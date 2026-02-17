@@ -27,15 +27,10 @@ class ObsidianConfig(BaseModel):
 
 
 class AIConfig(BaseModel):
-    model: str = "claude-sonnet-4-5-20250929"
-    api_key_env: str = "ANTHROPIC_API_KEY"
+    model: str = "sonnet"
     max_pdf_chars: int = 50000
     timeout: int = 180
     retries: int = 2
-
-    @property
-    def api_key(self) -> Optional[str]:
-        return os.environ.get(self.api_key_env)
 
 
 class StateConfig(BaseModel):

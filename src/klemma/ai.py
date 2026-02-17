@@ -1,11 +1,10 @@
-"""Claude API client via anthropic SDK."""
+"""Claude Code CLI wrapper for AI calls."""
 
 import json
 import logging
+import subprocess
 from pathlib import Path
 from typing import Optional
-
-import anthropic
 
 from .config import AIConfig
 
@@ -13,19 +12,18 @@ logger = logging.getLogger(__name__)
 
 
 class ClaudeClient:
-    """Wrapper around Anthropic SDK for structured AI calls."""
+    """Wrapper around Claude Code CLI (claude -p)."""
 
     def __init__(self, config: AIConfig):
-        api_key = config.api_key
-        if not api_key:
-            raise ValueError(
-                f"API key not found. Set {config.api_key_env} environment variable."
-            )
-        self.client = anthropic.Anthropic(api_key=api_key)
         self.model = config.model
         self.timeout = config.timeout
         self.retries = config.retries
         self.max_pdf_chars = config.max_pdf_chars
+
+        if not self.check_cli_available():
+            raise RuntimeError(
+                "'claude' command not found. Install Claude Code CLI: https://claude.ai/code"
+            )
 
     def call(
         self,
@@ -34,27 +32,35 @@ class ClaudeClient:
         max_tokens: int = 8192,
         temperature: float = 0.3,
     ) -> Optional[str]:
-        """Make a Claude API call with retries.
+        """Call Claude via CLI with retries.
 
         Returns the text response or None on failure.
         """
+        prompt = f"{system}\n\n---\n\n{user}"
+
         for attempt in range(self.retries + 1):
             try:
-                message = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    system=system,
-                    messages=[{"role": "user", "content": user}],
-                    temperature=temperature,
+                result = subprocess.run(
+                    ["claude", "-p", "--model", self.model, prompt],
+                    capture_output=True,
+                    text=True,
                     timeout=self.timeout,
                 )
-                return message.content[0].text
-            except anthropic.APITimeoutError:
+                if result.returncode != 0:
+                    logger.warning(
+                        "Claude CLI error (attempt %d/%d): %s",
+                        attempt + 1, self.retries + 1,
+                        result.stderr[:200],
+                    )
+                    continue
+                return result.stdout
+            except subprocess.TimeoutExpired:
                 logger.warning("Timeout (attempt %d/%d)", attempt + 1, self.retries + 1)
-            except anthropic.RateLimitError:
-                logger.warning("Rate limited (attempt %d/%d)", attempt + 1, self.retries + 1)
-            except anthropic.APIError as e:
-                logger.error("API error (attempt %d/%d): %s", attempt + 1, self.retries + 1, e)
+            except FileNotFoundError:
+                logger.error("'claude' command not found in PATH")
+                return None
+            except Exception as e:
+                logger.error("Error (attempt %d/%d): %s", attempt + 1, self.retries + 1, e)
         return None
 
     def call_json(
@@ -64,7 +70,7 @@ class ClaudeClient:
         max_tokens: int = 8192,
         temperature: float = 0.2,
     ) -> Optional[dict]:
-        """Make a Claude API call and parse JSON from the response."""
+        """Call Claude CLI and parse JSON from the response."""
         text = self.call(system, user, max_tokens=max_tokens, temperature=temperature)
         if not text:
             return None
@@ -76,6 +82,20 @@ class ClaudeClient:
 
         raw = template_path.read_text(encoding="utf-8")
         return Template(raw).render(**kwargs)
+
+    @staticmethod
+    def check_cli_available() -> bool:
+        """Check if Claude Code CLI is available."""
+        try:
+            result = subprocess.run(
+                ["claude", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
 
     @staticmethod
     def _extract_json(text: str) -> Optional[dict]:

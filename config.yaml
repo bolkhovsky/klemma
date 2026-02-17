@@ -19,8 +19,7 @@ obsidian:
   use_cli: null
 
 ai:
-  model: "claude-sonnet-4-5-20250929"
-  api_key_env: "ANTHROPIC_API_KEY"
+  model: "sonnet"
   max_pdf_chars: 50000
   timeout: 180
   retries: 2

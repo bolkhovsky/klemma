@@ -5,7 +5,7 @@ Klemma is a dual-mode CLI/TUI tool for PhD dissertation work. It manages literat
 
 ## Architecture
 - **Dual mode**: `klemma` → Textual TUI dashboard; `klemma morning/extract` → headless CLI
-- **Stack**: Python 3.11+, Click, Textual, anthropic SDK, pyzotero, PyMuPDF, SQLite
+- **Stack**: Python 3.11+, Click, Textual, Claude Code CLI, pyzotero, PyMuPDF, SQLite
 - **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/TUI/Obsidian)
 
 ## Project structure
@@ -15,7 +15,7 @@ src/klemma/
 ├── app.py          — Textual TUI app
 ├── config.py       — Pydantic config models
 ├── state.py        — SQLite state manager
-├── ai.py           — Claude API wrapper (anthropic SDK)
+├── ai.py           — Claude Code CLI wrapper (claude -p)
 ├── vault.py        — Obsidian adapter (CLI/file I/O)
 ├── tui/            — Textual screens (dashboard, fragments)
 ├── skills/         — AI skills (planner, extractor)
@@ -33,7 +33,7 @@ src/klemma/
 
 ## Config
 - `config.yaml` — main config (Zotero, Obsidian, AI, dissertation structure)
-- Environment: `ANTHROPIC_API_KEY`, `ZOTERO_API_KEY`
+- Requires: Claude Code CLI (`claude` in PATH), optionally `ZOTERO_API_KEY`
 
 ## SQLite tables
 - `sources` — Zotero entries with processing status and dissertation metadata
