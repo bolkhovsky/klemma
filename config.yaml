@@ -19,7 +19,7 @@ obsidian:
   use_cli: null
 
 ai:
-  model: "sonnet"
+  model: "opus"
   max_pdf_chars: 50000
   timeout: 180
   retries: 2

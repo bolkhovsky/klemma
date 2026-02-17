@@ -27,7 +27,7 @@ class ObsidianConfig(BaseModel):
 
 
 class AIConfig(BaseModel):
-    model: str = "sonnet"
+    model: str = "opus"
     max_pdf_chars: int = 50000
     timeout: int = 180
     retries: int = 2

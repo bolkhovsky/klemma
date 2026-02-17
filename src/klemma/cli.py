@@ -317,5 +317,100 @@ def fragments(ctx, chapter, section, frag_type, limit):
     console.print(table)
 
 
+@main.command()
+@click.option("--with-queue", is_flag=True, help="Also populate reading queue from high-priority sources")
+@click.pass_context
+def prepopulate(ctx, with_queue):
+    """Import existing vault notes into klemma database.
+
+    Scans @*.md files in the vault's notes folder, reads YAML frontmatter,
+    and registers each source with its metadata (chapter, section, quality, etc.).
+    """
+    config_path = ctx.obj["config_path"]
+    cfg, state, vault = _init_components(config_path)
+
+    notes_folder = cfg.obsidian.notes_folder
+    note_names = vault.list_notes(notes_folder)
+
+    # Filter to @citekey.md notes only
+    citekey_notes = [n for n in note_names if n.startswith("@")]
+
+    if not citekey_notes:
+        console.print(f"[yellow]No @citekey notes found in {notes_folder}/[/yellow]")
+        return
+
+    console.print(f"[blue]Scanning {notes_folder}/ ...[/blue]")
+
+    imported = 0
+    skipped = 0
+    by_chapter: dict[int, int] = {}
+    by_priority: dict[str, int] = {}
+    queue_added = 0
+
+    for note_name in citekey_notes:
+        props = vault.get_properties(note_name)
+        if not props:
+            skipped += 1
+            continue
+
+        citekey = props.get("citekey", note_name.lstrip("@"))
+        quality = props.get("quality", 0)
+        priority = props.get("priority", "medium")
+        chapter = props.get("chapter")
+        section = props.get("section", "")
+        nr1 = props.get("relevance_nr1", 0)
+        nr2 = props.get("relevance_nr2", 0)
+
+        # Normalize
+        if isinstance(quality, str):
+            quality = int(quality.split("/")[0]) if "/" in quality else int(quality)
+        if isinstance(chapter, str):
+            chapter = int(chapter) if chapter.isdigit() else None
+
+        state.register_sources([citekey])
+        state.update_source_metadata(
+            source_id=citekey,
+            quality_score=quality or 0,
+            primary_chapter=chapter,
+            primary_section=str(section) if section else None,
+            relevance_nr1=nr1 or 0,
+            relevance_nr2=nr2 or 0,
+            citation_priority=priority or "medium",
+            note_path=f"{notes_folder}/{note_name}.md",
+        )
+
+        if chapter:
+            by_chapter[chapter] = by_chapter.get(chapter, 0) + 1
+        by_priority[priority or "medium"] = by_priority.get(priority or "medium", 0) + 1
+
+        if with_queue and priority == "high":
+            state.add_to_reading_queue(citekey, priority=80)
+            queue_added += 1
+
+        imported += 1
+
+    # Summary
+    console.print(f"\n[green]Imported {imported} sources from vault.[/green]")
+    if skipped:
+        console.print(f"[dim]Skipped {skipped} notes (no frontmatter).[/dim]")
+
+    if by_chapter:
+        console.print()
+        table = Table(title="Coverage by Chapter")
+        table.add_column("Chapter", style="cyan")
+        table.add_column("Sources", justify="right")
+        for ch in sorted(by_chapter):
+            name = cfg.dissertation.chapters.get(ch, "")
+            table.add_row(f"Ch {ch}: {name}", str(by_chapter[ch]))
+        console.print(table)
+
+    if by_priority:
+        parts = [f"{p}: {c}" for p, c in sorted(by_priority.items())]
+        console.print(f"\n[dim]Priority: {', '.join(parts)}[/dim]")
+
+    if queue_added:
+        console.print(f"[blue]Reading queue: {queue_added} high-priority papers added.[/blue]")
+
+
 if __name__ == "__main__":
     main()

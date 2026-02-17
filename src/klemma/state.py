@@ -176,6 +176,37 @@ class StateManager:
                 (today,),
             )
 
+    def update_source_metadata(
+        self,
+        source_id: str,
+        quality_score: int = 0,
+        primary_chapter: Optional[int] = None,
+        primary_section: Optional[str] = None,
+        relevance_nr1: int = 0,
+        relevance_nr2: int = 0,
+        citation_priority: str = "medium",
+        note_path: Optional[str] = None,
+        status: str = "completed",
+    ):
+        """Set metadata on an existing source (e.g. from vault import)."""
+        now = datetime.now().isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE sources
+                   SET status=?, processed_at=?, quality_score=?,
+                       primary_chapter=?, primary_section=?,
+                       relevance_nr1=?, relevance_nr2=?, citation_priority=?,
+                       note_path=COALESCE(?, note_path)
+                   WHERE id=?""",
+                (
+                    status, now, quality_score,
+                    primary_chapter, primary_section,
+                    relevance_nr1, relevance_nr2, citation_priority,
+                    note_path,
+                    source_id,
+                ),
+            )
+
     def mark_failed(self, source_id: str, error: str):
         with self._conn() as conn:
             conn.execute(
