@@ -1,0 +1,209 @@
+# =============================================================================
+# KLEMMA CONFIGURATION — Academic Instance
+# =============================================================================
+
+instance:
+  name: "dissertation-arctic-ice"
+  type: "academic"
+
+zotero:
+  library_id: ""
+  library_type: "user"
+  api_key_env: "ZOTERO_API_KEY"
+  local: false
+
+obsidian:
+  vault_path: "/Users/ilya/Documents/Obsidian Vault"
+  notes_folder: "2 - Refs"
+  tags_folder: "3 - Tags"
+  use_cli: null
+
+ai:
+  model: "claude-sonnet-4-5-20250929"
+  api_key_env: "ANTHROPIC_API_KEY"
+  max_pdf_chars: 50000
+  timeout: 180
+  retries: 2
+
+state:
+  db_path: "./data/klemma.db"
+
+dissertation:
+  current_chapter: 2
+  current_section: "2.3.1"
+  title: "Geoinformation methodology for Arctic ice conditions assessment"
+  chapters:
+    1: "Analysis of ice forecasting domain"
+    2: "Geoinformation validation model"
+    3: "Validation methodology"
+    4: "Algorithm & software implementation"
+  scientific_results:
+    nr1: "AMSR2 validation model"
+    nr2: "IIEE-decomposition quality assessment"
+  priority_terms:
+    - icenet
+    - iiee
+    - amsr2
+    - barents
+    - validation
+    - lstm
+    - convlstm
+  min_sources_per_section: 3
+  chapter_mapping:
+    # Chapter 1
+    - pattern: "amsr|passive microwave|brightness temperature|ssm/i"
+      chapter: 1
+      section: "1.3.1"
+    - pattern: "sar|synthetic aperture|sentinel.?1|radarsat"
+      chapter: 1
+      section: "1.3.2"
+    - pattern: "data fusion|integration|machine learning.*data"
+      chapter: 1
+      section: "1.3.3"
+    - pattern: "numerical model|physical model|piomas|topaz"
+      chapter: 1
+      section: "1.4.1"
+    - pattern: "arima|statistical|time series|persistence"
+      chapter: 1
+      section: "1.4.2"
+    - pattern: "deep learning|neural network|paradigm"
+      chapter: 1
+      section: "1.4.3"
+    # Chapter 2
+    - pattern: "validation.*framework|verification.*system"
+      chapter: 2
+      section: "2.1"
+    - pattern: "lstm|convlstm|cnn|architecture.*comparison"
+      chapter: 2
+      section: "2.2.1"
+    - pattern: "u.?net|unet|encoder.?decoder|segmentation"
+      chapter: 2
+      section: "2.2.2"
+    - pattern: "icenet|ice.?net"
+      chapter: 2
+      section: "2.3.1"
+    # Chapter 3
+    - pattern: "data.*split|train.*test|cross.?validation"
+      chapter: 3
+      section: "3.2.1"
+    - pattern: "rmse|mae|r.?squared|iiee|aee|metrics"
+      chapter: 3
+      section: "3.2.2"
+    - pattern: "uncertainty|probabilistic|ensemble"
+      chapter: 3
+      section: "3.2.3"
+    - pattern: "software.*implementation|module"
+      chapter: 3
+      section: "3.4"
+    # Chapter 4
+    - pattern: "algorithm|pipeline"
+      chapter: 4
+      section: "4.2"
+    - pattern: "implementation|architecture"
+      chapter: 4
+      section: "4.3"
+    - pattern: "navigation|routing|northern sea route"
+      chapter: 4
+      section: "4.1"
+
+planning:
+  dissertation_focus: "Chapter 2, Section 2.3.1 — IceNet reference"
+  assistant_roadmap:
+    - "Fragment extraction (klemma extract)"
+    - "Reading queue (klemma read)"
+    - "ChromaDB semantic search"
+    - "Telegram bot delivery"
+
+reading:
+  snippet_length: 2000
+  daily_papers: 1
+  priority_boost_chapters: [2, 3]
+
+processing:
+  batch_size: 2
+  skip_no_pdf: true
+  min_pdf_length: 500
+
+tags:
+  auto_mapping:
+    # Topics
+    - pattern: "sea ice|ice concentration|sic|ice extent|ice edge"
+      tag: "Sea Ice"
+    - pattern: "arctic|polar"
+      tag: "Arctic"
+    - pattern: "climate|global warming"
+      tag: "Climate"
+    - pattern: "forecast|prediction|predictability"
+      tag: "Forecasting"
+    - pattern: "navigation|shipping|northern sea route|nsr"
+      tag: "Navigation"
+    - pattern: "icebreaker|ice class"
+      tag: "Icebreaking"
+    # Methods
+    - pattern: "gis|geoinformation|spatial analysis"
+      tag: "GIS"
+    - pattern: "machine learning|ml|deep learning|neural network"
+      tag: "Machine Learning"
+    - pattern: "lstm|long short.?term"
+      tag: "LSTM"
+    - pattern: "convlstm|conv.?lstm"
+      tag: "ConvLSTM"
+    - pattern: "u.?net|unet|encoder.?decoder"
+      tag: "U-Net"
+    - pattern: "cnn|convolutional"
+      tag: "CNN"
+    - pattern: "transformer|attention mechanism"
+      tag: "Transformer"
+    - pattern: "random forest|xgboost|gradient boosting|decision tree"
+      tag: "Classical ML"
+    - pattern: "statistical|time series|arima|persistence"
+      tag: "Statistics"
+    - pattern: "numerical model|physical model"
+      tag: "Physical Model"
+    - pattern: "validation|verification|accuracy"
+      tag: "Validation"
+    - pattern: "rmse|mae|bias|error analysis"
+      tag: "Metrics"
+    # Data & sensors
+    - pattern: "remote sensing|satellite"
+      tag: "Remote Sensing"
+    - pattern: "sar|synthetic aperture"
+      tag: "SAR"
+    - pattern: "sentinel.?1|radarsat"
+      tag: "Sentinel-1"
+    - pattern: "passive microwave|radiometer|brightness temperature"
+      tag: "Microwave"
+    - pattern: "amsr|amsr.?2|amsr.?e"
+      tag: "AMSR"
+    - pattern: "ssm/i|ssmis"
+      tag: "SSM-I"
+    - pattern: "optical|modis|viirs"
+      tag: "Optical"
+    - pattern: "era5|ecmwf|reanalysis"
+      tag: "ERA5"
+    - pattern: "osi.?saf|nsidc|ice chart"
+      tag: "Ice Products"
+    - pattern: "aari"
+      tag: "AARI"
+    # Regions
+    - pattern: "barents"
+      tag: "Barents Sea"
+    - pattern: "kara"
+      tag: "Kara Sea"
+    - pattern: "laptev"
+      tag: "Laptev Sea"
+    - pattern: "beaufort|chukchi"
+      tag: "Pacific Arctic"
+    - pattern: "antarctic"
+      tag: "Antarctic"
+    # Source type
+    - pattern: "review|survey|state of the art"
+      tag: "Review"
+    - pattern: "dataset|benchmark|open data"
+      tag: "Dataset"
+
+export:
+  output_dir: "./exports"
+  pandoc:
+    timeout: 300
+    number_sections: true

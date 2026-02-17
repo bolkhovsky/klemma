@@ -1,0 +1,62 @@
+---
+aliases:
+  - "@{{ entry.id }}"
+tags:
+{% for tag in annotation.suggested_tags %}
+  - "{{ tag }}"
+{% endfor %}
+Author: "{{ entry.authors_str }}"
+Year: {{ entry.year or "n.d." }}
+Title: "{{ entry.title or 'Untitled' }}"
+Journal: "{{ entry.container_title or 'N/A' }}"
+DOI: "{{ entry.DOI or '' }}"
+Quality: "{{ annotation.quality_score }}/5"
+Priority: "{{ annotation.citation_priority }}"
+{% if annotation.dissertation_relevance %}
+Chapter: {{ annotation.dissertation_relevance.primary_chapter }}
+Section: "{{ annotation.dissertation_relevance.primary_section }}"
+НР1: {{ annotation.dissertation_relevance.relevance_nr1 }}
+НР2: {{ annotation.dissertation_relevance.relevance_nr2 }}
+{% endif %}
+---
+
+# {{ entry.title or entry.id }}
+
+**{{ entry.authors_str }}** ({{ entry.year or "n.d." }})
+*{{ entry.container_title or "" }}*
+{% if entry.DOI %}DOI: [{{ entry.DOI }}](https://doi.org/{{ entry.DOI }}){% endif %}
+
+---
+
+## Summary
+{{ annotation.summary }}
+
+## Methodology
+{{ annotation.methodology }}
+
+## Key Findings
+{% for finding in annotation.key_findings %}
+- {{ finding }}
+{% endfor %}
+
+## Relevance to Dissertation
+{{ annotation.relevance_to_dissertation }}
+
+{% if annotation.key_quotes %}
+## Key Quotes
+{% for quote in annotation.key_quotes %}
+> "{{ quote.text }}" {% if quote.page %}(p. {{ quote.page }}){% endif %}
+> **Chapter fit**: {{ quote.chapter_fit }}, **Usage**: {{ quote.usage }}
+
+{% endfor %}
+{% endif %}
+
+{% if annotation.usage_types %}
+## Usage Types
+{% for usage in annotation.usage_types %}
+- {{ usage }}
+{% endfor %}
+{% endif %}
+
+---
+*Processed by Klemma on {{ now }}*
