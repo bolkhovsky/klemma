@@ -602,5 +602,37 @@ def prepopulate(ctx, with_queue):
         console.print(f"[blue]Reading queue: {queue_added} high-priority papers added.[/blue]")
 
 
+@main.command()
+@click.argument("query")
+@click.option("--section", "-s", help="Фокус на конкретном разделе")
+@click.option("--chapter", "-ch", type=int, help="Фокус на конкретной главе")
+@click.pass_context
+def agent(ctx, query, section, chapter):
+    """Universal research agent with full dissertation context.
+
+    Launches Claude Code interactively with all research data as context.
+    Claude gets full tool access (web search, file I/O, follow-up questions).
+
+    Example: klemma agent "Какие основные методы валидации прогнозов?"
+    """
+    import subprocess
+
+    config_path = ctx.obj["config_path"]
+    cfg, state, vault = _init_components(config_path)
+
+    from .skills.agent import build_agent_context
+
+    console.print("[blue]Сборка контекста исследования...[/blue]")
+    context = build_agent_context(cfg, state, vault, section=section, chapter=chapter)
+
+    console.print(f"[dim]Query: {query}[/dim]")
+    console.print("[blue]Запуск агента...[/blue]\n")
+
+    # Launch Claude interactively — stdin/stdout pass through
+    subprocess.run(["claude", "--system-prompt", context, query])
+
+    console.print("\n[dim]Сессия агента завершена.[/dim]")
+
+
 if __name__ == "__main__":
     main()

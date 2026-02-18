@@ -18,13 +18,14 @@ src/klemma/
 ├── ai.py           — Claude Code CLI wrapper (claude -p)
 ├── vault.py        — Obsidian adapter (CLI/file I/O, update_section)
 ├── tui/            — Textual screens (dashboard, fragments, coverage, gaps, stats)
-├── skills/         — AI skills (planner, extractor, researcher)
+├── skills/         — AI skills (planner, extractor, researcher, agent)
 └── literature/     — Zotero, PDF, models
 prompts/
 ├── morning.md              — Jinja2 prompt for daily plans
 ├── extract.md              — Jinja2 prompt for fragment extraction
 ├── research.md             — Jinja2 prompt for research briefing (first run)
-└── research_incremental.md — Jinja2 prompt for incremental research update
+├── research_incremental.md — Jinja2 prompt for incremental research update
+└── agent.md                — Jinja2 system prompt for interactive agent
 ```
 
 ## Key commands
@@ -38,6 +39,8 @@ prompts/
 - `klemma gaps` — find underserved sections
 - `klemma fragments` — browse extracted fragments
 - `klemma prepopulate` — import vault notes into DB (reads sections/chapters lists)
+- `klemma agent "query"` — interactive research agent with full dissertation context
+- `klemma agent -s 1.3.2 "query"` — agent focused on a specific section
 
 ## Config
 - `config.yaml` — main config (Zotero, Obsidian, AI, dissertation structure)
@@ -65,6 +68,9 @@ PDF → PyMuPDF text → Claude analysis → fragments to SQLite + vault (`## �
 `klemma research -s X.X` → auto-extract fragments → collect context (draft, fragments, sources, coverage) → Claude analysis → `Research_X.X.md` in vault
 
 Incremental mode: if Research note exists, reads `## ✏️ Что нового` (user notes), computes delta (new sources, fragments), sends incremental prompt. User notes archived to `## 📋 История изменений` with timestamp.
+
+### Agent
+`klemma agent "query"` → build_agent_context() gathers all research data (sources, coverage, gaps, fragments, plan) → renders Jinja2 system prompt → launches `claude --system-prompt <context> <query>` interactively. Claude saves response to `Agent/Agent_<date>.md` in vault.
 
 ### Multi-section sources
 Frontmatter `sections: [1.1, 1.4.1, 3.2.2]` → `source_sections` table → `get_by_section()` uses JOIN to find all relevant sources.

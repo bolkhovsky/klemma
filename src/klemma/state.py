@@ -280,6 +280,19 @@ class StateManager:
                         (source_id, ch, str(ch)),
                     )
 
+    def get_all_sources(self) -> list[dict]:
+        """Get all completed sources with metadata."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                """SELECT id, note_path, quality_score, primary_chapter,
+                          primary_section, relevance_nr1, relevance_nr2,
+                          citation_priority, fragment_count
+                   FROM sources WHERE status=?
+                   ORDER BY primary_chapter, citation_priority DESC, quality_score DESC""",
+                (ProcessingStatus.COMPLETED.value,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
     def get_by_chapter(self, chapter: int) -> list[dict]:
         with self._conn() as conn:
             cur = conn.execute(
