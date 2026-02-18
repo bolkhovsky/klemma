@@ -1,6 +1,6 @@
 # Klemma
 
-AI-ассистент для работы над диссертацией. Управляет библиотекой источников (Zotero), извлекает цитируемые фрагменты из PDF (Claude), генерирует ежедневные планы и отслеживает покрытие глав диссертации.
+AI-ассистент для работы над диссертацией. Управляет библиотекой источников (Zotero), извлекает цитируемые фрагменты из PDF (Claude), генерирует ежедневные планы, исследовательские брифинги, анализ библиотеки и отслеживает покрытие глав диссертации.
 
 ## Установка
 
@@ -17,105 +17,107 @@ pip install -e .
 ## Быстрый старт
 
 ```bash
-# 1. Импортировать существующие заметки из Obsidian в базу данных
-klemma prepopulate
-
-# 2. Посмотреть статистику и покрытие
-klemma stats
-klemma coverage
-klemma gaps
-
-# 3. Сгенерировать план на день
-klemma morning
-
-# 4. Извлечь фрагменты для цитирования из PDF источника
-klemma extract anderssonSeasonalArcticSea2021
-
-# 5. Исследовательский брифинг по разделу (авто-извлечение + анализ)
-klemma research --section 1.3.2
-
-# 6. Задать вопрос агенту с полным контекстом диссертации
-klemma agent "Какие основные методы валидации прогнозов ледовой обстановки?"
-
-# 7. Просмотреть извлечённые фрагменты
-klemma fragments
-
-# 8. Открыть TUI-дашборд
+# 1. Открыть TUI-дашборд
 klemma
+
+# 2. Сгенерировать план на день (включает дайджест библиотеки)
+klemma plan
+
+# 3. Посмотреть статистику, покрытие, пробелы
+klemma status              # компактный обзор
+klemma status --verbose    # полные таблицы
+klemma status --chapter 2  # фильтр по главе
+
+# 4. Обработать источник (фрагменты + аннотация + vault note)
+klemma process anderssonSeasonalArcticSea2021   # один источник
+klemma process                                  # все pending (до 10)
+
+# 5. Исследовательский брифинг по разделу
+klemma research -s 1.3.2
+
+# 6. AI-анализ библиотеки
+klemma library             # здоровье библиотеки
+klemma library -s 2.3      # рекомендации для раздела
+klemma library --audit     # глубокий аудит качества
+
+# 7. Задать вопрос агенту с полным контекстом диссертации
+klemma ask "Какие основные методы валидации прогнозов ледовой обстановки?"
 ```
 
 ## Команды
 
 ### `klemma`
-Интерактивный TUI-дашборд (Textual). Показывает план на день, статистику, покрытие по главам.
+Интерактивный TUI-дашборд (Textual). Показывает план на день, статистику, покрытие по главам, пробелы, reference gaps.
 
 Горячие клавиши: `d` — дашборд, `f` — фрагменты, `r` — обновить, `q` — выход.
 
-### `klemma prepopulate`
-Импортирует заметки `@*.md` из Obsidian vault в базу данных. Читает YAML-фронтматтер каждой заметки (quality, priority, chapter, section, sections, chapters, relevance_nr1/nr2) и регистрирует источник.
+### `klemma plan`
+Генерирует ежедневный план через Claude: фокус дня, рекомендации по чтению, задача для ассистента, стратегические предложения. Включает дайджест библиотеки. Учитывает вчерашний план, покрытие глав, пробелы, дедлайны. План сохраняется в базу и дописывается в daily note Obsidian.
 
-Поддерживает мульти-секционные источники: `sections: [1.1, 1.4.1, 3.2.2]` → заполняет таблицу `source_sections` для поиска по всем разделам.
-
-```bash
-klemma prepopulate                # импортировать все источники
-klemma prepopulate --with-queue   # + добавить high-priority в очередь чтения
-```
-
-### `klemma morning`
-Генерирует ежедневный план через Claude: задача для диссертации, задача для ассистента, рекомендация по чтению. Учитывает вчерашний план, покрытие глав, пробелы в источниках. План сохраняется в базу и дописывается в daily note Obsidian.
-
-### `klemma extract <citekey>`
-Извлекает фрагменты для цитирования из PDF. Находит PDF через BetterBibTeX JSON lookup или в хранилище Zotero, извлекает текст (PyMuPDF), отправляет в Claude для анализа. Каждый фрагмент маппится на главу/раздел диссертации с оценкой релевантности. Фрагменты сохраняются в SQLite и в vault-заметку `@citekey.md` (секция `## 💬 Цитаты для диссертации`).
+### `klemma status`
+Единая команда для статистики, покрытия и пробелов. Показывает: количество обработанных/pending/failed источников, покрытие по главам, разделы с недостаточным покрытием, reference gaps (ссылки из библиографий источников, отсутствующие в нашей библиотеке).
 
 ```bash
-klemma extract anderssonSeasonalArcticSea2021
+klemma status              # компактный обзор
+klemma status --verbose    # полные таблицы + детализация
+klemma status --chapter 2  # фильтр по конкретной главе
 ```
 
-### `klemma research --section <X.X>`
-Исследовательский брифинг: анализ готовности раздела к написанию. Автоматически извлекает фрагменты для всех источников раздела (если ещё не извлечены), собирает контекст (черновик, план сессий, фрагменты, аннотации, покрытие) и генерирует структуру аргументации с планом цитирования.
+### `klemma process [<citekey>]`
+Полный пайплайн обработки источника: поиск PDF → извлечение текста (PyMuPDF) → AI-анализ → сохранение фрагментов в SQLite + vault-заметку.
+
+**С аргументом** — обрабатывает один указанный источник.
+**Без аргумента** — batch-режим: обрабатывает все pending источники (до 10 за раз).
+
+При обработке автоматически:
+- Создаёт vault-заметку `@citekey.md`, если она отсутствует (AI-аннотация: summary, методология, релевантность, key references)
+- Извлекает фрагменты для цитирования и маппит их на главы/разделы диссертации
+- Анализирует библиографию источника и записывает reference gaps (ссылки, отсутствующие в нашей библиотеке)
+- Авто-резолвит ранее найденные reference gaps, если соответствующие источники уже добавлены
+
+```bash
+klemma process anderssonSeasonalArcticSea2021   # один источник
+klemma process                                  # все pending (до 10)
+```
+
+### `klemma research -s <X.X>`
+Исследовательский брифинг: глубокий анализ готовности раздела к написанию. Автоматически извлекает фрагменты для всех источников раздела (если ещё не извлечены), собирает контекст (черновик, план сессий, фрагменты, аннотации, покрытие) и генерирует структуру аргументации с планом цитирования.
 
 При повторном запуске работает в инкрементальном режиме: читает заметки пользователя из `## ✏️ Что нового`, определяет дельту (новые источники и фрагменты) и обновляет брифинг. Заметки пользователя архивируются в `## 📋 История изменений` с таймстампом.
 
 ```bash
-klemma research --section 1.3.2          # первый запуск: полный анализ
-klemma research --section 1.3.2          # повторный: инкрементальное обновление
-klemma research --section 1.3.2 --force  # переизвлечь все фрагменты
+klemma research -s 1.3.2          # первый запуск: полный анализ
+klemma research -s 1.3.2          # повторный: инкрементальное обновление
+klemma research -s 1.3.2 --force  # переизвлечь все фрагменты
 ```
 
-### `klemma agent "query"`
-Универсальный исследовательский агент. Запускает Claude Code в интерактивном режиме с полным контекстом диссертации: структура, источники, покрытие, пробелы, статистика фрагментов, план дня, очередь чтения. Claude получает полный доступ к инструментам (веб-поиск, файлы, bash) и сохраняет ответ в vault (`Agent/Agent_<date>.md`).
+### `klemma library [-s <X.X>] [--audit]`
+AI-анализ библиотеки. Три режима:
 
-Опциональная фокусировка на разделе или главе подгружает только релевантные источники.
+- **status** (по умолчанию) — общее здоровье библиотеки: покрытие по главам, оценка качества, критические проблемы
+- **recommend** (`-s 2.3`) — рекомендации по чтению для конкретного раздела: порядок чтения, оценка имеющихся источников
+- **audit** (`--audit`) — глубокий аудит качества: дублирование, устаревшие источники, пробелы в методологии
+
+Отчёт сохраняется в vault (`Library/Library_{mode}_{date}.md`).
 
 ```bash
-klemma agent "Какие основные методы валидации прогнозов ледовой обстановки?"
-klemma agent -s 1.3.2 "Найди статьи об AMSR2"
-klemma agent -ch 2 "Сравни архитектуры IceNet и ConvLSTM"
+klemma library              # здоровье библиотеки
+klemma library -s 2.3       # рекомендации для раздела 2.3
+klemma library --audit      # глубокий аудит
 ```
 
-### `klemma stats`
-Статистика обработки: сколько источников pending/completed/failed/skipped. Количество фрагментов по типам.
-
-### `klemma coverage`
-Покрытие диссертации по главам и разделам — сколько источников привязано к каждому разделу.
-
-### `klemma gaps`
-Разделы с недостаточным покрытием (менее N источников).
+### `klemma ask "query"`
+Универсальный исследовательский агент. Запускает Claude Code в интерактивном режиме с полным контекстом диссертации: структура, источники, покрытие, пробелы, статистика фрагментов, план дня, очередь чтения. Claude получает доступ к инструментам (веб-поиск, файлы, bash) и сохраняет ответ в vault (`Agent/Agent_<date>.md`).
 
 ```bash
-klemma gaps              # порог по умолчанию: 3
-klemma gaps -m 5         # минимум 5 источников на раздел
+klemma ask "Какие основные методы валидации прогнозов ледовой обстановки?"
+klemma ask -s 1.3.2 "Найди статьи об AMSR2"
+klemma ask -ch 2 "Сравни архитектуры IceNet и ConvLSTM"
 ```
 
-### `klemma fragments`
-Просмотр извлечённых фрагментов с фильтрацией.
+### Backward-compatible aliases
 
-```bash
-klemma fragments                  # все фрагменты
-klemma fragments -ch 2            # только глава 2
-klemma fragments -s 2.3.1         # только раздел 2.3.1
-klemma fragments -t methodology   # только методология
-```
+Старые имена команд работают как скрытые алиасы: `morning`→`plan`, `extract`→`process`, `agent`→`ask`, `stats`/`coverage`/`gaps`→`status`, `prepopulate`→`import`.
 
 ## Конфигурация
 
@@ -131,6 +133,9 @@ obsidian:
   vault_path: "/path/to/vault"
   notes_folder: "2 - Refs"   # папка с заметками источников
   tags_folder: "3 - Tags"
+
+zotero:
+  library_json: "/path/to/pubs-bibtex.json"   # BetterBibTeX auto-export (для PDF lookup)
 
 state:
   db_path: "./data/klemma.db" # путь к SQLite базе
@@ -149,6 +154,8 @@ dissertation:
       section: "2.3.1"
   min_sources_per_section: 3
 ```
+
+`zotero.library_json` — путь к BetterBibTeX JSON-экспорту. Используется для надёжного нахождения PDF по citekey. PDF ищутся в 3 этапа: прямой путь из БД → BetterBibTeX lookup (citekey → attachment path) → нечёткий поиск по имени файла в Zotero storage.
 
 ## Формат заметок Obsidian
 
@@ -172,27 +179,27 @@ tags: ["Sea-Ice", "Machine-Learning"]
 ---
 ```
 
-`chapter`/`section` — основной раздел (primary). `sections`/`chapters` — все разделы, в которых источник полезен. `klemma prepopulate` записывает оба варианта; `klemma research` находит источники по всем секциям.
-
-## Конфигурация Zotero
-
-Для надёжного нахождения PDF добавьте путь к BetterBibTeX JSON-экспорту:
-
-```yaml
-zotero:
-  library_json: "/path/to/pubs-bibtex.json"   # BetterBibTeX auto-export
-```
-
-PDF ищутся в 3 этапа: прямой путь из БД → BetterBibTeX lookup (citekey → attachment path) → нечёткий поиск по имени файла в Zotero storage.
+`chapter`/`section` — основной раздел (primary). `sections`/`chapters` — все разделы, в которых источник полезен. `klemma process` создаёт vault-заметки автоматически при обработке; `klemma research` находит источники по всем секциям.
 
 ## Архитектура
 
 ```
 klemma (CLI/TUI)
-├── Claude Code CLI ── AI-анализ (планирование, фрагменты, research briefing)
-├── Obsidian vault ─── заметки источников + research notes + daily notes
+├── Claude Code CLI ── AI-анализ
+│   ├── планирование (plan)
+│   ├── извлечение фрагментов (process)
+│   ├── research briefing
+│   ├── library analysis (status/recommend/audit)
+│   └── interactive agent (ask)
+├── Obsidian vault ─── заметки источников + research notes + daily notes + library reports
 ├── BetterBibTeX JSON ─ citekey → PDF path mapping
 ├── Zotero storage ─── PDF файлы (fallback)
 ├── PyMuPDF ────────── извлечение текста из PDF
-└── SQLite ─────────── sources, source_sections, fragments, daily_plans, reading_queue
+└── SQLite
+    ├── sources ─────────── Zotero entries, metadata, processing status
+    ├── source_sections ─── junction: source × section (multi-section)
+    ├── fragments ───────── citation fragments → chapter/section mapping
+    ├── reference_gaps ──── missing refs from bibliographies (score, auto-resolve)
+    ├── daily_plans ─────── generated plans
+    └── reading_queue ───── prioritized reading list
 ```
