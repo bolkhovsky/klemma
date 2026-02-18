@@ -14,6 +14,7 @@ class ZoteroConfig(BaseModel):
     api_key_env: str = "ZOTERO_API_KEY"
     local: bool = False
     library_json: Optional[str] = None  # Path to BetterBibTeX JSON export
+    backend: str = "local"  # "local" (BBT JSON) | "mcp" (zotero-mcp server)
 
     @property
     def api_key(self) -> Optional[str]:
@@ -106,6 +107,16 @@ class InstanceConfig(BaseModel):
     type: str = "academic"
 
 
+class MCPServerConfig(BaseModel):
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+
+
+class MCPConfig(BaseModel):
+    servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+
+
 class KlemmaConfig(BaseModel):
     instance: InstanceConfig = Field(default_factory=InstanceConfig)
     zotero: ZoteroConfig = Field(default_factory=ZoteroConfig)
@@ -118,6 +129,7 @@ class KlemmaConfig(BaseModel):
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
     tags: TagsConfig = Field(default_factory=TagsConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
 
 
 def load_config(config_path: str | Path = "config.yaml") -> KlemmaConfig:

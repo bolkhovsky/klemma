@@ -12,19 +12,21 @@ from rich.table import Table
 from . import __version__, get_banner
 from .ai import ClaudeClient
 from .config import load_config
-from .literature.pdf import PDFExtractor
+from .context import KlemmaContext
+from .library_provider import create_library
 from .state import StateManager
 from .vault import VaultAdapter
 
 console = Console()
 
 
-def _init_components(config_path: str):
+def _init_components(config_path: str) -> KlemmaContext:
     """Initialize all components from config."""
     cfg = load_config(config_path)
     state = StateManager(cfg.state.db_path)
     vault = VaultAdapter(cfg.obsidian.vault_path, use_cli=cfg.obsidian.use_cli)
-    return cfg, state, vault
+    library = create_library(cfg)
+    return KlemmaContext(config=cfg, state=state, vault=vault, library=library)
 
 
 def _init_ai(cfg):
@@ -32,13 +34,13 @@ def _init_ai(cfg):
     return ClaudeClient(cfg.ai)
 
 
-def _sync_sections(cfg, state, vault, quiet=False) -> dict:
+def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
     """Sync section assignments from vault frontmatter + discover new Zotero entries.
 
     Fast (~60ms for 138 notes). Safe to call on every command.
     """
+    cfg, state, vault = ctx.config, ctx.state, ctx.vault
     from .literature.note_factory import auto_classify
-    from .literature.pdf import PDFExtractor
 
     notes_folder = cfg.obsidian.notes_folder
     note_names = vault.list_notes(notes_folder)
@@ -79,8 +81,8 @@ def _sync_sections(cfg, state, vault, quiet=False) -> dict:
 
     # 2. Discover new Zotero entries not in DB
     new_entries = []
-    if cfg.zotero.library_json:
-        entry_lookup = PDFExtractor.load_entry_lookup(Path(cfg.zotero.library_json))
+    if ctx.library:
+        entry_lookup = ctx.library.entries
         vault_citekeys = {vd["citekey"] for vd in vault_data}
 
         with state._conn() as conn:
@@ -178,8 +180,8 @@ def main(ctx, config):
     if ctx.invoked_subcommand is not None:
         # Print status line for CLI subcommands
         try:
-            cfg, state, _ = _init_components(config)
-            _print_status_line(state)
+            kctx = _init_components(config)
+            _print_status_line(kctx.state)
         except Exception:
             pass
 
@@ -187,8 +189,8 @@ def main(ctx, config):
         # No subcommand → launch TUI
         try:
             from .app import KlemmaApp
-            cfg, state, vault = _init_components(config)
-            app = KlemmaApp(cfg=cfg, state=state, vault=vault)
+            kctx = _init_components(config)
+            app = KlemmaApp(cfg=kctx.config, state=kctx.state, vault=kctx.vault)
             app.run()
         except ImportError as e:
             console.print(f"[red]TUI not available: {e}[/red]")
@@ -204,7 +206,8 @@ def main(ctx, config):
 def plan(ctx):
     """Daily plan — focus, recommendations, deadlines."""
     config_path = ctx.obj["config_path"]
-    cfg, state, vault = _init_components(config_path)
+    kctx = _init_components(config_path)
+    cfg, state, vault = kctx.config, kctx.state, kctx.vault
     ai = _init_ai(cfg)
 
     from .skills.planner import generate_morning_plan
@@ -276,18 +279,16 @@ def process(ctx, citekey):
     Without arguments: process all pending sources (up to 10).
     """
     config_path = ctx.obj["config_path"]
-    cfg, state, vault = _init_components(config_path)
+    kctx = _init_components(config_path)
+    cfg, state, vault = kctx.config, kctx.state, kctx.vault
     ai = _init_ai(cfg)
 
     from .literature.pdf import PDFExtractor
 
     pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
 
-    # Load entry lookup for rich metadata and PDF paths
-    entry_lookup = PDFExtractor.load_entry_lookup(Path(cfg.zotero.library_json)) if cfg.zotero.library_json else {}
-
     # Auto-resolve previously detected reference gaps against current library
-    resolved = state.resolve_gaps(entry_lookup)
+    resolved = state.resolve_gaps(kctx.library.entries)
     if resolved:
         console.print(f"[green]Auto-resolved {resolved} reference gap(s)[/green]")
 
@@ -308,14 +309,14 @@ def process(ctx, citekey):
         if len(citekeys) > 1:
             console.print(f"\n[bold][{idx}/{len(citekeys)}] {ck}[/bold]")
 
-        _process_single(ck, cfg, state, vault, ai, pdf_extractor, entry_lookup)
+        _process_single(ck, cfg, state, vault, ai, pdf_extractor, kctx.library)
         processed += 1
 
     if len(citekeys) > 1:
         console.print(f"\n[green]Done: {processed}/{len(citekeys)} processed.[/green]")
 
 
-def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, entry_lookup):
+def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library):
     """Process a single source: find PDF, extract fragments, save to vault."""
     from .skills.extractor import extract_fragments, save_fragments_to_vault
 
@@ -324,7 +325,7 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, entry_lookup)
         state.register_sources([citekey])
         source = state.get_source(citekey)
 
-    entry = entry_lookup.get(citekey)
+    entry = library.entries.get(citekey)
     if not entry:
         from .literature.models import ZoteroEntry
         entry = ZoteroEntry(id=citekey, title=citekey)
@@ -337,7 +338,7 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, entry_lookup)
         citekey, pdf_search_paths,
         entry_title=entry.title or "",
         direct_path=source.get("pdf_path") if source else entry.pdf_path,
-        pdf_lookup={k: v.pdf_path for k, v in entry_lookup.items() if v.pdf_path},
+        pdf_lookup=library.pdf_paths,
     )
 
     if not pdf_path:
@@ -363,7 +364,7 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, entry_lookup)
     saved_path = save_fragments_to_vault(
         citekey, result.fragments, vault,
         entry=entry, config=cfg, state=state,
-        pdf_text=pdf_text, ai=ai, entry_lookup=entry_lookup,
+        pdf_text=pdf_text, ai=ai, entry_lookup=library.entries,
     )
     if saved_path:
         console.print(f" → @{citekey}")
@@ -378,8 +379,9 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, entry_lookup)
 def status(ctx, verbose, chapter):
     """Unified status: processing, coverage, gaps, reference gaps."""
     config_path = ctx.obj["config_path"]
-    cfg, state, vault = _init_components(config_path)
-    _sync_sections(cfg, state, vault, quiet=True)
+    kctx = _init_components(config_path)
+    cfg, state, vault = kctx.config, kctx.state, kctx.vault
+    _sync_sections(kctx, quiet=True)
 
     proc_stats = state.get_stats()
     frag_stats = state.get_fragment_stats()
@@ -503,8 +505,9 @@ def research(ctx, section, no_save, force):
     Example: klemma research --section 1.3.2
     """
     config_path = ctx.obj["config_path"]
-    cfg, state, vault = _init_components(config_path)
-    _sync_sections(cfg, state, vault)
+    kctx = _init_components(config_path)
+    cfg, state, vault = kctx.config, kctx.state, kctx.vault
+    _sync_sections(kctx)
     ai = _init_ai(cfg)
 
     from .skills.researcher import pre_extract_sources, research_section
@@ -516,6 +519,7 @@ def research(ctx, section, no_save, force):
     extract_result = pre_extract_sources(
         section, chapter, cfg, state, vault, ai,
         force=force,
+        library=kctx.library,
         on_progress=lambda ck, st, i, n: console.print(
             f"  [{i}/{n}] @{ck}: {st}"
         ),
@@ -653,9 +657,10 @@ def import_vault(ctx, with_queue):
     and syncs source metadata and section assignments with the database.
     """
     config_path = ctx.obj["config_path"]
-    cfg, state, vault = _init_components(config_path)
+    kctx = _init_components(config_path)
+    cfg, state, vault = kctx.config, kctx.state, kctx.vault
 
-    result = _sync_sections(cfg, state, vault, quiet=True)
+    result = _sync_sections(kctx, quiet=True)
 
     console.print(
         f"\n[green]Synced: {result['vault_updated']} updated, "
@@ -706,7 +711,8 @@ def ask(ctx, query, section, chapter):
     import subprocess
 
     config_path = ctx.obj["config_path"]
-    cfg, state, vault = _init_components(config_path)
+    kctx = _init_components(config_path)
+    cfg, state, vault = kctx.config, kctx.state, kctx.vault
 
     from .skills.agent import build_agent_context
 
@@ -734,14 +740,14 @@ def library(ctx, section, audit):
     With --audit: deep quality audit.
     """
     config_path = ctx.obj["config_path"]
-    cfg, state, vault = _init_components(config_path)
-    _sync_sections(cfg, state, vault)
+    kctx = _init_components(config_path)
+    cfg, state, vault = kctx.config, kctx.state, kctx.vault
+    _sync_sections(kctx)
     ai = _init_ai(cfg)
 
-    from .literature.pdf import PDFExtractor
     from .skills.librarian import analyze_library
 
-    entry_lookup = PDFExtractor.load_entry_lookup(Path(cfg.zotero.library_json)) if cfg.zotero.library_json else {}
+    entry_lookup = kctx.library.entries
 
     mode = "audit" if audit else "recommend" if section else "status"
     console.print(f"[blue]Analyzing library ({mode})...[/blue]")

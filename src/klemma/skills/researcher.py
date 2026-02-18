@@ -312,6 +312,7 @@ def pre_extract_sources(
     force: bool = False,
     on_progress: Optional[Callable] = None,
     max_sources: int = 50,
+    library=None,
 ) -> dict:
     """Извлечь фрагменты из источников раздела, если ещё не извлечены.
 
@@ -346,12 +347,13 @@ def pre_extract_sources(
     if not to_extract:
         return {"extracted": 0, "skipped": skipped, "failed": [], "no_pdf": []}
 
-    # 3. Загрузить entry lookup один раз (для метаданных + PDF paths)
-    entry_lookup: dict[str, ZoteroEntry] = {}
-    pdf_lookup: dict[str, str] = {}
-    if config.zotero.library_json:
-        entry_lookup = PDFExtractor.load_entry_lookup(Path(config.zotero.library_json))
-        pdf_lookup = {k: v.pdf_path for k, v in entry_lookup.items() if v.pdf_path}
+    # 3. Use library provider for metadata + PDF paths (single cached load)
+    if library:
+        entry_lookup = library.entries
+        pdf_lookup = library.pdf_paths
+    else:
+        entry_lookup = {}
+        pdf_lookup = {}
 
     pdf_extractor = PDFExtractor(max_chars=config.ai.max_pdf_chars)
     search_paths = [Path("/Users/ilya/Zotero/storage")]
