@@ -126,6 +126,39 @@ def _print_status_line(state: StateManager):
         pass  # Don't crash on status line failure
 
 
+def _print_ref_gaps_table(state: StateManager, limit: int = 20):
+    """Print reference gaps as a Rich table."""
+    ref_gaps = state.get_reference_gaps(limit=limit)
+    if not ref_gaps:
+        return
+    gap_summary = state.get_gap_summary()
+    ref_table = Table(
+        title=f"Reference Gaps — {gap_summary['open_count']} open (missing from library)",
+        show_edge=False, pad_edge=False,
+    )
+    ref_table.add_column("#", justify="right", style="dim", width=3)
+    ref_table.add_column("Score", justify="right", width=6)
+    ref_table.add_column("Count", justify="right", width=5)
+    ref_table.add_column("Authors", width=20)
+    ref_table.add_column("Year", width=5)
+    ref_table.add_column("Title", max_width=35)
+    ref_table.add_column("Why", max_width=30, style="dim")
+
+    for i, g in enumerate(ref_gaps, 1):
+        score_style = "red bold" if g["score"] >= 10 else "yellow" if g["score"] >= 5 else "dim"
+        ref_table.add_row(
+            str(i),
+            f"[{score_style}]{g['score']:.1f}[/{score_style}]",
+            str(g["count"]),
+            (g["ref_authors"] or "")[:20],
+            str(g.get("ref_year") or ""),
+            (g["ref_title"] or "")[:35],
+            (g.get("why_relevant") or "")[:30],
+        )
+    console.print()
+    console.print(ref_table)
+
+
 @click.group(invoke_without_command=True)
 @click.version_option(version="0.1.0")
 @click.option("--config", "-c", default="config.yaml", help="Config file path")
@@ -403,34 +436,13 @@ def status(ctx, verbose, chapter):
             console.print(f"  [dim]... and {len(gaps_data) - 5} more (use --verbose)[/dim]")
 
     # --- Reference gaps ---
-    ref_limit = 20 if verbose else 5
-    ref_gaps = state.get_reference_gaps(limit=ref_limit)
-    if ref_gaps:
-        console.print()
-        if verbose:
-            ref_table = Table(title="Reference Gaps (missing from library)", show_edge=False, pad_edge=False)
-            ref_table.add_column("#", justify="right", style="dim", width=3)
-            ref_table.add_column("Score", justify="right", width=6)
-            ref_table.add_column("Count", justify="right", width=5)
-            ref_table.add_column("Authors", width=20)
-            ref_table.add_column("Year", width=5)
-            ref_table.add_column("Title", max_width=35)
-            ref_table.add_column("Why", max_width=30, style="dim")
-
-            for i, g in enumerate(ref_gaps, 1):
-                score_style = "red bold" if g["score"] >= 10 else "yellow" if g["score"] >= 5 else "dim"
-                ref_table.add_row(
-                    str(i),
-                    f"[{score_style}]{g['score']:.1f}[/{score_style}]",
-                    str(g["count"]),
-                    (g["ref_authors"] or "")[:20],
-                    str(g.get("ref_year") or ""),
-                    (g["ref_title"] or "")[:35],
-                    (g.get("why_relevant") or "")[:30],
-                )
-            console.print(ref_table)
-        else:
+    if verbose:
+        _print_ref_gaps_table(state, limit=20)
+    else:
+        ref_gaps = state.get_reference_gaps(limit=5)
+        if ref_gaps:
             gap_summary = state.get_gap_summary()
+            console.print()
             console.print(f"[bold]Ref Gaps[/bold] [dim]({gap_summary['open_count']} open)[/dim]")
             for g in ref_gaps:
                 year = g.get("ref_year") or ""
@@ -438,8 +450,6 @@ def status(ctx, verbose, chapter):
                     f"  [yellow]x{g['count']}[/yellow]  {(g['ref_authors'] or '')[:20]} ({year}) "
                     f"[dim]— {(g.get('why_relevant') or '')[:40]}[/dim]"
                 )
-    elif verbose:
-        console.print("\n[dim]No reference gaps tracked yet.[/dim]")
 
     # --- Verbose: fragment breakdown ---
     if verbose and frag_stats["total"] > 0:
@@ -791,6 +801,9 @@ def library(ctx, section, audit):
             severity = finding.get("severity", "medium")
             style = {"high": "red", "medium": "yellow", "low": "dim"}.get(severity, "white")
             console.print(f"  [{style}]{severity.upper()}[/{style}] [{finding.get('type', '')}] {finding.get('details', '')}")
+
+    # Reference gaps table
+    _print_ref_gaps_table(state)
 
     console.print(f"\n[dim]Full report saved to vault.[/dim]")
 
