@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from . import __version__, get_banner
 from .ai import ClaudeClient
 from .config import load_config
 from .literature.pdf import PDFExtractor
@@ -160,7 +161,7 @@ def _print_ref_gaps_table(state: StateManager, limit: int = 20):
 
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="0.1.0")
+@click.version_option(version=__version__)
 @click.option("--config", "-c", default="config.yaml", help="Config file path")
 @click.pass_context
 def main(ctx, config):
@@ -170,6 +171,9 @@ def main(ctx, config):
     """
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config
+
+    # Banner
+    console.print(get_banner(cwd=str(Path.cwd())))
 
     if ctx.invoked_subcommand is not None:
         # Print status line for CLI subcommands
