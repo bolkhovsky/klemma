@@ -125,12 +125,62 @@ class ExtractionResult(BaseModel):
 
 
 class DailyPlan(BaseModel):
-    """Generated daily plan."""
+    """Generated daily briefing (Second Brain philosophy)."""
 
     date: str
+    # Briefing fields
+    focus: str = ""
+    why: str = ""
+    intervention: str = ""
+    status_line: str = ""
+    sources_needed: list[str] = Field(default_factory=list)
+    strategy_suggestions: list[str] = Field(default_factory=list)
+    briefing_text: str = ""
+    # Backward-compatible (TUI dashboard reads these)
     dissertation_task: str = ""
     assistant_task: str = ""
     reading_target: str = ""
     reading_snippet: str = ""
     progress_summary: str = ""
     coverage_gaps: list[str] = Field(default_factory=list)
+
+
+class CitationEntry(BaseModel):
+    """Запланированная цитата для раздела."""
+
+    citekey: str
+    fragment_text: str = ""
+    usage: str = ""  # evidence / method / comparison / definition / quote
+    position: str = ""
+    relevance: int = Field(3, ge=1, le=5)
+
+
+class ArgumentBlock(BaseModel):
+    """Логический блок структуры аргументации."""
+
+    order: int
+    title: str
+    description: str
+    citations: list[str] = Field(default_factory=list)
+    estimated_words: int = 200
+
+
+class ResearchResult(BaseModel):
+    """Результат исследовательского анализа раздела."""
+
+    section: str
+    chapter: int
+    section_title: str = ""
+    section_status: str = ""
+    current_word_count: int = 0
+    target_word_count: int = 0
+    readiness_pct: int = 0
+    available_sources: int = 0
+    available_fragments: int = 0
+    fragment_distribution: dict[str, int] = Field(default_factory=dict)
+    argument_blocks: list[ArgumentBlock] = Field(default_factory=list)
+    citation_plan: list[CitationEntry] = Field(default_factory=list)
+    missing_coverage: list[str] = Field(default_factory=list)
+    writing_suggestions: list[str] = Field(default_factory=list)
+    research_text: str = ""
+    generated_at: datetime = Field(default_factory=datetime.now)

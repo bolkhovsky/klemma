@@ -9,6 +9,7 @@ from ..config import KlemmaConfig
 from ..literature.models import ExtractionResult, Fragment, ZoteroEntry
 from ..literature.pdf import PDFExtractor
 from ..state import StateManager
+from ..vault import VaultAdapter
 from .planner import DISSERTATION_CONTEXT
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,42 @@ def extract_fragments(
     )
 
 
+def _format_fragments_for_vault(fragments: list[Fragment]) -> str:
+    """Format fragments as Obsidian callouts matching zobsidian note style."""
+    lines = []
+    for f in sorted(fragments, key=lambda x: (-x.relevance, x.section or "")):
+        page_str = f"Стр. {f.page}" if f.page else "—"
+        section_str = f"Раздел {f.section}" if f.section else f"Глава {f.chapter}" if f.chapter else "—"
+        stars = "\u2b50" * f.relevance
+        lines.append(f"> [!quote] {page_str} | {section_str} | {f.type} | {stars}")
+        lines.append(f"> \u00ab {f.text} \u00bb")
+        if f.usage_hint:
+            lines.append(f"> *{f.usage_hint}*")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def save_fragments_to_vault(
+    citekey: str,
+    fragments: list[Fragment],
+    vault: VaultAdapter,
+) -> Optional[str]:
+    """Save extracted fragments to the @citekey note in vault.
+
+    Updates the '## 💬 Цитаты для диссертации' section.
+    """
+    note_name = f"@{citekey}"
+    content = _format_fragments_for_vault(fragments)
+    section_heading = "## \U0001f4ac Цитаты для диссертации"
+
+    path = vault.update_section(note_name, section_heading, content)
+    if path:
+        logger.info("Фрагменты сохранены в vault: %s", path)
+        return str(path)
+    logger.warning("Заметка %s не найдена в vault — фрагменты не сохранены", note_name)
+    return None
+
+
 def extract_from_citekey(
     citekey: str,
     config: KlemmaConfig,
@@ -110,6 +147,7 @@ def extract_from_citekey(
     ai: ClaudeClient,
     pdf_extractor: PDFExtractor,
     pdf_search_paths: list[Path],
+    pdf_lookup: Optional[dict[str, str]] = None,
 ) -> Optional[ExtractionResult]:
     """Full extraction pipeline: find source, get PDF, extract fragments."""
 
@@ -125,6 +163,7 @@ def extract_from_citekey(
         pdf_search_paths,
         entry_title="",
         direct_path=source.get("pdf_path"),
+        pdf_lookup=pdf_lookup,
     )
 
     if not pdf_path:

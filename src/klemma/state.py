@@ -77,8 +77,17 @@ CREATE TABLE IF NOT EXISTS reading_queue (
     completed_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS source_sections (
+    source_id TEXT NOT NULL REFERENCES sources(id),
+    chapter INTEGER NOT NULL,
+    section TEXT NOT NULL,
+    PRIMARY KEY (source_id, section)
+);
+
 CREATE INDEX IF NOT EXISTS idx_sources_status ON sources(status);
 CREATE INDEX IF NOT EXISTS idx_sources_chapter ON sources(primary_chapter);
+CREATE INDEX IF NOT EXISTS idx_source_sections_section ON source_sections(section);
+CREATE INDEX IF NOT EXISTS idx_source_sections_chapter ON source_sections(chapter);
 CREATE INDEX IF NOT EXISTS idx_fragments_source ON fragments(source_id);
 CREATE INDEX IF NOT EXISTS idx_fragments_section ON fragments(section);
 CREATE INDEX IF NOT EXISTS idx_fragments_type ON fragments(fragment_type);
@@ -244,27 +253,58 @@ class StateManager:
             stats["today"] = row["count"] if row else 0
             return stats
 
+    def set_source_sections(
+        self, source_id: str, sections: list[str], chapters: list[int]
+    ) -> None:
+        """Записать все секции/главы для источника (из frontmatter sections/chapters)."""
+        with self._conn() as conn:
+            conn.execute(
+                "DELETE FROM source_sections WHERE source_id=?", (source_id,)
+            )
+            for sec in sections:
+                # Определить главу из номера секции
+                ch = int(sec.split(".")[0]) if "." in sec else None
+                # Или взять из списка chapters если глава без точки
+                if ch is None:
+                    continue
+                conn.execute(
+                    "INSERT OR IGNORE INTO source_sections (source_id, chapter, section) VALUES (?, ?, ?)",
+                    (source_id, ch, sec),
+                )
+            # Добавить главы без конкретных секций (если chapters шире чем sections)
+            existing_chapters = {int(s.split(".")[0]) for s in sections if "." in s}
+            for ch in chapters:
+                if ch not in existing_chapters:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO source_sections (source_id, chapter, section) VALUES (?, ?, ?)",
+                        (source_id, ch, str(ch)),
+                    )
+
     def get_by_chapter(self, chapter: int) -> list[dict]:
         with self._conn() as conn:
             cur = conn.execute(
-                """SELECT id, note_path, quality_score, primary_section,
-                          relevance_nr1, relevance_nr2, citation_priority
-                   FROM sources
-                   WHERE status=? AND primary_chapter=?
-                   ORDER BY citation_priority DESC, quality_score DESC""",
-                (ProcessingStatus.COMPLETED.value, chapter),
+                """SELECT DISTINCT s.id, s.note_path, s.quality_score, s.primary_section,
+                          s.relevance_nr1, s.relevance_nr2, s.citation_priority,
+                          s.fragment_count
+                   FROM sources s
+                   LEFT JOIN source_sections ss ON s.id = ss.source_id
+                   WHERE s.status=? AND (s.primary_chapter=? OR ss.chapter=?)
+                   ORDER BY s.citation_priority DESC, s.quality_score DESC""",
+                (ProcessingStatus.COMPLETED.value, chapter, chapter),
             )
             return [dict(row) for row in cur.fetchall()]
 
     def get_by_section(self, section: str) -> list[dict]:
         with self._conn() as conn:
             cur = conn.execute(
-                """SELECT id, note_path, quality_score, primary_chapter,
-                          relevance_nr1, relevance_nr2, citation_priority
-                   FROM sources
-                   WHERE status=? AND primary_section LIKE ?
-                   ORDER BY citation_priority DESC, quality_score DESC""",
-                (ProcessingStatus.COMPLETED.value, f"{section}%"),
+                """SELECT DISTINCT s.id, s.note_path, s.quality_score, s.primary_chapter,
+                          s.relevance_nr1, s.relevance_nr2, s.citation_priority,
+                          s.fragment_count
+                   FROM sources s
+                   LEFT JOIN source_sections ss ON s.id = ss.source_id
+                   WHERE s.status=? AND (s.primary_section LIKE ? OR ss.section LIKE ?)
+                   ORDER BY s.citation_priority DESC, s.quality_score DESC""",
+                (ProcessingStatus.COMPLETED.value, f"{section}%", f"{section}%"),
             )
             return [dict(row) for row in cur.fetchall()]
 
@@ -437,21 +477,65 @@ class StateManager:
         reading_target: str = "",
         reading_snippet: str = "",
         plan_json: str = "",
+        progress_summary: str = "",
     ):
         today = date.today().isoformat()
         with self._conn() as conn:
             conn.execute(
                 """INSERT INTO daily_plans
-                   (date, dissertation_task, assistant_task, reading_target, reading_snippet, plan_json)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                   (date, dissertation_task, assistant_task, reading_target,
+                    reading_snippet, plan_json, progress_summary)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(date) DO UPDATE SET
                    dissertation_task=?, assistant_task=?, reading_target=?,
-                   reading_snippet=?, plan_json=?""",
+                   reading_snippet=?, plan_json=?, progress_summary=?""",
                 (
-                    today, dissertation_task, assistant_task, reading_target, reading_snippet, plan_json,
-                    dissertation_task, assistant_task, reading_target, reading_snippet, plan_json,
+                    today, dissertation_task, assistant_task, reading_target,
+                    reading_snippet, plan_json, progress_summary,
+                    dissertation_task, assistant_task, reading_target,
+                    reading_snippet, plan_json, progress_summary,
                 ),
             )
+
+    def get_writing_streak(self) -> dict:
+        """Calculate writing streak and days without progress from daily_plans.
+
+        A day counts as 'progress' if a plan was generated for it.
+        Returns {"days_without_progress": int, "streak": int, "last_progress_date": str|None}.
+        """
+        from datetime import timedelta
+
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT date FROM daily_plans ORDER BY date DESC LIMIT 30"
+            )
+            plan_dates = {row["date"] for row in cur.fetchall()}
+
+        if not plan_dates:
+            return {"days_without_progress": 0, "streak": 0, "last_progress_date": None}
+
+        today = date.today()
+        days_without = 0
+        streak = 0
+        last_progress = None
+
+        # Count from yesterday backward (today's plan hasn't been generated yet)
+        for i in range(1, 31):
+            check = (today - timedelta(days=i)).isoformat()
+            if check in plan_dates:
+                last_progress = last_progress or check
+                streak += 1
+            else:
+                if last_progress is None:
+                    days_without += 1
+                else:
+                    break
+
+        return {
+            "days_without_progress": days_without,
+            "streak": streak,
+            "last_progress_date": last_progress,
+        }
 
     def get_plan(self, plan_date: Optional[str] = None) -> Optional[dict]:
         d = plan_date or date.today().isoformat()

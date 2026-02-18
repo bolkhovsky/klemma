@@ -62,45 +62,68 @@ def main(ctx, config):
 @main.command()
 @click.pass_context
 def morning(ctx):
-    """Generate daily morning plan."""
+    """Утренний брифинг — план дня по философии Second Brain."""
     config_path = ctx.obj["config_path"]
     cfg, state, vault = _init_components(config_path)
     ai = _init_ai(cfg)
 
     from .skills.planner import generate_morning_plan
 
-    console.print("[blue]Generating morning plan...[/blue]")
+    console.print("[blue]Генерация утреннего брифинга...[/blue]")
 
     plan = generate_morning_plan(cfg, state, vault, ai)
 
-    # Display plan
     console.print()
+
+    # Статус
+    if plan.status_line:
+        console.print(Panel(plan.status_line, border_style="blue"))
+
+    # Интервенция
+    if plan.intervention and plan.intervention != "NONE":
+        style = {
+            "CELEBRATION": "green",
+            "FOCUS_REDIRECT": "yellow",
+            "ESCALATION": "red",
+            "DEADLINE_RISK": "yellow",
+            "DEADLINE_CRITICAL": "red bold",
+        }.get(plan.intervention, "yellow")
+        console.print(f"[{style}]{plan.intervention}[/{style}]")
+
+    # Фокус
     console.print(Panel(
-        f"[bold]Dissertation:[/bold] {plan.dissertation_task}\n\n"
-        f"[bold]Assistant:[/bold] {plan.assistant_task}\n\n"
-        f"[bold]Reading:[/bold] {plan.reading_target}\n"
-        f"[dim]{plan.reading_snippet}[/dim]\n\n"
-        f"[bold]Progress:[/bold] {plan.progress_summary}",
-        title=f"Plan for today",
+        f"[bold]{plan.focus}[/bold]\n\n"
+        f"[dim]Почему:[/dim] {plan.why}",
+        title="Фокус сегодня",
         border_style="green",
     ))
 
-    if plan.coverage_gaps:
-        console.print("\n[yellow]Coverage gaps:[/yellow]")
-        for gap in plan.coverage_gaps:
-            console.print(f"  - {gap}")
+    # Источники
+    if plan.sources_needed:
+        console.print(f"\n[cyan]Источники:[/cyan] {', '.join(plan.sources_needed)}")
 
-    # Append to daily note
-    daily_content = (
-        f"## Klemma Plan\n\n"
-        f"**Dissertation:** {plan.dissertation_task}\n\n"
-        f"**Assistant:** {plan.assistant_task}\n\n"
-        f"**Reading:** {plan.reading_target}\n\n"
-        f"> {plan.reading_snippet}\n\n"
-        f"**Progress:** {plan.progress_summary}\n"
-    )
+    # Задача ассистента
+    if plan.assistant_task:
+        console.print(f"\n[blue]Задача ассистента:[/blue] {plan.assistant_task}")
+
+    # Чтение
+    if plan.reading_target:
+        console.print(f"\n[dim]Чтение:[/dim] {plan.reading_target}")
+
+    # Стратегические предложения
+    if plan.strategy_suggestions:
+        console.print("\n[yellow]Предложения по стратегии:[/yellow]")
+        for s in plan.strategy_suggestions:
+            console.print(f"  - {s}")
+
+    # Прогресс
+    if plan.progress_summary:
+        console.print(f"\n[dim]{plan.progress_summary}[/dim]")
+
+    # Записать брифинг в daily note
+    daily_content = f"## Klemma Брифинг\n\n{plan.briefing_text}\n"
     vault.append_to_daily(daily_content)
-    console.print("\n[dim]Plan appended to daily note.[/dim]")
+    console.print("\n[dim]Брифинг добавлен в daily note.[/dim]")
 
 
 @main.command()
@@ -131,9 +154,11 @@ def extract(ctx, citekey):
 
     # Find PDF
     pdf_search_paths = [Path("/Users/ilya/Zotero/storage")]
+    pdf_lookup = PDFExtractor.load_pdf_lookup(Path(cfg.zotero.library_json)) if cfg.zotero.library_json else {}
     pdf_path = pdf_extractor.find_pdf(
         citekey, pdf_search_paths,
         direct_path=source.get("pdf_path") if source else None,
+        pdf_lookup=pdf_lookup,
     )
 
     if not pdf_path:
@@ -188,6 +213,14 @@ def extract(ctx, citekey):
         )
 
     console.print(table)
+
+    # Save fragments to vault note
+    from .skills.extractor import save_fragments_to_vault
+    saved_path = save_fragments_to_vault(citekey, result.fragments, vault)
+    if saved_path:
+        console.print(f"[green]Фрагменты сохранены в vault:[/green] @{citekey}")
+    else:
+        console.print(f"[yellow]Заметка @{citekey} не найдена в vault — фрагменты только в БД[/yellow]")
 
 
 @main.command()
@@ -318,6 +351,155 @@ def fragments(ctx, chapter, section, frag_type, limit):
 
 
 @main.command()
+@click.option("--section", "-s", required=True, help="Идентификатор раздела, например 1.3.2")
+@click.option("--no-save", is_flag=True, help="Не сохранять в vault")
+@click.option("--force", is_flag=True, help="Переизвлечь фрагменты даже если уже есть")
+@click.pass_context
+def research(ctx, section, no_save, force):
+    """Исследовательский брифинг — анализ раздела перед написанием.
+
+    Собирает контекст из vault и базы данных, анализирует готовность
+    раздела и предлагает структуру аргументации с планом цитирования.
+
+    Автоматически извлекает фрагменты из источников раздела, если они
+    ещё не были извлечены. Флаг --force переизвлекает все фрагменты.
+
+    Пример: klemma research --section 1.3.2
+    """
+    config_path = ctx.obj["config_path"]
+    cfg, state, vault = _init_components(config_path)
+    ai = _init_ai(cfg)
+
+    from .skills.researcher import pre_extract_sources, research_section
+
+    chapter = int(section.split(".")[0])
+
+    # Авто-экстракция фрагментов
+    console.print(f"[blue]Подготовка фрагментов для раздела {section}...[/blue]")
+    extract_result = pre_extract_sources(
+        section, chapter, cfg, state, vault, ai,
+        force=force,
+        on_progress=lambda ck, status, i, n: console.print(
+            f"  [{i}/{n}] @{ck}: {status}"
+        ),
+    )
+
+    if extract_result["extracted"] > 0:
+        console.print(f"[green]Извлечено: {extract_result['extracted']} источников[/green]")
+    if extract_result["no_pdf"]:
+        for ck in extract_result["no_pdf"]:
+            console.print(f"  [yellow]@{ck}: PDF не найден[/yellow]")
+    if extract_result["skipped"] > 0 and extract_result["extracted"] == 0:
+        console.print(f"[dim]Все {extract_result['skipped']} источников уже извлечены[/dim]")
+
+    # Проверить: первый запуск или обновление
+    from .skills.researcher import _load_previous_research
+    prev = _load_previous_research(section, chapter, state, vault)
+    if prev:
+        mode_label = "[magenta]Инкрементальное обновление[/magenta]"
+        details = []
+        if prev["user_notes"]:
+            details.append("заметки пользователя")
+        details.append(f"пред. фрагментов: {prev['previous_fragment_count']}")
+        console.print(f"\n{mode_label} раздела {section} ({', '.join(details)})")
+    else:
+        console.print(f"\n[blue]Первичный анализ раздела {section}...[/blue]")
+
+    result = research_section(section, cfg, state, vault, ai, save_to_vault=not no_save)
+
+    if not result.section_status:
+        console.print("[red]Не удалось сгенерировать брифинг.[/red]")
+        return
+
+    console.print()
+
+    # Статус раздела
+    status_color = {
+        "не начат": "red",
+        "черновик": "yellow",
+        "требует доработки": "yellow",
+        "почти готов": "green",
+        "готов": "green",
+    }.get(result.section_status, "white")
+
+    status_text = (
+        f"[bold]{result.section_title or f'Раздел {section}'}[/bold]\n\n"
+        f"Статус: [{status_color}]{result.section_status}[/{status_color}]\n"
+        f"Объём: {result.current_word_count}/{result.target_word_count} слов "
+        f"({result.readiness_pct}%)\n"
+        f"Источников: {result.available_sources} | "
+        f"Фрагментов: {result.available_fragments}"
+    )
+    console.print(Panel(status_text, title=f"Раздел {section}", border_style="blue"))
+
+    # Распределение фрагментов
+    if result.fragment_distribution:
+        parts = [f"{t}: {c}" for t, c in result.fragment_distribution.items() if c > 0]
+        if parts:
+            console.print(f"\n[dim]Фрагменты: {', '.join(parts)}[/dim]")
+
+    # Структура аргументации
+    if result.argument_blocks:
+        console.print()
+        table = Table(title="Структура аргументации")
+        table.add_column("#", justify="right", width=3, style="dim")
+        table.add_column("Блок", max_width=30)
+        table.add_column("Описание", max_width=45)
+        table.add_column("Источники", max_width=25, style="cyan")
+        table.add_column("Слов", justify="right", width=5)
+
+        for block in result.argument_blocks:
+            cites = ", ".join(f"@{c}" for c in block.citations[:3])
+            if len(block.citations) > 3:
+                cites += f" +{len(block.citations) - 3}"
+            table.add_row(
+                str(block.order),
+                block.title,
+                block.description[:45] + ("..." if len(block.description) > 45 else ""),
+                cites,
+                str(block.estimated_words),
+            )
+        console.print(table)
+
+    # План цитирования
+    if result.citation_plan:
+        console.print()
+        table = Table(title="План цитирования")
+        table.add_column("Источник", width=25, style="cyan")
+        table.add_column("Тип", width=12)
+        table.add_column("Рел", justify="right", width=3)
+        table.add_column("Где", max_width=35)
+        table.add_column("Фрагмент", max_width=40, style="dim")
+
+        for c in result.citation_plan:
+            rel_style = "green" if c.relevance >= 4 else "yellow" if c.relevance >= 3 else "dim"
+            table.add_row(
+                f"@{c.citekey}",
+                c.usage,
+                f"[{rel_style}]{c.relevance}[/{rel_style}]",
+                c.position[:35] if c.position else "",
+                c.fragment_text[:40] + ("..." if len(c.fragment_text) > 40 else "") if c.fragment_text else "",
+            )
+        console.print(table)
+
+    # Пробелы
+    if result.missing_coverage:
+        console.print("\n[yellow]Пробелы в покрытии:[/yellow]")
+        for m in result.missing_coverage:
+            console.print(f"  - {m}")
+
+    # Рекомендации
+    if result.writing_suggestions:
+        console.print("\n[green]Рекомендации по написанию:[/green]")
+        for s in result.writing_suggestions:
+            console.print(f"  - {s}")
+
+    # Сохранение
+    if not no_save:
+        console.print(f"\n[dim]Брифинг сохранён: Research_{section}.md[/dim]")
+
+
+@main.command()
 @click.option("--with-queue", is_flag=True, help="Also populate reading queue from high-priority sources")
 @click.pass_context
 def prepopulate(ctx, with_queue):
@@ -378,6 +560,14 @@ def prepopulate(ctx, with_queue):
             citation_priority=priority or "medium",
             note_path=f"{notes_folder}/{note_name}.md",
         )
+
+        # Мульти-секции: sections=[1.1, 1.4.1, ...], chapters=[1, 3]
+        sections_list = props.get("sections", [])
+        chapters_list = props.get("chapters", [])
+        if isinstance(sections_list, list) and sections_list:
+            str_sections = [str(s) for s in sections_list]
+            int_chapters = [int(c) for c in chapters_list] if isinstance(chapters_list, list) else []
+            state.set_source_sections(citekey, str_sections, int_chapters)
 
         if chapter:
             by_chapter[chapter] = by_chapter.get(chapter, 0) + 1

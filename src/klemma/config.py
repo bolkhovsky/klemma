@@ -13,6 +13,7 @@ class ZoteroConfig(BaseModel):
     library_type: str = "user"
     api_key_env: str = "ZOTERO_API_KEY"
     local: bool = False
+    library_json: Optional[str] = None  # Path to BetterBibTeX JSON export
 
     @property
     def api_key(self) -> Optional[str]:
@@ -43,6 +44,12 @@ class ChapterMapping(BaseModel):
     section: str
 
 
+class ChapterDeadline(BaseModel):
+    chapter: str  # "1", "2", ..., "introduction", "conclusion"
+    deadline: str  # ISO date: "2026-03-15"
+    label: str = ""
+
+
 class DissertationConfig(BaseModel):
     current_chapter: int = 2
     current_section: str = "2.3.1"
@@ -52,6 +59,10 @@ class DissertationConfig(BaseModel):
     priority_terms: list[str] = Field(default_factory=list)
     chapter_mapping: list[ChapterMapping] = Field(default_factory=list)
     min_sources_per_section: int = 3
+    deadlines: list[ChapterDeadline] = Field(default_factory=list)
+    chapter_plan_pattern: str = "План_Глава{chapter}"
+    writing_constraints: str = "1-1.5 ч/день, 200-300 слов/день, Pomodoro"
+    chapter_draft_pattern: str = "Глава_{chapter}"
 
 
 class PlanningConfig(BaseModel):

@@ -11,6 +11,7 @@ zotero:
   library_type: "user"
   api_key_env: "ZOTERO_API_KEY"
   local: false
+  library_json: "/Users/ilya/research/zobsidian-processor/data/pubs-bibtex.json"
 
 obsidian:
   vault_path: "/Users/ilya/Documents/Obsidian Vault"
@@ -28,8 +29,8 @@ state:
   db_path: "./data/klemma.db"
 
 dissertation:
-  current_chapter: 2
-  current_section: "2.3.1"
+  current_chapter: 1
+  current_section: "1.2"
   title: "Geoinformation methodology for Arctic ice conditions assessment"
   chapters:
     1: "Analysis of ice forecasting domain"
@@ -39,6 +40,27 @@ dissertation:
   scientific_results:
     nr1: "AMSR2 validation model"
     nr2: "IIEE-decomposition quality assessment"
+  deadlines:
+    - chapter: "1"
+      deadline: "2026-03-15"
+      label: "Глава 1"
+    - chapter: "2"
+      deadline: "2026-05-31"
+      label: "Глава 2"
+    - chapter: "3"
+      deadline: "2026-08-31"
+      label: "Глава 3"
+    - chapter: "4"
+      deadline: "2026-10-31"
+      label: "Глава 4"
+    - chapter: "introduction"
+      deadline: "2026-11-30"
+      label: "Введение"
+    - chapter: "conclusion"
+      deadline: "2026-12-15"
+      label: "Заключение"
+  chapter_plan_pattern: "План_Глава{chapter}"
+  writing_constraints: "1-1.5 ч/день, 200-300 слов/день, Pomodoro"
   priority_terms:
     - icenet
     - iiee

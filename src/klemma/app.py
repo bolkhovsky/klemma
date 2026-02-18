@@ -19,6 +19,9 @@ class KlemmaApp(App):
         Binding("q", "quit", "Quit"),
         Binding("d", "switch_screen('dashboard')", "Dashboard"),
         Binding("f", "switch_screen('fragments')", "Fragments"),
+        Binding("s", "switch_screen('stats')", "Stats"),
+        Binding("c", "switch_screen('coverage')", "Coverage"),
+        Binding("g", "switch_screen('gaps')", "Gaps"),
         Binding("r", "refresh", "Refresh"),
     ]
 
@@ -90,18 +93,32 @@ class KlemmaApp(App):
         from .tui.dashboard import DashboardScreen
         yield DashboardScreen(self.cfg, self.state, self.vault)
 
+    SCREEN_SELECTOR = "DashboardScreen, FragmentScreen, StatsScreen, CoverageScreen, GapsScreen"
+
+    def _clear_screens(self):
+        self.query(self.SCREEN_SELECTOR).remove()
+
     def action_switch_screen(self, screen_name: str):
+        self._clear_screens()
+        self._current_screen = screen_name
+
         if screen_name == "dashboard":
             from .tui.dashboard import DashboardScreen
-            self.query("DashboardScreen, FragmentScreen").remove()
             self.mount(DashboardScreen(self.cfg, self.state, self.vault))
         elif screen_name == "fragments":
             from .tui.fragments import FragmentScreen
-            self.query("DashboardScreen, FragmentScreen").remove()
             self.mount(FragmentScreen(self.cfg, self.state))
+        elif screen_name == "stats":
+            from .tui.stats import StatsScreen
+            self.mount(StatsScreen(self.cfg, self.state))
+        elif screen_name == "coverage":
+            from .tui.coverage import CoverageScreen
+            self.mount(CoverageScreen(self.cfg, self.state))
+        elif screen_name == "gaps":
+            from .tui.gaps import GapsScreen
+            self.mount(GapsScreen(self.cfg, self.state))
 
     def action_refresh(self):
         """Refresh current screen."""
-        self.query("DashboardScreen, FragmentScreen").remove()
-        from .tui.dashboard import DashboardScreen
-        self.mount(DashboardScreen(self.cfg, self.state, self.vault))
+        screen = getattr(self, "_current_screen", "dashboard")
+        self.action_switch_screen(screen)

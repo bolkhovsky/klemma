@@ -31,10 +31,13 @@ klemma morning
 # 4. Извлечь фрагменты для цитирования из PDF источника
 klemma extract anderssonSeasonalArcticSea2021
 
-# 5. Просмотреть извлечённые фрагменты
+# 5. Исследовательский брифинг по разделу (авто-извлечение + анализ)
+klemma research --section 1.3.2
+
+# 6. Просмотреть извлечённые фрагменты
 klemma fragments
 
-# 6. Открыть TUI-дашборд
+# 7. Открыть TUI-дашборд
 klemma
 ```
 
@@ -46,7 +49,9 @@ klemma
 Горячие клавиши: `d` — дашборд, `f` — фрагменты, `r` — обновить, `q` — выход.
 
 ### `klemma prepopulate`
-Импортирует заметки `@*.md` из Obsidian vault в базу данных. Читает YAML-фронтматтер каждой заметки (quality, priority, chapter, section, relevance_nr1/nr2) и регистрирует источник.
+Импортирует заметки `@*.md` из Obsidian vault в базу данных. Читает YAML-фронтматтер каждой заметки (quality, priority, chapter, section, sections, chapters, relevance_nr1/nr2) и регистрирует источник.
+
+Поддерживает мульти-секционные источники: `sections: [1.1, 1.4.1, 3.2.2]` → заполняет таблицу `source_sections` для поиска по всем разделам.
 
 ```bash
 klemma prepopulate                # импортировать все источники
@@ -57,10 +62,21 @@ klemma prepopulate --with-queue   # + добавить high-priority в очер
 Генерирует ежедневный план через Claude: задача для диссертации, задача для ассистента, рекомендация по чтению. Учитывает вчерашний план, покрытие глав, пробелы в источниках. План сохраняется в базу и дописывается в daily note Obsidian.
 
 ### `klemma extract <citekey>`
-Извлекает фрагменты для цитирования из PDF. Находит PDF в хранилище Zotero, извлекает текст (PyMuPDF), отправляет в Claude для анализа. Каждый фрагмент маппится на главу/раздел диссертации с оценкой релевантности.
+Извлекает фрагменты для цитирования из PDF. Находит PDF через BetterBibTeX JSON lookup или в хранилище Zotero, извлекает текст (PyMuPDF), отправляет в Claude для анализа. Каждый фрагмент маппится на главу/раздел диссертации с оценкой релевантности. Фрагменты сохраняются в SQLite и в vault-заметку `@citekey.md` (секция `## 💬 Цитаты для диссертации`).
 
 ```bash
 klemma extract anderssonSeasonalArcticSea2021
+```
+
+### `klemma research --section <X.X>`
+Исследовательский брифинг: анализ готовности раздела к написанию. Автоматически извлекает фрагменты для всех источников раздела (если ещё не извлечены), собирает контекст (черновик, план сессий, фрагменты, аннотации, покрытие) и генерирует структуру аргументации с планом цитирования.
+
+При повторном запуске работает в инкрементальном режиме: читает заметки пользователя из `## ✏️ Что нового`, определяет дельту (новые источники и фрагменты) и обновляет брифинг. Заметки пользователя архивируются в `## 📋 История изменений` с таймстампом.
+
+```bash
+klemma research --section 1.3.2          # первый запуск: полный анализ
+klemma research --section 1.3.2          # повторный: инкрементальное обновление
+klemma research --section 1.3.2 --force  # переизвлечь все фрагменты
 ```
 
 ### `klemma stats`
@@ -132,21 +148,37 @@ author: "Tom R. Andersson..."
 year: 2021
 quality: 5
 priority: "high"
-chapter: 2
-section: "2.3.1"
+chapter: 2                                    # основная глава
+section: "2.3.1"                              # основной раздел
+sections: [1.4.3, 2.2.2, 2.3.1, 3.2.1]      # все релевантные разделы
+chapters: [1, 2, 3]                           # все релевантные главы
 relevance_nr1: 5
 relevance_nr2: 4
 tags: ["Sea-Ice", "Machine-Learning"]
 ---
 ```
 
+`chapter`/`section` — основной раздел (primary). `sections`/`chapters` — все разделы, в которых источник полезен. `klemma prepopulate` записывает оба варианта; `klemma research` находит источники по всем секциям.
+
+## Конфигурация Zotero
+
+Для надёжного нахождения PDF добавьте путь к BetterBibTeX JSON-экспорту:
+
+```yaml
+zotero:
+  library_json: "/path/to/pubs-bibtex.json"   # BetterBibTeX auto-export
+```
+
+PDF ищутся в 3 этапа: прямой путь из БД → BetterBibTeX lookup (citekey → attachment path) → нечёткий поиск по имени файла в Zotero storage.
+
 ## Архитектура
 
 ```
 klemma (CLI/TUI)
-├── Claude Code CLI ── AI-анализ (планирование, извлечение фрагментов)
-├── Obsidian vault ─── заметки источников + daily notes
-├── Zotero storage ─── PDF файлы
+├── Claude Code CLI ── AI-анализ (планирование, фрагменты, research briefing)
+├── Obsidian vault ─── заметки источников + research notes + daily notes
+├── BetterBibTeX JSON ─ citekey → PDF path mapping
+├── Zotero storage ─── PDF файлы (fallback)
 ├── PyMuPDF ────────── извлечение текста из PDF
-└── SQLite ─────────── состояние: sources, fragments, daily_plans, reading_queue
+└── SQLite ─────────── sources, source_sections, fragments, daily_plans, reading_queue
 ```

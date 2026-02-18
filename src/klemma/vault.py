@@ -97,6 +97,54 @@ class VaultAdapter:
         path.write_text(content, encoding="utf-8")
         return path
 
+    def update_section(self, name: str, section_heading: str, new_content: str) -> Optional[Path]:
+        """Replace a section's content in an existing note.
+
+        Finds the heading (e.g. '## 💬 Цитаты для диссертации') and replaces
+        everything until the next '---' separator or same/higher-level heading.
+        """
+        text = self.read_note(name)
+        if not text:
+            return None
+
+        idx = text.find(section_heading)
+        if idx == -1:
+            return None
+
+        # Find end of section: next '---' or next heading of same/higher level
+        heading_level = 0
+        for ch in section_heading:
+            if ch == "#":
+                heading_level += 1
+            else:
+                break
+
+        after = idx + len(section_heading)
+        end_idx = len(text)
+        lines = text[after:].split("\n")
+        offset = after
+        for line in lines:
+            stripped = line.lstrip()
+            # Stop at --- separator
+            if stripped.startswith("---"):
+                end_idx = offset
+                break
+            # Stop at same/higher-level heading
+            if stripped.startswith("#"):
+                level = len(stripped) - len(stripped.lstrip("#"))
+                if level <= heading_level:
+                    end_idx = offset
+                    break
+            offset += len(line) + 1
+
+        updated = text[:idx] + section_heading + "\n\n" + new_content + "\n\n" + text[end_idx:]
+
+        # Find the file and write
+        for md_path in self.vault_path.rglob(f"{name}.md"):
+            md_path.write_text(updated, encoding="utf-8")
+            return md_path
+        return None
+
     def append_to_note(self, name: str, content: str, folder: Optional[str] = None) -> Optional[Path]:
         """Append content to an existing note."""
         target_dir = self.vault_path / folder if folder else self.vault_path

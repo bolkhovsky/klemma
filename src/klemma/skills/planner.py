@@ -1,7 +1,11 @@
-"""Morning planning skill — generates daily plans."""
+"""Утренний брифинг — генерация плана дня (философия Second Brain)."""
 
+import json
 import logging
+import re
+from datetime import date, datetime
 from pathlib import Path
+from typing import Optional
 
 from ..ai import ClaudeClient
 from ..config import KlemmaConfig
@@ -11,7 +15,6 @@ from ..vault import VaultAdapter
 
 logger = logging.getLogger(__name__)
 
-# Full dissertation context for prompts (from zobsidian-processor)
 DISSERTATION_CONTEXT = """\
 Тема: «Геоинформационная методология представления и анализа оперативной НГГМИ
 для оценки ледовой обстановки в арктических акваториях с использованием нейронных сетей»
@@ -20,13 +23,99 @@ DISSERTATION_CONTEXT = """\
 НР2: Геоинформационная методика оценки качества прогнозов (IIEE-декомпозиция: AEE + ME)
 
 Главы:
-1. Анализ предметной области прогнозирования ледовой обстановки
-2. Геоинформационная модель оценки качества прогнозов
-3. Методика валидации прогнозов ледовой обстановки
-4. Алгоритм и программная реализация валидации
+1. Анализ предметной области прогнозирования ледовой обстановки (дедлайн: 15 марта 2026)
+2. Геоинформационная модель оценки качества прогнозов (дедлайн: 31 мая 2026)
+3. Методика валидации прогнозов ледовой обстановки (дедлайн: 31 августа 2026)
+4. Алгоритм и программная реализация валидации (дедлайн: 31 октября 2026)
 
 Ключевые понятия: SIC, IIEE, AEE, ME, IceNet, AMSR2, ДЗЗ, РСА, НГГМИ, НГО, АЗРФ, СМП\
 """
+
+
+def _get_current_deadline(config: KlemmaConfig) -> tuple[str, int]:
+    """Дедлайн текущей главы и дней до него."""
+    chapter_str = str(config.dissertation.current_chapter)
+    today = date.today()
+
+    for dl in config.dissertation.deadlines:
+        if dl.chapter == chapter_str:
+            deadline_date = datetime.strptime(dl.deadline, "%Y-%m-%d").date()
+            days_remaining = (deadline_date - today).days
+            return dl.deadline, days_remaining
+
+    return "не указан", -1
+
+
+def _read_chapter_plan(config: KlemmaConfig, vault: VaultAdapter) -> Optional[str]:
+    """Прочитать план главы из vault (например, План_Глава1)."""
+    pattern = config.dissertation.chapter_plan_pattern
+    note_name = pattern.format(chapter=config.dissertation.current_chapter)
+
+    content = vault.read_note(note_name)
+    if not content:
+        return None
+
+    # Извлечь секцию с планом сессий (самая полезная часть)
+    marker = "## План работы по сессиям"
+    idx = content.find(marker)
+    if idx != -1:
+        end_marker = "## Сводная таблица"
+        end_idx = content.find(end_marker, idx)
+        if end_idx != -1:
+            return content[idx:end_idx].strip()
+        return content[idx:].strip()
+
+    # Если маркер не найден — вернуть начало контента
+    return content[:4000]
+
+
+def _format_briefing(data: dict) -> str:
+    """Форматировать JSON-ответ в русский брифинг для daily note."""
+    lines = []
+
+    status = data.get("status_line", "")
+    if status:
+        lines.append(f"**Статус:** {status}")
+
+    intervention = data.get("intervention", "NONE")
+    intervention_msg = data.get("intervention_message", "")
+    if intervention != "NONE" and intervention_msg:
+        lines.append(f"**Интервенция ({intervention}):** {intervention_msg}")
+
+    lines.append("")
+
+    focus = data.get("focus", "")
+    if focus:
+        lines.append("### Фокус сегодня")
+        lines.append(focus)
+
+    why = data.get("why", "")
+    if why:
+        lines.append(f"\n**Почему:** {why}")
+
+    sources = data.get("sources_needed", [])
+    if sources:
+        lines.append(f"\n**Источники:** {', '.join(sources)}")
+
+    reading = data.get("reading_target", "")
+    if reading:
+        lines.append(f"\n**Чтение:** {reading}")
+
+    assistant = data.get("assistant_task", "")
+    if assistant:
+        lines.append(f"\n**Задача ассистента:** {assistant}")
+
+    suggestions = data.get("strategy_suggestions", [])
+    if suggestions:
+        lines.append("\n### Предложения по стратегии")
+        for s in suggestions:
+            lines.append(f"- {s}")
+
+    progress = data.get("progress_summary", "")
+    if progress:
+        lines.append(f"\n**Прогресс:** {progress}")
+
+    return "\n".join(lines)
 
 
 def generate_morning_plan(
@@ -35,25 +124,30 @@ def generate_morning_plan(
     vault: VaultAdapter,
     ai: ClaudeClient,
 ) -> DailyPlan:
-    """Generate a daily plan using Claude."""
+    """Сгенерировать утренний брифинг через Claude."""
 
-    # Gather context
+    # Контекст из базы
     yesterday = state.get_yesterday_plan()
     coverage = state.get_coverage_stats()
     gaps = state.get_gaps(min_sources=config.dissertation.min_sources_per_section)
     fragment_stats = state.get_fragment_stats()
     next_reading = state.get_next_reading()
-    stats = state.get_stats()
 
-    # Check recent vault changes
-    recent_notes = vault.list_notes(config.obsidian.notes_folder)[-5:]
+    # Дедлайн
+    current_deadline, days_until_deadline = _get_current_deadline(config)
 
-    # Chapter name
+    # План главы из vault
+    chapter_plan = _read_chapter_plan(config, vault)
+
+    # Streak
+    writing_streak = state.get_writing_streak()
+
+    # Название главы
     chapter_name = config.dissertation.chapters.get(
-        config.dissertation.current_chapter, "Unknown"
+        config.dissertation.current_chapter, "Неизвестно"
     )
 
-    # Render prompt
+    # Рендер промпта
     prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "morning.md"
     user_prompt = ai.render_prompt(
         prompt_path,
@@ -61,51 +155,63 @@ def generate_morning_plan(
         current_chapter=config.dissertation.current_chapter,
         current_section=config.dissertation.current_section,
         chapter_name=chapter_name,
+        current_deadline=current_deadline,
+        days_until_deadline=days_until_deadline,
+        days_without_progress=writing_streak["days_without_progress"],
+        streak=writing_streak["streak"],
         yesterday_plan=yesterday,
+        chapter_plan=chapter_plan or "План сессий не найден.",
         coverage=coverage,
         gaps=gaps,
         fragment_stats=fragment_stats,
         next_reading=next_reading,
-        recent_notes=recent_notes,
         min_sources=config.dissertation.min_sources_per_section,
-        stats=stats,
+        writing_constraints=config.dissertation.writing_constraints,
         range=range,
     )
 
     system = (
-        "You are a PhD academic planning assistant. "
-        "Generate a focused, actionable daily plan. Respond in Russian. Output only JSON."
+        "Ты — ассистент для написания кандидатской диссертации. "
+        "Генерируй утренний брифинг по принципу «один фокус в день». "
+        "Отвечай на русском. Верни только JSON."
     )
 
     data = ai.call_json(system, user_prompt, max_tokens=2048)
 
     if not data:
-        logger.error("Failed to generate morning plan")
+        logger.error("Не удалось сгенерировать утренний план")
         return DailyPlan(
             date="",
-            dissertation_task="Plan generation failed — review coverage gaps manually",
-            assistant_task="Retry planning",
+            focus="Не удалось сгенерировать план — проверь покрытие и пробелы вручную",
+            dissertation_task="Не удалось сгенерировать план",
+            assistant_task="Повторить генерацию",
         )
 
+    focus = data.get("focus", "")
     plan = DailyPlan(
         date="",
-        dissertation_task=data.get("dissertation_task", ""),
+        # Брифинг
+        focus=focus,
+        why=data.get("why", ""),
+        intervention=data.get("intervention", "NONE"),
+        status_line=data.get("status_line", ""),
+        sources_needed=data.get("sources_needed", []),
+        strategy_suggestions=data.get("strategy_suggestions", []),
+        briefing_text=_format_briefing(data),
+        # Обратная совместимость (TUI)
+        dissertation_task=focus,
         assistant_task=data.get("assistant_task", ""),
         reading_target=data.get("reading_target", ""),
-        reading_snippet=data.get("reading_snippet", ""),
         progress_summary=data.get("progress_summary", ""),
-        coverage_gaps=data.get("coverage_gaps", []),
     )
 
-    # Save to state
-    import json
-
+    # Сохранить в базу
     state.save_plan(
         dissertation_task=plan.dissertation_task,
         assistant_task=plan.assistant_task,
         reading_target=plan.reading_target,
-        reading_snippet=plan.reading_snippet,
         plan_json=json.dumps(data, ensure_ascii=False),
+        progress_summary=plan.progress_summary,
     )
 
     return plan
