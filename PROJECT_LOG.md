@@ -1,5 +1,27 @@
 # Klemma — Project Log
 
+## v0.4.1 — 2026-02-18: Auto-Sync Section Assignments
+
+### What was done
+- **Auto-sync vault→DB**: `_sync_sections()` reads all vault @citekey.md frontmatter on every `research`, `library`, `status` command. Updates section assignments when vault differs from DB (~60ms for 138 notes)
+- **New Zotero discovery**: auto-detects entries in BetterBibTeX JSON not yet in DB, registers them as `pending` with auto-classified sections (regex patterns from config.yaml)
+- **`sync_source_sections()`** in state.py: core DB sync method, compares vault data vs DB, updates in single transaction
+- **Removed 15-source hardcap**: `pre_extract_sources()` now accepts `max_sources=50` parameter (was hardcoded 15)
+- **Raised `_load_section_sources()` limit**: from 10 to 25 max sources, chapter supplement threshold from 3 to 5
+- **Simplified `klemma import`**: delegates to `_sync_sections()`, removed 60 lines of duplicated frontmatter parsing
+
+### Impact
+- Section 1.1: 15 → 21 sources visible
+- Chapter 1: 15 → 50 sources accessible in research mode (section+chapter combined)
+- 46 new Zotero entries auto-discovered and registered as pending
+
+### Files changed
+- `src/klemma/state.py` — `_set_sections_inline()`, `sync_source_sections()`
+- `src/klemma/cli.py` — `_sync_sections()` orchestrator, wired into 3 commands, simplified `import_vault`
+- `src/klemma/skills/researcher.py` — `max_sources=50`, `max_sources=25`, threshold 3→5
+
+---
+
 ## v0.4.0 — 2026-02-18: UX Simplification + AI Librarian
 
 ### What was done

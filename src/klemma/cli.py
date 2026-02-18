@@ -31,6 +31,81 @@ def _init_ai(cfg):
     return ClaudeClient(cfg.ai)
 
 
+def _sync_sections(cfg, state, vault, quiet=False) -> dict:
+    """Sync section assignments from vault frontmatter + discover new Zotero entries.
+
+    Fast (~60ms for 138 notes). Safe to call on every command.
+    """
+    from .literature.note_factory import auto_classify
+    from .literature.pdf import PDFExtractor
+
+    notes_folder = cfg.obsidian.notes_folder
+    note_names = vault.list_notes(notes_folder)
+
+    # 1. Parse vault frontmatter for all @citekey notes
+    vault_data = []
+    for note_name in note_names:
+        if not note_name.startswith("@"):
+            continue
+        citekey = note_name.lstrip("@")
+        props = vault.get_properties(note_name)
+        if not props:
+            continue
+
+        chapter = props.get("chapter")
+        if isinstance(chapter, str):
+            chapter = int(chapter) if chapter.isdigit() else None
+
+        quality = props.get("quality", 0)
+        if isinstance(quality, str):
+            quality = int(quality.split("/")[0]) if "/" in quality else int(quality)
+
+        sections_list = props.get("sections", [])
+        chapters_list = props.get("chapters", [])
+
+        vault_data.append({
+            "citekey": citekey,
+            "primary_section": str(props.get("section", "")) or None,
+            "primary_chapter": chapter,
+            "sections": [str(s) for s in sections_list] if isinstance(sections_list, list) else [],
+            "chapters": [int(c) for c in chapters_list] if isinstance(chapters_list, list) else [],
+            "quality": quality or 0,
+            "priority": props.get("priority", "medium"),
+            "nr1": props.get("relevance_nr1", 0) or 0,
+            "nr2": props.get("relevance_nr2", 0) or 0,
+            "note_path": f"{notes_folder}/{note_name}.md",
+        })
+
+    # 2. Discover new Zotero entries not in DB
+    new_entries = []
+    if cfg.zotero.library_json:
+        entry_lookup = PDFExtractor.load_entry_lookup(Path(cfg.zotero.library_json))
+        vault_citekeys = {vd["citekey"] for vd in vault_data}
+
+        with state._conn() as conn:
+            cur = conn.execute("SELECT id FROM sources")
+            existing = {row["id"] for row in cur.fetchall()}
+
+        for citekey, entry in entry_lookup.items():
+            if citekey not in existing and citekey not in vault_citekeys:
+                classification = auto_classify(entry, cfg)
+                new_entries.append((citekey, classification))
+
+    # 3. Sync to DB
+    result = state.sync_source_sections(vault_data, new_entries)
+
+    if not quiet:
+        parts = []
+        if result["vault_updated"]:
+            parts.append(f"[green]{result['vault_updated']} updated from vault[/green]")
+        if result["new_registered"]:
+            parts.append(f"[blue]{result['new_registered']} new from Zotero[/blue]")
+        if parts:
+            console.print("[dim]Sync:[/dim] " + " | ".join(parts))
+
+    return result
+
+
 def _print_status_line(state: StateManager):
     """Print a compact status line with key metrics."""
     try:
@@ -266,7 +341,8 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, entry_lookup)
 def status(ctx, verbose, chapter):
     """Unified status: processing, coverage, gaps, reference gaps."""
     config_path = ctx.obj["config_path"]
-    cfg, state, _ = _init_components(config_path)
+    cfg, state, vault = _init_components(config_path)
+    _sync_sections(cfg, state, vault, quiet=True)
 
     proc_stats = state.get_stats()
     frag_stats = state.get_fragment_stats()
@@ -414,6 +490,7 @@ def research(ctx, section, no_save, force):
     """
     config_path = ctx.obj["config_path"]
     cfg, state, vault = _init_components(config_path)
+    _sync_sections(cfg, state, vault)
     ai = _init_ai(cfg)
 
     from .skills.researcher import pre_extract_sources, research_section
@@ -556,103 +633,50 @@ def research(ctx, section, no_save, force):
 @click.option("--with-queue", is_flag=True, help="Also populate reading queue from high-priority sources")
 @click.pass_context
 def import_vault(ctx, with_queue):
-    """Import existing vault notes into klemma database.
+    """Import/sync vault notes into klemma database.
 
     Scans @*.md files in the vault's notes folder, reads YAML frontmatter,
-    and registers each source with its metadata (chapter, section, quality, etc.).
+    and syncs source metadata and section assignments with the database.
     """
     config_path = ctx.obj["config_path"]
     cfg, state, vault = _init_components(config_path)
 
-    notes_folder = cfg.obsidian.notes_folder
-    note_names = vault.list_notes(notes_folder)
+    result = _sync_sections(cfg, state, vault, quiet=True)
 
-    # Filter to @citekey.md notes only
-    citekey_notes = [n for n in note_names if n.startswith("@")]
+    console.print(
+        f"\n[green]Synced: {result['vault_updated']} updated, "
+        f"{result['new_registered']} new, "
+        f"{result['unchanged']} unchanged[/green]"
+    )
 
-    if not citekey_notes:
-        console.print(f"[yellow]No @citekey notes found in {notes_folder}/[/yellow]")
-        return
-
-    console.print(f"[blue]Scanning {notes_folder}/ ...[/blue]")
-
-    imported = 0
-    skipped = 0
-    by_chapter: dict[int, int] = {}
-    by_priority: dict[str, int] = {}
-    queue_added = 0
-
-    for note_name in citekey_notes:
-        props = vault.get_properties(note_name)
-        if not props:
-            skipped += 1
-            continue
-
-        citekey = props.get("citekey", note_name.lstrip("@"))
-        quality = props.get("quality", 0)
-        priority = props.get("priority", "medium")
-        chapter = props.get("chapter")
-        section = props.get("section", "")
-        nr1 = props.get("relevance_nr1", 0)
-        nr2 = props.get("relevance_nr2", 0)
-
-        # Normalize
-        if isinstance(quality, str):
-            quality = int(quality.split("/")[0]) if "/" in quality else int(quality)
-        if isinstance(chapter, str):
-            chapter = int(chapter) if chapter.isdigit() else None
-
-        state.register_sources([citekey])
-        state.update_source_metadata(
-            source_id=citekey,
-            quality_score=quality or 0,
-            primary_chapter=chapter,
-            primary_section=str(section) if section else None,
-            relevance_nr1=nr1 or 0,
-            relevance_nr2=nr2 or 0,
-            citation_priority=priority or "medium",
-            note_path=f"{notes_folder}/{note_name}.md",
-        )
-
-        # Мульти-секции: sections=[1.1, 1.4.1, ...], chapters=[1, 3]
-        sections_list = props.get("sections", [])
-        chapters_list = props.get("chapters", [])
-        if isinstance(sections_list, list) and sections_list:
-            str_sections = [str(s) for s in sections_list]
-            int_chapters = [int(c) for c in chapters_list] if isinstance(chapters_list, list) else []
-            state.set_source_sections(citekey, str_sections, int_chapters)
-
-        if chapter:
-            by_chapter[chapter] = by_chapter.get(chapter, 0) + 1
-        by_priority[priority or "medium"] = by_priority.get(priority or "medium", 0) + 1
-
-        if with_queue and priority == "high":
-            state.add_to_reading_queue(citekey, priority=80)
-            queue_added += 1
-
-        imported += 1
-
-    # Summary
-    console.print(f"\n[green]Imported {imported} sources from vault.[/green]")
-    if skipped:
-        console.print(f"[dim]Skipped {skipped} notes (no frontmatter).[/dim]")
-
-    if by_chapter:
+    # Coverage summary
+    cov = state.get_coverage_stats()
+    chapters = cov.get("chapters", {})
+    if chapters:
         console.print()
         table = Table(title="Coverage by Chapter")
         table.add_column("Chapter", style="cyan")
         table.add_column("Sources", justify="right")
-        for ch in sorted(by_chapter):
+        for ch in sorted(chapters):
             name = cfg.dissertation.chapters.get(ch, "")
-            table.add_row(f"Ch {ch}: {name}", str(by_chapter[ch]))
+            table.add_row(f"Ch {ch}: {name}", str(chapters[ch]))
         console.print(table)
 
-    if by_priority:
-        parts = [f"{p}: {c}" for p, c in sorted(by_priority.items())]
-        console.print(f"\n[dim]Priority: {', '.join(parts)}[/dim]")
-
-    if queue_added:
-        console.print(f"[blue]Reading queue: {queue_added} high-priority papers added.[/blue]")
+    # Reading queue from high-priority sources
+    if with_queue:
+        notes_folder = cfg.obsidian.notes_folder
+        note_names = vault.list_notes(notes_folder)
+        queue_added = 0
+        for note_name in note_names:
+            if not note_name.startswith("@"):
+                continue
+            props = vault.get_properties(note_name)
+            if props and props.get("priority") == "high":
+                citekey = note_name.lstrip("@")
+                state.add_to_reading_queue(citekey, priority=80)
+                queue_added += 1
+        if queue_added:
+            console.print(f"[blue]Reading queue: {queue_added} high-priority papers added.[/blue]")
 
 
 @main.command()
@@ -697,6 +721,7 @@ def library(ctx, section, audit):
     """
     config_path = ctx.obj["config_path"]
     cfg, state, vault = _init_components(config_path)
+    _sync_sections(cfg, state, vault)
     ai = _init_ai(cfg)
 
     from .literature.pdf import PDFExtractor

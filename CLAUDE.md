@@ -88,6 +88,9 @@ Incremental mode: if Research note exists, reads `## ✏️ Что нового`
 ### Library analysis
 `klemma library` → gather library context (summary, quality tiers, ref-gaps, sources compact list) → Claude analysis via `librarian.md` prompt → structured LibraryReport → saved to `Library/Library_{mode}_{date}.md` in vault. Three modes: status (health), recommend (section-focused), audit (deep quality check).
 
+### Auto-sync sections
+On every `research`, `library`, `status` command: `_sync_sections()` → reads all vault @citekey.md frontmatter (~60ms), compares with DB, updates section assignments where vault differs. Also discovers new Zotero entries not yet in DB (auto-classified via config regex patterns, registered as `pending`).
+
 ### Multi-section sources
 Frontmatter `sections: [1.1, 1.4.1, 3.2.2]` → `source_sections` table → `get_by_section()` uses JOIN to find all relevant sources.
 

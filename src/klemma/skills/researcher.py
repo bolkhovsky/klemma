@@ -71,12 +71,12 @@ def _load_section_sources(
     chapter: int,
     state: StateManager,
     vault: VaultAdapter,
-    max_sources: int = 10,
+    max_sources: int = 25,
 ) -> list[dict]:
     """Загрузить метаданные и аннотации из vault для источников раздела."""
     sources = state.get_by_section(section)
 
-    if len(sources) < 3:
+    if len(sources) < 5:
         chapter_sources = state.get_by_chapter(chapter)
         existing_ids = {s["id"] for s in sources}
         for cs in chapter_sources:
@@ -311,6 +311,7 @@ def pre_extract_sources(
     ai: ClaudeClient,
     force: bool = False,
     on_progress: Optional[Callable] = None,
+    max_sources: int = 50,
 ) -> dict:
     """Извлечь фрагменты из источников раздела, если ещё не извлечены.
 
@@ -327,7 +328,7 @@ def pre_extract_sources(
         if ck not in seen:
             seen.add(ck)
             citekeys.append(ck)
-        if len(citekeys) >= 15:
+        if len(citekeys) >= max_sources:
             break
 
     # 2. Отфильтровать: пропустить уже извлечённые (если не force)
