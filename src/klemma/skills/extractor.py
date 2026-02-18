@@ -123,10 +123,18 @@ def save_fragments_to_vault(
     citekey: str,
     fragments: list[Fragment],
     vault: VaultAdapter,
+    entry: Optional[ZoteroEntry] = None,
+    config: Optional[KlemmaConfig] = None,
+    state: Optional[StateManager] = None,
+    pdf_text: Optional[str] = None,
+    ai: Optional["ClaudeClient"] = None,
+    entry_lookup: Optional[dict] = None,
 ) -> Optional[str]:
     """Save extracted fragments to the @citekey note in vault.
 
     Updates the '## 💬 Цитаты для диссертации' section.
+    If note doesn't exist and entry/config provided, auto-creates it
+    (with AI annotation and reference analysis if pdf_text, ai, entry_lookup given).
     """
     note_name = f"@{citekey}"
     content = _format_fragments_for_vault(fragments)
@@ -136,6 +144,21 @@ def save_fragments_to_vault(
     if path:
         logger.info("Фрагменты сохранены в vault: %s", path)
         return str(path)
+
+    # Auto-create note if entry metadata available
+    if entry and config:
+        from ..literature.note_factory import create_vault_note
+        logger.info("Заметка %s не найдена — создаю из метаданных", note_name)
+        create_vault_note(
+            citekey, entry, config, vault,
+            state=state, pdf_text=pdf_text, ai=ai,
+            entry_lookup=entry_lookup,
+        )
+        path = vault.update_section(note_name, section_heading, content)
+        if path:
+            logger.info("Фрагменты сохранены в новую заметку: %s", path)
+            return str(path)
+
     logger.warning("Заметка %s не найдена в vault — фрагменты не сохранены", note_name)
     return None
 
@@ -148,6 +171,7 @@ def extract_from_citekey(
     pdf_extractor: PDFExtractor,
     pdf_search_paths: list[Path],
     pdf_lookup: Optional[dict[str, str]] = None,
+    entry_lookup: Optional[dict[str, ZoteroEntry]] = None,
 ) -> Optional[ExtractionResult]:
     """Full extraction pipeline: find source, get PDF, extract fragments."""
 
@@ -157,12 +181,15 @@ def extract_from_citekey(
         logger.error("Source %s not found in database", citekey)
         return None
 
+    # Get rich entry from lookup or build minimal one
+    entry = (entry_lookup or {}).get(citekey) or ZoteroEntry(id=citekey, title=citekey)
+
     # Try to find PDF
     pdf_path = pdf_extractor.find_pdf(
         citekey,
         pdf_search_paths,
-        entry_title="",
-        direct_path=source.get("pdf_path"),
+        entry_title=entry.title or "",
+        direct_path=source.get("pdf_path") or entry.pdf_path,
         pdf_lookup=pdf_lookup,
     )
 
@@ -174,8 +201,5 @@ def extract_from_citekey(
     if not pdf_text or len(pdf_text) < config.processing.min_pdf_length:
         logger.error("PDF text too short or extraction failed for %s", citekey)
         return None
-
-    # Build a minimal ZoteroEntry from state data
-    entry = ZoteroEntry(id=citekey, title=citekey)
 
     return extract_fragments(entry, pdf_text, config, state, ai)

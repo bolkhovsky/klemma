@@ -1,5 +1,37 @@
 # Klemma — Project Log
 
+## v0.3.0 — 2026-02-18: Reference Gap Tracking & Vault Note Auto-Creation
+
+### What was done
+- **AI annotation of vault notes**: `annotate.md` prompt analyzes PDF with full library context (174 entries), extracts summary, methodology, relevance, and bibliography cross-references
+- **Vault note auto-creation**: `note_factory.py` — `create_vault_note()` generates structured @citekey.md when missing during `klemma extract`
+- **Reference gap tracking**: new `reference_gaps` SQLite table tracks missing references found in source bibliographies
+  - Score formula: `count × avg_source_quality × section_weight` (2.0 for НР sections)
+  - Auto-resolve: `resolve_gaps(entry_lookup)` matches by surname+year when new sources added
+  - Supports both Latin and Cyrillic surname matching (BetterBibTeX format)
+- **CLI status line**: every `klemma` command prints `| N sources | M fragments | K ref-gaps (top: Author Year ×N)`
+- **CLI gaps command**: extended with reference gaps table (Score, Count, Authors, Year, Title, Sections, Why)
+- **TUI dashboard**: added "Ref Gaps" StatBox + top-5 gaps panel
+- **TUI gaps screen**: added reference gaps DataTable below coverage gaps
+- **entry_lookup propagation**: passed through extractor.py, researcher.py, cli.py to note_factory
+
+### Files changed
+- `prompts/annotate.md` — new: AI annotation prompt with library_entries and key_references
+- `src/klemma/literature/note_factory.py` — new: vault note creation + annotation pipeline
+- `src/klemma/state.py` — reference_gaps table, save/get/resolve methods, get_gap_summary
+- `src/klemma/cli.py` — status line, gaps table, auto-resolve, entry_lookup propagation
+- `src/klemma/skills/extractor.py` — entry_lookup propagation to save_fragments_to_vault
+- `src/klemma/skills/researcher.py` — entry_lookup propagation
+- `src/klemma/tui/dashboard.py` — Ref Gaps StatBox + gaps panel
+- `src/klemma/tui/gaps.py` — reference gaps DataTable
+
+### Next objectives
+- Real-world test: `klemma extract <citekey>` with new annotation prompt
+- Contextual gap surfacing in `klemma research --section X`
+- Morning plan integration: top-3 gaps when score >= 6
+
+---
+
 ## v0.1.0 — 2026-02-17: Initial Implementation
 
 ### What was done

@@ -31,6 +31,26 @@ def _init_ai(cfg):
     return ClaudeClient(cfg.ai)
 
 
+def _print_status_line(state: StateManager):
+    """Print a compact status line with key metrics."""
+    try:
+        stats = state.get_stats()
+        frag_stats = state.get_fragment_stats()
+        parts = [
+            f"[dim]{stats.get('total', 0)} sources[/dim]",
+            f"[dim]{frag_stats.get('total', 0)} fragments[/dim]",
+        ]
+        gap_summary = state.get_gap_summary()
+        if gap_summary["open_count"] > 0:
+            top = ""
+            if gap_summary["top_ref"]:
+                top = f" (top: {gap_summary['top_ref']} x{gap_summary['top_count']})"
+            parts.append(f"[yellow]{gap_summary['open_count']} ref-gaps{top}[/yellow]")
+        console.print(f"[dim]|[/dim] " + " [dim]|[/dim] ".join(parts))
+    except Exception:
+        pass  # Don't crash on status line failure
+
+
 @click.group(invoke_without_command=True)
 @click.version_option(version="0.1.0")
 @click.option("--config", "-c", default="config.yaml", help="Config file path")
@@ -42,6 +62,14 @@ def main(ctx, config):
     """
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config
+
+    if ctx.invoked_subcommand is not None:
+        # Print status line for CLI subcommands
+        try:
+            cfg, state, _ = _init_components(config)
+            _print_status_line(state)
+        except Exception:
+            pass
 
     if ctx.invoked_subcommand is None:
         # No subcommand → launch TUI
@@ -152,13 +180,26 @@ def extract(ctx, citekey):
 
     console.print(f"[blue]Extracting fragments from: {citekey}[/blue]")
 
+    # Load entry lookup for rich metadata and PDF paths
+    entry_lookup = PDFExtractor.load_entry_lookup(Path(cfg.zotero.library_json)) if cfg.zotero.library_json else {}
+
+    # Auto-resolve previously detected reference gaps against current library
+    resolved = state.resolve_gaps(entry_lookup)
+    if resolved:
+        console.print(f"[green]Auto-resolved {resolved} reference gap(s)[/green]")
+
+    entry = entry_lookup.get(citekey)
+    if not entry:
+        from .literature.models import ZoteroEntry
+        entry = ZoteroEntry(id=citekey, title=citekey)
+
     # Find PDF
     pdf_search_paths = [Path("/Users/ilya/Zotero/storage")]
-    pdf_lookup = PDFExtractor.load_pdf_lookup(Path(cfg.zotero.library_json)) if cfg.zotero.library_json else {}
     pdf_path = pdf_extractor.find_pdf(
         citekey, pdf_search_paths,
-        direct_path=source.get("pdf_path") if source else None,
-        pdf_lookup=pdf_lookup,
+        entry_title=entry.title or "",
+        direct_path=source.get("pdf_path") if source else entry.pdf_path,
+        pdf_lookup={k: v.pdf_path for k, v in entry_lookup.items() if v.pdf_path},
     )
 
     if not pdf_path:
@@ -175,10 +216,6 @@ def extract(ctx, citekey):
         return
 
     console.print(f"[dim]Extracted {len(pdf_text)} chars[/dim]")
-
-    # Build minimal entry
-    from .literature.models import ZoteroEntry
-    entry = ZoteroEntry(id=citekey, title=citekey)
 
     # Extract fragments
     console.print("[blue]Analyzing with Claude...[/blue]")
@@ -214,9 +251,13 @@ def extract(ctx, citekey):
 
     console.print(table)
 
-    # Save fragments to vault note
+    # Save fragments to vault note (auto-creates with annotation if missing)
     from .skills.extractor import save_fragments_to_vault
-    saved_path = save_fragments_to_vault(citekey, result.fragments, vault)
+    saved_path = save_fragments_to_vault(
+        citekey, result.fragments, vault,
+        entry=entry, config=cfg, state=state,
+        pdf_text=pdf_text, ai=ai, entry_lookup=entry_lookup,
+    )
     if saved_path:
         console.print(f"[green]Фрагменты сохранены в vault:[/green] @{citekey}")
     else:
@@ -294,23 +335,61 @@ def coverage(ctx):
 @click.option("--min-sources", "-m", type=int, default=3)
 @click.pass_context
 def gaps(ctx, min_sources):
-    """Find sections with insufficient source coverage."""
+    """Find sections with insufficient source coverage and reference gaps."""
     config_path = ctx.obj["config_path"]
     cfg, state, _ = _init_components(config_path)
 
+    # Coverage gaps
     gaps_data = state.get_gaps(min_sources=min_sources)
     if not gaps_data:
         console.print(f"[green]All sections have >= {min_sources} sources.[/green]")
-        return
+    else:
+        table = Table(title=f"Sections with < {min_sources} sources")
+        table.add_column("Section", style="cyan")
+        table.add_column("Count", justify="right")
+        table.add_column("Gap", justify="right", style="red")
+        for gap in gaps_data:
+            needed = min_sources - gap["count"]
+            table.add_row(gap["section"], str(gap["count"]), f"-{needed}")
+        console.print(table)
 
-    table = Table(title=f"Sections with < {min_sources} sources")
-    table.add_column("Section", style="cyan")
-    table.add_column("Count", justify="right")
-    table.add_column("Gap", justify="right", style="red")
-    for gap in gaps_data:
-        needed = min_sources - gap["count"]
-        table.add_row(gap["section"], str(gap["count"]), f"-{needed}")
-    console.print(table)
+    # Reference gaps
+    ref_gaps = state.get_reference_gaps(limit=20)
+    if ref_gaps:
+        console.print()
+        ref_table = Table(title="Reference Gaps (missing from library)")
+        ref_table.add_column("#", justify="right", style="dim", width=3)
+        ref_table.add_column("Score", justify="right", width=6)
+        ref_table.add_column("Count", justify="right", width=5)
+        ref_table.add_column("Authors", width=20)
+        ref_table.add_column("Year", width=5)
+        ref_table.add_column("Title", max_width=35)
+        ref_table.add_column("Sections", width=10, style="cyan")
+        ref_table.add_column("Why", max_width=30, style="dim")
+
+        for i, g in enumerate(ref_gaps, 1):
+            sections = g.get("dissertation_sections") or ""
+            # Parse concatenated JSON arrays
+            if sections and sections.startswith("["):
+                import json as _json
+                try:
+                    sections = ", ".join(_json.loads(sections))
+                except (ValueError, TypeError):
+                    pass
+            score_style = "red bold" if g["score"] >= 10 else "yellow" if g["score"] >= 5 else "dim"
+            ref_table.add_row(
+                str(i),
+                f"[{score_style}]{g['score']:.1f}[/{score_style}]",
+                str(g["count"]),
+                (g["ref_authors"] or "")[:20],
+                str(g.get("ref_year") or ""),
+                (g["ref_title"] or "")[:35],
+                str(sections)[:10],
+                (g.get("why_relevant") or "")[:30],
+            )
+        console.print(ref_table)
+    else:
+        console.print("\n[dim]No reference gaps tracked yet.[/dim]")
 
 
 @main.command()

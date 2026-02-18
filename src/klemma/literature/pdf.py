@@ -7,6 +7,8 @@ from typing import Optional
 
 import fitz
 
+from .models import Author, ZoteroEntry
+
 
 class PDFExtractor:
     """Extract text content from PDF files."""
@@ -15,24 +17,79 @@ class PDFExtractor:
         self.max_chars = max_chars
 
     @staticmethod
-    def load_pdf_lookup(library_json: Path) -> dict[str, str]:
-        """Build citekey → pdf_path mapping from BetterBibTeX JSON export."""
+    def _load_bbt_json(library_json: Path) -> list[dict]:
+        """Load items from BetterBibTeX JSON export."""
         path = Path(library_json)
         if not path.exists():
-            return {}
+            return []
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        return [
+            item for item in data.get("items", [])
+            if item.get("itemType") not in ("attachment", "note")
+            and item.get("citationKey")
+        ]
+
+    @staticmethod
+    def load_pdf_lookup(library_json: Path) -> dict[str, str]:
+        """Build citekey → pdf_path mapping from BetterBibTeX JSON export."""
+        items = PDFExtractor._load_bbt_json(library_json)
         lookup: dict[str, str] = {}
-        for item in data.get("items", []):
-            if item.get("itemType") in ("attachment", "note"):
-                continue
-            citekey = item.get("citationKey", "")
-            if not citekey:
-                continue
+        for item in items:
+            citekey = item["citationKey"]
             for att in item.get("attachments", []):
                 if att.get("path", "").lower().endswith(".pdf"):
                     lookup[citekey] = att["path"]
                     break
+        return lookup
+
+    @staticmethod
+    def load_entry_lookup(library_json: Path) -> dict[str, ZoteroEntry]:
+        """Build citekey → ZoteroEntry mapping from BetterBibTeX JSON export."""
+        items = PDFExtractor._load_bbt_json(library_json)
+        lookup: dict[str, ZoteroEntry] = {}
+        for item in items:
+            citekey = item["citationKey"]
+            # Parse authors
+            authors = []
+            for c in item.get("creators", []):
+                if c.get("creatorType") == "author":
+                    authors.append(Author(
+                        family=c.get("lastName", ""),
+                        given=c.get("firstName"),
+                    ))
+            # Parse year from date string
+            issued = None
+            date_str = item.get("date", "")
+            if date_str:
+                year_match = re.search(r"\d{4}", date_str)
+                if year_match:
+                    issued = {"date-parts": [[int(year_match.group())]]}
+            # Find PDF path
+            pdf_path = None
+            for att in item.get("attachments", []):
+                if att.get("path", "").lower().endswith(".pdf"):
+                    pdf_path = att["path"]
+                    break
+            # Collect tags
+            tags = [t["tag"] for t in item.get("tags", []) if t.get("tag")]
+            lookup[citekey] = ZoteroEntry(
+                id=citekey,
+                type=item.get("itemType", "article"),
+                title=item.get("title"),
+                abstract=item.get("abstractNote"),
+                author=authors,
+                issued=issued,
+                container_title=item.get("publicationTitle"),
+                DOI=item.get("DOI"),
+                URL=item.get("url"),
+                language=item.get("language"),
+                page=item.get("pages"),
+                volume=item.get("volume"),
+                issue=item.get("issue"),
+                keywords=", ".join(tags) if tags else None,
+                pdf_path=pdf_path,
+            )
         return lookup
 
     def extract(self, pdf_path: Path) -> Optional[str]:

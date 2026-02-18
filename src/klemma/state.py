@@ -1,5 +1,6 @@
 """Unified SQLite state manager."""
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -92,6 +93,22 @@ CREATE INDEX IF NOT EXISTS idx_fragments_source ON fragments(source_id);
 CREATE INDEX IF NOT EXISTS idx_fragments_section ON fragments(section);
 CREATE INDEX IF NOT EXISTS idx_fragments_type ON fragments(fragment_type);
 CREATE INDEX IF NOT EXISTS idx_reading_queue_priority ON reading_queue(priority DESC);
+
+CREATE TABLE IF NOT EXISTS reference_gaps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id TEXT NOT NULL REFERENCES sources(id),
+    ref_authors TEXT NOT NULL,
+    ref_year INTEGER,
+    ref_title TEXT NOT NULL,
+    why_relevant TEXT,
+    dissertation_sections TEXT,
+    status TEXT DEFAULT 'open',
+    resolved_citekey TEXT,
+    found_at TEXT DEFAULT (datetime('now')),
+    resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reference_gaps_source ON reference_gaps(source_id);
+CREATE INDEX IF NOT EXISTS idx_reference_gaps_status ON reference_gaps(status);
 """
 
 
@@ -600,3 +617,166 @@ class StateManager:
                 "UPDATE reading_queue SET status='completed', completed_at=datetime('now') WHERE source_id=?",
                 (source_id,),
             )
+
+    # ── Reference Gaps ────────────────────────────────────────────────────
+
+    def save_reference_gaps(self, source_id: str, gaps: list[dict]) -> int:
+        """Save reference gaps for a source (idempotent: replaces old gaps)."""
+        with self._conn() as conn:
+            conn.execute(
+                "DELETE FROM reference_gaps WHERE source_id=?", (source_id,)
+            )
+            for g in gaps:
+                sections = g.get("dissertation_sections", [])
+                conn.execute(
+                    """INSERT INTO reference_gaps
+                       (source_id, ref_authors, ref_year, ref_title,
+                        why_relevant, dissertation_sections)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        source_id,
+                        g.get("ref_authors", g.get("authors", "")),
+                        g.get("ref_year", g.get("year")),
+                        g.get("ref_title", g.get("title", "")),
+                        g.get("why_relevant", ""),
+                        json.dumps(sections) if sections else None,
+                    ),
+                )
+            return len(gaps)
+
+    def get_reference_gaps(
+        self,
+        section: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Get open reference gaps aggregated by (authors, year, title).
+
+        Returns list of dicts with: ref_authors, ref_year, ref_title,
+        why_relevant, dissertation_sections, count, avg_quality, score,
+        source_ids.
+        """
+        with self._conn() as conn:
+            query = """
+                SELECT
+                    rg.ref_authors,
+                    rg.ref_year,
+                    rg.ref_title,
+                    GROUP_CONCAT(DISTINCT rg.why_relevant) as why_relevant,
+                    GROUP_CONCAT(DISTINCT rg.dissertation_sections) as dissertation_sections,
+                    COUNT(DISTINCT rg.source_id) as count,
+                    AVG(COALESCE(s.quality_score, 3)) as avg_quality,
+                    GROUP_CONCAT(DISTINCT rg.source_id) as source_ids
+                FROM reference_gaps rg
+                JOIN sources s ON rg.source_id = s.id
+                WHERE rg.status = 'open'
+            """
+            params: list = []
+            if section:
+                query += " AND rg.dissertation_sections LIKE ?"
+                params.append(f'%"{section}%')
+
+            query += """
+                GROUP BY rg.ref_authors, rg.ref_year, rg.ref_title
+                ORDER BY COUNT(DISTINCT rg.source_id) * AVG(COALESCE(s.quality_score, 3)) DESC
+                LIMIT ?
+            """
+            params.append(limit)
+
+            cur = conn.execute(query, params)
+            results = []
+            for row in cur.fetchall():
+                r = dict(row)
+                count = r["count"]
+                avg_q = r["avg_quality"] or 3
+                # section_weight: 2.0 if relevant to NR1/NR2 sections (2.x)
+                sections_str = r.get("dissertation_sections") or ""
+                section_weight = 2.0 if '"2.' in sections_str else 1.0
+                r["score"] = round(count * avg_q * section_weight, 1)
+                results.append(r)
+            return results
+
+    def get_gap_summary(self) -> dict:
+        """Lightweight summary for status line: open count + top gap."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT COUNT(DISTINCT ref_authors || ref_year || ref_title) as cnt "
+                "FROM reference_gaps WHERE status='open'"
+            )
+            open_count = cur.fetchone()["cnt"]
+
+            top_ref = None
+            top_count = 0
+            if open_count > 0:
+                cur = conn.execute(
+                    """SELECT ref_authors, ref_year,
+                              COUNT(DISTINCT source_id) as cnt
+                       FROM reference_gaps WHERE status='open'
+                       GROUP BY ref_authors, ref_year, ref_title
+                       ORDER BY cnt DESC LIMIT 1"""
+                )
+                row = cur.fetchone()
+                if row:
+                    year_str = str(row["ref_year"]) if row["ref_year"] else ""
+                    top_ref = f"{row['ref_authors']} {year_str}".strip()
+                    top_count = row["cnt"]
+
+            return {
+                "open_count": open_count,
+                "top_ref": top_ref,
+                "top_count": top_count,
+            }
+
+    def resolve_gaps(self, entry_lookup: dict) -> int:
+        """Auto-resolve open gaps that match entries in library.
+
+        Matches by (author surname, year) or title prefix.
+        Returns count of resolved gaps.
+        """
+        # Build lookup index: "surname year" -> citekey
+        lib_index: dict[str, str] = {}
+        for citekey, entry in entry_lookup.items():
+            if entry.author:
+                # Last word of family = actual surname (handles "А. В. Юлин")
+                family = entry.author[0].family.lower().strip()
+                surname = family.split()[-1] if family else ""
+            else:
+                surname = ""
+            year = str(entry.year) if entry.year else ""
+            if surname and year:
+                lib_index[f"{surname} {year}"] = citekey
+            if entry.title:
+                lib_index[entry.title.lower()[:50]] = citekey
+
+        resolved = 0
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT id, ref_authors, ref_year, ref_title "
+                "FROM reference_gaps WHERE status='open'"
+            )
+            for row in cur.fetchall():
+                authors = (row["ref_authors"] or "").lower()
+                year = str(row["ref_year"]) if row["ref_year"] else ""
+                # Extract surname: first word >2 chars (skip initials "А.", "J.")
+                words = authors.replace("et al.", "").replace("и др.", "").split()
+                surname = ""
+                for w in words:
+                    clean = w.strip(".,")
+                    if len(clean) > 2:
+                        surname = clean
+                        break
+                key = f"{surname} {year}"
+
+                matched_citekey = lib_index.get(key)
+                if not matched_citekey and row["ref_title"]:
+                    matched_citekey = lib_index.get(row["ref_title"].lower()[:50])
+
+                if matched_citekey:
+                    conn.execute(
+                        """UPDATE reference_gaps
+                           SET status='resolved', resolved_citekey=?,
+                               resolved_at=datetime('now')
+                           WHERE id=?""",
+                        (matched_citekey, row["id"]),
+                    )
+                    resolved += 1
+        return resolved

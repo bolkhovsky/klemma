@@ -345,10 +345,12 @@ def pre_extract_sources(
     if not to_extract:
         return {"extracted": 0, "skipped": skipped, "failed": [], "no_pdf": []}
 
-    # 3. Загрузить PDF lookup один раз
-    pdf_lookup = {}
+    # 3. Загрузить entry lookup один раз (для метаданных + PDF paths)
+    entry_lookup: dict[str, ZoteroEntry] = {}
+    pdf_lookup: dict[str, str] = {}
     if config.zotero.library_json:
-        pdf_lookup = PDFExtractor.load_pdf_lookup(Path(config.zotero.library_json))
+        entry_lookup = PDFExtractor.load_entry_lookup(Path(config.zotero.library_json))
+        pdf_lookup = {k: v.pdf_path for k, v in entry_lookup.items() if v.pdf_path}
 
     pdf_extractor = PDFExtractor(max_chars=config.ai.max_pdf_chars)
     search_paths = [Path("/Users/ilya/Zotero/storage")]
@@ -361,9 +363,11 @@ def pre_extract_sources(
     for i, ck in enumerate(to_extract, 1):
         # Найти PDF
         source = state.get_source(ck)
+        entry = entry_lookup.get(ck) or ZoteroEntry(id=ck, title=ck)
         pdf_path = pdf_extractor.find_pdf(
             ck, search_paths,
-            direct_path=source.get("pdf_path") if source else None,
+            entry_title=entry.title or "",
+            direct_path=source.get("pdf_path") if source else entry.pdf_path,
             pdf_lookup=pdf_lookup,
         )
 
@@ -382,11 +386,14 @@ def pre_extract_sources(
             continue
 
         # Claude анализ
-        entry = ZoteroEntry(id=ck, title=ck)
         result = extract_fragments(entry, pdf_text, config, state, ai)
 
         if result and result.fragments:
-            save_fragments_to_vault(ck, result.fragments, vault)
+            save_fragments_to_vault(
+                ck, result.fragments, vault,
+                entry=entry, config=config, state=state,
+                pdf_text=pdf_text, ai=ai, entry_lookup=entry_lookup,
+            )
             extracted += 1
             if on_progress:
                 on_progress(ck, f"извлечено {len(result.fragments)} фрагментов", i, len(to_extract))

@@ -38,6 +38,7 @@ class DashboardScreen(Widget):
         stats = self.state.get_stats()
         frag_stats = self.state.get_fragment_stats()
         plan = self.state.get_plan()
+        gap_summary = self.state.get_gap_summary()
 
         # Stats row
         with Horizontal(id="stats-row"):
@@ -55,6 +56,10 @@ class DashboardScreen(Widget):
             )
             yield StatBox(
                 "Today", str(stats.get("today", 0)),
+                classes="stat-box",
+            )
+            yield StatBox(
+                "Ref Gaps", str(gap_summary.get("open_count", 0)),
                 classes="stat-box",
             )
 
@@ -81,6 +86,19 @@ class DashboardScreen(Widget):
 
         coverage_text = "[bold]Coverage[/bold]\n" + "\n".join(coverage_lines)
         yield Static(coverage_text, id="coverage-panel")
+
+        # Reference gaps panel
+        ref_gaps = self.state.get_reference_gaps(limit=5)
+        if ref_gaps:
+            gap_lines = ["[bold]Reference Gaps[/bold]"]
+            for g in ref_gaps:
+                year = g.get("ref_year") or ""
+                authors = (g.get("ref_authors") or "")[:25]
+                why = (g.get("why_relevant") or "")[:40]
+                gap_lines.append(
+                    f"  [yellow]x{g['count']}[/yellow] {authors} ({year}) — {why}"
+                )
+            yield Static("\n".join(gap_lines))
 
         # Fragment distribution
         if frag_stats["by_chapter"]:

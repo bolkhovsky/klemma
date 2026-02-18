@@ -19,10 +19,11 @@ src/klemma/
 ├── vault.py        — Obsidian adapter (CLI/file I/O, update_section)
 ├── tui/            — Textual screens (dashboard, fragments, coverage, gaps, stats)
 ├── skills/         — AI skills (planner, extractor, researcher, agent)
-└── literature/     — Zotero, PDF, models
+└── literature/     — Zotero, PDF, models, note_factory
 prompts/
 ├── morning.md              — Jinja2 prompt for daily plans
 ├── extract.md              — Jinja2 prompt for fragment extraction
+├── annotate.md             — Jinja2 prompt for vault note AI annotation
 ├── research.md             — Jinja2 prompt for research briefing (first run)
 ├── research_incremental.md — Jinja2 prompt for incremental research update
 └── agent.md                — Jinja2 system prompt for interactive agent
@@ -36,7 +37,7 @@ prompts/
 - `klemma research -s 1.3.2 --force` — re-extract all fragments before analysis
 - `klemma stats` — processing statistics
 - `klemma coverage` — dissertation coverage by chapter/section
-- `klemma gaps` — find underserved sections
+- `klemma gaps` — find underserved sections + reference gaps (missing from library)
 - `klemma fragments` — browse extracted fragments
 - `klemma prepopulate` — import vault notes into DB (reads sections/chapters lists)
 - `klemma agent "query"` — interactive research agent with full dissertation context
@@ -51,6 +52,7 @@ prompts/
 - `sources` — Zotero entries with processing status and dissertation metadata
 - `source_sections` — junction table: source_id × section (multi-section support)
 - `fragments` — extracted citation fragments mapped to chapters/sections
+- `reference_gaps` — missing references found in source bibliographies (status: open/resolved)
 - `daily_plans` — generated daily plans
 - `reading_queue` — prioritized reading list
 
@@ -63,6 +65,19 @@ prompts/
 
 ### Fragment extraction
 PDF → PyMuPDF text → Claude analysis → fragments to SQLite + vault (`## 💬 Цитаты для диссертации`)
+
+### Vault note creation
+`klemma extract <citekey>` → if @citekey.md missing, auto-creates it via `note_factory.create_vault_note()`:
+1. AI annotation (`annotate.md` prompt) analyzes PDF with full library context (174 entries)
+2. Extracts: summary, methodology, relevance, key_references (bibliography analysis)
+3. Renders structured vault note with sections: metadata, summary, methods, relevance, key references, quotes
+4. Saves reference gaps (missing refs from bibliography) to `reference_gaps` table
+
+### Reference gap tracking
+Each annotated paper's bibliography is cross-checked against our library. Missing relevant refs accumulate across sources.
+- **Score formula**: `count × avg_source_quality × section_weight` (section_weight=2.0 for НР1/НР2 sections)
+- **Auto-resolve**: when a gap's author+year matches a newly added source, it's marked resolved
+- **Surfacing**: CLI status line (every command), `klemma gaps`, TUI dashboard, TUI gaps screen
 
 ### Research briefing
 `klemma research -s X.X` → auto-extract fragments → collect context (draft, fragments, sources, coverage) → Claude analysis → `Research_X.X.md` in vault

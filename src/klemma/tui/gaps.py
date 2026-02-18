@@ -41,7 +41,29 @@ class GapsScreen(Widget):
                 )
 
             yield table
-
             yield Static(f"\n[dim]{len(gaps)} sections need more sources[/dim]")
+
+        # Reference gaps
+        ref_gaps = self.state.get_reference_gaps(limit=20)
+        yield Static("\n[bold]Reference Gaps (missing from library)[/bold]")
+
+        if ref_gaps:
+            ref_table = DataTable(id="ref-gaps-table")
+            ref_table.add_columns("Score", "Count", "Authors", "Year", "Title", "Why")
+
+            for g in ref_gaps:
+                ref_table.add_row(
+                    f"{g['score']:.1f}",
+                    str(g["count"]),
+                    (g.get("ref_authors") or "")[:20],
+                    str(g.get("ref_year") or ""),
+                    (g.get("ref_title") or "")[:35],
+                    (g.get("why_relevant") or "")[:30],
+                )
+
+            yield ref_table
+            yield Static(f"\n[dim]{len(ref_gaps)} reference gaps tracked[/dim]")
+        else:
+            yield Static("\n[dim]No reference gaps tracked yet.[/dim]")
 
         yield Footer()
