@@ -1,5 +1,52 @@
 # Klemma — Project Log
 
+## v0.4.0 — 2026-02-18: UX Simplification + AI Librarian
+
+### What was done
+
+**UX refactoring (10 → 7 commands):**
+- Merged `stats` + `coverage` + `gaps` → unified `klemma status` (compact by default, `--verbose` for full tables, `--chapter N` filter)
+- Renamed: `morning` → `plan`, `extract` → `process`, `agent` → `ask`, `prepopulate` → `import`
+- `klemma process` without args: batch-processes up to 10 pending sources
+- Removed `fragments` CLI command (still available in TUI via `f` key)
+- All old names preserved as hidden aliases for backward compatibility
+- Improved research auto-extract UX with per-source progress messages
+
+**AI Librarian (`klemma library`):**
+- New `skills/librarian.py` module (pattern follows planner.py)
+- Three modes: `status` (library health), `recommend -s X.X` (section reading plan), `audit` (deep quality check)
+- New `prompts/librarian.md` Jinja2 prompt with mode-dependent analysis
+- `state.get_library_summary()` — comprehensive aggregation (total, by_status, by_quality, avg_quality, zero_sections, ref_gaps_open)
+- `state.get_sources_by_quality()` — sources grouped by quality tier
+- `LibraryReport` model in `literature/models.py`
+- Reports saved to `Library/Library_{mode}_{date}.md` in vault
+- Library summary digest integrated into morning plan context (`klemma plan`)
+
+### Files changed
+- `src/klemma/cli.py` — unified status, renamed commands, hidden aliases, library command, batch process, improved research UX
+- `src/klemma/skills/librarian.py` — **new**: AI library analysis skill
+- `prompts/librarian.md` — **new**: librarian prompt (3 modes)
+- `src/klemma/state.py` — `get_library_summary()`, `get_sources_by_quality()`
+- `src/klemma/literature/models.py` — `LibraryReport` model
+- `src/klemma/skills/planner.py` — library summary in morning plan context
+- `prompts/morning.md` — `{{ library_summary }}` section
+
+### Researcher workflow
+```
+Morning:  klemma plan          → focus, recommendations, deadlines
+Work:     klemma research -s X → auto-extract + analysis
+New PDF:  klemma process       → batch processing
+Review:   klemma library       → library health assessment
+Question: klemma ask "..."     → agent with full context
+```
+
+### Next objectives
+- Real-world test of `klemma library` in all 3 modes
+- Consider `klemma library` auto-suggest in `klemma plan` when health score is low
+- TUI integration for library reports
+
+---
+
 ## v0.3.0 — 2026-02-18: Reference Gap Tracking & Vault Note Auto-Creation
 
 ### What was done

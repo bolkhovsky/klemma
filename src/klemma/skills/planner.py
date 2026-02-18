@@ -147,6 +147,17 @@ def generate_morning_plan(
         config.dissertation.current_chapter, "Неизвестно"
     )
 
+    # Library summary for context
+    library_summary = state.get_library_summary()
+    lib_digest = (
+        f"Библиотека: {library_summary['completed']} обработано, "
+        f"{library_summary.get('pending', 0)} в ожидании. "
+        f"Среднее качество: {library_summary.get('avg_quality', 0)}/5. "
+        f"Ref-gaps: {library_summary.get('ref_gaps_open', 0)} открыто."
+    )
+    if library_summary.get("zero_sections"):
+        lib_digest += f" Разделы без источников: {', '.join(library_summary['zero_sections'][:5])}."
+
     # Рендер промпта
     prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "morning.md"
     user_prompt = ai.render_prompt(
@@ -167,6 +178,7 @@ def generate_morning_plan(
         next_reading=next_reading,
         min_sources=config.dissertation.min_sources_per_section,
         writing_constraints=config.dissertation.writing_constraints,
+        library_summary=lib_digest,
         range=range,
     )
 

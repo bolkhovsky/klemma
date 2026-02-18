@@ -184,3 +184,17 @@ class ResearchResult(BaseModel):
     writing_suggestions: list[str] = Field(default_factory=list)
     research_text: str = ""
     generated_at: datetime = Field(default_factory=datetime.now)
+
+
+class LibraryReport(BaseModel):
+    """AI-generated library analysis report."""
+
+    mode: str = "status"  # status | recommend | audit
+    overall_health: str = ""
+    chapter_assessments: list[dict] = Field(default_factory=list)
+    critical_issues: list[str] = Field(default_factory=list)
+    recommendations: list[dict] = Field(default_factory=list)
+    section_detail: dict = Field(default_factory=dict)
+    audit_findings: list[dict] = Field(default_factory=list)
+    report_text: str = ""
+    generated_at: datetime = Field(default_factory=datetime.now)

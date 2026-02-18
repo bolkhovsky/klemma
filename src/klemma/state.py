@@ -780,3 +780,64 @@ class StateManager:
                     )
                     resolved += 1
         return resolved
+
+    # --- Library analysis methods ---
+
+    def get_library_summary(self) -> dict:
+        """Comprehensive library summary for AI analysis context."""
+        with self._conn() as conn:
+            stats = self.get_stats()
+            frag_stats = self.get_fragment_stats()
+            cov = self.get_coverage_stats()
+            gap_summary = self.get_gap_summary()
+
+            # Quality distribution
+            cur = conn.execute(
+                "SELECT quality_score, COUNT(*) as cnt FROM sources "
+                "WHERE status='completed' AND quality_score IS NOT NULL "
+                "GROUP BY quality_score ORDER BY quality_score DESC"
+            )
+            by_quality = {row["quality_score"]: row["cnt"] for row in cur.fetchall()}
+
+            # Average quality
+            cur = conn.execute(
+                "SELECT AVG(quality_score) as avg_q, AVG(fragment_count) as avg_f "
+                "FROM sources WHERE status='completed' AND quality_score > 0"
+            )
+            row = cur.fetchone()
+            avg_quality = round(row["avg_q"], 1) if row["avg_q"] else 0
+            avg_fragments = round(row["avg_f"], 1) if row["avg_f"] else 0
+
+            # Sections with zero sources
+            all_sections = set(cov["sections"].keys()) if cov["sections"] else set()
+            zero_sections = [s for s, c in cov["sections"].items() if c == 0] if cov["sections"] else []
+
+            return {
+                **stats,
+                "fragments_total": frag_stats.get("total", 0),
+                "fragments_by_type": frag_stats.get("by_type", {}),
+                "chapters": cov.get("chapters", {}),
+                "sections": cov.get("sections", {}),
+                "by_quality": by_quality,
+                "avg_quality": avg_quality,
+                "avg_fragments": avg_fragments,
+                "zero_sections": zero_sections,
+                "ref_gaps_open": gap_summary["open_count"],
+                "top_ref_gap": gap_summary.get("top_ref"),
+            }
+
+    def get_sources_by_quality(self) -> dict[int, list[dict]]:
+        """Completed sources grouped by quality tier (5 → 1)."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                """SELECT id, quality_score, primary_chapter, primary_section,
+                          relevance_nr1, relevance_nr2, citation_priority,
+                          fragment_count
+                   FROM sources WHERE status='completed'
+                   ORDER BY quality_score DESC, primary_chapter"""
+            )
+            result: dict[int, list[dict]] = {}
+            for row in cur.fetchall():
+                q = row["quality_score"] or 0
+                result.setdefault(q, []).append(dict(row))
+            return result

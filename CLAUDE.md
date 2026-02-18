@@ -4,7 +4,7 @@
 Klemma is a dual-mode CLI/TUI tool for PhD dissertation work. It manages literature (via Zotero), extracts citation fragments from PDFs (via Claude AI), generates research briefings, daily plans, and tracks dissertation coverage.
 
 ## Architecture
-- **Dual mode**: `klemma` → Textual TUI dashboard; `klemma morning/extract/research` → headless CLI
+- **Dual mode**: `klemma` → Textual TUI dashboard; `klemma plan/process/research/library` → headless CLI
 - **Stack**: Python 3.11+, Click, Textual, Claude Code CLI, pyzotero, PyMuPDF, SQLite
 - **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/TUI/Obsidian)
 
@@ -18,7 +18,7 @@ src/klemma/
 ├── ai.py           — Claude Code CLI wrapper (claude -p)
 ├── vault.py        — Obsidian adapter (CLI/file I/O, update_section)
 ├── tui/            — Textual screens (dashboard, fragments, coverage, gaps, stats)
-├── skills/         — AI skills (planner, extractor, researcher, agent)
+├── skills/         — AI skills (planner, extractor, researcher, librarian, agent)
 └── literature/     — Zotero, PDF, models, note_factory
 prompts/
 ├── morning.md              — Jinja2 prompt for daily plans
@@ -26,22 +26,20 @@ prompts/
 ├── annotate.md             — Jinja2 prompt for vault note AI annotation
 ├── research.md             — Jinja2 prompt for research briefing (first run)
 ├── research_incremental.md — Jinja2 prompt for incremental research update
+├── librarian.md            — Jinja2 prompt for library analysis (3 modes)
 └── agent.md                — Jinja2 system prompt for interactive agent
 ```
 
-## Key commands
+## Key commands (7)
 - `klemma` — TUI dashboard
-- `klemma morning` — daily plan generation
-- `klemma extract <citekey>` — extract citation fragments from PDF, save to DB + vault
+- `klemma plan` — daily plan generation (library digest included)
+- `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
+- `klemma process [<citekey>]` — extract fragments from PDF; no arg = batch (up to 10 pending)
 - `klemma research -s 1.3.2` — research briefing for a section (auto-extracts fragments)
-- `klemma research -s 1.3.2 --force` — re-extract all fragments before analysis
-- `klemma stats` — processing statistics
-- `klemma coverage` — dissertation coverage by chapter/section
-- `klemma gaps` — find underserved sections + reference gaps (missing from library)
-- `klemma fragments` — browse extracted fragments
-- `klemma prepopulate` — import vault notes into DB (reads sections/chapters lists)
-- `klemma agent "query"` — interactive research agent with full dissertation context
-- `klemma agent -s 1.3.2 "query"` — agent focused on a specific section
+- `klemma library [-s 2.3] [--audit]` — AI library analysis (status / recommend / audit)
+- `klemma ask "query"` — interactive research agent with full dissertation context
+
+Hidden aliases (backward compat): `morning`→`plan`, `extract`→`process`, `agent`→`ask`, `stats`/`coverage`/`gaps`→`status`, `prepopulate`→`import`
 
 ## Config
 - `config.yaml` — main config (Zotero, Obsidian, AI, dissertation structure)
@@ -85,7 +83,10 @@ Each annotated paper's bibliography is cross-checked against our library. Missin
 Incremental mode: if Research note exists, reads `## ✏️ Что нового` (user notes), computes delta (new sources, fragments), sends incremental prompt. User notes archived to `## 📋 История изменений` with timestamp.
 
 ### Agent
-`klemma agent "query"` → build_agent_context() gathers all research data (sources, coverage, gaps, fragments, plan) → renders Jinja2 system prompt → launches `claude --system-prompt <context> <query>` interactively. Claude saves response to `Agent/Agent_<date>.md` in vault.
+`klemma ask "query"` → build_agent_context() gathers all research data (sources, coverage, gaps, fragments, plan) → renders Jinja2 system prompt → launches `claude --system-prompt <context> <query>` interactively. Claude saves response to `Agent/Agent_<date>.md` in vault.
+
+### Library analysis
+`klemma library` → gather library context (summary, quality tiers, ref-gaps, sources compact list) → Claude analysis via `librarian.md` prompt → structured LibraryReport → saved to `Library/Library_{mode}_{date}.md` in vault. Three modes: status (health), recommend (section-focused), audit (deep quality check).
 
 ### Multi-section sources
 Frontmatter `sections: [1.1, 1.4.1, 3.2.2]` → `source_sections` table → `get_by_section()` uses JOIN to find all relevant sources.

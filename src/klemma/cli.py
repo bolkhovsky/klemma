@@ -89,8 +89,8 @@ def main(ctx, config):
 
 @main.command()
 @click.pass_context
-def morning(ctx):
-    """Утренний брифинг — план дня по философии Second Brain."""
+def plan(ctx):
+    """Daily plan — focus, recommendations, deadlines."""
     config_path = ctx.obj["config_path"]
     cfg, state, vault = _init_components(config_path)
     ai = _init_ai(cfg)
@@ -155,30 +155,21 @@ def morning(ctx):
 
 
 @main.command()
-@click.argument("citekey")
+@click.argument("citekey", required=False)
 @click.pass_context
-def extract(ctx, citekey):
-    """Extract citation fragments from a source PDF.
+def process(ctx, citekey):
+    """Process source(s): extract fragments, annotate, create vault note.
 
-    CITEKEY: Citation key of the source (e.g., smithIceNet2021)
+    With CITEKEY: process a single source.
+    Without arguments: process all pending sources (up to 10).
     """
     config_path = ctx.obj["config_path"]
     cfg, state, vault = _init_components(config_path)
     ai = _init_ai(cfg)
 
     from .literature.pdf import PDFExtractor
-    from .skills.extractor import extract_fragments
 
     pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
-
-    # Find source
-    source = state.get_source(citekey)
-    if not source:
-        # Try registering it first
-        state.register_sources([citekey])
-        source = state.get_source(citekey)
-
-    console.print(f"[blue]Extracting fragments from: {citekey}[/blue]")
 
     # Load entry lookup for rich metadata and PDF paths
     entry_lookup = PDFExtractor.load_entry_lookup(Path(cfg.zotero.library_json)) if cfg.zotero.library_json else {}
@@ -188,10 +179,45 @@ def extract(ctx, citekey):
     if resolved:
         console.print(f"[green]Auto-resolved {resolved} reference gap(s)[/green]")
 
+    # Build citekey list: single or batch
+    if citekey:
+        citekeys = [citekey]
+    else:
+        # Process all pending sources (up to 10)
+        proc_stats = state.get_stats()
+        if proc_stats.get("pending", 0) == 0:
+            console.print("[green]No pending sources to process.[/green]")
+            return
+        citekeys = state.get_pending_sources(limit=10)
+        console.print(f"[blue]Processing {len(citekeys)} pending sources...[/blue]")
+
+    processed = 0
+    for idx, ck in enumerate(citekeys, 1):
+        if len(citekeys) > 1:
+            console.print(f"\n[bold][{idx}/{len(citekeys)}] {ck}[/bold]")
+
+        _process_single(ck, cfg, state, vault, ai, pdf_extractor, entry_lookup)
+        processed += 1
+
+    if len(citekeys) > 1:
+        console.print(f"\n[green]Done: {processed}/{len(citekeys)} processed.[/green]")
+
+
+def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, entry_lookup):
+    """Process a single source: find PDF, extract fragments, save to vault."""
+    from .skills.extractor import extract_fragments, save_fragments_to_vault
+
+    source = state.get_source(citekey)
+    if not source:
+        state.register_sources([citekey])
+        source = state.get_source(citekey)
+
     entry = entry_lookup.get(citekey)
     if not entry:
         from .literature.models import ZoteroEntry
         entry = ZoteroEntry(id=citekey, title=citekey)
+
+    console.print(f"[blue]Processing: {entry.authors_str} ({entry.year or '?'})[/blue] [dim]@{citekey}[/dim]")
 
     # Find PDF
     pdf_search_paths = [Path("/Users/ilya/Zotero/storage")]
@@ -203,230 +229,174 @@ def extract(ctx, citekey):
     )
 
     if not pdf_path:
-        console.print("[red]PDF not found.[/red]")
-        console.print("[dim]Searched in Zotero storage.[/dim]")
+        console.print("  [red]PDF not found[/red]")
         return
-
-    console.print(f"[green]Found PDF:[/green] {pdf_path.name}")
 
     # Extract text
     pdf_text = pdf_extractor.extract(pdf_path)
     if not pdf_text or len(pdf_text) < cfg.processing.min_pdf_length:
-        console.print("[red]PDF extraction failed or text too short.[/red]")
+        console.print("  [red]PDF extraction failed or text too short[/red]")
         return
 
-    console.print(f"[dim]Extracted {len(pdf_text)} chars[/dim]")
-
     # Extract fragments
-    console.print("[blue]Analyzing with Claude...[/blue]")
     result = extract_fragments(entry, pdf_text, cfg, state, ai)
 
     if not result or not result.fragments:
-        console.print("[red]No fragments extracted.[/red]")
+        console.print("  [red]No fragments extracted[/red]")
         return
 
-    # Display results
-    console.print(f"\n[green]Extracted {len(result.fragments)} fragments[/green]")
-    if result.summary:
-        console.print(f"\n[dim]{result.summary}[/dim]")
+    console.print(f"  [green]{len(result.fragments)} fragments[/green]", end="")
 
-    table = Table(title=f"Fragments: {citekey}")
-    table.add_column("#", justify="right", style="dim", width=3)
-    table.add_column("Type", width=12)
-    table.add_column("Section", width=8)
-    table.add_column("Rel", justify="right", width=3)
-    table.add_column("Fragment", max_width=60)
-    table.add_column("Usage", max_width=30, style="dim")
-
-    for i, frag in enumerate(result.fragments, 1):
-        rel_style = "green" if frag.relevance >= 4 else "yellow" if frag.relevance >= 3 else "dim"
-        table.add_row(
-            str(i),
-            frag.type,
-            frag.section or "-",
-            f"[{rel_style}]{frag.relevance}[/{rel_style}]",
-            frag.text[:60] + ("..." if len(frag.text) > 60 else ""),
-            frag.usage_hint[:30] if frag.usage_hint else "",
-        )
-
-    console.print(table)
-
-    # Save fragments to vault note (auto-creates with annotation if missing)
-    from .skills.extractor import save_fragments_to_vault
+    # Save to vault
     saved_path = save_fragments_to_vault(
         citekey, result.fragments, vault,
         entry=entry, config=cfg, state=state,
         pdf_text=pdf_text, ai=ai, entry_lookup=entry_lookup,
     )
     if saved_path:
-        console.print(f"[green]Фрагменты сохранены в vault:[/green] @{citekey}")
+        console.print(f" → @{citekey}")
     else:
-        console.print(f"[yellow]Заметка @{citekey} не найдена в vault — фрагменты только в БД[/yellow]")
+        console.print(" [dim](DB only)[/dim]")
 
 
 @main.command()
+@click.option("--verbose", "-v", is_flag=True, help="Show full detailed tables")
+@click.option("--chapter", "-ch", type=int, help="Filter by chapter")
 @click.pass_context
-def stats(ctx):
-    """Show processing and fragment statistics."""
+def status(ctx, verbose, chapter):
+    """Unified status: processing, coverage, gaps, reference gaps."""
     config_path = ctx.obj["config_path"]
     cfg, state, _ = _init_components(config_path)
 
-    # Processing stats
     proc_stats = state.get_stats()
-    table = Table(title="Processing Statistics")
-    table.add_column("Status", style="cyan")
-    table.add_column("Count", justify="right")
-
-    total = proc_stats.get("total", 1)
-    styles = {"completed": "green", "pending": "yellow", "failed": "red", "skipped": "dim", "processing": "blue"}
-    for status, count in proc_stats.items():
-        if status in ("total", "today"):
-            continue
-        table.add_row(status.title(), f"[{styles.get(status, 'white')}]{count}[/{styles.get(status, 'white')}]")
-    table.add_section()
-    table.add_row("[bold]Total[/bold]", f"[bold]{total}[/bold]")
-    table.add_row("Today", str(proc_stats.get("today", 0)))
-    console.print(table)
-
-    # Fragment stats
     frag_stats = state.get_fragment_stats()
-    if frag_stats["total"] > 0:
-        console.print()
-        table = Table(title="Fragment Statistics")
-        table.add_column("Category", style="cyan")
-        table.add_column("Count", justify="right")
-        table.add_row("Total fragments", str(frag_stats["total"]))
-        for ftype, cnt in sorted(frag_stats["by_type"].items()):
-            table.add_row(f"  {ftype}", str(cnt))
-        console.print(table)
-
-
-@main.command()
-@click.pass_context
-def coverage(ctx):
-    """Show dissertation coverage by chapter and section."""
-    config_path = ctx.obj["config_path"]
-    cfg, state, _ = _init_components(config_path)
-
     cov = state.get_coverage_stats()
 
-    table = Table(title="Coverage by Chapter")
+    # --- Processing summary ---
+    completed = proc_stats.get("completed", 0)
+    pending = proc_stats.get("pending", 0)
+    failed = proc_stats.get("failed", 0)
+    total = proc_stats.get("total", 0)
+    parts = [f"[green]{completed} completed[/green]"]
+    if pending:
+        parts.append(f"[yellow]{pending} pending[/yellow]")
+    if failed:
+        parts.append(f"[red]{failed} failed[/red]")
+    console.print(f"Processing: {' | '.join(parts)}  [dim]({total} total, {frag_stats.get('total', 0)} fragments)[/dim]")
+    console.print()
+
+    # --- Coverage by chapter ---
+    table = Table(title="Coverage by Chapter", show_edge=False, pad_edge=False)
     table.add_column("Chapter", style="cyan")
-    table.add_column("Sources", justify="right")
+    table.add_column("Sources", justify="right", width=8)
     for ch in range(1, 5):
+        if chapter and ch != chapter:
+            continue
         count = cov["chapters"].get(ch, 0)
         style = "green" if count >= 10 else "yellow" if count >= 5 else "red"
         name = cfg.dissertation.chapters.get(ch, "")
         table.add_row(f"Ch {ch}: {name}", f"[{style}]{count}[/{style}]")
     console.print(table)
 
-    if cov["sections"]:
+    # --- Sections (verbose or filtered by chapter) ---
+    if (verbose or chapter) and cov["sections"]:
         console.print()
-        table = Table(title="Coverage by Section")
-        table.add_column("Section", style="cyan")
-        table.add_column("Sources", justify="right")
-        for section, count in sorted(cov["sections"].items()):
+        sec_table = Table(title="Coverage by Section", show_edge=False, pad_edge=False)
+        sec_table.add_column("Section", style="cyan")
+        sec_table.add_column("Sources", justify="right", width=8)
+        for sec, count in sorted(cov["sections"].items()):
+            if chapter and not sec.startswith(f"{chapter}."):
+                continue
             style = "green" if count >= 3 else "yellow" if count >= 1 else "red"
-            table.add_row(section, f"[{style}]{count}[/{style}]")
-        console.print(table)
+            sec_table.add_row(sec, f"[{style}]{count}[/{style}]")
+        console.print(sec_table)
+
+    # --- Top gaps ---
+    min_sources = cfg.dissertation.min_sources_per_section
+    gaps_data = state.get_gaps(min_sources=min_sources)
+    if gaps_data:
+        if chapter:
+            gaps_data = [g for g in gaps_data if g["section"].startswith(f"{chapter}.")]
+        shown = gaps_data if verbose else gaps_data[:5]
+        console.print()
+        console.print(f"[bold]Top Gaps[/bold] [dim](sections with < {min_sources} sources)[/dim]")
+        for gap in shown:
+            needed = min_sources - gap["count"]
+            console.print(f"  [red]{gap['section']}[/red] — {gap['count']} sources [dim](need {needed} more)[/dim]")
+        if not verbose and len(gaps_data) > 5:
+            console.print(f"  [dim]... and {len(gaps_data) - 5} more (use --verbose)[/dim]")
+
+    # --- Reference gaps ---
+    ref_limit = 20 if verbose else 5
+    ref_gaps = state.get_reference_gaps(limit=ref_limit)
+    if ref_gaps:
+        console.print()
+        if verbose:
+            ref_table = Table(title="Reference Gaps (missing from library)", show_edge=False, pad_edge=False)
+            ref_table.add_column("#", justify="right", style="dim", width=3)
+            ref_table.add_column("Score", justify="right", width=6)
+            ref_table.add_column("Count", justify="right", width=5)
+            ref_table.add_column("Authors", width=20)
+            ref_table.add_column("Year", width=5)
+            ref_table.add_column("Title", max_width=35)
+            ref_table.add_column("Why", max_width=30, style="dim")
+
+            for i, g in enumerate(ref_gaps, 1):
+                score_style = "red bold" if g["score"] >= 10 else "yellow" if g["score"] >= 5 else "dim"
+                ref_table.add_row(
+                    str(i),
+                    f"[{score_style}]{g['score']:.1f}[/{score_style}]",
+                    str(g["count"]),
+                    (g["ref_authors"] or "")[:20],
+                    str(g.get("ref_year") or ""),
+                    (g["ref_title"] or "")[:35],
+                    (g.get("why_relevant") or "")[:30],
+                )
+            console.print(ref_table)
+        else:
+            gap_summary = state.get_gap_summary()
+            console.print(f"[bold]Ref Gaps[/bold] [dim]({gap_summary['open_count']} open)[/dim]")
+            for g in ref_gaps:
+                year = g.get("ref_year") or ""
+                console.print(
+                    f"  [yellow]x{g['count']}[/yellow]  {(g['ref_authors'] or '')[:20]} ({year}) "
+                    f"[dim]— {(g.get('why_relevant') or '')[:40]}[/dim]"
+                )
+    elif verbose:
+        console.print("\n[dim]No reference gaps tracked yet.[/dim]")
+
+    # --- Verbose: fragment breakdown ---
+    if verbose and frag_stats["total"] > 0:
+        console.print()
+        ft = Table(title="Fragment Distribution", show_edge=False, pad_edge=False)
+        ft.add_column("Category", style="cyan")
+        ft.add_column("Count", justify="right")
+        for ftype, cnt in sorted(frag_stats["by_type"].items()):
+            ft.add_row(ftype, str(cnt))
+        console.print(ft)
 
 
-@main.command()
+# Backward-compatible aliases
+@main.command(hidden=True)
+@click.pass_context
+def stats(ctx):
+    """[alias] → status"""
+    ctx.invoke(status)
+
+
+@main.command(hidden=True)
+@click.pass_context
+def coverage(ctx):
+    """[alias] → status --verbose"""
+    ctx.invoke(status, verbose=True)
+
+
+@main.command(hidden=True)
 @click.option("--min-sources", "-m", type=int, default=3)
 @click.pass_context
 def gaps(ctx, min_sources):
-    """Find sections with insufficient source coverage and reference gaps."""
-    config_path = ctx.obj["config_path"]
-    cfg, state, _ = _init_components(config_path)
-
-    # Coverage gaps
-    gaps_data = state.get_gaps(min_sources=min_sources)
-    if not gaps_data:
-        console.print(f"[green]All sections have >= {min_sources} sources.[/green]")
-    else:
-        table = Table(title=f"Sections with < {min_sources} sources")
-        table.add_column("Section", style="cyan")
-        table.add_column("Count", justify="right")
-        table.add_column("Gap", justify="right", style="red")
-        for gap in gaps_data:
-            needed = min_sources - gap["count"]
-            table.add_row(gap["section"], str(gap["count"]), f"-{needed}")
-        console.print(table)
-
-    # Reference gaps
-    ref_gaps = state.get_reference_gaps(limit=20)
-    if ref_gaps:
-        console.print()
-        ref_table = Table(title="Reference Gaps (missing from library)")
-        ref_table.add_column("#", justify="right", style="dim", width=3)
-        ref_table.add_column("Score", justify="right", width=6)
-        ref_table.add_column("Count", justify="right", width=5)
-        ref_table.add_column("Authors", width=20)
-        ref_table.add_column("Year", width=5)
-        ref_table.add_column("Title", max_width=35)
-        ref_table.add_column("Sections", width=10, style="cyan")
-        ref_table.add_column("Why", max_width=30, style="dim")
-
-        for i, g in enumerate(ref_gaps, 1):
-            sections = g.get("dissertation_sections") or ""
-            # Parse concatenated JSON arrays
-            if sections and sections.startswith("["):
-                import json as _json
-                try:
-                    sections = ", ".join(_json.loads(sections))
-                except (ValueError, TypeError):
-                    pass
-            score_style = "red bold" if g["score"] >= 10 else "yellow" if g["score"] >= 5 else "dim"
-            ref_table.add_row(
-                str(i),
-                f"[{score_style}]{g['score']:.1f}[/{score_style}]",
-                str(g["count"]),
-                (g["ref_authors"] or "")[:20],
-                str(g.get("ref_year") or ""),
-                (g["ref_title"] or "")[:35],
-                str(sections)[:10],
-                (g.get("why_relevant") or "")[:30],
-            )
-        console.print(ref_table)
-    else:
-        console.print("\n[dim]No reference gaps tracked yet.[/dim]")
-
-
-@main.command()
-@click.option("--chapter", "-ch", type=int, help="Filter by chapter")
-@click.option("--section", "-s", help="Filter by section")
-@click.option("--type", "-t", "frag_type", help="Filter by fragment type")
-@click.option("--limit", "-n", type=int, default=20)
-@click.pass_context
-def fragments(ctx, chapter, section, frag_type, limit):
-    """Browse extracted fragments."""
-    config_path = ctx.obj["config_path"]
-    cfg, state, _ = _init_components(config_path)
-
-    frags = state.get_fragments(
-        chapter=chapter, section=section, fragment_type=frag_type, limit=limit
-    )
-
-    if not frags:
-        console.print("[yellow]No fragments found.[/yellow]")
-        return
-
-    table = Table(title=f"Fragments ({len(frags)} shown)")
-    table.add_column("Source", width=20, style="cyan")
-    table.add_column("Type", width=12)
-    table.add_column("Section", width=8)
-    table.add_column("Rel", justify="right", width=3)
-    table.add_column("Fragment", max_width=50)
-
-    for f in frags:
-        table.add_row(
-            f.get("citekey", "?")[:20],
-            f.get("fragment_type", "?"),
-            f.get("section", "-"),
-            str(f.get("relevance_score", "?")),
-            (f.get("fragment_text", ""))[:50],
-        )
-    console.print(table)
+    """[alias] → status --verbose"""
+    ctx.invoke(status, verbose=True)
 
 
 @main.command()
@@ -435,15 +405,12 @@ def fragments(ctx, chapter, section, frag_type, limit):
 @click.option("--force", is_flag=True, help="Переизвлечь фрагменты даже если уже есть")
 @click.pass_context
 def research(ctx, section, no_save, force):
-    """Исследовательский брифинг — анализ раздела перед написанием.
+    """Deep section analysis — argument structure, citation plan, gaps.
 
-    Собирает контекст из vault и базы данных, анализирует готовность
-    раздела и предлагает структуру аргументации с планом цитирования.
+    Auto-processes unextracted sources before analysis.
+    Use --force to re-extract all fragments.
 
-    Автоматически извлекает фрагменты из источников раздела, если они
-    ещё не были извлечены. Флаг --force переизвлекает все фрагменты.
-
-    Пример: klemma research --section 1.3.2
+    Example: klemma research --section 1.3.2
     """
     config_path = ctx.obj["config_path"]
     cfg, state, vault = _init_components(config_path)
@@ -453,23 +420,30 @@ def research(ctx, section, no_save, force):
 
     chapter = int(section.split(".")[0])
 
-    # Авто-экстракция фрагментов
-    console.print(f"[blue]Подготовка фрагментов для раздела {section}...[/blue]")
+    # Auto-process unextracted sources
+    console.print(f"[blue]Auto-processing unextracted sources for section {section}...[/blue]")
     extract_result = pre_extract_sources(
         section, chapter, cfg, state, vault, ai,
         force=force,
-        on_progress=lambda ck, status, i, n: console.print(
-            f"  [{i}/{n}] @{ck}: {status}"
+        on_progress=lambda ck, st, i, n: console.print(
+            f"  [{i}/{n}] @{ck}: {st}"
         ),
     )
 
-    if extract_result["extracted"] > 0:
-        console.print(f"[green]Извлечено: {extract_result['extracted']} источников[/green]")
-    if extract_result["no_pdf"]:
-        for ck in extract_result["no_pdf"]:
-            console.print(f"  [yellow]@{ck}: PDF не найден[/yellow]")
-    if extract_result["skipped"] > 0 and extract_result["extracted"] == 0:
-        console.print(f"[dim]Все {extract_result['skipped']} источников уже извлечены[/dim]")
+    extracted = extract_result["extracted"]
+    skipped = extract_result["skipped"]
+    no_pdf = extract_result["no_pdf"]
+    if extracted > 0:
+        console.print(f"[green]Processed {extracted} sources[/green]", end="")
+        if skipped:
+            console.print(f" [dim]({skipped} already cached)[/dim]")
+        else:
+            console.print()
+    elif skipped > 0:
+        console.print(f"[dim]All {skipped} sources already processed[/dim]")
+    if no_pdf:
+        for ck in no_pdf:
+            console.print(f"  [yellow]@{ck}: PDF not found, skipping[/yellow]")
 
     # Проверить: первый запуск или обновление
     from .skills.researcher import _load_previous_research
@@ -578,10 +552,10 @@ def research(ctx, section, no_save, force):
         console.print(f"\n[dim]Брифинг сохранён: Research_{section}.md[/dim]")
 
 
-@main.command()
+@main.command(name="import", hidden=True)
 @click.option("--with-queue", is_flag=True, help="Also populate reading queue from high-priority sources")
 @click.pass_context
-def prepopulate(ctx, with_queue):
+def import_vault(ctx, with_queue):
     """Import existing vault notes into klemma database.
 
     Scans @*.md files in the vault's notes folder, reads YAML frontmatter,
@@ -683,16 +657,13 @@ def prepopulate(ctx, with_queue):
 
 @main.command()
 @click.argument("query")
-@click.option("--section", "-s", help="Фокус на конкретном разделе")
-@click.option("--chapter", "-ch", type=int, help="Фокус на конкретной главе")
+@click.option("--section", "-s", help="Focus on a specific section")
+@click.option("--chapter", "-ch", type=int, help="Focus on a specific chapter")
 @click.pass_context
-def agent(ctx, query, section, chapter):
-    """Universal research agent with full dissertation context.
+def ask(ctx, query, section, chapter):
+    """Ask a research question with full dissertation context.
 
-    Launches Claude Code interactively with all research data as context.
-    Claude gets full tool access (web search, file I/O, follow-up questions).
-
-    Example: klemma agent "Какие основные методы валидации прогнозов?"
+    Example: klemma ask "What are the main ice forecast validation methods?"
     """
     import subprocess
 
@@ -711,6 +682,127 @@ def agent(ctx, query, section, chapter):
     subprocess.run(["claude", "--system-prompt", context, query])
 
     console.print("\n[dim]Сессия агента завершена.[/dim]")
+
+
+@main.command()
+@click.option("--section", "-s", help="Focus on a specific section (recommend mode)")
+@click.option("--audit", is_flag=True, help="Deep quality audit")
+@click.pass_context
+def library(ctx, section, audit):
+    """AI-powered library analysis and recommendations.
+
+    Without flags: overall health assessment.
+    With --section: reading recommendations for that section.
+    With --audit: deep quality audit.
+    """
+    config_path = ctx.obj["config_path"]
+    cfg, state, vault = _init_components(config_path)
+    ai = _init_ai(cfg)
+
+    from .literature.pdf import PDFExtractor
+    from .skills.librarian import analyze_library
+
+    entry_lookup = PDFExtractor.load_entry_lookup(Path(cfg.zotero.library_json)) if cfg.zotero.library_json else {}
+
+    mode = "audit" if audit else "recommend" if section else "status"
+    console.print(f"[blue]Analyzing library ({mode})...[/blue]")
+
+    report = analyze_library(cfg, state, vault, ai, entry_lookup, mode=mode, focus_section=section)
+
+    if not report:
+        console.print("[red]Failed to generate library analysis.[/red]")
+        return
+
+    # Overall health
+    if report.overall_health:
+        console.print(Panel(report.overall_health, title="Library Health", border_style="blue"))
+
+    # Chapter assessments
+    if report.chapter_assessments:
+        table = Table(title="Chapter Assessment", show_edge=False, pad_edge=False)
+        table.add_column("Ch", width=4, style="cyan")
+        table.add_column("Sources", justify="right", width=8)
+        table.add_column("Quality", justify="right", width=8)
+        table.add_column("Verdict", max_width=50)
+        for ch in report.chapter_assessments:
+            table.add_row(
+                str(ch.get("chapter", "?")),
+                str(ch.get("sources", "?")),
+                str(ch.get("quality_avg", "?")),
+                ch.get("verdict", "")[:50],
+            )
+        console.print(table)
+
+    # Critical issues
+    if report.critical_issues:
+        console.print("\n[bold red]Critical Issues[/bold red]")
+        for issue in report.critical_issues:
+            console.print(f"  [red]-[/red] {issue}")
+
+    # Recommendations
+    if report.recommendations:
+        console.print("\n[bold green]Recommendations[/bold green]")
+        for rec in report.recommendations:
+            priority = rec.get("priority", "medium")
+            style = {"high": "red", "medium": "yellow", "low": "dim"}.get(priority, "white")
+            console.print(f"  [{style}]{priority.upper()}[/{style}] {rec.get('action', '')}")
+            if rec.get("reason"):
+                console.print(f"        [dim]{rec['reason']}[/dim]")
+
+    # Section detail (recommend mode)
+    if report.section_detail:
+        detail = report.section_detail
+        if detail.get("current_sources_assessment"):
+            console.print(f"\n[bold]Section Assessment[/bold]\n{detail['current_sources_assessment']}")
+        if detail.get("reading_order"):
+            console.print("\n[bold]Reading Order[/bold]")
+            for i, item in enumerate(detail["reading_order"], 1):
+                console.print(f"  {i}. {item.get('citekey_or_ref', '?')} — {item.get('reason', '')}")
+
+    # Audit findings
+    if report.audit_findings:
+        console.print("\n[bold]Audit Findings[/bold]")
+        for finding in report.audit_findings:
+            severity = finding.get("severity", "medium")
+            style = {"high": "red", "medium": "yellow", "low": "dim"}.get(severity, "white")
+            console.print(f"  [{style}]{severity.upper()}[/{style}] [{finding.get('type', '')}] {finding.get('details', '')}")
+
+    console.print(f"\n[dim]Full report saved to vault.[/dim]")
+
+
+# --- Backward-compatible aliases ---
+
+@main.command(hidden=True)
+@click.pass_context
+def morning(ctx):
+    """[alias] → plan"""
+    ctx.invoke(plan)
+
+
+@main.command(hidden=True)
+@click.argument("citekey")
+@click.pass_context
+def extract(ctx, citekey):
+    """[alias] → process"""
+    ctx.invoke(process, citekey=citekey)
+
+
+@main.command(hidden=True)
+@click.argument("query")
+@click.option("--section", "-s", default=None)
+@click.option("--chapter", "-ch", type=int, default=None)
+@click.pass_context
+def agent(ctx, query, section, chapter):
+    """[alias] → ask"""
+    ctx.invoke(ask, query=query, section=section, chapter=chapter)
+
+
+@main.command(hidden=True)
+@click.option("--with-queue", is_flag=True)
+@click.pass_context
+def prepopulate(ctx, with_queue):
+    """[alias] → import"""
+    ctx.invoke(import_vault, with_queue=with_queue)
 
 
 if __name__ == "__main__":
