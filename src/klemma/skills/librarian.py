@@ -56,6 +56,7 @@ def analyze_library(
         recommendations=data.get("recommendations", []),
         section_detail=data.get("section_detail", {}),
         audit_findings=data.get("audit_findings", []),
+        prune=data.get("prune"),
         report_text=data.get("report_text", ""),
     )
 
@@ -100,6 +101,8 @@ def _gather_library_context(
         "section": focus_section or "",
         "section_title": "",
         "section_summaries": "",
+        "prune_needed": summary.get("total", 0) > 100,
+        "target_range": "100-120",
     }
 
     # For recommend mode: load vault summaries for the section
@@ -206,6 +209,23 @@ def _save_report_to_vault(
             marker = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(priority, "")
             content += f"- {marker} **{rec.get('action', '')}** — {rec.get('reason', '')}\n"
         content += "\n"
+
+    if report.prune:
+        content += "## Prune Recommendations\n\n"
+        drop = report.prune.get("drop", [])
+        maybe = report.prune.get("maybe", [])
+        if drop:
+            content += f"### Drop ({len(drop)} sources)\n\n"
+            content += "| Citekey | Reason |\n|---------|--------|\n"
+            for item in drop:
+                content += f"| @{item.get('citekey', '?')} | {item.get('reason', '')} |\n"
+            content += "\n"
+        if maybe:
+            content += f"### Maybe ({len(maybe)} sources)\n\n"
+            content += "| Citekey | Reason |\n|---------|--------|\n"
+            for item in maybe:
+                content += f"| @{item.get('citekey', '?')} | {item.get('reason', '')} |\n"
+            content += "\n"
 
     if report.report_text:
         content += "---\n\n"

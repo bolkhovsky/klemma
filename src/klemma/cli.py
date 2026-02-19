@@ -831,6 +831,41 @@ def library(ctx, section, audit):
             style = {"high": "red", "medium": "yellow", "low": "dim"}.get(severity, "white")
             console.print(f"  [{style}]{severity.upper()}[/{style}] [{finding.get('type', '')}] {finding.get('details', '')}")
 
+    # Prune recommendations (auto-triggered when >100 sources)
+    if report.prune:
+        prune = report.prune
+        drop = prune.get("drop", [])
+        maybe = prune.get("maybe", [])
+        total = state.get_library_summary().get("total", 0)
+        after = total - len(drop)
+        src_lookup = {s["id"]: s for s in state.get_all_sources()}
+
+        console.print(f"\n[bold yellow]Prune Analysis[/bold yellow] [dim]({total} → ~{after} sources)[/dim]")
+
+        def _prune_table(items: list[dict], title: str, style: str) -> Table:
+            t = Table(title=f"{title} ({len(items)})", show_edge=False, pad_edge=False)
+            t.add_column("#", width=4, style="dim")
+            t.add_column("Citekey", max_width=35, style=style)
+            t.add_column("Q", width=3, justify="right")
+            t.add_column("F", width=3, justify="right")
+            t.add_column("Reason", max_width=50)
+            for i, item in enumerate(items, 1):
+                ck = item.get("citekey", "?")
+                src = src_lookup.get(ck, {})
+                t.add_row(
+                    str(i),
+                    f"@{ck}",
+                    str(src.get("quality_score") or "?"),
+                    str(src.get("fragment_count") or "?"),
+                    item.get("reason", ""),
+                )
+            return t
+
+        if drop:
+            console.print(_prune_table(drop, "Drop", "red"))
+        if maybe:
+            console.print(_prune_table(maybe, "Maybe", "yellow"))
+
     # Reference gaps table
     _print_ref_gaps_table(state)
 
