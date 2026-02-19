@@ -876,6 +876,144 @@ def search(ctx, query, source, limit):
     console.print(result.content)
 
 
+# --- Discover: background literature discovery ---
+
+@main.command()
+@click.option("--section", "-s", help="Section to discover papers for")
+@click.option("--status", "show_status", is_flag=True, help="Show discovery status")
+@click.option("--review", is_flag=True, help="Review pending discoveries")
+@click.option("--background", "-bg", is_flag=True, help="Run in background")
+@click.pass_context
+def discover(ctx, section, show_status, review, background):
+    """Discover new literature via external search.
+
+    Requires academia MCP server.
+
+    \b
+    Examples:
+      klemma discover -s 1.3.2           # search and assess
+      klemma discover -s 1.3.2 -bg       # run in background
+      klemma discover --status            # show all discoveries
+      klemma discover --review            # review pending results
+    """
+    config_path = ctx.obj["config_path"]
+    kctx = _init_components(config_path)
+    cfg, state = kctx.config, kctx.state
+
+    if show_status:
+        _discover_status(state)
+        return
+
+    if review:
+        _discover_review(state)
+        return
+
+    if not section:
+        console.print("[red]--section required for discovery. Example: klemma discover -s 1.3.2[/red]")
+        return
+
+    if "academia" not in cfg.mcp.servers:
+        console.print("[red]Academia MCP server not configured.[/red]")
+        console.print(
+            '[dim]Add it with: klemma tools add academia '
+            '--command python3 --args "-m" --args academia_mcp[/dim]'
+        )
+        return
+
+    if background:
+        import subprocess as sp
+
+        log_path = Path.home() / ".klemma" / f"discovery_{section}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        sp.Popen(
+            [sys.executable, "-m", "klemma.tools.discovery",
+             "--section", section, "--config", config_path],
+            stdout=open(log_path, "w"),
+            stderr=sp.STDOUT,
+        )
+        console.print(f"[green]Discovery started in background for section {section}[/green]")
+        console.print(f"[dim]Log: {log_path}[/dim]")
+        console.print(f"[dim]Review results: klemma discover --review[/dim]")
+        return
+
+    # Foreground execution
+    console.print(f"[blue]Discovering papers for section {section}...[/blue]")
+
+    from .tools.discovery import run_discovery
+
+    result = run_discovery(section=section, config_path=config_path)
+
+    console.print(
+        f"[green]Done:[/green] searched {result['searched']}, "
+        f"found {result['found']} new, assessed {result['assessed']}"
+    )
+    if result["errors"]:
+        for err in result["errors"]:
+            console.print(f"[red]  {err}[/red]")
+
+    if result["found"] > 0:
+        console.print(f"\n[dim]Review results: klemma discover --review[/dim]")
+
+
+def _discover_status(state):
+    """Show discovery status across all sections."""
+    for status_type in ("pending", "assessed", "accepted", "rejected"):
+        discoveries = state.get_discoveries(status=status_type, limit=100)
+        if not discoveries:
+            continue
+
+        sections = {}
+        for d in discoveries:
+            sec = d["section"]
+            sections[sec] = sections.get(sec, 0) + 1
+
+        label = {"pending": "yellow", "assessed": "blue", "accepted": "green", "rejected": "dim"}
+        style = label.get(status_type, "white")
+        console.print(f"[{style}]{status_type.title()}:[/{style}] ", end="")
+        parts = [f"{sec} ({cnt})" for sec, cnt in sorted(sections.items())]
+        console.print(", ".join(parts))
+
+    if not any(state.get_discoveries(status=s) for s in ("pending", "assessed", "accepted", "rejected")):
+        console.print("[dim]No discoveries yet. Run: klemma discover -s <section>[/dim]")
+
+
+def _discover_review(state):
+    """Interactive review of pending/assessed discoveries."""
+    discoveries = state.get_discoveries(status="pending", limit=50)
+    assessed = state.get_discoveries(status="assessed", limit=50)
+    all_pending = discoveries + assessed
+
+    if not all_pending:
+        console.print("[dim]No discoveries to review.[/dim]")
+        return
+
+    table = Table(title=f"Discoveries to Review ({len(all_pending)})", show_edge=False, pad_edge=False)
+    table.add_column("ID", width=4, style="dim")
+    table.add_column("Sec", width=6, style="cyan")
+    table.add_column("Rel", width=3, justify="right")
+    table.add_column("Year", width=5)
+    table.add_column("Authors", width=20)
+    table.add_column("Title", max_width=40)
+    table.add_column("Use", width=10, style="dim")
+
+    for d in all_pending:
+        rel = d.get("relevance_score")
+        rel_str = str(rel) if rel else "?"
+        rel_style = "green" if rel and rel >= 4 else "yellow" if rel and rel >= 3 else "dim"
+        table.add_row(
+            str(d["id"]),
+            d.get("section", ""),
+            f"[{rel_style}]{rel_str}[/{rel_style}]",
+            str(d.get("year") or ""),
+            (d.get("authors") or "")[:20],
+            (d.get("title") or "")[:40],
+            d.get("usage_type") or "",
+        )
+
+    console.print(table)
+    console.print("\n[dim]Accept/reject via: klemma discover --review (interactive coming soon)[/dim]")
+
+
 # --- Tools: MCP server management ---
 
 @main.group()
