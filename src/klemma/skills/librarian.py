@@ -105,7 +105,7 @@ def _gather_library_context(
     # For recommend mode: load vault summaries for the section
     if mode == "recommend" and focus_section:
         chapter = int(focus_section.split(".")[0])
-        context["section_title"] = config.dissertation.sections.get(focus_section, "")
+        context["section_title"] = config.dissertation.chapters.get(chapter, "")
         context["section_summaries"] = _load_section_summaries(
             focus_section, chapter, state, vault
         )
