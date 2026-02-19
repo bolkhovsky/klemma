@@ -15,6 +15,7 @@ from .config import load_config
 from .context import KlemmaContext
 from .library_provider import create_library
 from .state import StateManager
+from .tools.registry import ToolRegistry
 from .vault import VaultAdapter
 
 console = Console()
@@ -26,7 +27,8 @@ def _init_components(config_path: str) -> KlemmaContext:
     state = StateManager(cfg.state.db_path)
     vault = VaultAdapter(cfg.obsidian.vault_path, use_cli=cfg.obsidian.use_cli)
     library = create_library(cfg)
-    return KlemmaContext(config=cfg, state=state, vault=vault, library=library)
+    tools = ToolRegistry(cfg) if cfg.mcp.servers else None
+    return KlemmaContext(config=cfg, state=state, vault=vault, library=library, tools=tools)
 
 
 def _init_ai(cfg):
@@ -816,6 +818,128 @@ def library(ctx, section, audit):
     _print_ref_gaps_table(state)
 
     console.print(f"\n[dim]Full report saved to vault.[/dim]")
+
+
+# --- Tools: MCP server management ---
+
+@main.group()
+def tools():
+    """Manage MCP tool servers (add, list, remove, call)."""
+    pass
+
+
+@tools.command(name="add")
+@click.argument("name")
+@click.option("--command", "-cmd", required=True, help="Command to launch server (e.g. uvx, python3)")
+@click.option("--args", "-a", multiple=True, help="Arguments (repeatable)")
+@click.option("--env", "-e", multiple=True, help="Environment vars as KEY=VALUE (repeatable)")
+@click.pass_context
+def tools_add(ctx, name, command, args, env):
+    """Register an MCP server.
+
+    Example: klemma tools add zotero --command uvx --args zotero-mcp --env ZOTERO_LOCAL=true
+    """
+    from .tools.registry import add_server
+
+    config_path = ctx.obj["config_path"]
+    env_dict = {}
+    for item in env:
+        if "=" in item:
+            k, v = item.split("=", 1)
+            env_dict[k] = v
+        else:
+            console.print(f"[red]Invalid env format: {item} (use KEY=VALUE)[/red]")
+            return
+
+    add_server(config_path, name, command, list(args), env_dict)
+    console.print(f"[green]Added MCP server '{name}'[/green]")
+    console.print(f"  command: {command} {' '.join(args)}")
+    if env_dict:
+        console.print(f"  env: {env_dict}")
+    console.print(f"\n[dim]Verify with: klemma tools list[/dim]")
+
+
+@tools.command(name="list")
+@click.option("--probe", is_flag=True, help="Connect to each server and list available tools")
+@click.pass_context
+def tools_list(ctx, probe):
+    """List registered MCP servers."""
+    config_path = ctx.obj["config_path"]
+    cfg = load_config(config_path)
+
+    servers = cfg.mcp.servers
+    if not servers:
+        console.print("[dim]No MCP servers registered.[/dim]")
+        console.print("[dim]Add one with: klemma tools add <name> --command <cmd> --args <arg>[/dim]")
+        return
+
+    table = Table(title="MCP Servers", show_edge=False, pad_edge=False)
+    table.add_column("Name", style="cyan")
+    table.add_column("Command", max_width=40)
+    if probe:
+        table.add_column("Tools", max_width=50)
+
+    for name, srv in servers.items():
+        cmd_str = f"{srv.command} {' '.join(srv.args)}"
+        if probe:
+            try:
+                registry = ToolRegistry(cfg)
+                tool_names = registry.available_tools(name)
+                tools_str = f"[green]{len(tool_names)}[/green]: {', '.join(tool_names)}"
+            except Exception as e:
+                tools_str = f"[red]error: {e}[/red]"
+            table.add_row(name, cmd_str, tools_str)
+        else:
+            table.add_row(name, cmd_str)
+
+    console.print(table)
+
+
+@tools.command(name="remove")
+@click.argument("name")
+@click.pass_context
+def tools_remove(ctx, name):
+    """Remove an MCP server registration."""
+    from .tools.registry import remove_server
+
+    config_path = ctx.obj["config_path"]
+    if remove_server(config_path, name):
+        console.print(f"[green]Removed MCP server '{name}'[/green]")
+    else:
+        console.print(f"[red]Server '{name}' not found[/red]")
+
+
+@tools.command(name="call")
+@click.argument("server")
+@click.argument("tool")
+@click.argument("args_json", default="{}")
+@click.pass_context
+def tools_call(ctx, server, tool, args_json):
+    """Call a tool directly (debug/power user).
+
+    Example: klemma tools call zotero zotero_search_items '{"query": "ice"}'
+    """
+    config_path = ctx.obj["config_path"]
+    cfg = load_config(config_path)
+
+    if server not in cfg.mcp.servers:
+        console.print(f"[red]Server '{server}' not registered[/red]")
+        return
+
+    try:
+        tool_args = json.loads(args_json)
+    except json.JSONDecodeError as e:
+        console.print(f"[red]Invalid JSON: {e}[/red]")
+        return
+
+    registry = ToolRegistry(cfg)
+    console.print(f"[dim]Calling {server}.{tool}({tool_args})...[/dim]")
+    result = registry.call(server, tool, tool_args)
+
+    if result.is_error:
+        console.print(f"[red]Error: {result.content}[/red]")
+    else:
+        console.print(result.content)
 
 
 # --- Backward-compatible aliases ---

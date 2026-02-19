@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .config import KlemmaConfig
     from .library_provider import LibraryProvider
     from .state import StateManager
+    from .tools.registry import ToolRegistry
     from .vault import VaultAdapter
 
 
@@ -26,4 +27,4 @@ class KlemmaContext:
     vault: VaultAdapter
     ai: Optional[ClaudeClient] = None
     library: Optional[LibraryProvider] = None
-    tools: Optional[object] = None  # ToolRegistry, added in Phase 2
+    tools: Optional[ToolRegistry] = None

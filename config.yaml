@@ -5,8 +5,6 @@
 instance:
   name: "dissertation-arctic-ice"
   type: "academic"
-
-zotero:
   library_id: ""
   library_type: "user"
   api_key_env: "ZOTERO_API_KEY"
@@ -228,3 +226,12 @@ export:
   pandoc:
     timeout: 300
     number_sections: true
+
+mcp:
+  servers:
+    zotero:
+      command: "uvx"
+      args:
+        - "zotero-mcp"
+      env:
+        ZOTERO_LOCAL: "true"

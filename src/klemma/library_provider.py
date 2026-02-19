@@ -1,13 +1,18 @@
 """LibraryProvider — abstraction for Zotero library data access.
 
-Two implementations:
+Three implementations:
 - LocalLibrary: wraps existing PDFExtractor.load_entry_lookup() (BBT JSON)
-- MCPLibrary: uses zotero-mcp server (added in Phase 2)
+- MCPLibrary: uses zotero-mcp server via MCP protocol
+- CompositeLibrary: merges local + MCP (local entries win on conflict)
 """
 
+import json
 import logging
 from pathlib import Path
-from typing import Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Optional, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from .tools.client import MCPClient
 
 from .literature.models import ZoteroEntry
 
@@ -76,20 +81,87 @@ class LocalLibrary:
             return {}
 
 
+class MCPLibrary:
+    """Zotero MCP backend — fetches library data via zotero-mcp server.
+
+    Uses zotero_search_items for catalog, zotero_item_fulltext for text.
+    MCP doesn't expose filesystem paths, so pdf_paths is always empty.
+    """
+
+    def __init__(self, client: "MCPClient"):
+        self._client = client
+        self._entries: Optional[dict[str, ZoteroEntry]] = None
+        self._pdf_paths: dict[str, str] = {}
+
+    @property
+    def entries(self) -> dict[str, ZoteroEntry]:
+        if self._entries is None:
+            self._entries = self._load_entries()
+        return self._entries
+
+    @property
+    def pdf_paths(self) -> dict[str, str]:
+        return self._pdf_paths
+
+    def get_text(self, citekey: str) -> Optional[str]:
+        """Get full text via zotero_item_fulltext."""
+        result = self._client.call_tool("zotero_item_fulltext", {"query": citekey})
+        if result.is_error or not result.content:
+            return None
+        return result.content
+
+    def _load_entries(self) -> dict[str, ZoteroEntry]:
+        """Load all library entries via zotero_search_items."""
+        result = self._client.call_tool("zotero_search_items", {"query": ""})
+        if result.is_error or not result.content:
+            logger.warning("MCPLibrary: failed to load entries: %s", result.content)
+            return {}
+        try:
+            items = json.loads(result.content) if isinstance(result.content, str) else result.content
+            if not isinstance(items, list):
+                items = [items]
+            entries = {}
+            for item in items:
+                citekey = item.get("citekey") or item.get("key", "")
+                if not citekey:
+                    continue
+                entries[citekey] = ZoteroEntry(
+                    id=citekey,
+                    title=item.get("title", ""),
+                    authors=item.get("authors") or item.get("creators", []),
+                    year=item.get("year") or item.get("date", ""),
+                    item_type=item.get("itemType", ""),
+                    abstract=item.get("abstract", ""),
+                )
+            return entries
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error("MCPLibrary: failed to parse entries: %s", e)
+            return {}
+
+
 def create_library(config) -> LibraryProvider:
     """Factory: create the right LibraryProvider from config.
 
     config.zotero.backend == "local" → LocalLibrary (default)
-    config.zotero.backend == "mcp"   → MCPLibrary (Phase 2)
+    config.zotero.backend == "mcp"   → MCPLibrary (zotero-mcp server)
     """
     backend = getattr(config.zotero, "backend", "local")
 
     if backend == "mcp":
-        # Phase 2: MCPLibrary will be imported and returned here
-        raise NotImplementedError(
-            "MCP library backend not yet implemented. "
-            "Use backend: 'local' or install Phase 2."
+        zotero_srv = config.mcp.servers.get("zotero")
+        if not zotero_srv or not zotero_srv.command:
+            raise ValueError(
+                "zotero.backend is 'mcp' but no 'zotero' MCP server configured. "
+                "Use: klemma tools add zotero --command uvx --args zotero-mcp"
+            )
+        from .tools.client import MCPClient
+
+        client = MCPClient(
+            command=zotero_srv.command,
+            args=zotero_srv.args,
+            env=zotero_srv.env,
         )
+        return MCPLibrary(client)
 
     # Default: local BBT JSON
     library_json = config.zotero.library_json
