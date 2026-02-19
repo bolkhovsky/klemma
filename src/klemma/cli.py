@@ -278,7 +278,7 @@ def process(ctx, citekey):
     """Process source(s): extract fragments, annotate, create vault note.
 
     With CITEKEY: process a single source.
-    Without arguments: process all pending sources (up to 10).
+    Without arguments: process all pending sources.
     """
     config_path = ctx.obj["config_path"]
     kctx = _init_components(config_path)
@@ -298,12 +298,11 @@ def process(ctx, citekey):
     if citekey:
         citekeys = [citekey]
     else:
-        # Process all pending sources (up to 10)
         proc_stats = state.get_stats()
         if proc_stats.get("pending", 0) == 0:
             console.print("[green]No pending sources to process.[/green]")
             return
-        citekeys = state.get_pending_sources(limit=10)
+        citekeys = state.get_pending_sources()
         console.print(f"[blue]Processing {len(citekeys)} pending sources...[/blue]")
 
     processed = 0
@@ -335,7 +334,7 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library):
     console.print(f"[blue]Processing: {entry.authors_str} ({entry.year or '?'})[/blue] [dim]@{citekey}[/dim]")
 
     # Find PDF
-    pdf_search_paths = [Path("/Users/ilya/Zotero/storage")]
+    pdf_search_paths = [Path(cfg.zotero.storage_path)]
     pdf_path = pdf_extractor.find_pdf(
         citekey, pdf_search_paths,
         entry_title=entry.title or "",

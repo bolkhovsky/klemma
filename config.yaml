@@ -5,11 +5,14 @@
 instance:
   name: "dissertation-arctic-ice"
   type: "academic"
+
+zotero:
   library_id: ""
   library_type: "user"
   api_key_env: "ZOTERO_API_KEY"
   local: false
   library_json: "/Users/ilya/research/zobsidian-processor/data/pubs-bibtex.json"
+  storage_path: "/Users/ilya/Zotero/storage"
 
 obsidian:
   vault_path: "/Users/ilya/Documents/Obsidian Vault"

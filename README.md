@@ -42,7 +42,7 @@ klemma status --chapter 2  # фильтр по главе
 
 # 4. Обработать источник (фрагменты + аннотация + vault note)
 klemma process anderssonSeasonalArcticSea2021   # один источник
-klemma process                                  # все pending (до 10)
+klemma process                                  # все pending
 
 # 5. Исследовательский брифинг по разделу
 klemma research -s 1.3.2
@@ -92,7 +92,7 @@ klemma status --chapter 2  # фильтр по конкретной главе
 Полный пайплайн обработки источника: поиск PDF → извлечение текста (PyMuPDF) → AI-анализ → сохранение фрагментов в SQLite + vault-заметку.
 
 **С аргументом** — обрабатывает один указанный источник.
-**Без аргумента** — batch-режим: обрабатывает все pending источники (до 10 за раз).
+**Без аргумента** — batch-режим: обрабатывает все pending источники.
 
 При обработке автоматически:
 - Создаёт vault-заметку `@citekey.md`, если она отсутствует (AI-аннотация: summary, методология, релевантность, key references)
@@ -102,7 +102,7 @@ klemma status --chapter 2  # фильтр по конкретной главе
 
 ```bash
 klemma process anderssonSeasonalArcticSea2021   # один источник
-klemma process                                  # все pending (до 10)
+klemma process                                  # все pending
 ```
 
 ### `klemma research -s <X.X>`

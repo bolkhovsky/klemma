@@ -29,7 +29,7 @@
 **UX refactoring (10 → 7 commands):**
 - Merged `stats` + `coverage` + `gaps` → unified `klemma status` (compact by default, `--verbose` for full tables, `--chapter N` filter)
 - Renamed: `morning` → `plan`, `extract` → `process`, `agent` → `ask`, `prepopulate` → `import`
-- `klemma process` without args: batch-processes up to 10 pending sources
+- `klemma process` without args: batch-processes all pending sources
 - Removed `fragments` CLI command (still available in TUI via `f` key)
 - All old names preserved as hidden aliases for backward compatibility
 - Improved research auto-extract UX with per-source progress messages

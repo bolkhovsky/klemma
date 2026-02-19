@@ -166,4 +166,25 @@ def create_library(config) -> LibraryProvider:
     # Default: local BBT JSON
     library_json = config.zotero.library_json
     path = Path(library_json) if library_json else None
-    return LocalLibrary(path)
+    local = LocalLibrary(path)
+
+    # Fallback: if local library is empty and zotero MCP is available, try it
+    if not local.entries and hasattr(config, "mcp"):
+        zotero_srv = config.mcp.servers.get("zotero")
+        if zotero_srv and zotero_srv.command:
+            logger.info("LocalLibrary empty, falling back to zotero MCP")
+            try:
+                from .tools.client import MCPClient
+
+                client = MCPClient(
+                    command=zotero_srv.command,
+                    args=zotero_srv.args,
+                    env=zotero_srv.env,
+                )
+                mcp_lib = MCPLibrary(client)
+                if mcp_lib.entries:
+                    return mcp_lib
+            except Exception as e:
+                logger.warning("Zotero MCP fallback failed: %s", e)
+
+    return local

@@ -166,21 +166,27 @@ class StateManager:
                 [(sid,) for sid in source_ids],
             )
 
-    def get_pending_sources(self, limit: int = 10) -> list[str]:
-        today = date.today().isoformat()
+    def get_pending_sources(self, limit: int = 0) -> list[str]:
         with self._conn() as conn:
-            cur = conn.execute(
-                "SELECT count FROM daily_batches WHERE date = ?", (today,)
-            )
-            row = cur.fetchone()
-            already = row["count"] if row else 0
-            remaining = max(0, limit - already)
-            if remaining == 0:
-                return []
-            cur = conn.execute(
-                "SELECT id FROM sources WHERE status = ? ORDER BY id LIMIT ?",
-                (ProcessingStatus.PENDING.value, remaining),
-            )
+            if limit > 0:
+                today = date.today().isoformat()
+                cur = conn.execute(
+                    "SELECT count FROM daily_batches WHERE date = ?", (today,)
+                )
+                row = cur.fetchone()
+                already = row["count"] if row else 0
+                remaining = max(0, limit - already)
+                if remaining == 0:
+                    return []
+                cur = conn.execute(
+                    "SELECT id FROM sources WHERE status = ? ORDER BY id LIMIT ?",
+                    (ProcessingStatus.PENDING.value, remaining),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT id FROM sources WHERE status = ? ORDER BY id",
+                    (ProcessingStatus.PENDING.value,),
+                )
             return [row["id"] for row in cur.fetchall()]
 
     def mark_processing(self, source_id: str):

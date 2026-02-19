@@ -43,7 +43,7 @@ prompts/
 - `klemma` — TUI dashboard
 - `klemma plan` — daily plan generation (library digest included)
 - `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
-- `klemma process [<citekey>]` — extract fragments from PDF; no arg = batch (up to 10 pending)
+- `klemma process [<citekey>]` — extract fragments from PDF; no arg = batch all pending
 - `klemma research -s 1.3.2` — research briefing for a section (`--enrich` for MCP enrichment)
 - `klemma library [-s 2.3] [--audit]` — AI library analysis (status / recommend / audit)
 - `klemma ask "query"` — interactive research agent with full dissertation context

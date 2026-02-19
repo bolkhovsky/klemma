@@ -356,7 +356,7 @@ def pre_extract_sources(
         pdf_lookup = {}
 
     pdf_extractor = PDFExtractor(max_chars=config.ai.max_pdf_chars)
-    search_paths = [Path("/Users/ilya/Zotero/storage")]
+    search_paths = [Path(config.zotero.storage_path)]
 
     # 4. Извлечь фрагменты
     extracted = 0
