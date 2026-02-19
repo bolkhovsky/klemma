@@ -23,7 +23,7 @@ obsidian:
 ai:
   model: "opus"
   max_pdf_chars: 50000
-  timeout: 180
+  timeout: 300
   retries: 2
 
 state:

@@ -126,6 +126,9 @@ def _print_status_line(state: StateManager):
             if gap_summary["top_ref"]:
                 top = f" (top: {gap_summary['top_ref']} x{gap_summary['top_count']})"
             parts.append(f"[yellow]{gap_summary['open_count']} ref-gaps{top}[/yellow]")
+        prune = state.get_prune_summary()
+        if prune["total"] > 0:
+            parts.append(f"[yellow]{prune['total']} pruned ({prune['drop']} drop, {prune['maybe']} maybe)[/yellow]")
         console.print(f"[dim]|[/dim] " + " [dim]|[/dim] ".join(parts))
     except Exception:
         pass  # Don't crash on status line failure

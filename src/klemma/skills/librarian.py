@@ -43,7 +43,7 @@ def analyze_library(
         "Отвечай только валидным JSON."
     )
 
-    data = ai.call_json(system, user_prompt, max_tokens=4096)
+    data = ai.call_json(system, user_prompt, max_tokens=16384)
     if not data:
         logger.error("Failed to get library analysis from Claude")
         return None
@@ -59,6 +59,13 @@ def analyze_library(
         prune=data.get("prune"),
         report_text=data.get("report_text", ""),
     )
+
+    # Persist prune verdicts (with hard protection)
+    if report.prune:
+        state.save_prune_verdicts(
+            drop=report.prune.get("drop", []),
+            maybe=report.prune.get("maybe", []),
+        )
 
     # Save to vault
     _save_report_to_vault(report, vault, mode, focus_section)

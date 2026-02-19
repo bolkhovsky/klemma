@@ -130,7 +130,20 @@ CREATE TABLE IF NOT EXISTS discoveries (
 );
 CREATE INDEX IF NOT EXISTS idx_discoveries_section ON discoveries(section);
 CREATE INDEX IF NOT EXISTS idx_discoveries_status ON discoveries(status);
+
+CREATE TABLE IF NOT EXISTS prune_verdicts (
+    source_id TEXT PRIMARY KEY REFERENCES sources(id),
+    verdict TEXT NOT NULL,
+    reason TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 """
+
+PRUNE_EXPIRY_DAYS = 14
+PRUNE_DROP_SUBQUERY = (
+    "SELECT source_id FROM prune_verdicts "
+    "WHERE verdict='drop' AND updated_at > datetime('now', '-14 days')"
+)
 
 
 class StateManager:
@@ -340,12 +353,13 @@ class StateManager:
     def get_by_chapter(self, chapter: int) -> list[dict]:
         with self._conn() as conn:
             cur = conn.execute(
-                """SELECT DISTINCT s.id, s.note_path, s.quality_score, s.primary_section,
+                f"""SELECT DISTINCT s.id, s.note_path, s.quality_score, s.primary_section,
                           s.relevance_nr1, s.relevance_nr2, s.citation_priority,
                           s.fragment_count
                    FROM sources s
                    LEFT JOIN source_sections ss ON s.id = ss.source_id
                    WHERE s.status=? AND (s.primary_chapter=? OR ss.chapter=?)
+                     AND s.id NOT IN ({PRUNE_DROP_SUBQUERY})
                    ORDER BY s.citation_priority DESC, s.quality_score DESC""",
                 (ProcessingStatus.COMPLETED.value, chapter, chapter),
             )
@@ -354,12 +368,13 @@ class StateManager:
     def get_by_section(self, section: str) -> list[dict]:
         with self._conn() as conn:
             cur = conn.execute(
-                """SELECT DISTINCT s.id, s.note_path, s.quality_score, s.primary_chapter,
+                f"""SELECT DISTINCT s.id, s.note_path, s.quality_score, s.primary_chapter,
                           s.relevance_nr1, s.relevance_nr2, s.citation_priority,
                           s.fragment_count
                    FROM sources s
                    LEFT JOIN source_sections ss ON s.id = ss.source_id
                    WHERE s.status=? AND (s.primary_section LIKE ? OR ss.section LIKE ?)
+                     AND s.id NOT IN ({PRUNE_DROP_SUBQUERY})
                    ORDER BY s.citation_priority DESC, s.quality_score DESC""",
                 (ProcessingStatus.COMPLETED.value, f"{section}%", f"{section}%"),
             )
@@ -619,10 +634,11 @@ class StateManager:
     def get_next_reading(self) -> Optional[dict]:
         with self._conn() as conn:
             cur = conn.execute(
-                """SELECT rq.*, s.id as citekey
+                f"""SELECT rq.*, s.id as citekey
                    FROM reading_queue rq
                    JOIN sources s ON rq.source_id = s.id
                    WHERE rq.status = 'queued'
+                     AND s.id NOT IN ({PRUNE_DROP_SUBQUERY})
                    ORDER BY rq.priority DESC
                    LIMIT 1"""
             )
@@ -955,6 +971,8 @@ class StateManager:
                         ),
                     )
                     self._set_sections_inline(conn, citekey, list(vault_sections), vd.get("chapters", []))
+                    # Auto-restore: if user edited vault note, clear prune verdict
+                    conn.execute("DELETE FROM prune_verdicts WHERE source_id=?", (citekey,))
                     vault_updated += 1
                 else:
                     unchanged += 1
@@ -1027,3 +1045,71 @@ class StateManager:
                 "UPDATE discoveries SET status = ?, reviewed_at = datetime('now') WHERE id = ?",
                 (new_status, discovery_id),
             )
+
+    # ── Prune Verdicts ──────────────────────────────────────────────────
+
+    def save_prune_verdicts(self, drop: list[dict], maybe: list[dict]):
+        """Replace all prune verdicts with fresh results. Hard-protect valuable sources."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM prune_verdicts")
+            for item in drop:
+                ck = item.get("citekey", "")
+                if not ck or self._is_protected(conn, ck):
+                    continue
+                conn.execute(
+                    "INSERT OR REPLACE INTO prune_verdicts (source_id, verdict, reason) VALUES (?, 'drop', ?)",
+                    (ck, item.get("reason", "")),
+                )
+            for item in maybe:
+                ck = item.get("citekey", "")
+                if not ck or self._is_protected(conn, ck):
+                    continue
+                conn.execute(
+                    "INSERT OR REPLACE INTO prune_verdicts (source_id, verdict, reason) VALUES (?, 'maybe', ?)",
+                    (ck, item.get("reason", "")),
+                )
+
+    @staticmethod
+    def _is_protected(conn, source_id: str) -> bool:
+        """Check if source is too valuable to prune."""
+        cur = conn.execute(
+            "SELECT quality_score, relevance_nr1, relevance_nr2, citation_priority FROM sources WHERE id=?",
+            (source_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return True  # unknown source = don't prune
+        return (
+            (row["quality_score"] or 0) >= 4
+            or (row["relevance_nr1"] or 0) >= 4
+            or (row["relevance_nr2"] or 0) >= 4
+            or row["citation_priority"] == "high"
+        )
+
+    def get_prune_drop_ids(self, max_age_days: int = PRUNE_EXPIRY_DAYS) -> set[str]:
+        """Return citekeys with verdict='drop' within expiry window."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT source_id FROM prune_verdicts WHERE verdict='drop' AND updated_at > datetime('now', ?)",
+                (f"-{max_age_days} days",),
+            )
+            return {row["source_id"] for row in cur.fetchall()}
+
+    def get_prune_summary(self) -> dict:
+        """Return prune verdict counts for status display."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT verdict, COUNT(*) as cnt FROM prune_verdicts "
+                "WHERE updated_at > datetime('now', ?) GROUP BY verdict",
+                (f"-{PRUNE_EXPIRY_DAYS} days",),
+            )
+            result = {"drop": 0, "maybe": 0}
+            for row in cur.fetchall():
+                result[row["verdict"]] = row["cnt"]
+            result["total"] = result["drop"] + result["maybe"]
+            return result
+
+    def clear_prune_verdict(self, source_id: str):
+        """Remove prune verdict for a source (e.g. when user edits its vault note)."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM prune_verdicts WHERE source_id=?", (source_id,))
