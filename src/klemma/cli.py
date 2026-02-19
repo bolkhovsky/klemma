@@ -146,7 +146,7 @@ def _print_ref_gaps_table(state: StateManager, limit: int = 20):
     ref_table.add_column("Count", justify="right", width=5)
     ref_table.add_column("Authors", width=20)
     ref_table.add_column("Year", width=5)
-    ref_table.add_column("Title", max_width=35)
+    ref_table.add_column("Title")
     ref_table.add_column("Why", max_width=30, style="dim")
 
     for i, g in enumerate(ref_gaps, 1):
@@ -157,7 +157,7 @@ def _print_ref_gaps_table(state: StateManager, limit: int = 20):
             str(g["count"]),
             (g["ref_authors"] or "")[:20],
             str(g.get("ref_year") or ""),
-            (g["ref_title"] or "")[:35],
+            g["ref_title"] or "",
             (g.get("why_relevant") or "")[:30],
         )
     console.print()
