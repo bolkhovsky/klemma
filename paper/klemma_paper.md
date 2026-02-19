@@ -23,11 +23,31 @@
 
 ### 2. Обзор существующих решений (~1.5 стр.)
 
-- **2.1 Менеджеры ссылок:** Zotero [1], Mendeley [2] — метаданные и PDF, не анализ содержания
-- **2.2 AI для исследований:** Elicit [10], Semantic Scholar [5,6], Research Rabbit — поиск и аннотации, но уровень отдельных статей, не библиотеки
-- **2.3 PKM-системы:** Obsidian + Zettelkasten [17,18] — гибкие заметки, но ручной ввод
-- **2.4 MCP и tool-use:** Model Context Protocol [12], Toolformer [13], Gorilla [16]
-- **Таблица 1:** сравнение Klemma vs Zotero vs Elicit vs Semantic Scholar vs Obsidian по 8 параметрам
+- **2.1 Менеджеры ссылок:** Zotero [1], Mendeley [2] — метаданные и PDF, не анализ содержания. BetterBibTeX как мост к внешним инструментам
+- **2.2 AI для академических исследований:**
+  - *Коммерческие:* Elicit (QA по статьям), Semantic Scholar [5,6] (TLDR [28], графы), Research Rabbit (визуальное открытие)
+  - *Open-source RAG:* PaperQA [29] (RAG с цитатами, сверхчеловеческая точность в научном QA), LitLLM (генерация related work)
+  - *Автономные агенты:* GPT-Researcher [31] (глубокий веб-поиск, мульти-агентная архитектура), STORM [30] (мульти-перспективная генерация статей, Stanford), AI-Scientist [32] (полный цикл: гипотеза → эксперимент → статья)
+  - *Zotero + AI:* PapersGPT (Zotero-плагин с Claude/GPT, BM25-поиск), Aria (Zotero+GPT), Oracle of Zotero (PaperQA+ZoteroDB)
+  - **Общий разрыв:** все работают с отдельными статьями или веб, не с библиотекой + структурой конкретной диссертации
+- **2.3 PKM + AI:** Obsidian + Zettelkasten [17,18]. AI-плагины: obsidian-copilot (агентный AI), Smart Connections (эмбеддинги). obsidian-zotero-integration (мост метаданных, однонаправленный). Нет автоматического AI-извлечения из PDF
+- **2.4 MCP-экосистема для академии:** 10+ MCP-серверов arXiv, несколько для Zotero (54yyyu/zotero-mcp), Semantic Scholar, Scopus, PubMed. Все — одиночные мосты к API; нет интегрированного registry + hybrid pipeline
+- **2.5 PDF-извлечение:** GROBID [33] (ML-парсинг структуры), MinerU [34] (PDF→markdown для LLM), science-parse (Allen AI). Низкоуровневое; нет AI-аннотации с контекстом диссертации
+- **Таблица 1:** сравнение Klemma vs PaperQA vs GPT-Researcher vs STORM vs PapersGPT vs Obsidian+AI по 11 параметрам:
+
+| Функция | Klemma | PaperQA | GPT-Res. | STORM | PapersGPT | Obsidian+AI |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| Привязка к разделам дисс. | **+** | - | - | - | - | - |
+| Reference gap tracking | **+** | - | - | - | - | - |
+| Авто-разрешение пробелов | **+** | - | - | - | - | - |
+| Гибридный discovery (MCP+LLM) | **+** | - | - | - | - | - |
+| Инкрементальные брифинги | **+** | - | - | - | - | - |
+| MCP ToolRegistry | **+** | - | - | - | - | - |
+| Obsidian vault | **+** | - | - | - | - | **+** |
+| Zotero библиотека | **+** | - | - | - | **+** | **+** |
+| AI-извлечение из PDF | **+** | **+** (RAG) | **+** (веб) | - | **+** (chat) | - |
+| SQLite state machine | **+** | **+** | - | - | - | - |
+| Ежедневное планирование | **+** | - | - | - | - | - |
 
 ### 3. Архитектура системы (~2 стр.)
 
@@ -130,7 +150,7 @@ daily_plans (standalone, keyed by date)
 
 ---
 
-## Рекомендуемый список литературы (30 источников)
+## Рекомендуемый список литературы (36 источников)
 
 ### Системы управления ссылками (4)
 1. Stillman D. et al. Zotero: Personal research assistant // zotero.org, 2006-2024
@@ -172,6 +192,16 @@ daily_plans (standalone, keyed by date)
 27. Singh A. et al. SciRepEval: A multi-format benchmark for scientific document representations // EMNLP, 2023
 28. Cachola I. et al. TLDR: Extreme summarization of scientific documents // EMNLP (Findings), 2020
 
+### Близкие open-source системы (4) — по результатам GitHub-анализа
+29. Lala A., White A. et al. PaperQA: Retrieval-Augmented Generative Agent for Scientific Research // arXiv:2312.07559, 2023
+30. Shao Z. et al. Assisting in Writing Wikipedia-like Articles From Scratch with Large Language Models (STORM) // arXiv:2402.14207, 2024
+31. Assafelovic E. GPT Researcher: Autonomous Agent for Comprehensive Online Research // gptr.dev, 2024
+32. Lu C. et al. The AI Scientist: Towards Fully Automated Open-Ended Scientific Discovery // arXiv:2408.06292, 2024
+
+### Извлечение из научных документов (2)
+33. Lopez P. GROBID: Combining automatic bibliographic data recognition and term extraction // ECDL, 2009
+34. Shen Z. et al. MinerU: An Open-Source Solution for Precise Document Content Extraction // arXiv, 2024
+
 ### Русскоязычные источники (2)
-29. Воронцов К.В. и др. Обзор методов машинного обучения для анализа научных текстов // Программная инженерия, 2023
-30. Добров Б.В. и др. Автоматическая обработка текстов на естественном языке и анализа данных. — М.: НИУ ВШЭ, 2021
+35. Воронцов К.В. и др. Обзор методов машинного обучения для анализа научных текстов // Программная инженерия, 2023
+36. Добров Б.В. и др. Автоматическая обработка текстов на естественном языке и анализа данных. — М.: НИУ ВШЭ, 2021
