@@ -65,6 +65,11 @@ class LocalLibrary:
             }
         return self._pdf_paths
 
+    @property
+    def item_key_to_citekey(self) -> dict[str, str]:
+        """Reverse lookup: Zotero itemKey → current citekey."""
+        return {e.item_key: k for k, e in self.entries.items() if e.item_key}
+
     def get_text(self, citekey: str) -> Optional[str]:
         # LocalLibrary doesn't provide text — caller uses PyMuPDF
         return None

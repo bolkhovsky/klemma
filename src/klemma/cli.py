@@ -81,8 +81,9 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
             "note_path": f"{notes_folder}/{note_name}.md",
         })
 
-    # 2. Discover new Zotero entries not in DB
+    # 2. Discover new Zotero entries not in DB + detect renames
     new_entries = []
+    renames = []
     if ctx.library:
         entry_lookup = ctx.library.entries
         vault_citekeys = {vd["citekey"] for vd in vault_data}
@@ -91,16 +92,37 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
             cur = conn.execute("SELECT id FROM sources")
             existing = {row["id"] for row in cur.fetchall()}
 
+        # Rename detection via immutable Zotero itemKey
+        db_zotero_keys = state.get_zotero_key_map()  # {itemKey: old_citekey}
         for citekey, entry in entry_lookup.items():
-            if citekey not in existing and citekey not in vault_citekeys:
+            if citekey in existing:
+                continue
+            if entry.item_key and entry.item_key in db_zotero_keys:
+                old_ck = db_zotero_keys[entry.item_key]
+                if old_ck != citekey:
+                    state.rename_source(old_ck, citekey, entry.item_key)
+                    existing.discard(old_ck)
+                    existing.add(citekey)
+                    renames.append((old_ck, citekey))
+                    continue
+            if citekey not in vault_citekeys:
                 classification = auto_classify(entry, cfg)
                 new_entries.append((citekey, classification))
+
+        # Backfill zotero_key for existing sources (idempotent, only fills NULL)
+        backfill = {ck: entry.item_key for ck, entry in entry_lookup.items() if entry.item_key}
+        if backfill:
+            state.populate_zotero_keys(backfill)
 
     # 3. Sync to DB
     result = state.sync_source_sections(vault_data, new_entries)
 
     if not quiet:
         parts = []
+        if renames:
+            parts.append(f"[magenta]{len(renames)} renamed[/magenta]")
+            for old_ck, new_ck in renames:
+                console.print(f"  [magenta]Rename:[/magenta] @{old_ck} → @{new_ck}")
         if result["vault_updated"]:
             parts.append(f"[green]{result['vault_updated']} updated from vault[/green]")
         if result["new_registered"]:

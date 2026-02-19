@@ -447,6 +447,47 @@ class StateManager:
             )
             return counts
 
+    # ── Zotero Key / Rename ────────────────────────────────────────────────
+
+    def get_zotero_key_map(self) -> dict[str, str]:
+        """Return {zotero_key: citekey} for all sources with a populated zotero_key."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT id, zotero_key FROM sources WHERE zotero_key IS NOT NULL AND zotero_key != ''"
+            )
+            return {row["zotero_key"]: row["id"] for row in cur.fetchall()}
+
+    def rename_source(self, old_id: str, new_id: str, zotero_key: str = ""):
+        """Cascade-rename source across all tables."""
+        with self._conn() as conn:
+            # Temporarily disable FK checks for atomic rename
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.execute(
+                "UPDATE sources SET id=?, zotero_key=? WHERE id=?",
+                (new_id, zotero_key, old_id),
+            )
+            for table, col in [
+                ("fragments", "source_id"),
+                ("source_sections", "source_id"),
+                ("reference_gaps", "source_id"),
+                ("reading_queue", "source_id"),
+                ("prune_verdicts", "source_id"),
+            ]:
+                conn.execute(
+                    f"UPDATE {table} SET {col}=? WHERE {col}=?",
+                    (new_id, old_id),
+                )
+            conn.execute("PRAGMA foreign_keys=ON")
+
+    def populate_zotero_keys(self, mapping: dict[str, str]):
+        """Backfill zotero_key from {citekey: itemKey}. Only updates NULL rows."""
+        with self._conn() as conn:
+            for citekey, item_key in mapping.items():
+                conn.execute(
+                    "UPDATE sources SET zotero_key=? WHERE id=? AND (zotero_key IS NULL OR zotero_key='')",
+                    (item_key, citekey),
+                )
+
     # ── Fragments ────────────────────────────────────────────────────────
 
     def save_fragments(self, source_id: str, fragments: list[dict]) -> int:

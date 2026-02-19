@@ -89,6 +89,7 @@ class PDFExtractor:
                 issue=item.get("issue"),
                 keywords=", ".join(tags) if tags else None,
                 pdf_path=pdf_path,
+                item_key=item.get("itemKey"),
             )
         return lookup
 

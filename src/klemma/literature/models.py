@@ -37,6 +37,7 @@ class ZoteroEntry(BaseModel):
     issue: Optional[str] = None
     keywords: Optional[str] = None
     pdf_path: Optional[str] = None
+    item_key: Optional[str] = None  # Zotero internal key (immutable, survives citekey renames)
 
     model_config = {"populate_by_name": True, "extra": "ignore"}
 
