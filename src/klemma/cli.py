@@ -497,12 +497,14 @@ def gaps(ctx, min_sources):
 @click.option("--section", "-s", required=True, help="Идентификатор раздела, например 1.3.2")
 @click.option("--no-save", is_flag=True, help="Не сохранять в vault")
 @click.option("--force", is_flag=True, help="Переизвлечь фрагменты даже если уже есть")
+@click.option("--enrich", is_flag=True, help="Enrich with external search via MCP (requires academia server)")
 @click.pass_context
-def research(ctx, section, no_save, force):
+def research(ctx, section, no_save, force, enrich):
     """Deep section analysis — argument structure, citation plan, gaps.
 
     Auto-processes unextracted sources before analysis.
     Use --force to re-extract all fragments.
+    Use --enrich to add external paper search results to the analysis context.
 
     Example: klemma research --section 1.3.2
     """
@@ -515,6 +517,22 @@ def research(ctx, section, no_save, force):
     from .skills.researcher import pre_extract_sources, research_section
 
     chapter = int(section.split(".")[0])
+
+    # Optional: enrich with external search via MCP
+    enrichment_context = ""
+    if enrich and kctx.tools and kctx.tools.has("academia"):
+        console.print(f"[blue]Enriching with external search for section {section}...[/blue]")
+        # Search for papers related to the section topic
+        chapter_name = cfg.dissertation.chapters.get(chapter, "")
+        search_query = f"{chapter_name} {section}"
+        result = kctx.tools.call("academia", "arxiv_search", {"query": search_query, "limit": 5})
+        if not result.is_error and result.content:
+            enrichment_context = f"\n\n## External Search Results (ArXiv)\n{result.content}"
+            console.print(f"[green]Found external papers for context[/green]")
+        else:
+            console.print(f"[yellow]External search returned no results[/yellow]")
+    elif enrich:
+        console.print("[yellow]--enrich requires academia MCP server (klemma tools add academia ...)[/yellow]")
 
     # Auto-process unextracted sources
     console.print(f"[blue]Auto-processing unextracted sources for section {section}...[/blue]")
@@ -818,6 +836,44 @@ def library(ctx, section, audit):
     _print_ref_gaps_table(state)
 
     console.print(f"\n[dim]Full report saved to vault.[/dim]")
+
+
+# --- Search: external paper search via MCP ---
+
+@main.command()
+@click.argument("query")
+@click.option("--source", "-src", default="arxiv", type=click.Choice(["arxiv", "s2"]), help="Search source")
+@click.option("--limit", "-n", default=10, help="Max results")
+@click.pass_context
+def search(ctx, query, source, limit):
+    """Search for papers via external MCP servers.
+
+    Requires academia MCP server: klemma tools add academia --command python3 --args "-m" --args "academia_mcp"
+
+    Example: klemma search "AMSR2 sea ice forecast validation"
+    """
+    config_path = ctx.obj["config_path"]
+    cfg = load_config(config_path)
+
+    if "academia" not in cfg.mcp.servers:
+        console.print("[red]Academia MCP server not configured.[/red]")
+        console.print(
+            '[dim]Add it with: klemma tools add academia '
+            '--command python3 --args "-m" --args academia_mcp[/dim]'
+        )
+        return
+
+    registry = ToolRegistry(cfg)
+    tool_name = "arxiv_search" if source == "arxiv" else "s2_search"
+    console.print(f"[blue]Searching {source}: {query}...[/blue]")
+
+    result = registry.call("academia", tool_name, {"query": query, "limit": limit})
+
+    if result.is_error:
+        console.print(f"[red]Search failed: {result.content}[/red]")
+        return
+
+    console.print(result.content)
 
 
 # --- Tools: MCP server management ---
