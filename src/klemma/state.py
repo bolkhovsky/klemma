@@ -1163,6 +1163,39 @@ class StateManager:
             result["total"] = result["drop"] + result["maybe"]
             return result
 
+    def get_prune_verdicts(self, chapter: Optional[int] = None, verdict: Optional[str] = None) -> list[dict]:
+        """Get prune verdicts with source metadata, optionally filtered by chapter/verdict."""
+        with self._conn() as conn:
+            conditions = [f"pv.updated_at > datetime('now', '-{PRUNE_EXPIRY_DAYS} days')"]
+            params: list = []
+
+            if verdict:
+                conditions.append("pv.verdict = ?")
+                params.append(verdict)
+
+            if chapter is not None:
+                ch = str(chapter)
+                conditions.append(
+                    "EXISTS (SELECT 1 FROM source_sections ss2 "
+                    "WHERE ss2.source_id = pv.source_id AND (ss2.section = ? OR ss2.section LIKE ?))"
+                )
+                params.extend([ch, f"{ch}.%"])
+
+            where = " AND ".join(conditions)
+            cur = conn.execute(
+                f"""SELECT pv.source_id, pv.verdict, pv.reason,
+                           s.quality_score, s.fragment_count,
+                           GROUP_CONCAT(DISTINCT ss.section) as sections
+                    FROM prune_verdicts pv
+                    LEFT JOIN sources s ON s.id = pv.source_id
+                    LEFT JOIN source_sections ss ON ss.source_id = pv.source_id
+                    WHERE {where}
+                    GROUP BY pv.source_id
+                    ORDER BY pv.verdict, s.quality_score ASC NULLS LAST""",
+                params,
+            )
+            return [dict(row) for row in cur.fetchall()]
+
     def clear_prune_verdict(self, source_id: str):
         """Remove prune verdict for a source (e.g. when user edits its vault note)."""
         with self._conn() as conn:

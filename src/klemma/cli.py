@@ -807,7 +807,7 @@ def ask(ctx, query, section, chapter):
     console.print("\n[dim]Сессия агента завершена.[/dim]")
 
 
-@main.command()
+@main.group(invoke_without_command=True)
 @click.option("--section", "-s", help="Focus on a specific section (recommend mode)")
 @click.option("--audit", is_flag=True, help="Deep quality audit")
 @click.pass_context
@@ -818,6 +818,9 @@ def library(ctx, section, audit):
     With --section: reading recommendations for that section.
     With --audit: deep quality audit.
     """
+    if ctx.invoked_subcommand is not None:
+        return
+
     config_path = ctx.obj["config_path"]
     kctx = _init_components(config_path)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
@@ -930,6 +933,69 @@ def library(ctx, section, audit):
     _print_ref_gaps_table(state)
 
     console.print(f"\n[dim]Full report saved to vault.[/dim]")
+
+
+@library.command()
+@click.option("-c", "--chapter", type=int, help="Filter by chapter number")
+@click.option("-v", "--verdict", type=click.Choice(["drop", "maybe"]), help="Filter by verdict")
+@click.option("--clear", "clear_key", help="Clear verdict for a citekey")
+@click.pass_context
+def prune(ctx, chapter, verdict, clear_key):
+    """Browse and manage prune verdicts from library analysis."""
+    config_path = ctx.obj["config_path"]
+    kctx = _init_components(config_path)
+    state = kctx.state
+
+    if clear_key and (chapter is not None or verdict is not None):
+        console.print("[red]--clear cannot be combined with -c/-v[/red]")
+        return
+
+    if clear_key:
+        key = clear_key.lstrip("@")
+        state.clear_prune_verdict(key)
+        console.print(f"[green]Cleared prune verdict for @{key}[/green]")
+        return
+
+    items = state.get_prune_verdicts(chapter=chapter, verdict=verdict)
+    if not items:
+        label = []
+        if verdict:
+            label.append(f"verdict={verdict}")
+        if chapter is not None:
+            label.append(f"chapter={chapter}")
+        hint = f" ({', '.join(label)})" if label else ""
+        console.print(f"[dim]No prune verdicts found{hint}.[/dim]")
+        console.print("[dim]Run 'klemma library' to generate verdicts.[/dim]")
+        return
+
+    table = Table(
+        title=f"Prune Verdicts ({len(items)})",
+        show_edge=False, pad_edge=False,
+    )
+    table.add_column("#", width=4, style="dim")
+    table.add_column("Verdict", width=7)
+    table.add_column("Citekey", max_width=35)
+    table.add_column("Q", width=3, justify="right")
+    table.add_column("F", width=3, justify="right")
+    table.add_column("Sections", max_width=15, style="dim")
+    table.add_column("Reason", max_width=45)
+
+    for i, item in enumerate(items, 1):
+        v = item["verdict"]
+        v_style = "red" if v == "drop" else "yellow"
+        table.add_row(
+            str(i),
+            f"[{v_style}]{v}[/{v_style}]",
+            f"@{item['source_id']}",
+            str(item.get("quality_score") or "?"),
+            str(item.get("fragment_count") or "?"),
+            item.get("sections") or "",
+            item.get("reason") or "",
+        )
+
+    console.print(table)
+    summary = state.get_prune_summary()
+    console.print(f"\n[dim]Total: {summary['drop']} drop, {summary['maybe']} maybe[/dim]")
 
 
 # --- Search: external paper search via MCP ---
