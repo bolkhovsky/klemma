@@ -109,6 +109,41 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
                 classification = auto_classify(entry, cfg)
                 new_entries.append((citekey, classification))
 
+        # Fuzzy orphan cleanup: DB sources not in BBT JSON (pre-existing renames)
+        bbt_citekeys = set(entry_lookup.keys())
+        orphans = existing - bbt_citekeys
+        if orphans:
+            import re
+            bbt_by_author_year: dict[tuple[str, str], tuple[str, str]] = {}
+            for ck, entry in entry_lookup.items():
+                am = re.match(r"([a-z.]+?)(?=[A-Z\d])", ck)
+                ym = re.search(r"(\d{4})", ck)
+                if am and ym:
+                    author = am.group(1).replace(".", "").lower()
+                    bbt_by_author_year[(author, ym.group(1))] = (ck, entry.item_key or "")
+
+            for old_ck in orphans:
+                clean = re.sub(r"^[a-z]\.[a-z]\.", "", old_ck)
+                am = re.match(r"([a-z.]+?)(?=[A-Z\d])", clean)
+                ym = re.search(r"(\d{4})", old_ck)
+                if not (am and ym):
+                    continue
+                author = am.group(1).replace(".", "").lower()
+                match = bbt_by_author_year.get((author, ym.group(1)))
+                if not match:
+                    continue
+                new_ck, item_key = match
+                if new_ck in existing:
+                    # New key already exists with data — delete orphan duplicate
+                    state.delete_source(old_ck)
+                    existing.discard(old_ck)
+                    renames.append((old_ck, new_ck))
+                else:
+                    state.rename_source(old_ck, new_ck, item_key)
+                    existing.discard(old_ck)
+                    existing.add(new_ck)
+                    renames.append((old_ck, new_ck))
+
         # Backfill zotero_key for existing sources (idempotent, only fills NULL)
         backfill = {ck: entry.item_key for ck, entry in entry_lookup.items() if entry.item_key}
         if backfill:

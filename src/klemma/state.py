@@ -479,6 +479,19 @@ class StateManager:
                 )
             conn.execute("PRAGMA foreign_keys=ON")
 
+    def delete_source(self, source_id: str):
+        """Delete an orphan source and all its FK-dependent rows."""
+        with self._conn() as conn:
+            for table, col in [
+                ("fragments", "source_id"),
+                ("source_sections", "source_id"),
+                ("reference_gaps", "source_id"),
+                ("reading_queue", "source_id"),
+                ("prune_verdicts", "source_id"),
+            ]:
+                conn.execute(f"DELETE FROM {table} WHERE {col}=?", (source_id,))
+            conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
+
     def populate_zotero_keys(self, mapping: dict[str, str]):
         """Backfill zotero_key from {citekey: itemKey}. Only updates NULL rows."""
         with self._conn() as conn:
