@@ -8,13 +8,16 @@ from pathlib import Path
 from typing import Optional
 
 from ..ai import ClaudeClient
-from ..config import KlemmaConfig
+from ..config import KlemmaConfig, ProjectConfig
 from ..literature.models import DailyPlan
 from ..state import StateManager
 from ..vault import VaultAdapter
+from .work_context import build_work_context, get_current_deadline
 
 logger = logging.getLogger(__name__)
 
+# Legacy constant — kept for backward compatibility with external imports.
+# Internal code should use build_work_context(project) instead.
 DISSERTATION_CONTEXT = """\
 Тема: «Геоинформационная методология представления и анализа оперативной НГГМИ
 для оценки ледовой обстановки в арктических акваториях с использованием нейронных сетей»
@@ -32,8 +35,18 @@ DISSERTATION_CONTEXT = """\
 """
 
 
-def _get_current_deadline(config: KlemmaConfig) -> tuple[str, int]:
+def _get_dissertation_context(config: KlemmaConfig, project: Optional[ProjectConfig] = None) -> str:
+    """Get work context string — dynamic from project, or legacy fallback."""
+    if project:
+        return build_work_context(project)
+    return DISSERTATION_CONTEXT
+
+
+def _get_current_deadline(config: KlemmaConfig, project: Optional[ProjectConfig] = None) -> tuple[str, int]:
     """Дедлайн текущей главы и дней до него."""
+    if project:
+        return get_current_deadline(project)
+
     chapter_str = str(config.dissertation.current_chapter)
     today = date.today()
 
@@ -46,10 +59,15 @@ def _get_current_deadline(config: KlemmaConfig) -> tuple[str, int]:
     return "не указан", -1
 
 
-def _read_chapter_plan(config: KlemmaConfig, vault: VaultAdapter) -> Optional[str]:
+def _read_chapter_plan(config: KlemmaConfig, vault: VaultAdapter,
+                       project: Optional[ProjectConfig] = None) -> Optional[str]:
     """Прочитать план главы из vault (например, План_Глава1)."""
-    pattern = config.dissertation.chapter_plan_pattern
-    note_name = pattern.format(chapter=config.dissertation.current_chapter)
+    if project:
+        pattern = project.chapter_plan_pattern
+        note_name = pattern.format(chapter=project.current_chapter)
+    else:
+        pattern = config.dissertation.chapter_plan_pattern
+        note_name = pattern.format(chapter=config.dissertation.current_chapter)
 
     content = vault.read_note(note_name)
     if not content:
@@ -123,29 +141,39 @@ def generate_morning_plan(
     state: StateManager,
     vault: VaultAdapter,
     ai: ClaudeClient,
+    project: Optional[ProjectConfig] = None,
 ) -> DailyPlan:
     """Сгенерировать утренний брифинг через Claude."""
 
     # Контекст из базы
+    min_sources = (project.min_sources_per_section if project
+                   else config.dissertation.min_sources_per_section)
     yesterday = state.get_yesterday_plan()
     coverage = state.get_coverage_stats()
-    gaps = state.get_gaps(min_sources=config.dissertation.min_sources_per_section)
+    gaps = state.get_gaps(min_sources=min_sources)
     fragment_stats = state.get_fragment_stats()
     next_reading = state.get_next_reading()
 
     # Дедлайн
-    current_deadline, days_until_deadline = _get_current_deadline(config)
+    current_deadline, days_until_deadline = _get_current_deadline(config, project=project)
 
     # План главы из vault
-    chapter_plan = _read_chapter_plan(config, vault)
+    chapter_plan = _read_chapter_plan(config, vault, project=project)
 
     # Streak
     writing_streak = state.get_writing_streak()
 
     # Название главы
-    chapter_name = config.dissertation.chapters.get(
-        config.dissertation.current_chapter, "Неизвестно"
-    )
+    if project:
+        current_chapter = project.current_chapter
+        chapter_name = project.chapters.get(current_chapter, "Неизвестно")
+        current_section = project.current_section
+        writing_constraints = project.writing_constraints
+    else:
+        current_chapter = config.dissertation.current_chapter
+        chapter_name = config.dissertation.chapters.get(current_chapter, "Неизвестно")
+        current_section = config.dissertation.current_section
+        writing_constraints = config.dissertation.writing_constraints
 
     # Library summary for context
     library_summary = state.get_library_summary()
@@ -162,9 +190,9 @@ def generate_morning_plan(
     prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "morning.md"
     user_prompt = ai.render_prompt(
         prompt_path,
-        dissertation_context=DISSERTATION_CONTEXT,
-        current_chapter=config.dissertation.current_chapter,
-        current_section=config.dissertation.current_section,
+        dissertation_context=_get_dissertation_context(config, project),
+        current_chapter=current_chapter,
+        current_section=current_section,
         chapter_name=chapter_name,
         current_deadline=current_deadline,
         days_until_deadline=days_until_deadline,
@@ -176,8 +204,8 @@ def generate_morning_plan(
         gaps=gaps,
         fragment_stats=fragment_stats,
         next_reading=next_reading,
-        min_sources=config.dissertation.min_sources_per_section,
-        writing_constraints=config.dissertation.writing_constraints,
+        min_sources=min_sources,
+        writing_constraints=writing_constraints,
         library_summary=lib_digest,
         range=range,
     )

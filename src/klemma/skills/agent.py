@@ -7,10 +7,10 @@ from typing import Optional
 
 from jinja2 import Template
 
-from ..config import KlemmaConfig
+from ..config import KlemmaConfig, ProjectConfig
 from ..state import StateManager
 from ..vault import VaultAdapter
-from .planner import DISSERTATION_CONTEXT, _get_current_deadline
+from .planner import _get_current_deadline, _get_dissertation_context
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ def build_agent_context(
     vault: VaultAdapter,
     section: Optional[str] = None,
     chapter: Optional[int] = None,
+    project: Optional[ProjectConfig] = None,
 ) -> str:
     """Build a rich system prompt with full research context for the agent.
 
@@ -28,14 +29,25 @@ def build_agent_context(
     today's plan, and reading queue. Renders via Jinja2 template.
     """
     # Deadline
-    current_deadline, days_until_deadline = _get_current_deadline(config)
+    current_deadline, days_until_deadline = _get_current_deadline(config, project=project)
 
     # Chapter name
-    focus_chapter = chapter or config.dissertation.current_chapter
-    chapter_name = config.dissertation.chapters.get(focus_chapter, f"Глава {focus_chapter}")
-
-    # Focus section
-    focus_section = section or config.dissertation.current_section
+    if project:
+        focus_chapter = chapter or project.current_chapter
+        chapter_name = project.chapters.get(focus_chapter, f"Глава {focus_chapter}")
+        focus_section = section or project.current_section
+        chapters = project.chapters
+        scientific_results = project.scientific_results
+        priority_terms = project.priority_terms
+        min_sources = project.min_sources_per_section
+    else:
+        focus_chapter = chapter or config.dissertation.current_chapter
+        chapter_name = config.dissertation.chapters.get(focus_chapter, f"Глава {focus_chapter}")
+        focus_section = section or config.dissertation.current_section
+        chapters = config.dissertation.chapters
+        scientific_results = config.dissertation.scientific_results
+        priority_terms = config.dissertation.priority_terms
+        min_sources = config.dissertation.min_sources_per_section
 
     # Sources: section-specific, chapter-specific, or all
     if section:
@@ -58,7 +70,7 @@ def build_agent_context(
 
     # Coverage & gaps
     coverage = state.get_coverage_stats()
-    gaps = state.get_gaps(min_sources=config.dissertation.min_sources_per_section)
+    gaps = state.get_gaps(min_sources=min_sources)
 
     # Fragment stats
     fragment_stats = state.get_fragment_stats()
@@ -73,10 +85,10 @@ def build_agent_context(
     prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "agent.md"
     raw = prompt_path.read_text(encoding="utf-8")
     context = Template(raw).render(
-        dissertation_context=DISSERTATION_CONTEXT,
-        chapters=config.dissertation.chapters,
-        scientific_results=config.dissertation.scientific_results,
-        priority_terms=config.dissertation.priority_terms,
+        dissertation_context=_get_dissertation_context(config, project),
+        chapters=chapters,
+        scientific_results=scientific_results,
+        priority_terms=priority_terms,
         current_chapter=focus_chapter,
         chapter_name=chapter_name,
         current_section=focus_section,
@@ -85,7 +97,7 @@ def build_agent_context(
         sources=sources,
         coverage=coverage,
         gaps=gaps,
-        min_sources=config.dissertation.min_sources_per_section,
+        min_sources=min_sources,
         fragment_stats=fragment_stats,
         today_plan=today_plan,
         next_reading=next_reading,

@@ -78,9 +78,11 @@ class DashboardScreen(Widget):
         # Coverage table
         coverage = self.state.get_coverage_stats()
         coverage_lines = []
-        for ch in range(1, 5):
+        chapters = self.cfg.dissertation.chapters
+        chapter_nums = sorted(chapters.keys()) if chapters else list(range(1, 5))
+        for ch in chapter_nums:
             count = coverage["chapters"].get(ch, 0)
-            name = self.cfg.dissertation.chapters.get(ch, "")
+            name = chapters.get(ch, "")
             marker = "+" if count >= 10 else "~" if count >= 5 else "-"
             coverage_lines.append(f"  {marker} Ch {ch}: {name} — {count} sources")
 

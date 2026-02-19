@@ -5,12 +5,12 @@ from pathlib import Path
 from typing import Optional
 
 from ..ai import ClaudeClient
-from ..config import KlemmaConfig
+from ..config import KlemmaConfig, ProjectConfig
 from ..literature.models import ExtractionResult, Fragment, ZoteroEntry
 from ..literature.pdf import PDFExtractor
 from ..state import StateManager
 from ..vault import VaultAdapter
-from .planner import DISSERTATION_CONTEXT
+from .planner import DISSERTATION_CONTEXT, _get_dissertation_context
 
 logger = logging.getLogger(__name__)
 

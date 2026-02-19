@@ -1,7 +1,7 @@
 # Klemma — AI Academic Assistant
 
 ## What is this
-Klemma is a dual-mode CLI/TUI tool for PhD dissertation work. It manages literature (via Zotero), extracts citation fragments from PDFs (via Claude AI), generates research briefings, daily plans, and tracks dissertation coverage.
+Klemma is a dual-mode CLI/TUI tool for academic writing. It manages literature (via Zotero), extracts citation fragments from PDFs (via Claude AI), generates research briefings, daily plans, and tracks coverage. Supports multiple concurrent projects (dissertation, papers, theses) with separate databases and bibliographies.
 
 ## Architecture
 - **Dual mode**: `klemma` → Textual TUI dashboard; `klemma plan/process/research/library` → headless CLI
@@ -9,21 +9,22 @@ Klemma is a dual-mode CLI/TUI tool for PhD dissertation work. It manages literat
 - **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/TUI/Obsidian)
 - **MCP layer**: ToolRegistry → MCPClient (stdio transport) → external servers (zotero-mcp, academia-mcp)
 - **Library abstraction**: LibraryProvider protocol with LocalLibrary (BBT JSON) and MCPLibrary (zotero-mcp) backends
-- **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/tools
+- **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/tools/project
+- **Multi-project**: workspace.yaml maps project names → config files; each project gets own DB, bibliography, vault area
 
 ## Project structure
 ```
 src/klemma/
 ├── cli.py              — Click CLI entry point
 ├── app.py              — Textual TUI app
-├── config.py           — Pydantic config models (incl. MCPServerConfig, MCPConfig)
-├── context.py          — KlemmaContext dataclass (single object per CLI command)
+├── config.py           — Pydantic config models (ProjectConfig, WorkspaceConfig, KlemmaConfig)
+├── context.py          — KlemmaContext dataclass (single object per CLI command, includes project)
 ├── state.py            — SQLite state manager
 ├── ai.py               — Claude Code CLI wrapper (claude -p)
 ├── vault.py            — Obsidian adapter (CLI/file I/O, update_section)
 ├── library_provider.py — LibraryProvider protocol + LocalLibrary + MCPLibrary
 ├── tui/                — Textual screens (dashboard, fragments, coverage, gaps, stats)
-├── skills/             — AI skills (planner, extractor, researcher, librarian, agent)
+├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, work_context)
 ├── literature/         — Zotero, PDF, models, note_factory
 └── tools/              — MCP tool integration
     ├── client.py       — MCPClient (sync wrapper over async MCP SDK)
@@ -39,7 +40,7 @@ prompts/
 └── agent.md                — Jinja2 system prompt for interactive agent
 ```
 
-## Key commands (10)
+## Key commands (12)
 - `klemma` — TUI dashboard
 - `klemma plan` — daily plan generation (library digest included)
 - `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
@@ -50,15 +51,35 @@ prompts/
 - `klemma tools {add,list,remove,call}` — manage MCP servers (zotero, academia, etc.)
 - `klemma search "query"` — search papers via MCP (arXiv, Semantic Scholar)
 - `klemma discover -s X.X` — hybrid discovery pipeline (`--background`, `--status`, `--review`)
+- `klemma projects {list,switch,info}` — manage multiple projects (workspace mode)
+- Global options: `--project/-p <name>`, `--workspace/-w <path>`, `--config/-c <path>`
 
 Hidden aliases (backward compat): `morning`→`plan`, `extract`→`process`, `agent`→`ask`, `stats`/`coverage`/`gaps`→`status`, `prepopulate`→`import`
 
 ## Config
 - `config.yaml` — main config (Zotero, Obsidian, AI, dissertation structure, MCP servers)
+- `workspace.yaml` — optional: maps project names to per-project config files, shared defaults
 - `zotero.library_json` — path to BetterBibTeX JSON export (for PDF lookup)
 - `zotero.backend` — `"local"` (default, BBT JSON) or `"mcp"` (zotero-mcp server)
+- `zotero.collection` — optional Zotero collection ID for filtering
 - `mcp.servers` — registered MCP servers (managed via `klemma tools add/remove`)
+- `project:` — optional inline ProjectConfig (type, title, chapters, scientific_results, etc.)
 - Requires: Claude Code CLI (`claude` in PATH), optionally `ZOTERO_API_KEY`
+
+### Multi-project setup
+```yaml
+# workspace.yaml
+active: dissertation
+defaults:
+  ai: { model: opus }
+  mcp: { servers: { ... } }
+projects:
+  dissertation: ./configs/dissertation.yaml
+  ice_paper: ./configs/ice_paper.yaml
+```
+Each project config is a full config.yaml with its own obsidian/state/zotero/project sections.
+Workspace defaults are deep-merged under each project config (project values win).
+Without workspace.yaml, the legacy `dissertation:` block in config.yaml is auto-wrapped into a ProjectConfig.
 
 ## SQLite tables
 - `sources` — Zotero entries with processing status and dissertation metadata

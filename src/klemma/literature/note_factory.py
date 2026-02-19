@@ -91,7 +91,7 @@ def annotate_source(
     key_references.
     Returns None on failure.
     """
-    from ..skills.planner import DISSERTATION_CONTEXT
+    from ..skills.planner import _get_dissertation_context
 
     prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "annotate.md"
     user_prompt = ai.render_prompt(
@@ -104,7 +104,7 @@ def annotate_source(
         language=entry.language or "Unknown",
         abstract=entry.abstract or "Not available",
         pdf_text=pdf_text,
-        dissertation_context=DISSERTATION_CONTEXT,
+        dissertation_context=_get_dissertation_context(config),
         available_tags=", ".join(AVAILABLE_TAGS),
         library_entries=_format_library_entries(entry_lookup),
     )

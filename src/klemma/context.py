@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from .ai import ClaudeClient
-    from .config import KlemmaConfig
+    from .config import KlemmaConfig, ProjectConfig
     from .library_provider import LibraryProvider
     from .state import StateManager
     from .tools.registry import ToolRegistry
@@ -28,3 +28,5 @@ class KlemmaContext:
     ai: Optional[ClaudeClient] = None
     library: Optional[LibraryProvider] = None
     tools: Optional[ToolRegistry] = None
+    project: Optional[ProjectConfig] = None
+    project_name: str = "default"

@@ -8,22 +8,26 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..ai import ClaudeClient
-from ..config import KlemmaConfig
+from ..config import KlemmaConfig, ProjectConfig
 from ..literature.models import ArgumentBlock, CitationEntry, ResearchResult, ZoteroEntry
 from ..literature.pdf import PDFExtractor
 from ..state import StateManager
 from ..vault import VaultAdapter
 from .extractor import extract_fragments, save_fragments_to_vault
-from .planner import DISSERTATION_CONTEXT
+from .planner import _get_dissertation_context
 
 logger = logging.getLogger(__name__)
 
 
 def _load_chapter_draft(
-    chapter: int, config: KlemmaConfig, vault: VaultAdapter
+    chapter: int, config: KlemmaConfig, vault: VaultAdapter,
+    project: Optional[ProjectConfig] = None,
 ) -> Optional[str]:
     """Прочитать черновик главы из vault."""
-    pattern = config.dissertation.chapter_draft_pattern
+    if project:
+        pattern = project.chapter_draft_pattern
+    else:
+        pattern = config.dissertation.chapter_draft_pattern
     note_name = pattern.format(chapter=chapter)
     content = vault.read_note(note_name)
     if not content:
@@ -482,6 +486,7 @@ def research_section(
     vault: VaultAdapter,
     ai: ClaudeClient,
     save_to_vault: bool = True,
+    project: Optional[ProjectConfig] = None,
 ) -> ResearchResult:
     """Сгенерировать исследовательский брифинг для раздела диссертации.
 
@@ -494,20 +499,22 @@ def research_section(
     """
     # Определить главу
     chapter = int(section.split(".")[0])
-    chapter_name = config.dissertation.chapters.get(chapter, f"Глава {chapter}")
+    chapter_name = (project.chapters.get(chapter, f"Глава {chapter}") if project
+                    else config.dissertation.chapters.get(chapter, f"Глава {chapter}"))
 
     # 0. Проверить предыдущий брифинг (инкрементальный режим)
     prev = _load_previous_research(section, chapter, state, vault)
     is_incremental = prev is not None and prev["previous_text"]
 
     # 1. Черновик главы + текст раздела
-    draft_content = _load_chapter_draft(chapter, config, vault)
+    draft_content = _load_chapter_draft(chapter, config, vault, project=project)
     section_text = None
     if draft_content:
         section_text = _extract_section(draft_content, section)
 
     # 2. План сессий из vault
-    plan_pattern = config.dissertation.chapter_plan_pattern
+    plan_pattern = (project.chapter_plan_pattern if project
+                    else config.dissertation.chapter_plan_pattern)
     plan_name = plan_pattern.format(chapter=chapter)
     chapter_plan = vault.read_note(plan_name)
 
@@ -539,7 +546,9 @@ def research_section(
 
     # 5. Покрытие и пробелы
     coverage = state.get_coverage_stats()
-    gaps = state.get_gaps(min_sources=config.dissertation.min_sources_per_section)
+    min_sources = (project.min_sources_per_section if project
+                   else config.dissertation.min_sources_per_section)
+    gaps = state.get_gaps(min_sources=min_sources)
     fragment_stats = state.get_fragment_stats()
 
     # 6. Подготовить фрагменты для промпта
@@ -588,7 +597,7 @@ def research_section(
         )
         user_prompt = ai.render_prompt(
             prompt_path,
-            dissertation_context=DISSERTATION_CONTEXT,
+            dissertation_context=_get_dissertation_context(config, project),
             target_section=section,
             chapter_num=chapter,
             chapter_name=chapter_name,
@@ -612,7 +621,7 @@ def research_section(
             ),
             coverage=coverage,
             gaps=gaps,
-            min_sources=config.dissertation.min_sources_per_section,
+            min_sources=min_sources,
             range=range,
         )
 
@@ -636,7 +645,7 @@ def research_section(
         )
         user_prompt = ai.render_prompt(
             prompt_path,
-            dissertation_context=DISSERTATION_CONTEXT,
+            dissertation_context=_get_dissertation_context(config, project),
             target_section=section,
             chapter_num=chapter,
             chapter_name=chapter_name,
@@ -656,7 +665,7 @@ def research_section(
             coverage=coverage,
             gaps=gaps,
             fragment_stats=fragment_stats,
-            min_sources=config.dissertation.min_sources_per_section,
+            min_sources=min_sources,
             range=range,
         )
 

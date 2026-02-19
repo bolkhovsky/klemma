@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Optional
 
 from ..ai import ClaudeClient
-from ..config import KlemmaConfig
+from ..config import KlemmaConfig, ProjectConfig
 from ..literature.models import LibraryReport
 from ..state import StateManager
 from ..vault import VaultAdapter
-from .planner import DISSERTATION_CONTEXT, _get_current_deadline
+from .planner import _get_current_deadline, _get_dissertation_context
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ def analyze_library(
     entry_lookup: dict,
     mode: str = "status",
     focus_section: Optional[str] = None,
+    project: Optional[ProjectConfig] = None,
 ) -> Optional[LibraryReport]:
     """Run AI library analysis and return structured report.
 
@@ -32,7 +33,7 @@ def analyze_library(
         audit: deep quality audit
     """
     context = _gather_library_context(
-        config, state, vault, entry_lookup, mode, focus_section
+        config, state, vault, entry_lookup, mode, focus_section, project=project
     )
 
     prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "librarian.md"
@@ -80,9 +81,10 @@ def _gather_library_context(
     entry_lookup: dict,
     mode: str,
     focus_section: Optional[str],
+    project: Optional[ProjectConfig] = None,
 ) -> dict:
     """Collect all data needed for the librarian prompt."""
-    deadline, days_remaining = _get_current_deadline(config)
+    deadline, days_remaining = _get_current_deadline(config, project=project)
     summary = state.get_library_summary()
     quality_data = state.get_sources_by_quality()
     ref_gaps = state.get_reference_gaps(limit=15)
@@ -91,12 +93,17 @@ def _gather_library_context(
     all_sources = state.get_all_sources()
     sources_compact = _format_sources_compact(all_sources, entry_lookup)
 
+    if project:
+        current_chapter = project.current_chapter
+        chapter_name = project.chapters.get(current_chapter, "")
+    else:
+        current_chapter = config.dissertation.current_chapter
+        chapter_name = config.dissertation.chapters.get(current_chapter, "")
+
     context = {
-        "dissertation_context": DISSERTATION_CONTEXT,
-        "current_chapter": config.dissertation.current_chapter,
-        "chapter_name": config.dissertation.chapters.get(
-            config.dissertation.current_chapter, ""
-        ),
+        "dissertation_context": _get_dissertation_context(config, project),
+        "current_chapter": current_chapter,
+        "chapter_name": chapter_name,
         "deadline": deadline,
         "days_remaining": days_remaining,
         "mode": mode,
@@ -115,7 +122,8 @@ def _gather_library_context(
     # For recommend mode: load vault summaries for the section
     if mode == "recommend" and focus_section:
         chapter = int(focus_section.split(".")[0])
-        context["section_title"] = config.dissertation.chapters.get(chapter, "")
+        context["section_title"] = (project.chapters.get(chapter, "") if project
+                                    else config.dissertation.chapters.get(chapter, ""))
         context["section_summaries"] = _load_section_summaries(
             focus_section, chapter, state, vault
         )

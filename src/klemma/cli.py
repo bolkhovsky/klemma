@@ -11,7 +11,7 @@ from rich.table import Table
 
 from . import __version__, get_banner
 from .ai import ClaudeClient
-from .config import load_config
+from .config import load_config, resolve_project
 from .context import KlemmaContext
 from .library_provider import create_library
 from .state import StateManager
@@ -21,14 +21,22 @@ from .vault import VaultAdapter
 console = Console()
 
 
-def _init_components(config_path: str) -> KlemmaContext:
-    """Initialize all components from config."""
-    cfg = load_config(config_path)
+def _init_components(config_path: str, project_name: str | None = None,
+                     workspace_path: str | None = None) -> KlemmaContext:
+    """Initialize all components from config, with optional project selection."""
+    cfg, project, proj_name = resolve_project(
+        config_path=config_path,
+        workspace_path=workspace_path,
+        project_name=project_name,
+    )
     state = StateManager(cfg.state.db_path)
     vault = VaultAdapter(cfg.obsidian.vault_path, use_cli=cfg.obsidian.use_cli)
     library = create_library(cfg)
     tools = ToolRegistry(cfg) if cfg.mcp.servers else None
-    return KlemmaContext(config=cfg, state=state, vault=vault, library=library, tools=tools)
+    return KlemmaContext(
+        config=cfg, state=state, vault=vault, library=library, tools=tools,
+        project=project, project_name=proj_name,
+    )
 
 
 def _init_ai(cfg):
@@ -168,7 +176,7 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
     return result
 
 
-def _print_status_line(state: StateManager):
+def _print_status_line(state: StateManager, project_name: str = "default"):
     """Print a compact status line with key metrics."""
     try:
         stats = state.get_stats()
@@ -177,6 +185,8 @@ def _print_status_line(state: StateManager):
             f"[dim]{stats.get('total', 0)} sources[/dim]",
             f"[dim]{frag_stats.get('total', 0)} fragments[/dim]",
         ]
+        if project_name != "default":
+            parts.insert(0, f"[cyan]{project_name}[/cyan]")
         gap_summary = state.get_gap_summary()
         if gap_summary["open_count"] > 0:
             top = ""
@@ -227,14 +237,18 @@ def _print_ref_gaps_table(state: StateManager, limit: int = 20):
 @click.group(invoke_without_command=True)
 @click.version_option(version=__version__)
 @click.option("--config", "-c", default="config.yaml", help="Config file path")
+@click.option("--project", "-p", default=None, help="Project name (from workspace.yaml)")
+@click.option("--workspace", "-w", default=None, help="Workspace file path")
 @click.pass_context
-def main(ctx, config):
+def main(ctx, config, project, workspace):
     """Klemma — AI academic assistant.
 
     Run without arguments to launch TUI dashboard.
     """
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config
+    ctx.obj["project_name"] = project
+    ctx.obj["workspace_path"] = workspace
 
     # Banner
     console.print(get_banner(cwd=str(Path.cwd())))
@@ -242,8 +256,9 @@ def main(ctx, config):
     if ctx.invoked_subcommand is not None:
         # Print status line for CLI subcommands
         try:
-            kctx = _init_components(config)
-            _print_status_line(kctx.state)
+            kctx = _init_components(config, project_name=project,
+                                    workspace_path=workspace)
+            _print_status_line(kctx.state, project_name=kctx.project_name)
         except Exception:
             pass
 
@@ -251,7 +266,8 @@ def main(ctx, config):
         # No subcommand → launch TUI
         try:
             from .app import KlemmaApp
-            kctx = _init_components(config)
+            kctx = _init_components(config, project_name=project,
+                                    workspace_path=workspace)
             app = KlemmaApp(cfg=kctx.config, state=kctx.state, vault=kctx.vault)
             app.run()
         except ImportError as e:
@@ -268,7 +284,8 @@ def main(ctx, config):
 def plan(ctx):
     """Daily plan — focus, recommendations, deadlines."""
     config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _init_components(config_path, project_name=ctx.obj["project_name"],
+                            workspace_path=ctx.obj["workspace_path"])
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
     ai = _init_ai(cfg)
 
@@ -276,7 +293,7 @@ def plan(ctx):
 
     console.print("[blue]Генерация утреннего брифинга...[/blue]")
 
-    plan = generate_morning_plan(cfg, state, vault, ai)
+    plan = generate_morning_plan(cfg, state, vault, ai, project=kctx.project)
 
     console.print()
 
@@ -341,7 +358,8 @@ def process(ctx, citekey):
     Without arguments: process all pending sources.
     """
     config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _init_components(config_path, project_name=ctx.obj["project_name"],
+                            workspace_path=ctx.obj["workspace_path"])
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
     ai = _init_ai(cfg)
 
@@ -440,8 +458,10 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library):
 def status(ctx, verbose, chapter):
     """Unified status: processing, coverage, gaps, reference gaps."""
     config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _init_components(config_path, project_name=ctx.obj["project_name"],
+                            workspace_path=ctx.obj["workspace_path"])
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
+    project = kctx.project
     _sync_sections(kctx, quiet=True)
 
     proc_stats = state.get_stats()
@@ -461,16 +481,18 @@ def status(ctx, verbose, chapter):
     console.print(f"Processing: {' | '.join(parts)}  [dim]({total} total, {frag_stats.get('total', 0)} fragments)[/dim]")
     console.print()
 
-    # --- Coverage by chapter ---
+    # --- Coverage by chapter (dynamic from project config) ---
+    chapter_numbers = project.chapter_numbers if project else list(range(1, 5))
     table = Table(title="Coverage by Chapter", show_edge=False, pad_edge=False)
     table.add_column("Chapter", style="cyan")
     table.add_column("Sources", justify="right", width=8)
-    for ch in range(1, 5):
+    for ch in chapter_numbers:
         if chapter and ch != chapter:
             continue
         count = cov["chapters"].get(ch, 0)
         style = "green" if count >= 10 else "yellow" if count >= 5 else "red"
-        name = cfg.dissertation.chapters.get(ch, "")
+        name = (project.chapters.get(ch, "") if project
+                else cfg.dissertation.chapters.get(ch, ""))
         table.add_row(f"Ch {ch}: {name}", f"[{style}]{count}[/{style}]")
     console.print(table)
 
@@ -488,7 +510,8 @@ def status(ctx, verbose, chapter):
         console.print(sec_table)
 
     # --- Top gaps ---
-    min_sources = cfg.dissertation.min_sources_per_section
+    min_sources = (project.min_sources_per_section if project
+                   else cfg.dissertation.min_sources_per_section)
     gaps_data = state.get_gaps(min_sources=min_sources)
     if gaps_data:
         if chapter:
@@ -568,8 +591,10 @@ def research(ctx, section, no_save, force, enrich):
     Example: klemma research --section 1.3.2
     """
     config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _init_components(config_path, project_name=ctx.obj["project_name"],
+                            workspace_path=ctx.obj["workspace_path"])
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
+    project = kctx.project
     _sync_sections(kctx)
     ai = _init_ai(cfg)
 
@@ -582,7 +607,8 @@ def research(ctx, section, no_save, force, enrich):
     if enrich and kctx.tools and kctx.tools.has("academia"):
         console.print(f"[blue]Enriching with external search for section {section}...[/blue]")
         # Search for papers related to the section topic
-        chapter_name = cfg.dissertation.chapters.get(chapter, "")
+        chapter_name = (project.chapters.get(chapter, "") if project
+                        else cfg.dissertation.chapters.get(chapter, ""))
         search_query = f"{chapter_name} {section}"
         result = kctx.tools.call("academia", "arxiv_search", {"query": search_query, "limit": 5})
         if not result.is_error and result.content:
@@ -632,7 +658,8 @@ def research(ctx, section, no_save, force, enrich):
     else:
         console.print(f"\n[blue]Первичный анализ раздела {section}...[/blue]")
 
-    result = research_section(section, cfg, state, vault, ai, save_to_vault=not no_save)
+    result = research_section(section, cfg, state, vault, ai,
+                              save_to_vault=not no_save, project=kctx.project)
 
     if not result.section_status:
         console.print("[red]Не удалось сгенерировать брифинг.[/red]")
@@ -736,8 +763,10 @@ def import_vault(ctx, with_queue):
     and syncs source metadata and section assignments with the database.
     """
     config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _init_components(config_path, project_name=ctx.obj["project_name"],
+                            workspace_path=ctx.obj["workspace_path"])
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
+    project = kctx.project
 
     result = _sync_sections(kctx, quiet=True)
 
@@ -756,7 +785,8 @@ def import_vault(ctx, with_queue):
         table.add_column("Chapter", style="cyan")
         table.add_column("Sources", justify="right")
         for ch in sorted(chapters):
-            name = cfg.dissertation.chapters.get(ch, "")
+            name = (project.chapters.get(ch, "") if project
+                    else cfg.dissertation.chapters.get(ch, ""))
             table.add_row(f"Ch {ch}: {name}", str(chapters[ch]))
         console.print(table)
 
@@ -790,13 +820,15 @@ def ask(ctx, query, section, chapter):
     import subprocess
 
     config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _init_components(config_path, project_name=ctx.obj["project_name"],
+                            workspace_path=ctx.obj["workspace_path"])
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
 
     from .skills.agent import build_agent_context
 
     console.print("[blue]Сборка контекста исследования...[/blue]")
-    context = build_agent_context(cfg, state, vault, section=section, chapter=chapter)
+    context = build_agent_context(cfg, state, vault, section=section, chapter=chapter,
+                                  project=kctx.project)
 
     console.print(f"[dim]Query: {query}[/dim]")
     console.print("[blue]Запуск агента...[/blue]\n")
@@ -822,7 +854,8 @@ def library(ctx, section, audit):
         return
 
     config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _init_components(config_path, project_name=ctx.obj["project_name"],
+                            workspace_path=ctx.obj["workspace_path"])
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
     _sync_sections(kctx)
     ai = _init_ai(cfg)
@@ -834,7 +867,8 @@ def library(ctx, section, audit):
     mode = "audit" if audit else "recommend" if section else "status"
     console.print(f"[blue]Analyzing library ({mode})...[/blue]")
 
-    report = analyze_library(cfg, state, vault, ai, entry_lookup, mode=mode, focus_section=section)
+    report = analyze_library(cfg, state, vault, ai, entry_lookup, mode=mode,
+                             focus_section=section, project=kctx.project)
 
     if not report:
         console.print("[red]Failed to generate library analysis.[/red]")
@@ -943,7 +977,8 @@ def library(ctx, section, audit):
 def prune(ctx, chapter, verdict, clear_key):
     """Browse and manage prune verdicts from library analysis."""
     config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _init_components(config_path, project_name=ctx.obj["project_name"],
+                            workspace_path=ctx.obj["workspace_path"])
     state = kctx.state
 
     if clear_key and (chapter is not None or verdict is not None):
@@ -1057,7 +1092,8 @@ def discover(ctx, section, show_status, review, background):
       klemma discover --review            # review pending results
     """
     config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _init_components(config_path, project_name=ctx.obj["project_name"],
+                            workspace_path=ctx.obj["workspace_path"])
     cfg, state = kctx.config, kctx.state
 
     if show_status:
@@ -1294,6 +1330,122 @@ def tools_call(ctx, server, tool, args_json):
         console.print(f"[red]Error: {result.content}[/red]")
     else:
         console.print(result.content)
+
+
+# --- Projects: multi-project management ---
+
+@main.group()
+def projects():
+    """Manage multiple projects (workspace mode)."""
+    pass
+
+
+@projects.command(name="list")
+@click.pass_context
+def projects_list(ctx):
+    """List all projects in the workspace."""
+    import yaml as _yaml
+
+    workspace_path = ctx.obj.get("workspace_path") or "workspace.yaml"
+    ws_path = Path(workspace_path)
+
+    if not ws_path.exists():
+        console.print("[dim]No workspace.yaml found.[/dim]")
+        console.print("[dim]Create one to manage multiple projects.[/dim]")
+        console.print("[dim]Or use --config to point at a specific project config.[/dim]")
+        return
+
+    with open(ws_path, "r", encoding="utf-8") as f:
+        ws_raw = _yaml.safe_load(f) or {}
+
+    from .config import WorkspaceConfig
+    ws = WorkspaceConfig.model_validate(ws_raw)
+
+    table = Table(title="Projects", show_edge=False, pad_edge=False)
+    table.add_column("", width=2)
+    table.add_column("Name", style="cyan")
+    table.add_column("Config Path")
+    table.add_column("Status")
+
+    for name, path in ws.projects.items():
+        marker = "[green]\u25cf[/green]" if name == ws.active else " "
+        resolved = ws_path.parent / path
+        exists = "[green]OK[/green]" if resolved.exists() else "[red]missing[/red]"
+        table.add_row(marker, name, path, exists)
+
+    console.print(table)
+    console.print(f"\n[dim]Active: {ws.active}[/dim]")
+    console.print(f"[dim]Switch: klemma projects switch <name>[/dim]")
+
+
+@projects.command(name="switch")
+@click.argument("name")
+@click.pass_context
+def projects_switch(ctx, name):
+    """Switch the active project in workspace.yaml."""
+    import yaml as _yaml
+
+    workspace_path = ctx.obj.get("workspace_path") or "workspace.yaml"
+    ws_path = Path(workspace_path)
+
+    if not ws_path.exists():
+        console.print(f"[red]Workspace file not found: {ws_path}[/red]")
+        return
+
+    with open(ws_path, "r", encoding="utf-8") as f:
+        ws_raw = _yaml.safe_load(f) or {}
+
+    if name not in ws_raw.get("projects", {}):
+        available = ", ".join(ws_raw.get("projects", {}).keys()) or "(none)"
+        console.print(f"[red]Project '{name}' not found. Available: {available}[/red]")
+        return
+
+    ws_raw["active"] = name
+    with open(ws_path, "w", encoding="utf-8") as f:
+        _yaml.dump(ws_raw, f, default_flow_style=False, allow_unicode=True)
+
+    console.print(f"[green]Switched to project: {name}[/green]")
+
+
+@projects.command(name="info")
+@click.argument("name", required=False)
+@click.pass_context
+def projects_info(ctx, name):
+    """Show detailed info about a project."""
+    config_path = ctx.obj["config_path"]
+    try:
+        kctx = _init_components(
+            config_path,
+            project_name=name or ctx.obj.get("project_name"),
+            workspace_path=ctx.obj.get("workspace_path"),
+        )
+    except Exception as e:
+        console.print(f"[red]Error loading project: {e}[/red]")
+        return
+
+    project = kctx.project
+    if not project:
+        console.print("[dim]No project configuration found.[/dim]")
+        return
+
+    console.print(Panel(
+        f"[bold]{project.title or 'Untitled'}[/bold]\n"
+        f"Type: {project.type}\n"
+        f"Focus: {project.current_focus}\n"
+        f"Chapters: {len(project.chapters)}\n"
+        f"DB: {kctx.config.state.db_path}\n"
+        f"Vault: {kctx.config.obsidian.vault_path}",
+        title=f"Project: {kctx.project_name}",
+        border_style="blue",
+    ))
+
+    if project.chapters:
+        table = Table(title="Structure", show_edge=False, pad_edge=False)
+        table.add_column("Ch", width=4, style="cyan")
+        table.add_column("Title")
+        for ch_num in sorted(project.chapters.keys()):
+            table.add_row(str(ch_num), project.chapters[ch_num])
+        console.print(table)
 
 
 # --- Backward-compatible aliases ---
