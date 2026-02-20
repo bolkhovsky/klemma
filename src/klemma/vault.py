@@ -1,7 +1,6 @@
 """Obsidian vault adapter — CLI with file I/O fallback."""
 
 import json
-import re
 import shutil
 import subprocess
 from datetime import date

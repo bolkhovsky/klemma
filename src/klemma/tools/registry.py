@@ -5,9 +5,9 @@ Lazily creates MCPClient instances on first use.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Optional
 
-from ..config import KlemmaConfig, MCPServerConfig
+from ..config import KlemmaConfig
 from .client import MCPClient, ToolInfo, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -115,12 +115,9 @@ def remove_server(config_path: str, name: str) -> bool:
 
     # Match the server block: "    name:" followed by indented lines
     pattern = rf"^    {re.escape(name)}:.*\n(?:      .*\n|        .*\n)*"
-    new_text, count = re.sub(pattern, "", text, flags=re.MULTILINE), text
+    new_text = re.sub(pattern, "", text, flags=re.MULTILINE)
     if text == new_text:
         return False
-
-    # Actually do the replacement
-    new_text = re.sub(pattern, "", text, flags=re.MULTILINE)
 
     with open(config_path, "w", encoding="utf-8") as f:
         f.write(new_text)

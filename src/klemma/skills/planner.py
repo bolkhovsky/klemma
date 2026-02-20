@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
@@ -25,14 +24,14 @@ DISSERTATION_CONTEXT = ""
 def _get_dissertation_context(config: KlemmaConfig, project: Optional[ProjectConfig] = None) -> str:
     """Get work context string — dynamic from project, or legacy fallback."""
     if project:
-        return build_work_context(project)
+        return build_work_context(project, language=config.ai.language)
     return DISSERTATION_CONTEXT
 
 
 def _get_current_deadline(config: KlemmaConfig, project: Optional[ProjectConfig] = None) -> tuple[str, int]:
-    """Дедлайн текущей главы и дней до него."""
+    """Deadline for current chapter and days remaining."""
     if project:
-        return get_current_deadline(project)
+        return get_current_deadline(project, language=config.ai.language)
 
     chapter_str = str(config.dissertation.current_chapter)
     today = date.today()

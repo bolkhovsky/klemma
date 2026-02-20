@@ -11,7 +11,13 @@ from rich.table import Table
 
 from . import __version__, get_banner
 from .ai import create_ai
-from .config import get_klemma_home, load_available_tags, load_config, load_dissertation_context, resolve_project
+from .config import (
+    get_klemma_home,
+    load_available_tags,
+    load_config,
+    load_dissertation_context,
+    resolve_project,
+)
 from .context import KlemmaContext
 from .library_provider import create_library
 from .state import StateManager
@@ -214,7 +220,7 @@ def _print_status_line(state: StateManager, project_name: str = "default"):
         prune = state.get_prune_summary()
         if prune["total"] > 0:
             parts.append(f"[yellow]{prune['total']} pruned ({prune['drop']} drop, {prune['maybe']} maybe)[/yellow]")
-        console.print(f"[dim]|[/dim] " + " [dim]|[/dim] ".join(parts))
+        console.print("[dim]|[/dim] " + " [dim]|[/dim] ".join(parts))
     except Exception:
         pass  # Don't crash on status line failure
 
@@ -321,7 +327,7 @@ def init(ctx):
     console.print(f"  1. Edit [cyan]{klemma_home / 'config.yaml'}[/cyan] — set Zotero/Obsidian paths")
     console.print(f"  2. Edit [cyan]{klemma_home / 'context.md'}[/cyan] — describe your dissertation")
     console.print(f"  3. Edit [cyan]{klemma_home / 'tags.yaml'}[/cyan] — define your topic taxonomy")
-    console.print(f"  4. Run [bold]klemma status[/bold] to verify")
+    console.print("  4. Run [bold]klemma status[/bold] to verify")
 
 
 @main.command()
@@ -569,7 +575,7 @@ def status(ctx, verbose, chapter):
     config_path = ctx.obj["config_path"]
     kctx = _init_components(config_path, project_name=ctx.obj["project_name"],
                             workspace_path=ctx.obj["workspace_path"])
-    cfg, state, vault = kctx.config, kctx.state, kctx.vault
+    cfg, state = kctx.config, kctx.state
     project = kctx.project
     _sync_sections(kctx, quiet=True)
 
@@ -720,10 +726,10 @@ def research(ctx, section, no_save, force, enrich):
         with console.status(f"Searching arXiv for section {section}", spinner="dots2"):
             result = kctx.tools.call("academia", "arxiv_search", {"query": search_query, "limit": 5})
         if not result.is_error and result.content:
-            enrichment_context = f"\n\n## External Search Results (ArXiv)\n{result.content}"
-            console.print(f"[green]Found external papers for context[/green]")
+            enrichment_context = f"\n\n## External Search Results (ArXiv)\n{result.content}"  # noqa: F841
+            console.print("[green]Found external papers for context[/green]")
         else:
-            console.print(f"[yellow]External search returned no results[/yellow]")
+            console.print("[yellow]External search returned no results[/yellow]")
     elif enrich:
         console.print("[yellow]--enrich requires academia MCP server (klemma tools add academia ...)[/yellow]")
 
@@ -1095,7 +1101,7 @@ def library(ctx, section, audit):
     # Reference gaps table
     _print_ref_gaps_table(state)
 
-    console.print(f"\n[dim]Full report saved to vault.[/dim]")
+    console.print("\n[dim]Full report saved to vault.[/dim]")
 
 
 @library.command()
@@ -1360,7 +1366,7 @@ def discover(ctx, section, show_status, review, background):
         )
         console.print(f"[green]Discovery started in background for section {section}[/green]")
         console.print(f"[dim]Log: {log_path}[/dim]")
-        console.print(f"[dim]Review results: klemma discover --review[/dim]")
+        console.print("[dim]Review results: klemma discover --review[/dim]")
         return
 
     from .tools.discovery import run_discovery
@@ -1377,7 +1383,7 @@ def discover(ctx, section, show_status, review, background):
             console.print(f"[red]  {err}[/red]")
 
     if result["found"] > 0:
-        console.print(f"\n[dim]Review results: klemma discover --review[/dim]")
+        console.print("\n[dim]Review results: klemma discover --review[/dim]")
 
 
 def _discover_status(state):
@@ -1475,7 +1481,7 @@ def tools_add(ctx, name, command, args, env):
     console.print(f"  command: {command} {' '.join(args)}")
     if env_dict:
         console.print(f"  env: {env_dict}")
-    console.print(f"\n[dim]Verify with: klemma tools list[/dim]")
+    console.print("\n[dim]Verify with: klemma tools list[/dim]")
 
 
 @tools.command(name="list")
@@ -1604,7 +1610,7 @@ def projects_list(ctx):
 
     console.print(table)
     console.print(f"\n[dim]Active: {ws.active}[/dim]")
-    console.print(f"[dim]Switch: klemma projects switch <name>[/dim]")
+    console.print("[dim]Switch: klemma projects switch <name>[/dim]")
 
 
 @projects.command(name="switch")

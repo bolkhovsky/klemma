@@ -1,14 +1,20 @@
 """Auto-create @citekey vault notes from BetterBibTeX metadata."""
 
+from __future__ import annotations
+
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from ..config import KlemmaConfig, resolve_prompt
 from ..vault import VaultAdapter
 from .models import ZoteroEntry
+
+if TYPE_CHECKING:
+    from ..ai import AIProvider
+    from ..state import StateManager
 
 logger = logging.getLogger(__name__)
 
