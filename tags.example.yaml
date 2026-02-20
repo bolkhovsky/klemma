@@ -1,0 +1,11 @@
+# Tags for automatic source classification.
+# These are used by AI to categorize extracted fragments.
+# Customize to match your research domain.
+- "Review"
+- "Dataset"
+- "Methodology"
+- "Machine Learning"
+- "Statistics"
+- "Experiment"
+- "Theory"
+- "Software"

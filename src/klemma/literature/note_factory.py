@@ -6,23 +6,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from ..config import KlemmaConfig
+from ..config import KlemmaConfig, resolve_prompt
 from ..vault import VaultAdapter
 from .models import ZoteroEntry
 
 logger = logging.getLogger(__name__)
-
-# Re-use AVAILABLE_TAGS from extractor
-AVAILABLE_TAGS = [
-    "Sea Ice", "Arctic", "Climate", "Forecasting", "Navigation", "Icebreaking",
-    "GIS", "Machine Learning", "LSTM", "ConvLSTM", "U-Net", "CNN",
-    "Transformer", "Classical ML", "Statistics", "Physical Model",
-    "Validation", "Metrics",
-    "Remote Sensing", "SAR", "Sentinel-1", "Microwave", "AMSR", "SSM-I",
-    "Optical", "ERA5", "Ice Products", "AARI",
-    "Barents Sea", "Kara Sea", "Laptev Sea", "Pacific Arctic", "Antarctic",
-    "Review", "Dataset",
-]
 
 
 def auto_classify(entry: ZoteroEntry, config: KlemmaConfig) -> dict:
@@ -80,8 +68,11 @@ def annotate_source(
     entry: ZoteroEntry,
     pdf_text: str,
     config: KlemmaConfig,
-    ai: "ClaudeClient",
+    ai: "AIProvider",
     entry_lookup: Optional[dict] = None,
+    dissertation_context: str = "",
+    available_tags: list[str] | None = None,
+    klemma_home: Optional[Path] = None,
 ) -> Optional[dict]:
     """Generate AI annotation (summary, methodology, key findings, relevance).
 
@@ -91,9 +82,7 @@ def annotate_source(
     key_references.
     Returns None on failure.
     """
-    from ..skills.planner import _get_dissertation_context
-
-    prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "annotate.md"
+    prompt_path = resolve_prompt("annotate.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "annotate.md"
     user_prompt = ai.render_prompt(
         prompt_path,
         title=entry.title or "Unknown",
@@ -104,8 +93,8 @@ def annotate_source(
         language=entry.language or "Unknown",
         abstract=entry.abstract or "Not available",
         pdf_text=pdf_text,
-        dissertation_context=_get_dissertation_context(config),
-        available_tags=", ".join(AVAILABLE_TAGS),
+        dissertation_context=dissertation_context,
+        available_tags=", ".join(available_tags) if available_tags else "",
         library_entries=_format_library_entries(entry_lookup),
     )
 
@@ -374,8 +363,11 @@ def create_vault_note(
     vault: VaultAdapter,
     state: Optional["StateManager"] = None,
     pdf_text: Optional[str] = None,
-    ai: Optional["ClaudeClient"] = None,
+    ai: Optional["AIProvider"] = None,
     entry_lookup: Optional[dict] = None,
+    dissertation_context: str = "",
+    available_tags: list[str] | None = None,
+    klemma_home: Optional[Path] = None,
 ) -> Path:
     """Create @citekey.md vault note from BetterBibTeX metadata.
 
@@ -388,7 +380,12 @@ def create_vault_note(
     annotation = None
     if pdf_text and ai:
         logger.info("Generating annotation for @%s...", citekey)
-        annotation = annotate_source(entry, pdf_text, config, ai, entry_lookup=entry_lookup)
+        annotation = annotate_source(
+            entry, pdf_text, config, ai, entry_lookup=entry_lookup,
+            dissertation_context=dissertation_context,
+            available_tags=available_tags,
+            klemma_home=klemma_home,
+        )
 
     # 2. Classification: prefer AI result, fallback to regex
     if annotation and annotation.get("dissertation_relevance"):

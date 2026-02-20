@@ -137,7 +137,7 @@ class DailyPlan(BaseModel):
     sources_needed: list[str] = Field(default_factory=list)
     strategy_suggestions: list[str] = Field(default_factory=list)
     briefing_text: str = ""
-    # Backward-compatible (TUI dashboard reads these)
+    # Legacy plan fields (used by CLI output and DB)
     dissertation_task: str = ""
     assistant_task: str = ""
     reading_target: str = ""

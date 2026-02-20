@@ -1,0 +1,126 @@
+# =============================================================================
+# KLEMMA CONFIGURATION — Example
+# =============================================================================
+# Copy to ~/.klemma/config.yaml and customize for your project.
+# See: https://github.com/bolkhovsky/klemma
+
+instance:
+  name: "my-dissertation"
+  type: "academic"
+
+zotero:
+  library_id: "YOUR_LIBRARY_ID"       # Zotero library ID (from Settings → Feeds/API)
+  library_type: "user"                 # "user" or "group"
+  api_key_env: "ZOTERO_API_KEY"        # env var holding your Zotero API key
+  local: false
+  library_json: "/path/to/your/bibtex-export.json"  # BetterBibTeX JSON export
+  storage_path: "/path/to/Zotero/storage"            # Zotero attachment storage
+
+obsidian:
+  vault_path: "/path/to/your/obsidian/vault"
+  notes_folder: "References"           # folder with @citekey.md notes
+  tags_folder: "Tags"                  # optional folder for tag notes
+  use_cli: null
+
+ai:
+  model: "sonnet"                      # claude model: "opus", "sonnet", "haiku"
+  max_pdf_chars: 50000
+  timeout: 300
+  retries: 2
+  # Uncomment for OpenAI-compatible backends (Ollama, vLLM, LM Studio):
+  # backend: "openai"
+  # base_url: "http://localhost:11434/v1"
+  # api_key_env: "OPENAI_API_KEY"
+  # json_mode: true
+
+state:
+  db_path: "./data/klemma.db"          # relative to ~/.klemma/ or absolute
+
+dissertation:
+  current_chapter: 1
+  current_section: "1.1"
+  title: "Your dissertation title"
+  chapters:
+    1: "Literature review"
+    2: "Methodology"
+    3: "Results and discussion"
+    4: "Implementation"
+  scientific_results:
+    nr1: "First scientific result"
+    nr2: "Second scientific result"
+  deadlines:
+    - chapter: "1"
+      deadline: "2026-06-01"
+      label: "Chapter 1"
+    - chapter: "2"
+      deadline: "2026-09-01"
+      label: "Chapter 2"
+    - chapter: "3"
+      deadline: "2026-11-01"
+      label: "Chapter 3"
+    - chapter: "4"
+      deadline: "2027-01-01"
+      label: "Chapter 4"
+  chapter_plan_pattern: "Plan_Chapter{chapter}"
+  writing_constraints: "1-2 hours/day, 200-400 words/day"
+  priority_terms:
+    - your_key_term_1
+    - your_key_term_2
+  min_sources_per_section: 3
+  chapter_mapping:
+    # Map keywords in source text to chapters/sections:
+    # - pattern: "regex pattern"
+    #   chapter: 1
+    #   section: "1.2.1"
+    - pattern: "literature review|survey|state of the art"
+      chapter: 1
+      section: "1.1"
+    - pattern: "methodology|method|approach"
+      chapter: 2
+      section: "2.1"
+
+planning:
+  dissertation_focus: "Chapter 1, Section 1.1"
+  assistant_roadmap:
+    - "Fragment extraction (klemma process)"
+    - "Reading queue"
+
+reading:
+  snippet_length: 2000
+  daily_papers: 1
+  priority_boost_chapters: [1, 2]
+
+processing:
+  batch_size: 2
+  skip_no_pdf: true
+  min_pdf_length: 500
+
+tags:
+  auto_mapping:
+    # Map keywords to tags for automatic classification:
+    - pattern: "review|survey|meta.?analysis"
+      tag: "Review"
+    - pattern: "dataset|benchmark|open data"
+      tag: "Dataset"
+    - pattern: "methodology|method"
+      tag: "Methodology"
+    - pattern: "machine learning|deep learning|neural network"
+      tag: "Machine Learning"
+    - pattern: "statistical|regression|correlation"
+      tag: "Statistics"
+
+export:
+  output_dir: "./exports"
+  pandoc:
+    timeout: 300
+    number_sections: true
+
+mcp:
+  servers: {}
+  # Example: add MCP servers for external search
+  # servers:
+  #   zotero:
+  #     command: "uvx"
+  #     args: ["zotero-mcp"]
+  #     env:
+  #       ZOTERO_LOCAL: "true"

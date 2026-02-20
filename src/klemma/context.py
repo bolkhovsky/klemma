@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from .ai import ClaudeClient
+    from .ai import AIProvider
     from .config import KlemmaConfig, ProjectConfig
     from .library_provider import LibraryProvider
     from .state import StateManager
@@ -25,8 +26,11 @@ class KlemmaContext:
     config: KlemmaConfig
     state: StateManager
     vault: VaultAdapter
-    ai: Optional[ClaudeClient] = None
+    ai: Optional[AIProvider] = None
     library: Optional[LibraryProvider] = None
     tools: Optional[ToolRegistry] = None
     project: Optional[ProjectConfig] = None
     project_name: str = "default"
+    klemma_home: Path = field(default_factory=lambda: Path.home() / ".klemma")
+    dissertation_context: str = ""
+    available_tags: list[str] = field(default_factory=list)

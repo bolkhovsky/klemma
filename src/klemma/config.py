@@ -1,11 +1,22 @@
 """Configuration loader with Pydantic validation."""
 
+import logging
 import os
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+# Shipped prompts directory (relative to this file → repo root / prompts)
+_SHIPPED_PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+
+
+def get_klemma_home() -> Path:
+    """Return klemma home directory (~/.klemma/ or KLEMMA_HOME env var)."""
+    return Path(os.environ.get("KLEMMA_HOME", "~/.klemma")).expanduser()
 
 
 class ZoteroConfig(BaseModel):
@@ -31,10 +42,21 @@ class ObsidianConfig(BaseModel):
 
 
 class AIConfig(BaseModel):
+    backend: str = "claude"  # "claude" | "openai" | "litellm"
     model: str = "opus"
     max_pdf_chars: int = 50000
     timeout: int = 180
     retries: int = 2
+    base_url: Optional[str] = None  # URL for OpenAI-compatible endpoints
+    api_key_env: str = ""  # env var name for API key (e.g. "OPENAI_API_KEY")
+    json_mode: bool = False  # use structured JSON mode when backend supports it
+
+    @property
+    def api_key(self) -> Optional[str]:
+        """Resolve API key from environment variable."""
+        if self.api_key_env:
+            return os.environ.get(self.api_key_env)
+        return None
 
 
 class StateConfig(BaseModel):
@@ -214,12 +236,16 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
-def load_config(config_path: str | Path = "config.yaml") -> KlemmaConfig:
+def load_config(config_path: str | Path | None = None) -> KlemmaConfig:
     """Load and validate configuration from YAML file.
 
+    If config_path is None, uses get_klemma_home() / "config.yaml".
     Supports both legacy single-project configs and new project-aware configs.
     """
-    path = Path(config_path)
+    if config_path is None:
+        path = get_klemma_home() / "config.yaml"
+    else:
+        path = Path(config_path)
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
 
@@ -288,7 +314,7 @@ def load_workspace(
 
 
 def resolve_project(
-    config_path: str | Path = "config.yaml",
+    config_path: str | Path | None = None,
     workspace_path: Optional[str | Path] = None,
     project_name: Optional[str] = None,
 ) -> tuple[KlemmaConfig, ProjectConfig, str]:
@@ -316,3 +342,69 @@ def resolve_project(
     project = ProjectConfig.from_dissertation(cfg.dissertation)
     name = project_name or "default"
     return cfg, project, name
+
+
+def load_dissertation_context(klemma_home: Path, config: KlemmaConfig) -> str:
+    """Load dissertation context from context.md or build from config fields.
+
+    Looks for klemma_home/context.md first. If not found, builds a basic
+    context string from config.dissertation fields as fallback.
+    """
+    context_path = klemma_home / "context.md"
+    if context_path.exists():
+        text = context_path.read_text(encoding="utf-8").strip()
+        if text:
+            return text
+
+    # Fallback: build from config fields
+    parts = []
+    if config.dissertation.title:
+        parts.append(f"Topic: {config.dissertation.title}")
+    if config.dissertation.scientific_results:
+        parts.append("")
+        for key, val in config.dissertation.scientific_results.items():
+            parts.append(f"{key.upper()}: {val}")
+    if config.dissertation.chapters:
+        parts.append("")
+        parts.append("Chapters:")
+        for ch_num, ch_name in sorted(config.dissertation.chapters.items()):
+            parts.append(f"{ch_num}. {ch_name}")
+    if config.dissertation.priority_terms:
+        parts.append("")
+        parts.append(f"Key terms: {', '.join(config.dissertation.priority_terms)}")
+
+    return "\n".join(parts)
+
+
+def load_available_tags(klemma_home: Path, config: KlemmaConfig) -> list[str]:
+    """Load available tags from tags.yaml or extract from config.
+
+    Looks for klemma_home/tags.yaml first. If not found, extracts unique
+    tag names from config.tags.auto_mapping as fallback.
+    """
+    tags_path = klemma_home / "tags.yaml"
+    if tags_path.exists():
+        with open(tags_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        if isinstance(data, list):
+            return data
+
+    # Fallback: extract from auto_mapping
+    seen: set[str] = set()
+    tags: list[str] = []
+    for mapping in config.tags.auto_mapping:
+        if mapping.tag not in seen:
+            tags.append(mapping.tag)
+            seen.add(mapping.tag)
+    return tags
+
+
+def resolve_prompt(name: str, klemma_home: Path) -> Path:
+    """Resolve prompt template path: user override first, then shipped.
+
+    Looks in klemma_home/prompts/ first, then the shipped prompts/ directory.
+    """
+    user_path = klemma_home / "prompts" / name
+    if user_path.exists():
+        return user_path
+    return _SHIPPED_PROMPTS_DIR / name
