@@ -3,7 +3,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -27,6 +27,7 @@ class ZoteroConfig(BaseModel):
     library_json: Optional[str] = None  # Path to BetterBibTeX JSON export
     storage_path: str = str(Path.home() / "Zotero" / "storage")  # Zotero PDF storage
     backend: str = "local"  # "local" (BBT JSON) | "mcp" (zotero-mcp server)
+    collection: Optional[str] = None  # Optional Zotero collection ID for filtering
 
     @property
     def api_key(self) -> Optional[str]:
@@ -88,6 +89,73 @@ class DissertationConfig(BaseModel):
     chapter_plan_pattern: str = "План_Глава{chapter}"
     writing_constraints: str = "1-1.5 ч/день, 200-300 слов/день, Pomodoro"
     chapter_draft_pattern: str = "Глава_{chapter}"
+
+
+# --- Multi-project support ---
+
+
+class ProjectConfig(BaseModel):
+    """Configuration for a single academic work (dissertation, paper, thesis)."""
+
+    type: str = "dissertation"  # dissertation | paper | thesis
+    title: str = ""
+    current_focus: str = ""  # e.g. "2.3.1" for dissertation, "methods" for paper
+    chapters: dict[int, str] = Field(default_factory=dict)
+    scientific_results: dict[str, str] = Field(default_factory=dict)
+    priority_terms: list[str] = Field(default_factory=list)
+    chapter_mapping: list[ChapterMapping] = Field(default_factory=list)
+    min_sources_per_section: int = 3
+    deadlines: list[ChapterDeadline] = Field(default_factory=list)
+    chapter_plan_pattern: str = "План_Глава{chapter}"
+    writing_constraints: str = ""
+    chapter_draft_pattern: str = "Глава_{chapter}"
+
+    @property
+    def current_chapter(self) -> int:
+        """Extract chapter number from current_focus (e.g. '2.3.1' -> 2)."""
+        if not self.current_focus:
+            return 1
+        first = self.current_focus.split(".")[0]
+        try:
+            return int(first)
+        except ValueError:
+            return 1
+
+    @property
+    def current_section(self) -> str:
+        """Return current_focus as section identifier."""
+        return self.current_focus
+
+    @property
+    def chapter_numbers(self) -> list[int]:
+        """All chapter numbers, sorted."""
+        return sorted(self.chapters.keys()) if self.chapters else [1]
+
+    @classmethod
+    def from_dissertation(cls, d: DissertationConfig) -> "ProjectConfig":
+        """Convert legacy DissertationConfig to ProjectConfig."""
+        return cls(
+            type="dissertation",
+            title=d.title,
+            current_focus=d.current_section or str(d.current_chapter),
+            chapters=d.chapters,
+            scientific_results=d.scientific_results,
+            priority_terms=d.priority_terms,
+            chapter_mapping=d.chapter_mapping,
+            min_sources_per_section=d.min_sources_per_section,
+            deadlines=d.deadlines,
+            chapter_plan_pattern=d.chapter_plan_pattern,
+            writing_constraints=d.writing_constraints,
+            chapter_draft_pattern=d.chapter_draft_pattern,
+        )
+
+
+class WorkspaceConfig(BaseModel):
+    """Workspace configuration — maps project names to config file paths."""
+
+    active: str = "default"
+    defaults: dict[str, Any] = Field(default_factory=dict)
+    projects: dict[str, str] = Field(default_factory=dict)  # name → config path
 
 
 class PlanningConfig(BaseModel):
@@ -154,18 +222,31 @@ class KlemmaConfig(BaseModel):
     tags: TagsConfig = Field(default_factory=TagsConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    # Multi-project: optional project config embedded in same file
+    project: Optional[ProjectConfig] = None
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Deep merge override into base dict. Override values win."""
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
 
 
 def load_config(config_path: str | Path | None = None) -> KlemmaConfig:
     """Load and validate configuration from YAML file.
 
     If config_path is None, uses get_klemma_home() / "config.yaml".
+    Supports both legacy single-project configs and new project-aware configs.
     """
     if config_path is None:
         path = get_klemma_home() / "config.yaml"
     else:
         path = Path(config_path)
-
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
 
@@ -181,6 +262,87 @@ def load_config(config_path: str | Path | None = None) -> KlemmaConfig:
             raw["zotero"] = migrated
 
     return KlemmaConfig.model_validate(raw)
+
+
+def load_workspace(
+    workspace_path: str | Path = "workspace.yaml",
+    project_name: Optional[str] = None,
+) -> tuple[KlemmaConfig, ProjectConfig, str]:
+    """Load workspace and resolve a project config.
+
+    Returns (config, project, project_name).
+
+    The workspace.yaml points to per-project config files.
+    Shared defaults from workspace are merged under each project config.
+    """
+    ws_path = Path(workspace_path)
+    if not ws_path.exists():
+        raise FileNotFoundError(f"Workspace file not found: {ws_path}")
+
+    with open(ws_path, "r", encoding="utf-8") as f:
+        ws_raw = yaml.safe_load(f) or {}
+
+    ws = WorkspaceConfig.model_validate(ws_raw)
+    name = project_name or ws.active
+
+    if name not in ws.projects:
+        available = ", ".join(ws.projects.keys()) or "(none)"
+        raise ValueError(f"Project '{name}' not found in workspace. Available: {available}")
+
+    # Resolve project config path (relative to workspace file)
+    project_config_path = ws_path.parent / ws.projects[name]
+    if not project_config_path.exists():
+        raise FileNotFoundError(
+            f"Project config not found: {project_config_path} (for project '{name}')"
+        )
+
+    with open(project_config_path, "r", encoding="utf-8") as f:
+        proj_raw = yaml.safe_load(f) or {}
+
+    # Merge workspace defaults under project config (project values win)
+    merged = _deep_merge(ws.defaults, proj_raw)
+
+    # Load the merged config as KlemmaConfig
+    cfg = KlemmaConfig.model_validate(merged)
+
+    # Extract ProjectConfig: prefer explicit 'project:' block, else synthesize from 'dissertation:'
+    if "project" in merged and merged["project"]:
+        project = ProjectConfig.model_validate(merged["project"])
+    else:
+        project = ProjectConfig.from_dissertation(cfg.dissertation)
+
+    return cfg, project, name
+
+
+def resolve_project(
+    config_path: str | Path | None = None,
+    workspace_path: Optional[str | Path] = None,
+    project_name: Optional[str] = None,
+) -> tuple[KlemmaConfig, ProjectConfig, str]:
+    """Unified entry point: resolve config + project from either workspace or direct config.
+
+    Priority:
+    1. If workspace_path is given and exists, use workspace mode
+    2. If workspace.yaml exists in cwd, use workspace mode
+    3. Fall back to direct config mode (legacy)
+    """
+    # Try workspace mode
+    ws_path = Path(workspace_path) if workspace_path else Path("workspace.yaml")
+    if ws_path.exists():
+        return load_workspace(ws_path, project_name=project_name)
+
+    # Direct config mode (legacy or new-style single project)
+    cfg = load_config(config_path)
+
+    # If config has explicit project: block, use it
+    if cfg.project:
+        name = project_name or "default"
+        return cfg, cfg.project, name
+
+    # Legacy: synthesize ProjectConfig from DissertationConfig
+    project = ProjectConfig.from_dissertation(cfg.dissertation)
+    name = project_name or "default"
+    return cfg, project, name
 
 
 def load_dissertation_context(klemma_home: Path, config: KlemmaConfig) -> str:

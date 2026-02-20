@@ -119,9 +119,6 @@ def remove_server(config_path: str, name: str) -> bool:
     if text == new_text:
         return False
 
-    # Actually do the replacement
-    new_text = re.sub(pattern, "", text, flags=re.MULTILINE)
-
     with open(config_path, "w", encoding="utf-8") as f:
         f.write(new_text)
 

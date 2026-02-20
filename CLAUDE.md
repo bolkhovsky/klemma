@@ -1,7 +1,7 @@
 # Klemma — AI Academic Assistant
 
 ## What is this
-Klemma is a CLI tool for PhD dissertation work. It manages literature (via Zotero), extracts citation fragments from PDFs (via Claude AI), generates research briefings, daily plans, and tracks dissertation coverage.
+Klemma is a CLI tool for academic writing. It manages literature (via Zotero), extracts citation fragments from PDFs (via Claude AI), generates research briefings, daily plans, and tracks coverage. Supports multiple concurrent projects (dissertation, papers, theses) with separate databases and bibliographies.
 
 ## Architecture
 - **CLI mode**: `klemma <command>` — all commands are headless CLI
@@ -10,14 +10,15 @@ Klemma is a CLI tool for PhD dissertation work. It manages literature (via Zoter
 - **MCP layer**: ToolRegistry → MCPClient (stdio transport) → external servers (zotero-mcp, academia-mcp)
 - **Library abstraction**: LibraryProvider protocol with LocalLibrary (BBT JSON) and MCPLibrary (zotero-mcp) backends
 - **AI abstraction**: AIProvider protocol with ClaudeClient (CLI), OpenAIClient, LiteLLMClient backends + `create_ai()` factory
-- **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/tools
+- **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/tools/project
+- **Multi-project**: workspace.yaml maps project names → config files; each project gets own DB, bibliography, vault area
 
 ## Project structure
 ```
 src/klemma/
 ├── cli.py              — Click CLI entry point
-├── config.py           — Pydantic config models + get_klemma_home(), load helpers, resolve_prompt()
-├── context.py          — KlemmaContext dataclass (single object per CLI command)
+├── config.py           — Pydantic config models (ProjectConfig, WorkspaceConfig, KlemmaConfig) + get_klemma_home(), load helpers, resolve_prompt()
+├── context.py          — KlemmaContext dataclass (single object per CLI command, includes project)
 ├── setup.py            — `klemma init` logic — scaffolds ~/.klemma/ from example files
 ├── state.py            — SQLite state manager
 ├── ai.py               — AIProvider protocol + AIProviderBase + ClaudeClient + create_ai() factory
@@ -25,7 +26,7 @@ src/klemma/
 ├── ai_litellm.py       — LiteLLM universal backend (100+ providers)
 ├── vault.py            — Obsidian adapter (CLI/file I/O, update_section)
 ├── library_provider.py — LibraryProvider protocol + LocalLibrary + MCPLibrary
-├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, acquirer)
+├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, acquirer, work_context)
 ├── literature/         — Zotero, PDF, models, note_factory
 └── tools/              — MCP tool integration
     ├── client.py       — MCPClient (sync wrapper over async MCP SDK)
@@ -48,7 +49,7 @@ tags.example.yaml           — Template tag taxonomy
 └── klemma-status/SKILL.md  — Agent skill: coverage & gaps check
 ```
 
-## Key commands (11)
+## Key commands (12)
 - `klemma init` — scaffold `~/.klemma/` with config templates (first-time setup)
 - `klemma plan` — daily plan generation (library digest included)
 - `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
@@ -60,6 +61,8 @@ tags.example.yaml           — Template tag taxonomy
 - `klemma tools {add,list,remove,call}` — manage MCP servers (zotero, academia, etc.)
 - `klemma search "query"` — search papers via MCP (arXiv, Semantic Scholar)
 - `klemma discover -s X.X` — hybrid discovery pipeline (`--background`, `--status`, `--review`)
+- `klemma projects {list,switch,info}` — manage multiple projects (workspace mode)
+- Global options: `--project/-p <name>`, `--workspace/-w <path>`, `--config/-c <path>`
 
 Hidden aliases (backward compat): `morning`→`plan`, `extract`→`process`, `agent`→`ask`, `stats`/`coverage`/`gaps`→`status`, `prepopulate`→`import`
 
@@ -77,11 +80,14 @@ User data lives in `~/.klemma/` (overridable via `KLEMMA_HOME` env var):
 ```
 
 Run `klemma init` to scaffold from `config.example.yaml`, `context.example.md`, `tags.example.yaml`.
+- `workspace.yaml` — optional: maps project names to per-project config files, shared defaults
 
 **Config keys:**
 - `zotero.library_json` — path to BetterBibTeX JSON export (for PDF lookup)
 - `zotero.backend` — `"local"` (default, BBT JSON) or `"mcp"` (zotero-mcp server)
+- `zotero.collection` — optional Zotero collection ID for filtering
 - `mcp.servers` — registered MCP servers (managed via `klemma tools add/remove`)
+- `project:` — optional inline ProjectConfig (type, title, chapters, scientific_results, etc.)
 - `ai.backend` — `"claude"` (default, CLI), `"openai"` (OpenAI-compatible API), or `"litellm"` (100+ providers)
 - `ai.base_url` — endpoint URL for OpenAI-compatible servers (Ollama, vLLM, LM Studio)
 - `ai.api_key_env` — env var name for API key (e.g. `"OPENAI_API_KEY"`)
@@ -91,6 +97,21 @@ Run `klemma init` to scaffold from `config.example.yaml`, `context.example.md`, 
 **Prompt resolution:** `resolve_prompt(name, klemma_home)` checks `~/.klemma/prompts/<name>` first, then falls back to shipped `prompts/<name>`.
 
 **Fallbacks:** If `context.md` is missing, context is built from `config.dissertation` fields. If `tags.yaml` is missing, tags are extracted from `config.tags.auto_mapping` keys.
+
+### Multi-project setup
+```yaml
+# workspace.yaml
+active: dissertation
+defaults:
+  ai: { model: opus }
+  mcp: { servers: { ... } }
+projects:
+  dissertation: ./configs/dissertation.yaml
+  ice_paper: ./configs/ice_paper.yaml
+```
+Each project config is a full config.yaml with its own obsidian/state/zotero/project sections.
+Workspace defaults are deep-merged under each project config (project values win).
+Without workspace.yaml, the legacy `dissertation:` block in config.yaml is auto-wrapped into a ProjectConfig.
 
 ## SQLite tables
 - `sources` — Zotero entries with processing status and dissertation metadata

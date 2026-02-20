@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from .ai import AIProvider
-    from .config import KlemmaConfig
+    from .config import KlemmaConfig, ProjectConfig
     from .library_provider import LibraryProvider
     from .state import StateManager
     from .tools.registry import ToolRegistry
@@ -29,6 +29,8 @@ class KlemmaContext:
     ai: Optional[AIProvider] = None
     library: Optional[LibraryProvider] = None
     tools: Optional[ToolRegistry] = None
+    project: Optional[ProjectConfig] = None
+    project_name: str = "default"
     klemma_home: Path = field(default_factory=lambda: Path.home() / ".klemma")
     dissertation_context: str = ""
     available_tags: list[str] = field(default_factory=list)
