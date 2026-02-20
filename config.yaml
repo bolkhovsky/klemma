@@ -7,7 +7,7 @@ instance:
   type: "academic"
 
 zotero:
-  library_id: ""
+  library_id: "14729610"
   library_type: "user"
   api_key_env: "ZOTERO_API_KEY"
   local: false

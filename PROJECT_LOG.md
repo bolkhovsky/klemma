@@ -1,5 +1,62 @@
 # Klemma — Project Log
 
+## v0.5.0 — 2026-02-20: Paper Acquisition + Agent Skills
+
+### What was done
+
+**`klemma acquire` command:**
+- Full pipeline: download PDF → create Zotero item → create attachment record → store PDF locally → poll BBT → register in DB
+- Local PDF storage: bypasses Zotero cloud (paid quota exceeded), creates attachment metadata via API, places file in `{storage_path}/{attachment_key}/`. Zotero sees the attachment and finds the file locally.
+- Single mode: `klemma acquire <url> --title "..." --authors "..." --year N --section X.X`
+- Batch mode: `klemma acquire --batch papers.json` (JSON array with url, title, authors, year, sections, etc.)
+- `--no-process` flag to skip fragment extraction
+- New `skills/acquirer.py` module: `acquire_paper()`, `download_pdf()`, `poll_bbt_citekey()`, `parse_authors()`
+- New `ZoteroLibrary.create_item()`, `create_attachment_record()` methods; `state.set_pdf_path()`
+- Requires `ZOTERO_API_KEY` env var and `zotero.library_id` in config.yaml
+
+**Batch `klemma process`:**
+- `klemma process key1 key2 key3` — multiple citekeys via `nargs=-1`
+- Parallel execution by default with `ThreadPoolExecutor(max_workers=3)`
+- `--serial` flag for sequential processing
+
+**Claude Code Agent Skills (`.claude/skills/`):**
+- `klemma-acquire/SKILL.md` — full acquire pipeline instructions with batch JSON format
+- `klemma-process/SKILL.md` — fragment extraction (single, batch, parallel)
+- `klemma-status/SKILL.md` — coverage and gaps check
+- Agent (`klemma ask`) auto-discovers Skills instead of reading source code
+- `agent.md` simplified: inline instructions replaced with `/klemma-acquire`, `/klemma-process`, `/klemma-status` references
+
+**Library prune improvements (from prior commits):**
+- `klemma library prune -c N -v drop|maybe` — browse prune verdicts by chapter/verdict
+- Fixed `@` prefix bug in AI-returned citekeys (caused empty prune_verdicts table)
+- Drop-verdicted sources excluded from librarian AI context (no repeated recommendations)
+- Orphan DB entries cleaned up from pre-existing citekey renames
+- Auto-detect Zotero citekey renames via immutable itemKey
+
+### Files changed
+- `src/klemma/skills/acquirer.py` — **new**: paper acquisition pipeline
+- `src/klemma/literature/zotero.py` — `create_item()`, `attach_pdf()` write methods
+- `src/klemma/cli.py` — `acquire` command, batch `process`, `library prune` subcommand
+- `prompts/agent.md` — Skills references instead of inline instructions
+- `.claude/skills/klemma-{acquire,process,status}/SKILL.md` — **new**: Agent Skills
+- `pyproject.toml` — added `requests` dependency
+- `.gitignore` — exclude `.claude/settings.local.json`
+- `config.yaml` — `zotero.library_id` configured
+
+### Researcher workflow (updated)
+```
+Morning:  klemma plan             → focus, recommendations, deadlines
+Work:     klemma research -s X    → auto-extract + analysis
+Find:     klemma ask "find papers on ..." → agent searches, saves to vault
+Acquire:  klemma acquire --batch /tmp/papers.json → download + Zotero + DB
+Process:  klemma process key1 key2 → parallel fragment extraction
+Review:   klemma library           → library health assessment
+Check:    klemma status -ch N      → coverage & gaps
+Prune:    klemma library prune -c N -v drop → review drop verdicts
+```
+
+---
+
 ## v0.4.1 — 2026-02-18: Auto-Sync Section Assignments
 
 ### What was done

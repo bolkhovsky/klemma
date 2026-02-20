@@ -332,12 +332,13 @@ def plan(ctx):
 
 
 @main.command()
-@click.argument("citekey", required=False)
+@click.argument("citekeys", nargs=-1)
+@click.option("--serial", is_flag=True, help="Disable parallel processing")
 @click.pass_context
-def process(ctx, citekey):
+def process(ctx, citekeys, serial):
     """Process source(s): extract fragments, annotate, create vault note.
 
-    With CITEKEY: process a single source.
+    With CITEKEY(s): process specified sources (parallel when >1).
     Without arguments: process all pending sources.
     """
     config_path = ctx.obj["config_path"]
@@ -354,31 +355,67 @@ def process(ctx, citekey):
     if resolved:
         console.print(f"[green]Auto-resolved {resolved} reference gap(s)[/green]")
 
-    # Build citekey list: single or batch
-    if citekey:
-        citekeys = [citekey]
+    # Build citekey list: explicit or all pending
+    if citekeys:
+        keys = list(citekeys)
     else:
         proc_stats = state.get_stats()
         if proc_stats.get("pending", 0) == 0:
             console.print("[green]No pending sources to process.[/green]")
             return
-        citekeys = state.get_pending_sources()
-        console.print(f"[blue]Processing {len(citekeys)} pending sources...[/blue]")
+        keys = state.get_pending_sources()
+        console.print(f"[blue]Processing {len(keys)} pending sources...[/blue]")
 
-    processed = 0
-    for idx, ck in enumerate(citekeys, 1):
-        if len(citekeys) > 1:
-            console.print(f"\n[bold][{idx}/{len(citekeys)}] {ck}[/bold]")
+    parallel = len(keys) > 1 and not serial
 
-        _process_single(ck, cfg, state, vault, ai, pdf_extractor, kctx.library)
-        processed += 1
+    if parallel:
+        import time
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    if len(citekeys) > 1:
-        console.print(f"\n[green]Done: {processed}/{len(citekeys)} processed.[/green]")
+        console.print(f"[blue]Processing {len(keys)} sources in parallel (3 workers)...[/blue]")
+        t0 = time.monotonic()
+        results = {}
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {
+                pool.submit(_process_single, ck, cfg, state, vault, ai, pdf_extractor, kctx.library, quiet=True): ck
+                for ck in keys
+            }
+            for future in as_completed(futures):
+                ck = futures[future]
+                try:
+                    results[ck] = future.result()
+                except Exception as e:
+                    results[ck] = (0, f"error: {e}")
+
+        elapsed = time.monotonic() - t0
+        ok = 0
+        for idx, ck in enumerate(keys, 1):
+            n_frags, status = results.get(ck, (0, "unknown"))
+            if n_frags > 0:
+                console.print(f"  [{idx}/{len(keys)}] @{ck} — [green]{n_frags} fragments[/green]")
+                ok += 1
+            else:
+                console.print(f"  [{idx}/{len(keys)}] @{ck} — [red]{status}[/red]")
+        console.print(f"\n[green]Done: {ok}/{len(keys)} processed (parallel, {elapsed:.0f}s).[/green]")
+    else:
+        processed = 0
+        for idx, ck in enumerate(keys, 1):
+            if len(keys) > 1:
+                console.print(f"\n[bold][{idx}/{len(keys)}] {ck}[/bold]")
+            n_frags, _ = _process_single(ck, cfg, state, vault, ai, pdf_extractor, kctx.library)
+            if n_frags > 0:
+                processed += 1
+        if len(keys) > 1:
+            console.print(f"\n[green]Done: {processed}/{len(keys)} processed.[/green]")
 
 
-def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library):
-    """Process a single source: find PDF, extract fragments, save to vault."""
+def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quiet=False):
+    """Process a single source: find PDF, extract fragments, save to vault.
+
+    Returns (fragment_count, status_message). When quiet=True, suppresses console output
+    (used for parallel execution).
+    """
     from .skills.extractor import extract_fragments, save_fragments_to_vault
 
     source = state.get_source(citekey)
@@ -391,7 +428,8 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library):
         from .literature.models import ZoteroEntry
         entry = ZoteroEntry(id=citekey, title=citekey)
 
-    console.print(f"[blue]Processing: {entry.authors_str} ({entry.year or '?'})[/blue] [dim]@{citekey}[/dim]")
+    if not quiet:
+        console.print(f"[blue]Processing: {entry.authors_str} ({entry.year or '?'})[/blue] [dim]@{citekey}[/dim]")
 
     # Find PDF
     pdf_search_paths = [Path(cfg.zotero.storage_path)]
@@ -403,23 +441,27 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library):
     )
 
     if not pdf_path:
-        console.print("  [red]PDF not found[/red]")
-        return
+        if not quiet:
+            console.print("  [red]PDF not found[/red]")
+        return (0, "PDF not found")
 
     # Extract text
     pdf_text = pdf_extractor.extract(pdf_path)
     if not pdf_text or len(pdf_text) < cfg.processing.min_pdf_length:
-        console.print("  [red]PDF extraction failed or text too short[/red]")
-        return
+        if not quiet:
+            console.print("  [red]PDF extraction failed or text too short[/red]")
+        return (0, "text too short")
 
     # Extract fragments
     result = extract_fragments(entry, pdf_text, cfg, state, ai)
 
     if not result or not result.fragments:
-        console.print("  [red]No fragments extracted[/red]")
-        return
+        if not quiet:
+            console.print("  [red]No fragments extracted[/red]")
+        return (0, "no fragments")
 
-    console.print(f"  [green]{len(result.fragments)} fragments[/green]", end="")
+    if not quiet:
+        console.print(f"  [green]{len(result.fragments)} fragments[/green]", end="")
 
     # Save to vault
     saved_path = save_fragments_to_vault(
@@ -427,10 +469,13 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library):
         entry=entry, config=cfg, state=state,
         pdf_text=pdf_text, ai=ai, entry_lookup=library.entries,
     )
-    if saved_path:
-        console.print(f" → @{citekey}")
-    else:
-        console.print(" [dim](DB only)[/dim]")
+    if not quiet:
+        if saved_path:
+            console.print(f" → @{citekey}")
+        else:
+            console.print(" [dim](DB only)[/dim]")
+
+    return (len(result.fragments), "ok")
 
 
 @main.command()
@@ -996,6 +1041,98 @@ def prune(ctx, chapter, verdict, clear_key):
     console.print(table)
     summary = state.get_prune_summary()
     console.print(f"\n[dim]Total: {summary['drop']} drop, {summary['maybe']} maybe[/dim]")
+
+
+# --- Acquire: download + add to Zotero + register ---
+
+@main.command()
+@click.argument("url", required=False)
+@click.option("--title", "-t", help="Paper title")
+@click.option("--authors", "-a", help="Authors (comma-separated)")
+@click.option("--year", "-y", type=int, help="Publication year")
+@click.option("--journal", "-j", help="Journal name")
+@click.option("--volume", help="Volume")
+@click.option("--issue", help="Issue")
+@click.option("--section", "-s", multiple=True, help="Dissertation section(s) to assign")
+@click.option("--batch", "batch_path", type=click.Path(exists=True), help="JSON file with papers list")
+@click.option("--no-process", is_flag=True, help="Skip fragment extraction after adding")
+@click.pass_context
+def acquire(ctx, url, title, authors, year, journal, volume, issue, section, batch_path, no_process):
+    """Download PDF, add to Zotero, register in klemma.
+
+    Single paper: klemma acquire <pdf_url> --title "..." --authors "..." --year 2022 --section 1.2
+    Batch: klemma acquire --batch papers.json
+    """
+    from .literature.zotero import ZoteroLibrary
+    from .skills.acquirer import PaperMetadata, acquire_paper, load_batch
+
+    config_path = ctx.obj["config_path"]
+    kctx = _init_components(config_path)
+    cfg, state = kctx.config, kctx.state
+
+    # Validate Zotero config
+    if not cfg.zotero.library_id:
+        console.print("[red]zotero.library_id not set in config.yaml[/red]")
+        return
+    api_key = cfg.zotero.api_key
+    if not api_key:
+        console.print(f"[red]{cfg.zotero.api_key_env} not set in environment[/red]")
+        return
+
+    zot_lib = ZoteroLibrary(
+        library_id=cfg.zotero.library_id,
+        library_type=cfg.zotero.library_type,
+        api_key=api_key,
+    )
+
+    # Build paper list
+    if batch_path:
+        papers = load_batch(batch_path)
+        console.print(f"[blue]Loaded {len(papers)} papers from batch file[/blue]")
+    elif url:
+        papers = [PaperMetadata(
+            url=url,
+            title=title or "",
+            authors=authors or "",
+            year=year,
+            journal=journal or "",
+            volume=volume or "",
+            issue=issue or "",
+            sections=list(section),
+        )]
+    else:
+        console.print("[red]Provide a URL or --batch file[/red]")
+        return
+
+    library_json = cfg.zotero.library_json or ""
+    ok = 0
+
+    for i, meta in enumerate(papers, 1):
+        label = meta.title[:50] if meta.title else meta.url[:50]
+        console.print(f"\n[bold][{i}/{len(papers)}] {label}[/bold]")
+
+        result = acquire_paper(
+            meta, zot_lib, library_json,
+            storage_path=cfg.zotero.storage_path, state=state,
+        )
+
+        if result.status == "ok":
+            console.print(f"  [green]@{result.citekey}[/green] (item: {result.item_key})")
+            if meta.sections:
+                console.print(f"  [dim]sections: {', '.join(meta.sections)}[/dim]")
+
+            if not no_process:
+                console.print(f"  [blue]Processing...[/blue]")
+                ai = _init_ai(cfg)
+                from .literature.pdf import PDFExtractor
+                pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
+                _process_single(result.citekey, cfg, state, kctx.vault, ai, pdf_extractor, kctx.library)
+
+            ok += 1
+        else:
+            console.print(f"  [red]{result.status}[/red]")
+
+    console.print(f"\n[green]Done: {ok}/{len(papers)} acquired.[/green]")
 
 
 # --- Search: external paper search via MCP ---
