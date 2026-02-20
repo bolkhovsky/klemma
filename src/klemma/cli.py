@@ -262,9 +262,8 @@ def plan(ctx):
 
     from .skills.planner import generate_morning_plan
 
-    console.print("[blue]Генерация утреннего брифинга...[/blue]")
-
-    plan = generate_morning_plan(cfg, state, vault, ai)
+    with console.status("Генерация утреннего брифинга", spinner="dots"):
+        plan = generate_morning_plan(cfg, state, vault, ai)
 
     console.print()
 
@@ -352,7 +351,7 @@ def process(ctx, citekeys, serial):
             console.print("[green]No pending sources to process.[/green]")
             return
         keys = state.get_pending_sources()
-        console.print(f"[blue]Processing {len(keys)} pending sources...[/blue]")
+        console.print(f"[blue]Processing {len(keys)} pending sources[/blue]")
 
     parallel = len(keys) > 1 and not serial
 
@@ -360,21 +359,23 @@ def process(ctx, citekeys, serial):
         import time
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        console.print(f"[blue]Processing {len(keys)} sources in parallel (3 workers)...[/blue]")
         t0 = time.monotonic()
         results = {}
 
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            futures = {
-                pool.submit(_process_single, ck, cfg, state, vault, ai, pdf_extractor, kctx.library, quiet=True): ck
-                for ck in keys
-            }
-            for future in as_completed(futures):
-                ck = futures[future]
-                try:
-                    results[ck] = future.result()
-                except Exception as e:
-                    results[ck] = (0, f"error: {e}")
+        with console.status(
+            f"Extracting fragments from {len(keys)} sources (3 workers)", spinner="arc"
+        ):
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                futures = {
+                    pool.submit(_process_single, ck, cfg, state, vault, ai, pdf_extractor, kctx.library, quiet=True): ck
+                    for ck in keys
+                }
+                for future in as_completed(futures):
+                    ck = futures[future]
+                    try:
+                        results[ck] = future.result()
+                    except Exception as e:
+                        results[ck] = (0, f"error: {e}")
 
         elapsed = time.monotonic() - t0
         ok = 0
@@ -613,11 +614,10 @@ def research(ctx, section, no_save, force, enrich):
     # Optional: enrich with external search via MCP
     enrichment_context = ""
     if enrich and kctx.tools and kctx.tools.has("academia"):
-        console.print(f"[blue]Enriching with external search for section {section}...[/blue]")
-        # Search for papers related to the section topic
         chapter_name = cfg.dissertation.chapters.get(chapter, "")
         search_query = f"{chapter_name} {section}"
-        result = kctx.tools.call("academia", "arxiv_search", {"query": search_query, "limit": 5})
+        with console.status(f"Searching arXiv for section {section}", spinner="dots2"):
+            result = kctx.tools.call("academia", "arxiv_search", {"query": search_query, "limit": 5})
         if not result.is_error and result.content:
             enrichment_context = f"\n\n## External Search Results (ArXiv)\n{result.content}"
             console.print(f"[green]Found external papers for context[/green]")
@@ -627,15 +627,13 @@ def research(ctx, section, no_save, force, enrich):
         console.print("[yellow]--enrich requires academia MCP server (klemma tools add academia ...)[/yellow]")
 
     # Auto-process unextracted sources
-    console.print(f"[blue]Auto-processing unextracted sources for section {section}...[/blue]")
-    extract_result = pre_extract_sources(
-        section, chapter, cfg, state, vault, ai,
-        force=force,
-        library=kctx.library,
-        on_progress=lambda ck, st, i, n: console.print(
-            f"  [{i}/{n}] @{ck}: {st}"
-        ),
-    )
+    with console.status(f"Auto-processing unextracted sources for section {section}", spinner="arc"):
+        extract_result = pre_extract_sources(
+            section, chapter, cfg, state, vault, ai,
+            force=force,
+            library=kctx.library,
+            on_progress=lambda ck, st, i, n: None,  # suppress inside spinner
+        )
 
     extracted = extract_result["extracted"]
     skipped = extract_result["skipped"]
@@ -656,16 +654,17 @@ def research(ctx, section, no_save, force, enrich):
     from .skills.researcher import _load_previous_research
     prev = _load_previous_research(section, chapter, state, vault)
     if prev:
-        mode_label = "[magenta]Инкрементальное обновление[/magenta]"
+        mode_label = "Инкрементальное обновление"
         details = []
         if prev["user_notes"]:
             details.append("заметки пользователя")
         details.append(f"пред. фрагментов: {prev['previous_fragment_count']}")
-        console.print(f"\n{mode_label} раздела {section} ({', '.join(details)})")
+        spinner_text = f"{mode_label} раздела {section} ({', '.join(details)})"
     else:
-        console.print(f"\n[blue]Первичный анализ раздела {section}...[/blue]")
+        spinner_text = f"Анализ раздела {section}"
 
-    result = research_section(section, cfg, state, vault, ai, save_to_vault=not no_save)
+    with console.status(spinner_text, spinner="dots"):
+        result = research_section(section, cfg, state, vault, ai, save_to_vault=not no_save)
 
     if not result.section_status:
         console.print("[red]Не удалось сгенерировать брифинг.[/red]")
@@ -827,19 +826,18 @@ def ask(ctx, query, section, chapter):
 
     from .skills.agent import build_agent_context
 
-    console.print("[blue]Сборка контекста исследования...[/blue]")
-    context = build_agent_context(cfg, state, vault, section=section, chapter=chapter)
+    with console.status("Сборка контекста исследования", spinner="dots"):
+        context = build_agent_context(cfg, state, vault, section=section, chapter=chapter)
 
     console.print(f"[dim]Query: {query}[/dim]")
 
     if ai.interactive_available:
         import subprocess
 
-        console.print("[blue]Запуск агента...[/blue]\n")
         subprocess.run(["claude", "--system-prompt", context, query])
     else:
-        console.print("[blue]Генерация ответа...[/blue]\n")
-        response = ai.call(system=context, user=query, max_tokens=8192)
+        with console.status("Генерация ответа", spinner="dots"):
+            response = ai.call(system=context, user=query, max_tokens=8192)
         if response:
             console.print(response)
         else:
@@ -873,9 +871,9 @@ def library(ctx, section, audit):
     entry_lookup = kctx.library.entries
 
     mode = "audit" if audit else "recommend" if section else "status"
-    console.print(f"[blue]Analyzing library ({mode})...[/blue]")
 
-    report = analyze_library(cfg, state, vault, ai, entry_lookup, mode=mode, focus_section=section)
+    with console.status(f"Analyzing library ({mode})", spinner="dots"):
+        report = analyze_library(cfg, state, vault, ai, entry_lookup, mode=mode, focus_section=section)
 
     if not report:
         console.print("[red]Failed to generate library analysis.[/red]")
@@ -1126,10 +1124,10 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
                     ai = None
 
                 if ai:
-                    console.print(f"  [blue]Processing...[/blue]")
                     from .literature.pdf import PDFExtractor
                     pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
-                    _process_single(result.citekey, cfg, state, kctx.vault, ai, pdf_extractor, kctx.library)
+                    with console.status(f"Extracting fragments from @{result.citekey}", spinner="arc"):
+                        _process_single(result.citekey, cfg, state, kctx.vault, ai, pdf_extractor, kctx.library)
 
             ok += 1
         else:
@@ -1165,9 +1163,9 @@ def search(ctx, query, source, limit):
 
     registry = ToolRegistry(cfg)
     tool_name = "arxiv_search" if source == "arxiv" else "s2_search"
-    console.print(f"[blue]Searching {source}: {query}...[/blue]")
 
-    result = registry.call("academia", tool_name, {"query": query, "limit": limit})
+    with console.status(f"Searching {source}: {query}", spinner="dots2"):
+        result = registry.call("academia", tool_name, {"query": query, "limit": limit})
 
     if result.is_error:
         console.print(f"[red]Search failed: {result.content}[/red]")
@@ -1236,12 +1234,10 @@ def discover(ctx, section, show_status, review, background):
         console.print(f"[dim]Review results: klemma discover --review[/dim]")
         return
 
-    # Foreground execution
-    console.print(f"[blue]Discovering papers for section {section}...[/blue]")
-
     from .tools.discovery import run_discovery
 
-    result = run_discovery(section=section, config_path=config_path)
+    with console.status(f"Discovering papers for section {section}", spinner="earth"):
+        result = run_discovery(section=section, config_path=config_path)
 
     console.print(
         f"[green]Done:[/green] searched {result['searched']}, "
@@ -1427,8 +1423,8 @@ def tools_call(ctx, server, tool, args_json):
         return
 
     registry = ToolRegistry(cfg)
-    console.print(f"[dim]Calling {server}.{tool}({tool_args})...[/dim]")
-    result = registry.call(server, tool, tool_args)
+    with console.status(f"Calling {server}.{tool}", spinner="bounce"):
+        result = registry.call(server, tool, tool_args)
 
     if result.is_error:
         console.print(f"[red]Error: {result.content}[/red]")
