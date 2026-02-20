@@ -40,6 +40,7 @@ class LiteLLMClient(AIProviderBase):
         user: str,
         max_tokens: int = 8192,
         temperature: float = 0.3,
+        timeout: Optional[int] = None,
     ) -> Optional[str]:
         """Call LiteLLM completion with retries."""
         messages = [
@@ -55,6 +56,8 @@ class LiteLLMClient(AIProviderBase):
                     "max_tokens": max_tokens,
                     "temperature": temperature,
                 }
+                if timeout:
+                    kwargs["timeout"] = timeout
                 if self._api_key:
                     kwargs["api_key"] = self._api_key
                 response = self._litellm.completion(**kwargs)

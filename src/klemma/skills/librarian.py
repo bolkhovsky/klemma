@@ -1,6 +1,7 @@
 """Librarian skill — AI-powered library health analysis and recommendations."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -14,6 +15,9 @@ from .planner import DISSERTATION_CONTEXT, _get_current_deadline
 
 logger = logging.getLogger(__name__)
 
+PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
+LIBRARY_TIMEOUT = 300  # 5 min — library analysis needs more time than other skills
+
 
 def analyze_library(
     config: KlemmaConfig,
@@ -26,16 +30,20 @@ def analyze_library(
 ) -> Optional[LibraryReport]:
     """Run AI library analysis and return structured report.
 
-    Modes:
-        status: overall library health assessment
-        recommend: reading recommendations for a section
-        audit: deep quality audit
+    Two-stage pipeline:
+      1. Main analysis (filtered sources, no prune)
+      2. Prune pass (separate call, only when needed)
     """
+    # Gather context with mode-aware source filtering
+    all_sources = state.get_all_sources()
+    drop_ids = state.get_prune_drop_ids()
+    active_sources = [s for s in all_sources if s["id"] not in drop_ids]
+
     context = _gather_library_context(
-        config, state, vault, entry_lookup, mode, focus_section
+        config, state, vault, entry_lookup, active_sources, mode, focus_section
     )
 
-    prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "librarian.md"
+    prompt_path = PROMPTS_DIR / "librarian.md"
     user_prompt = ai.render_prompt(prompt_path, **context)
 
     system = (
@@ -43,9 +51,9 @@ def analyze_library(
         "Отвечай только валидным JSON."
     )
 
-    data = ai.call_json(system, user_prompt, max_tokens=16384)
+    data = ai.call_json(system, user_prompt, max_tokens=8192, timeout=LIBRARY_TIMEOUT)
     if not data:
-        logger.error("Failed to get library analysis from Claude")
+        logger.error("Failed to get library analysis from AI")
         return None
 
     report = LibraryReport(
@@ -56,16 +64,20 @@ def analyze_library(
         recommendations=data.get("recommendations", []),
         section_detail=data.get("section_detail", {}),
         audit_findings=data.get("audit_findings", []),
-        prune=data.get("prune"),
+        prune=None,
         report_text=data.get("report_text", ""),
     )
 
-    # Persist prune verdicts (with hard protection)
-    if report.prune:
-        state.save_prune_verdicts(
-            drop=report.prune.get("drop", []),
-            maybe=report.prune.get("maybe", []),
-        )
+    # Stage 2: separate prune pass if library is oversaturated
+    if len(active_sources) > 100:
+        logger.info("Running prune analysis (%d active sources)...", len(active_sources))
+        prune_result = _run_prune_analysis(active_sources, entry_lookup, config, ai)
+        if prune_result:
+            report.prune = prune_result
+            state.save_prune_verdicts(
+                drop=prune_result.get("drop", []),
+                maybe=prune_result.get("maybe", []),
+            )
 
     # Save to vault
     _save_report_to_vault(report, vault, mode, focus_section)
@@ -73,11 +85,117 @@ def analyze_library(
     return report
 
 
+# ---------------------------------------------------------------------------
+# Source filtering
+# ---------------------------------------------------------------------------
+
+def _select_sources_for_mode(
+    active_sources: list[dict], mode: str, focus_section: Optional[str]
+) -> tuple[list[dict], dict]:
+    """Select relevant sources for the given mode.
+
+    Returns (selected_sources, omit_info) where omit_info has keys for
+    the prompt template to display truncation notes.
+    """
+    total = len(active_sources)
+
+    if mode == "recommend" and focus_section:
+        chapter = int(focus_section.split(".")[0])
+        selected = [s for s in active_sources if s.get("primary_chapter") == chapter]
+        other_count = total - len(selected)
+        detail = f"{other_count} sources from other chapters omitted"
+        return selected, {
+            "sources_omitted": True,
+            "sources_shown": len(selected),
+            "sources_total": total,
+            "sources_omitted_detail": detail,
+        }
+
+    if mode == "status":
+        # Top 30 per chapter by quality + fragment count
+        by_chapter: dict[int, list] = {}
+        for s in active_sources:
+            ch = s.get("primary_chapter") or 0
+            by_chapter.setdefault(ch, []).append(s)
+
+        selected = []
+        omitted_parts = []
+        for ch in sorted(by_chapter):
+            sources = by_chapter[ch]
+            sources.sort(
+                key=lambda x: (x.get("quality_score") or 0, x.get("fragment_count") or 0),
+                reverse=True,
+            )
+            selected.extend(sources[:30])
+            if len(sources) > 30:
+                omitted_parts.append(f"ch{ch}: {len(sources) - 30} omitted")
+
+        if omitted_parts:
+            return selected, {
+                "sources_omitted": True,
+                "sources_shown": len(selected),
+                "sources_total": total,
+                "sources_omitted_detail": ", ".join(omitted_parts),
+            }
+        return selected, {}
+
+    if mode == "audit":
+        # All low-quality + top from each chapter, cap ~150
+        low_q = [s for s in active_sources if (s.get("quality_score") or 0) <= 2]
+        rest = [s for s in active_sources if (s.get("quality_score") or 0) > 2]
+
+        by_chapter: dict[int, list] = {}
+        for s in rest:
+            ch = s.get("primary_chapter") or 0
+            by_chapter.setdefault(ch, []).append(s)
+
+        selected = list(low_q)
+        cap_per_ch = max(5, (150 - len(selected)) // max(len(by_chapter), 1))
+        for ch in sorted(by_chapter):
+            sources = by_chapter[ch]
+            sources.sort(
+                key=lambda x: (x.get("quality_score") or 0, x.get("fragment_count") or 0),
+                reverse=True,
+            )
+            selected.extend(sources[:cap_per_ch])
+
+        selected = selected[:150]
+        if len(selected) < total:
+            return selected, {
+                "sources_omitted": True,
+                "sources_shown": len(selected),
+                "sources_total": total,
+                "sources_omitted_detail": f"{total - len(selected)} high-quality sources omitted",
+            }
+        return selected, {}
+
+    # Fallback: cap at 120
+    active_sources_sorted = sorted(
+        active_sources,
+        key=lambda x: (x.get("quality_score") or 0, x.get("fragment_count") or 0),
+        reverse=True,
+    )
+    selected = active_sources_sorted[:120]
+    if len(selected) < total:
+        return selected, {
+            "sources_omitted": True,
+            "sources_shown": len(selected),
+            "sources_total": total,
+            "sources_omitted_detail": "",
+        }
+    return selected, {}
+
+
+# ---------------------------------------------------------------------------
+# Context gathering
+# ---------------------------------------------------------------------------
+
 def _gather_library_context(
     config: KlemmaConfig,
     state: StateManager,
     vault: VaultAdapter,
     entry_lookup: dict,
+    active_sources: list[dict],
     mode: str,
     focus_section: Optional[str],
 ) -> dict:
@@ -87,13 +205,9 @@ def _gather_library_context(
     quality_data = state.get_sources_by_quality()
     ref_gaps = state.get_reference_gaps(limit=15)
 
-    # Compact sources list for prompt (exclude already-verdicted drops)
-    all_sources = state.get_all_sources()
-    drop_ids = state.get_prune_drop_ids()
-    active_sources = [s for s in all_sources if s["id"] not in drop_ids]
-    sources_compact = _format_sources_compact(active_sources, entry_lookup)
-
-    active_total = len(active_sources)
+    # Mode-aware source filtering
+    selected, omit_info = _select_sources_for_mode(active_sources, mode, focus_section)
+    sources_compact = _format_sources_compact(selected, entry_lookup)
 
     context = {
         "dissertation_context": DISSERTATION_CONTEXT,
@@ -112,8 +226,8 @@ def _gather_library_context(
         "section": focus_section or "",
         "section_title": "",
         "section_summaries": "",
-        "prune_needed": active_total > 100,
-        "target_range": "100-120",
+        # Omission info for prompt template
+        **omit_info,
     }
 
     # For recommend mode: load vault summaries for the section
@@ -190,6 +304,78 @@ def _load_section_summaries(
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Prune (separate AI call)
+# ---------------------------------------------------------------------------
+
+def _run_prune_analysis(
+    active_sources: list[dict],
+    entry_lookup: dict,
+    config: KlemmaConfig,
+    ai: AIProvider,
+) -> Optional[dict]:
+    """Run focused prune analysis as a separate AI call.
+
+    For >300 sources, batches per-chapter in parallel.
+    """
+    if len(active_sources) <= 300:
+        return _prune_batch(active_sources, entry_lookup, ai)
+
+    # Per-chapter parallel batching
+    by_chapter: dict[int, list] = {}
+    for s in active_sources:
+        ch = s.get("primary_chapter") or 0
+        by_chapter.setdefault(ch, []).append(s)
+
+    all_drop: list[dict] = []
+    all_maybe: list[dict] = []
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {
+            pool.submit(_prune_batch, sources, entry_lookup, ai): ch
+            for ch, sources in by_chapter.items()
+        }
+        for future in as_completed(futures):
+            ch = futures[future]
+            try:
+                result = future.result()
+                if result:
+                    all_drop.extend(result.get("drop", []))
+                    all_maybe.extend(result.get("maybe", []))
+            except Exception as e:
+                logger.warning("Prune batch for chapter %s failed: %s", ch, e)
+
+    if not all_drop and not all_maybe:
+        return None
+    return {"drop": all_drop, "maybe": all_maybe}
+
+
+def _prune_batch(
+    sources: list[dict], entry_lookup: dict, ai: AIProvider
+) -> Optional[dict]:
+    """Run prune on a batch of sources."""
+    sources_compact = _format_sources_compact(sources, entry_lookup)
+
+    prompt_path = PROMPTS_DIR / "librarian_prune.md"
+    user_prompt = ai.render_prompt(
+        prompt_path,
+        sources_compact=sources_compact,
+        source_count=len(sources),
+    )
+
+    system = (
+        "Ты — библиотекарь-аналитик. "
+        "Задача: отсеять нерелевантные источники. "
+        "Отвечай только валидным JSON."
+    )
+
+    return ai.call_json(system, user_prompt, max_tokens=4096, timeout=LIBRARY_TIMEOUT)
+
+
+# ---------------------------------------------------------------------------
+# Vault report
+# ---------------------------------------------------------------------------
+
 def _save_report_to_vault(
     report: LibraryReport,
     vault: VaultAdapter,
@@ -207,6 +393,16 @@ def _save_report_to_vault(
     if report.overall_health:
         content += f"## Overall Health\n\n{report.overall_health}\n\n"
 
+    if report.chapter_assessments:
+        content += "## Chapter Assessments\n\n"
+        for ch in report.chapter_assessments:
+            ch_num = ch.get("chapter", "?")
+            sources = ch.get("sources", "?")
+            q_avg = ch.get("quality_avg", "?")
+            verdict = ch.get("verdict", "")
+            content += f"### Chapter {ch_num} ({sources} sources, avg quality {q_avg})\n\n"
+            content += f"{verdict}\n\n"
+
     if report.critical_issues:
         content += "## Critical Issues\n\n"
         for issue in report.critical_issues:
@@ -219,6 +415,33 @@ def _save_report_to_vault(
             priority = rec.get("priority", "medium")
             marker = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(priority, "")
             content += f"- {marker} **{rec.get('action', '')}** — {rec.get('reason', '')}\n"
+        content += "\n"
+
+    if report.section_detail:
+        detail = report.section_detail
+        if detail.get("current_sources_assessment"):
+            content += f"## Section Assessment\n\n{detail['current_sources_assessment']}\n\n"
+        if detail.get("missing_types"):
+            content += "### Missing Source Types\n\n"
+            for t in detail["missing_types"]:
+                content += f"- {t}\n"
+            content += "\n"
+        if detail.get("reading_order"):
+            content += "### Reading Order\n\n"
+            for i, item in enumerate(detail["reading_order"], 1):
+                ck = item.get("citekey_or_ref", "?")
+                reason = item.get("reason", "")
+                content += f"{i}. **{ck}** — {reason}\n"
+            content += "\n"
+
+    if report.audit_findings:
+        content += "## Audit Findings\n\n"
+        for finding in report.audit_findings:
+            sev = finding.get("severity", "medium")
+            marker = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(sev, "")
+            ftype = finding.get("type", "")
+            details = finding.get("details", "")
+            content += f"- {marker} **{ftype}**: {details}\n"
         content += "\n"
 
     if report.prune:

@@ -76,6 +76,7 @@ class AIProvider(Protocol):
         user: str,
         max_tokens: int = 8192,
         temperature: float = 0.3,
+        timeout: Optional[int] = None,
     ) -> Optional[str]: ...
 
     def call_json(
@@ -84,6 +85,7 @@ class AIProvider(Protocol):
         user: str,
         max_tokens: int = 8192,
         temperature: float = 0.2,
+        timeout: Optional[int] = None,
     ) -> Optional[dict]: ...
 
     def render_prompt(self, template_path: Path, **kwargs) -> str: ...
@@ -114,6 +116,7 @@ class AIProviderBase:
         user: str,
         max_tokens: int = 8192,
         temperature: float = 0.3,
+        timeout: Optional[int] = None,
     ) -> Optional[str]:
         raise NotImplementedError
 
@@ -123,9 +126,10 @@ class AIProviderBase:
         user: str,
         max_tokens: int = 8192,
         temperature: float = 0.2,
+        timeout: Optional[int] = None,
     ) -> Optional[dict]:
         """Call the backend and parse JSON from the response."""
-        text = self.call(system, user, max_tokens=max_tokens, temperature=temperature)
+        text = self.call(system, user, max_tokens=max_tokens, temperature=temperature, timeout=timeout)
         if not text:
             return None
         return extract_json(text)
@@ -163,11 +167,13 @@ class ClaudeClient(AIProviderBase):
         user: str,
         max_tokens: int = 8192,
         temperature: float = 0.3,
+        timeout: Optional[int] = None,
     ) -> Optional[str]:
         """Call Claude via CLI with retries.
 
         Returns the text response or None on failure.
         """
+        effective_timeout = timeout or self.timeout
         prompt = f"{system}\n\n---\n\n{user}"
 
         for attempt in range(self.retries + 1):
@@ -176,7 +182,7 @@ class ClaudeClient(AIProviderBase):
                     ["claude", "-p", "--model", self.model, prompt],
                     capture_output=True,
                     text=True,
-                    timeout=self.timeout,
+                    timeout=effective_timeout,
                 )
                 if result.returncode != 0:
                     logger.warning(

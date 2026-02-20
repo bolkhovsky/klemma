@@ -39,6 +39,7 @@ class OpenAIClient(AIProviderBase):
         user: str,
         max_tokens: int = 8192,
         temperature: float = 0.3,
+        timeout: Optional[int] = None,
     ) -> Optional[str]:
         """Call OpenAI-compatible chat completions API with retries."""
         messages = [
@@ -68,10 +69,11 @@ class OpenAIClient(AIProviderBase):
         user: str,
         max_tokens: int = 8192,
         temperature: float = 0.2,
+        timeout: Optional[int] = None,
     ) -> Optional[dict]:
         """Call API and parse JSON, optionally using structured JSON mode."""
         if not self._json_mode:
-            return super().call_json(system, user, max_tokens, temperature)
+            return super().call_json(system, user, max_tokens, temperature, timeout)
 
         # JSON mode: request structured output from the API
         messages = [
