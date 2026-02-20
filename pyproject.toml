@@ -15,6 +15,7 @@ dependencies = [
     "textual==1.0.0",
     "rich==13.9.4",
     "pyzotero==1.10.0",
+    "requests>=2.31.0",
     "mcp>=1.0.0",
 ]
 

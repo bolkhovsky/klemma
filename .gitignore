@@ -19,3 +19,4 @@ exports/
 .mypy_cache/
 *.swp
 *.swo
+.claude/settings.local.json

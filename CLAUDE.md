@@ -23,7 +23,7 @@ src/klemma/
 ├── vault.py            — Obsidian adapter (CLI/file I/O, update_section)
 ├── library_provider.py — LibraryProvider protocol + LocalLibrary + MCPLibrary
 ├── tui/                — Textual screens (dashboard, fragments, coverage, gaps, stats)
-├── skills/             — AI skills (planner, extractor, researcher, librarian, agent)
+├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, acquirer)
 ├── literature/         — Zotero, PDF, models, note_factory
 └── tools/              — MCP tool integration
     ├── client.py       — MCPClient (sync wrapper over async MCP SDK)
@@ -37,13 +37,18 @@ prompts/
 ├── research_incremental.md — Jinja2 prompt for incremental research update
 ├── librarian.md            — Jinja2 prompt for library analysis (3 modes)
 └── agent.md                — Jinja2 system prompt for interactive agent
+.claude/skills/
+├── klemma-acquire/SKILL.md — Agent skill: paper acquisition pipeline
+├── klemma-process/SKILL.md — Agent skill: fragment extraction
+└── klemma-status/SKILL.md  — Agent skill: coverage & gaps check
 ```
 
-## Key commands (10)
+## Key commands (11)
 - `klemma` — TUI dashboard
 - `klemma plan` — daily plan generation (library digest included)
 - `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
-- `klemma process [<citekey>]` — extract fragments from PDF; no arg = batch all pending
+- `klemma process [<citekeys>...]` — extract fragments from PDF; no arg = batch all pending; parallel by default
+- `klemma acquire <url> [--batch file.json]` — download PDF → Zotero → BBT citekey → register in DB
 - `klemma research -s 1.3.2` — research briefing for a section (`--enrich` for MCP enrichment)
 - `klemma library [-s 2.3] [--audit]` — AI library analysis (status / recommend / audit)
 - `klemma ask "query"` — interactive research agent with full dissertation context
@@ -58,7 +63,7 @@ Hidden aliases (backward compat): `morning`→`plan`, `extract`→`process`, `ag
 - `zotero.library_json` — path to BetterBibTeX JSON export (for PDF lookup)
 - `zotero.backend` — `"local"` (default, BBT JSON) or `"mcp"` (zotero-mcp server)
 - `mcp.servers` — registered MCP servers (managed via `klemma tools add/remove`)
-- Requires: Claude Code CLI (`claude` in PATH), optionally `ZOTERO_API_KEY`
+- Requires: Claude Code CLI (`claude` in PATH), `ZOTERO_API_KEY` env var (for acquire + Zotero API access)
 
 ## SQLite tables
 - `sources` — Zotero entries with processing status and dissertation metadata
@@ -97,8 +102,22 @@ Each annotated paper's bibliography is cross-checked against our library. Missin
 
 Incremental mode: if Research note exists, reads `## ✏️ Что нового` (user notes), computes delta (new sources, fragments), sends incremental prompt. User notes archived to `## 📋 История изменений` with timestamp.
 
+### Paper acquisition
+`klemma acquire <url> --title "..." --authors "..." --year N --section X.X` or `klemma acquire --batch papers.json`.
+Pipeline: download PDF → pyzotero `create_items` + `attachment_simple` → poll BBT JSON for citekey (30s timeout, 2s interval) → `state.register_sources([citekey])` → optional `klemma process`.
+Core logic in `skills/acquirer.py`. Zotero write methods: `ZoteroLibrary.create_item()`, `ZoteroLibrary.attach_pdf()`.
+Requires: `ZOTERO_API_KEY` env var, `zotero.library_id` in config.yaml.
+
 ### Agent
 `klemma ask "query"` → build_agent_context() gathers all research data (sources, coverage, gaps, fragments, plan) → renders Jinja2 system prompt → launches `claude --system-prompt <context> <query>` interactively. Claude saves response to `Agent/Agent_<date>.md` in vault.
+
+### Agent Skills (Claude Code)
+Agent uses Claude Code Skills from `.claude/skills/` instead of reading source code:
+- `klemma-acquire` — full acquire pipeline instructions (single + batch JSON format)
+- `klemma-process` — fragment extraction (single, batch, parallel)
+- `klemma-status` — coverage and gaps check
+
+Skills are auto-discovered by Claude Code in `--system-prompt` mode. Agent prompt (`agent.md`) references Skills via `/klemma-acquire`, `/klemma-process`, `/klemma-status`.
 
 ### Library analysis
 `klemma library` → gather library context (summary, quality tiers, ref-gaps, sources compact list) → Claude analysis via `librarian.md` prompt → structured LibraryReport → saved to `Library/Library_{mode}_{date}.md` in vault. Three modes: status (health), recommend (section-focused), audit (deep quality check).
