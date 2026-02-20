@@ -12,9 +12,9 @@ dependencies = [
     "PyMuPDF==1.25.3",
     "Jinja2==3.1.5",
     "PyYAML==6.0.2",
-    "textual==1.0.0",
     "rich==13.9.4",
     "pyzotero==1.10.0",
+    "requests>=2.31.0",
     "mcp>=1.0.0",
 ]
 
@@ -24,6 +24,9 @@ dev = [
     "pytest-cov>=4.0",
     "ruff>=0.8",
 ]
+openai = ["openai>=1.0"]
+litellm = ["litellm>=1.40"]
+all-ai = ["openai>=1.0", "litellm>=1.40"]
 
 [project.scripts]
 klemma = "klemma.cli:main"

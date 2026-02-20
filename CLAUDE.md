@@ -1,14 +1,15 @@
 # Klemma — AI Academic Assistant
 
 ## What is this
-Klemma is a dual-mode CLI/TUI tool for academic writing. It manages literature (via Zotero), extracts citation fragments from PDFs (via Claude AI), generates research briefings, daily plans, and tracks coverage. Supports multiple concurrent projects (dissertation, papers, theses) with separate databases and bibliographies.
+Klemma is a CLI tool for academic writing. It manages literature (via Zotero), extracts citation fragments from PDFs (via Claude AI), generates research briefings, daily plans, and tracks coverage. Supports multiple concurrent projects (dissertation, papers, theses) with separate databases and bibliographies.
 
 ## Architecture
-- **Dual mode**: `klemma` → Textual TUI dashboard; `klemma plan/process/research/library` → headless CLI
-- **Stack**: Python 3.11+, Click, Textual, Claude Code CLI, pyzotero, PyMuPDF, MCP, SQLite
-- **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/TUI/Obsidian)
+- **CLI mode**: `klemma <command>` — all commands are headless CLI
+- **Stack**: Python 3.11+, Click, pyzotero, PyMuPDF, MCP, SQLite
+- **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/Obsidian)
 - **MCP layer**: ToolRegistry → MCPClient (stdio transport) → external servers (zotero-mcp, academia-mcp)
 - **Library abstraction**: LibraryProvider protocol with LocalLibrary (BBT JSON) and MCPLibrary (zotero-mcp) backends
+- **AI abstraction**: AIProvider protocol with ClaudeClient (CLI), OpenAIClient, LiteLLMClient backends + `create_ai()` factory
 - **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/tools/project
 - **Multi-project**: workspace.yaml maps project names → config files; each project gets own DB, bibliography, vault area
 
@@ -16,35 +17,44 @@ Klemma is a dual-mode CLI/TUI tool for academic writing. It manages literature (
 ```
 src/klemma/
 ├── cli.py              — Click CLI entry point
-├── app.py              — Textual TUI app
-├── config.py           — Pydantic config models (ProjectConfig, WorkspaceConfig, KlemmaConfig)
+├── config.py           — Pydantic config models (ProjectConfig, WorkspaceConfig, KlemmaConfig) + get_klemma_home(), load helpers, resolve_prompt()
 ├── context.py          — KlemmaContext dataclass (single object per CLI command, includes project)
+├── setup.py            — `klemma init` logic — scaffolds ~/.klemma/ from example files
 ├── state.py            — SQLite state manager
-├── ai.py               — Claude Code CLI wrapper (claude -p)
+├── ai.py               — AIProvider protocol + AIProviderBase + ClaudeClient + create_ai() factory
+├── ai_openai.py        — OpenAI-compatible backend (OpenAI, Ollama, vLLM, LM Studio)
+├── ai_litellm.py       — LiteLLM universal backend (100+ providers)
 ├── vault.py            — Obsidian adapter (CLI/file I/O, update_section)
 ├── library_provider.py — LibraryProvider protocol + LocalLibrary + MCPLibrary
-├── tui/                — Textual screens (dashboard, fragments, coverage, gaps, stats)
-├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, work_context)
+├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, acquirer, work_context)
 ├── literature/         — Zotero, PDF, models, note_factory
 └── tools/              — MCP tool integration
     ├── client.py       — MCPClient (sync wrapper over async MCP SDK)
     ├── registry.py     — ToolRegistry (server management, lazy client creation)
     └── discovery.py    — Hybrid discovery pipeline (MCP search + Claude assessment)
-prompts/
-├── morning.md              — Jinja2 prompt for daily plans
-├── extract.md              — Jinja2 prompt for fragment extraction
-├── annotate.md             — Jinja2 prompt for vault note AI annotation
-├── research.md             — Jinja2 prompt for research briefing (first run)
-├── research_incremental.md — Jinja2 prompt for incremental research update
-├── librarian.md            — Jinja2 prompt for library analysis (3 modes)
-└── agent.md                — Jinja2 system prompt for interactive agent
+prompts/                    — Shipped Jinja2 prompt templates (overridable via ~/.klemma/prompts/)
+├── morning.md              — daily plans
+├── extract.md              — fragment extraction
+├── annotate.md             — vault note AI annotation
+├── research.md             — research briefing (first run)
+├── research_incremental.md — incremental research update
+├── librarian.md            — library analysis (3 modes)
+└── agent.md                — interactive agent system prompt
+config.example.yaml         — Template config for `klemma init`
+context.example.md          — Template dissertation context
+tags.example.yaml           — Template tag taxonomy
+.claude/skills/
+├── klemma-acquire/SKILL.md — Agent skill: paper acquisition pipeline
+├── klemma-process/SKILL.md — Agent skill: fragment extraction
+└── klemma-status/SKILL.md  — Agent skill: coverage & gaps check
 ```
 
 ## Key commands (12)
-- `klemma` — TUI dashboard
+- `klemma init` — scaffold `~/.klemma/` with config templates (first-time setup)
 - `klemma plan` — daily plan generation (library digest included)
 - `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
-- `klemma process [<citekey>]` — extract fragments from PDF; no arg = batch all pending
+- `klemma process [<citekeys>...]` — extract fragments from PDF; no arg = batch all pending; parallel by default
+- `klemma acquire <url> [--batch file.json]` — download PDF → Zotero → BBT citekey → register in DB
 - `klemma research -s 1.3.2` — research briefing for a section (`--enrich` for MCP enrichment)
 - `klemma library [-s 2.3] [--audit]` — AI library analysis (status / recommend / audit)
 - `klemma ask "query"` — interactive research agent with full dissertation context
@@ -57,14 +67,36 @@ prompts/
 Hidden aliases (backward compat): `morning`→`plan`, `extract`→`process`, `agent`→`ask`, `stats`/`coverage`/`gaps`→`status`, `prepopulate`→`import`
 
 ## Config
-- `config.yaml` — main config (Zotero, Obsidian, AI, dissertation structure, MCP servers)
+
+User data lives in `~/.klemma/` (overridable via `KLEMMA_HOME` env var):
+```
+~/.klemma/
+├── config.yaml    — main config (Zotero, Obsidian, AI, dissertation structure, MCP)
+├── context.md     — dissertation context (topic, results, chapters, key terms)
+├── tags.yaml      — tag taxonomy for fragment classification (list of strings)
+├── prompts/       — optional user overrides for shipped Jinja2 prompt templates
+└── data/
+    └── klemma.db  — SQLite database
+```
+
+Run `klemma init` to scaffold from `config.example.yaml`, `context.example.md`, `tags.example.yaml`.
 - `workspace.yaml` — optional: maps project names to per-project config files, shared defaults
+
+**Config keys:**
 - `zotero.library_json` — path to BetterBibTeX JSON export (for PDF lookup)
 - `zotero.backend` — `"local"` (default, BBT JSON) or `"mcp"` (zotero-mcp server)
 - `zotero.collection` — optional Zotero collection ID for filtering
 - `mcp.servers` — registered MCP servers (managed via `klemma tools add/remove`)
 - `project:` — optional inline ProjectConfig (type, title, chapters, scientific_results, etc.)
-- Requires: Claude Code CLI (`claude` in PATH), optionally `ZOTERO_API_KEY`
+- `ai.backend` — `"claude"` (default, CLI), `"openai"` (OpenAI-compatible API), or `"litellm"` (100+ providers)
+- `ai.base_url` — endpoint URL for OpenAI-compatible servers (Ollama, vLLM, LM Studio)
+- `ai.api_key_env` — env var name for API key (e.g. `"OPENAI_API_KEY"`)
+- `ai.json_mode` — enable structured JSON output when backend supports it
+- Requires: AI backend (`claude` CLI by default, or `pip install klemma[openai]` / `klemma[litellm]`), optionally `ZOTERO_API_KEY`
+
+**Prompt resolution:** `resolve_prompt(name, klemma_home)` checks `~/.klemma/prompts/<name>` first, then falls back to shipped `prompts/<name>`.
+
+**Fallbacks:** If `context.md` is missing, context is built from `config.dissertation` fields. If `tags.yaml` is missing, tags are extracted from `config.tags.auto_mapping` keys.
 
 ### Multi-project setup
 ```yaml
@@ -90,57 +122,73 @@ Without workspace.yaml, the legacy `dissertation:` block in config.yaml is auto-
 - `daily_plans` — generated daily plans
 - `reading_queue` — prioritized reading list
 
-## Key data flows
+## Module documentation
 
-### PDF finding (3-tier)
-1. `direct_path` from DB
-2. BetterBibTeX JSON lookup (`library_json` → citekey → attachment path)
-3. Fuzzy filename matching (exact citekey, title words + year, author in prefix)
+Detailed documentation for each subsystem lives in its directory, loaded incrementally as the agent navigates:
 
-### Fragment extraction
-PDF → PyMuPDF text → Claude analysis → fragments to SQLite + vault (`## 💬 Цитаты для диссертации`)
-
-### Vault note creation
-`klemma extract <citekey>` → if @citekey.md missing, auto-creates it via `note_factory.create_vault_note()`:
-1. AI annotation (`annotate.md` prompt) analyzes PDF with full library context (174 entries)
-2. Extracts: summary, methodology, relevance, key_references (bibliography analysis)
-3. Renders structured vault note with sections: metadata, summary, methods, relevance, key references, quotes
-4. Saves reference gaps (missing refs from bibliography) to `reference_gaps` table
-
-### Reference gap tracking
-Each annotated paper's bibliography is cross-checked against our library. Missing relevant refs accumulate across sources.
-- **Score formula**: `count × avg_source_quality × section_weight` (section_weight=2.0 for НР1/НР2 sections)
-- **Auto-resolve**: when a gap's author+year matches a newly added source, it's marked resolved
-- **Surfacing**: CLI status line (every command), `klemma gaps`, TUI dashboard, TUI gaps screen
-
-### Research briefing
-`klemma research -s X.X` → auto-extract fragments → collect context (draft, fragments, sources, coverage) → Claude analysis → `Research_X.X.md` in vault
-
-Incremental mode: if Research note exists, reads `## ✏️ Что нового` (user notes), computes delta (new sources, fragments), sends incremental prompt. User notes archived to `## 📋 История изменений` with timestamp.
-
-### Agent
-`klemma ask "query"` → build_agent_context() gathers all research data (sources, coverage, gaps, fragments, plan) → renders Jinja2 system prompt → launches `claude --system-prompt <context> <query>` interactively. Claude saves response to `Agent/Agent_<date>.md` in vault.
-
-### Library analysis
-`klemma library` → gather library context (summary, quality tiers, ref-gaps, sources compact list) → Claude analysis via `librarian.md` prompt → structured LibraryReport → saved to `Library/Library_{mode}_{date}.md` in vault. Three modes: status (health), recommend (section-focused), audit (deep quality check).
-
-### MCP tool integration
-`klemma tools add <name> --command <cmd> --args <args>` registers an MCP server in `config.yaml → mcp.servers`. ToolRegistry lazily creates MCPClient instances (sync wrapper over async MCP SDK, stdio transport). Each `call_tool()` spawns a fresh connection. Servers are not installed by Klemma — only launch commands are registered.
-
-### Paper search
-`klemma search "query"` → ToolRegistry.call("academia", "arxiv_search", ...) → rich table output. Requires registered `academia` MCP server.
-
-### Discovery pipeline
-`klemma discover -s X.X` → Phase 1 (deterministic: MCP search per ref-gap + section keywords, deduplicate against library) → Phase 2 (Claude: relevance assessment, usage type, priority) → results saved to `discoveries` table. Can run as background subprocess via `--background`. Review with `--review`.
-
-### Auto-sync sections
-On every `research`, `library`, `status` command: `_sync_sections()` → reads all vault @citekey.md frontmatter (~60ms), compares with DB, updates section assignments where vault differs. Also discovers new Zotero entries not yet in DB (auto-classified via config regex patterns, registered as `pending`).
-
-### Multi-section sources
-Frontmatter `sections: [1.1, 1.4.1, 3.2.2]` → `source_sections` table → `get_by_section()` uses JOIN to find all relevant sources.
+- [Core infrastructure](src/klemma/CLAUDE.md) — config, state, AI providers, vault, library, CLI, context
+- [AI Skills](src/klemma/skills/CLAUDE.md) — planner, extractor, researcher, librarian, agent, acquirer
+- [MCP Tools](src/klemma/tools/CLAUDE.md) — MCPClient, ToolRegistry, discovery pipeline
+- [Literature](src/klemma/literature/CLAUDE.md) — Zotero, PDF extraction, models, vault note factory
+- [TUI](src/klemma/tui/CLAUDE.md) — Textual dashboard and screens
+- [Prompts](prompts/CLAUDE.md) — Jinja2 templates for AI calls
+- [Tests](tests/CLAUDE.md) — testing patterns and conventions
 
 ## Development
 ```bash
 pip install -e ".[dev]"
+pip install -e ".[openai]"     # OpenAI / Ollama / vLLM / LM Studio backend
+pip install -e ".[litellm]"    # LiteLLM universal backend (100+ providers)
+pip install -e ".[all-ai]"     # all AI backends
+klemma init                    # scaffold ~/.klemma/ with config templates
+# edit ~/.klemma/config.yaml, context.md, tags.yaml for your project
 klemma --help
 ```
+
+## Maintaining CLAUDE.md documentation
+
+This documentation is a modular knowledge graph — 8 interconnected CLAUDE.md files loaded incrementally as the agent navigates directories. **Keep it up to date when changing code.**
+
+### When to update
+- **Adding a module**: add entry to the parent directory's CLAUDE.md (module name, line count, purpose, key functions)
+- **Adding a CLI command**: update "Key commands" section here + relevant skill/tool CLAUDE.md
+- **Adding a SQLite table**: update "SQLite tables" here + `src/klemma/CLAUDE.md` state.py section
+- **Adding a prompt template**: update `prompts/CLAUDE.md` (template table + variables) + skill's CLAUDE.md
+- **Adding a data flow**: document in the primary owner's CLAUDE.md, add cross-references
+- **Renaming/removing a module**: update the CLAUDE.md where it's documented, fix any cross-reference links
+- **Changing function signatures or key behavior**: update the relevant module entry
+
+### When to create a new CLAUDE.md
+Create a new child CLAUDE.md when a **new subdirectory** is added that contains 2+ modules with shared context. Follow this template:
+
+```markdown
+# <Subsystem Name>
+
+<One-line purpose.>
+
+## Modules
+
+### module.py (N lines)
+<Purpose.>
+- `key_function()` — what it does
+- `KeyClass` — what it represents
+
+## Data flows
+
+### <Flow name>
+<Step-by-step description of the end-to-end flow.>
+
+## Maintaining this file
+Update when modules are added/removed/renamed in this directory, or when key functions/classes change.
+
+See: [links to related CLAUDE.md files]
+```
+
+After creating a new child, add a link to the **Module documentation** section above.
+
+### Structure rules
+- **Primary owner**: each data flow is documented fully in one CLAUDE.md, other files only link to it
+- **Line counts**: listed as `(N lines)` next to module names — update after significant changes
+- **Cross-references**: every child ends with `See:` links to related CLAUDE.md files; use relative paths
+- **Self-contained**: each child should be understandable without reading the root
+- **Concise**: document what an agent needs to navigate and modify code, not exhaustive API docs

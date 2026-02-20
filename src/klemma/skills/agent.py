@@ -7,10 +7,10 @@ from typing import Optional
 
 from jinja2 import Template
 
-from ..config import KlemmaConfig, ProjectConfig
+from ..config import KlemmaConfig, ProjectConfig, resolve_prompt
 from ..state import StateManager
 from ..vault import VaultAdapter
-from .planner import _get_current_deadline, _get_dissertation_context
+from .planner import _get_current_deadline
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,8 @@ def build_agent_context(
     section: Optional[str] = None,
     chapter: Optional[int] = None,
     project: Optional[ProjectConfig] = None,
+    dissertation_context: str = "",
+    klemma_home: Optional[Path] = None,
 ) -> str:
     """Build a rich system prompt with full research context for the agent.
 
@@ -82,10 +84,10 @@ def build_agent_context(
     next_reading = state.get_next_reading()
 
     # Render prompt
-    prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "agent.md"
+    prompt_path = resolve_prompt("agent.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "agent.md"
     raw = prompt_path.read_text(encoding="utf-8")
     context = Template(raw).render(
-        dissertation_context=_get_dissertation_context(config, project),
+        dissertation_context=dissertation_context,
         chapters=chapters,
         scientific_results=scientific_results,
         priority_terms=priority_terms,

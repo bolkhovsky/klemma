@@ -187,9 +187,9 @@ def _parse_search_results(content: str, source: str, gap_id: Optional[int] = Non
 
 def _phase2_assess(section: str, state, cfg) -> int:
     """Phase 2: Claude assesses relevance of pending discoveries."""
-    from ..ai import ClaudeClient
+    from ..ai import create_ai
 
-    ai = ClaudeClient(cfg.ai)
+    ai = create_ai(cfg.ai)
     pending = state.get_discoveries(section=section, status="pending", limit=20)
     if not pending:
         return 0

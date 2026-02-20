@@ -4,26 +4,14 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from ..ai import ClaudeClient
-from ..config import KlemmaConfig, ProjectConfig
+from ..ai import AIProvider
+from ..config import KlemmaConfig, resolve_prompt
 from ..literature.models import ExtractionResult, Fragment, ZoteroEntry
 from ..literature.pdf import PDFExtractor
 from ..state import StateManager
 from ..vault import VaultAdapter
-from .planner import DISSERTATION_CONTEXT, _get_dissertation_context
 
 logger = logging.getLogger(__name__)
-
-AVAILABLE_TAGS = [
-    "Sea Ice", "Arctic", "Climate", "Forecasting", "Navigation", "Icebreaking",
-    "GIS", "Machine Learning", "LSTM", "ConvLSTM", "U-Net", "CNN",
-    "Transformer", "Classical ML", "Statistics", "Physical Model",
-    "Validation", "Metrics",
-    "Remote Sensing", "SAR", "Sentinel-1", "Microwave", "AMSR", "SSM-I",
-    "Optical", "ERA5", "Ice Products", "AARI",
-    "Barents Sea", "Kara Sea", "Laptev Sea", "Pacific Arctic", "Antarctic",
-    "Review", "Dataset",
-]
 
 
 def extract_fragments(
@@ -31,11 +19,14 @@ def extract_fragments(
     pdf_text: str,
     config: KlemmaConfig,
     state: StateManager,
-    ai: ClaudeClient,
+    ai: AIProvider,
+    dissertation_context: str = "",
+    available_tags: list[str] | None = None,
+    klemma_home: Optional[Path] = None,
 ) -> Optional[ExtractionResult]:
     """Extract citation fragments from a paper's PDF text."""
 
-    prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "extract.md"
+    prompt_path = resolve_prompt("extract.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "extract.md"
     user_prompt = ai.render_prompt(
         prompt_path,
         title=entry.title or "Unknown",
@@ -45,8 +36,8 @@ def extract_fragments(
         doi=entry.DOI or "N/A",
         abstract=entry.abstract or "Not available",
         pdf_text=pdf_text,
-        dissertation_context=DISSERTATION_CONTEXT,
-        available_tags=", ".join(AVAILABLE_TAGS),
+        dissertation_context=dissertation_context,
+        available_tags=", ".join(available_tags) if available_tags else "",
     )
 
     system = (
@@ -127,8 +118,11 @@ def save_fragments_to_vault(
     config: Optional[KlemmaConfig] = None,
     state: Optional[StateManager] = None,
     pdf_text: Optional[str] = None,
-    ai: Optional["ClaudeClient"] = None,
+    ai: Optional["AIProvider"] = None,
     entry_lookup: Optional[dict] = None,
+    dissertation_context: str = "",
+    available_tags: list[str] | None = None,
+    klemma_home: Optional[Path] = None,
 ) -> Optional[str]:
     """Save extracted fragments to the @citekey note in vault.
 
@@ -153,6 +147,9 @@ def save_fragments_to_vault(
             citekey, entry, config, vault,
             state=state, pdf_text=pdf_text, ai=ai,
             entry_lookup=entry_lookup,
+            dissertation_context=dissertation_context,
+            available_tags=available_tags,
+            klemma_home=klemma_home,
         )
         path = vault.update_section(note_name, section_heading, content)
         if path:
@@ -167,11 +164,14 @@ def extract_from_citekey(
     citekey: str,
     config: KlemmaConfig,
     state: StateManager,
-    ai: ClaudeClient,
+    ai: AIProvider,
     pdf_extractor: PDFExtractor,
     pdf_search_paths: list[Path],
     pdf_lookup: Optional[dict[str, str]] = None,
     entry_lookup: Optional[dict[str, ZoteroEntry]] = None,
+    dissertation_context: str = "",
+    available_tags: list[str] | None = None,
+    klemma_home: Optional[Path] = None,
 ) -> Optional[ExtractionResult]:
     """Full extraction pipeline: find source, get PDF, extract fragments."""
 
@@ -202,4 +202,9 @@ def extract_from_citekey(
         logger.error("PDF text too short or extraction failed for %s", citekey)
         return None
 
-    return extract_fragments(entry, pdf_text, config, state, ai)
+    return extract_fragments(
+        entry, pdf_text, config, state, ai,
+        dissertation_context=dissertation_context,
+        available_tags=available_tags,
+        klemma_home=klemma_home,
+    )

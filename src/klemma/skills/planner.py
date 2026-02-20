@@ -7,8 +7,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
-from ..ai import ClaudeClient
-from ..config import KlemmaConfig, ProjectConfig
+from ..ai import AIProvider
+from ..config import KlemmaConfig, ProjectConfig, resolve_prompt
 from ..literature.models import DailyPlan
 from ..state import StateManager
 from ..vault import VaultAdapter
@@ -16,23 +16,10 @@ from .work_context import build_work_context, get_current_deadline
 
 logger = logging.getLogger(__name__)
 
+
 # Legacy constant — kept for backward compatibility with external imports.
-# Internal code should use build_work_context(project) instead.
-DISSERTATION_CONTEXT = """\
-Тема: «Геоинформационная методология представления и анализа оперативной НГГМИ
-для оценки ледовой обстановки в арктических акваториях с использованием нейронных сетей»
-
-НР1: Геоинформационная модель валидации прогнозов ледовой обстановки (AMSR2, Баренцево море)
-НР2: Геоинформационная методика оценки качества прогнозов (IIEE-декомпозиция: AEE + ME)
-
-Главы:
-1. Анализ предметной области прогнозирования ледовой обстановки (дедлайн: 15 марта 2026)
-2. Геоинформационная модель оценки качества прогнозов (дедлайн: 31 мая 2026)
-3. Методика валидации прогнозов ледовой обстановки (дедлайн: 31 августа 2026)
-4. Алгоритм и программная реализация валидации (дедлайн: 31 октября 2026)
-
-Ключевые понятия: SIC, IIEE, AEE, ME, IceNet, AMSR2, ДЗЗ, РСА, НГГМИ, НГО, АЗРФ, СМП\
-"""
+# Internal code should use build_work_context(project) or dissertation_context parameter.
+DISSERTATION_CONTEXT = ""
 
 
 def _get_dissertation_context(config: KlemmaConfig, project: Optional[ProjectConfig] = None) -> str:
@@ -140,8 +127,10 @@ def generate_morning_plan(
     config: KlemmaConfig,
     state: StateManager,
     vault: VaultAdapter,
-    ai: ClaudeClient,
+    ai: AIProvider,
     project: Optional[ProjectConfig] = None,
+    dissertation_context: str = "",
+    klemma_home: Optional[Path] = None,
 ) -> DailyPlan:
     """Сгенерировать утренний брифинг через Claude."""
 
@@ -187,10 +176,10 @@ def generate_morning_plan(
         lib_digest += f" Разделы без источников: {', '.join(library_summary['zero_sections'][:5])}."
 
     # Рендер промпта
-    prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "morning.md"
+    prompt_path = resolve_prompt("morning.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "morning.md"
     user_prompt = ai.render_prompt(
         prompt_path,
-        dissertation_context=_get_dissertation_context(config, project),
+        dissertation_context=dissertation_context or _get_dissertation_context(config, project),
         current_chapter=current_chapter,
         current_section=current_section,
         chapter_name=chapter_name,
@@ -238,7 +227,7 @@ def generate_morning_plan(
         sources_needed=data.get("sources_needed", []),
         strategy_suggestions=data.get("strategy_suggestions", []),
         briefing_text=_format_briefing(data),
-        # Обратная совместимость (TUI)
+        # Legacy plan fields (CLI output + DB)
         dissertation_task=focus,
         assistant_task=data.get("assistant_task", ""),
         reading_target=data.get("reading_target", ""),
