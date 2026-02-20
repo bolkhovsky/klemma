@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import shutil
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -126,10 +127,29 @@ def poll_bbt_citekey(
     return None
 
 
+def _slugify(text: str, max_len: int = 60) -> str:
+    """Convert text to a safe filename slug."""
+    slug = re.sub(r"[^\w\s-]", "", text.strip()).strip()
+    slug = re.sub(r"[\s]+", "_", slug)
+    return slug[:max_len] if slug else "paper"
+
+
+def _store_pdf_locally(tmp_path: Path, storage_path: str, item_key: str, title: str) -> Path:
+    """Copy PDF from temp to permanent Zotero storage location."""
+    dest_dir = Path(storage_path) / item_key
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{_slugify(title)}.pdf"
+    dest = dest_dir / filename
+    shutil.copy2(tmp_path, dest)
+    logger.info("Stored PDF → %s", dest)
+    return dest
+
+
 def acquire_paper(
     meta: PaperMetadata,
     zotero_lib,  # ZoteroLibrary instance
     library_json_path: str,
+    storage_path: str = "",
     state=None,
 ) -> AcquireResult:
     """Full acquire pipeline: download → Zotero → citekey → register."""
@@ -172,21 +192,38 @@ def acquire_paper(
         pdf_path.unlink(missing_ok=True)
         return AcquireResult(status="zotero_failed: no item key returned")
 
-    # 3. Attach PDF
+    # 3. Create attachment record (metadata only) + store PDF locally
+    #    (cloud upload via attachment_simple creates broken records when
+    #    storage quota is exceeded — create record, place file in local storage)
+    permanent_path = ""
+    filename = f"{_slugify(meta.title)}.pdf"
     try:
-        zotero_lib.attach_pdf(item_key, pdf_path)
+        attachment_key = zotero_lib.create_attachment_record(item_key, filename)
+        if attachment_key and storage_path:
+            dest = _store_pdf_locally(pdf_path, storage_path, attachment_key, meta.title)
+            permanent_path = str(dest)
+            logger.info("Attachment %s → local storage", attachment_key)
     except Exception as e:
-        logger.warning("PDF attach failed (item created): %s", e)
+        logger.warning("Attachment record failed: %s", e)
+        # Fallback: store under parent item key
+        if storage_path:
+            try:
+                dest = _store_pdf_locally(pdf_path, storage_path, item_key, meta.title)
+                permanent_path = str(dest)
+            except Exception as e2:
+                logger.error("Local PDF storage failed: %s", e2)
 
-    # 4. Poll for BBT citekey
+    # 5. Poll for BBT citekey
     citekey = poll_bbt_citekey(library_json_path, item_key)
     if not citekey:
         logger.warning("BBT citekey not found for %s, using item key as fallback", item_key)
         citekey = item_key
 
-    # 5. Register in klemma DB
+    # 6. Register in klemma DB + set pdf_path
     if state:
         state.register_sources([citekey])
+        if permanent_path:
+            state.set_pdf_path(citekey, permanent_path)
         if meta.sections:
             chapters = list({int(s.split(".")[0]) for s in meta.sections if "." in s})
             with state._conn() as conn:
@@ -196,7 +233,7 @@ def acquire_paper(
     return AcquireResult(
         citekey=citekey,
         item_key=item_key,
-        pdf_path=str(pdf_path),
+        pdf_path=permanent_path or str(pdf_path),
         status="ok",
     )
 

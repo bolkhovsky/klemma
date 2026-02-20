@@ -104,8 +104,9 @@ Incremental mode: if Research note exists, reads `## ✏️ Что нового`
 
 ### Paper acquisition
 `klemma acquire <url> --title "..." --authors "..." --year N --section X.X` or `klemma acquire --batch papers.json`.
-Pipeline: download PDF → pyzotero `create_items` + `attachment_simple` → poll BBT JSON for citekey (30s timeout, 2s interval) → `state.register_sources([citekey])` → optional `klemma process`.
-Core logic in `skills/acquirer.py`. Zotero write methods: `ZoteroLibrary.create_item()`, `ZoteroLibrary.attach_pdf()`.
+Pipeline: download PDF → pyzotero `create_items` → `create_attachment_record` (metadata only, no cloud upload) → place PDF in `{storage_path}/{attachment_key}/` → poll BBT JSON for citekey → `state.register_sources([citekey])` + `set_pdf_path()` → optional `klemma process`.
+PDF storage: bypasses Zotero cloud (paid quota), stores locally in Zotero storage dir. Zotero sees attachment record and finds file locally.
+Core logic in `skills/acquirer.py`. Zotero write methods: `ZoteroLibrary.create_item()`, `ZoteroLibrary.create_attachment_record()`.
 Requires: `ZOTERO_API_KEY` env var, `zotero.library_id` in config.yaml.
 
 ### Agent

@@ -5,12 +5,13 @@
 ### What was done
 
 **`klemma acquire` command:**
-- Full pipeline: download PDF → create Zotero item (pyzotero) → attach PDF → poll BBT for citekey → register in DB
+- Full pipeline: download PDF → create Zotero item → create attachment record → store PDF locally → poll BBT → register in DB
+- Local PDF storage: bypasses Zotero cloud (paid quota exceeded), creates attachment metadata via API, places file in `{storage_path}/{attachment_key}/`. Zotero sees the attachment and finds the file locally.
 - Single mode: `klemma acquire <url> --title "..." --authors "..." --year N --section X.X`
 - Batch mode: `klemma acquire --batch papers.json` (JSON array with url, title, authors, year, sections, etc.)
 - `--no-process` flag to skip fragment extraction
 - New `skills/acquirer.py` module: `acquire_paper()`, `download_pdf()`, `poll_bbt_citekey()`, `parse_authors()`
-- New `ZoteroLibrary.create_item()` and `ZoteroLibrary.attach_pdf()` write methods
+- New `ZoteroLibrary.create_item()`, `create_attachment_record()` methods; `state.set_pdf_path()`
 - Requires `ZOTERO_API_KEY` env var and `zotero.library_id` in config.yaml
 
 **Batch `klemma process`:**

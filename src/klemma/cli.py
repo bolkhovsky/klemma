@@ -1111,7 +1111,10 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
         label = meta.title[:50] if meta.title else meta.url[:50]
         console.print(f"\n[bold][{i}/{len(papers)}] {label}[/bold]")
 
-        result = acquire_paper(meta, zot_lib, library_json, state)
+        result = acquire_paper(
+            meta, zot_lib, library_json,
+            storage_path=cfg.zotero.storage_path, state=state,
+        )
 
         if result.status == "ok":
             console.print(f"  [green]@{result.citekey}[/green] (item: {result.item_key})")
