@@ -913,7 +913,7 @@ def library(ctx, section, audit):
             t.add_column("F", width=3, justify="right")
             t.add_column("Reason", max_width=50)
             for i, item in enumerate(items, 1):
-                ck = item.get("citekey", "?")
+                ck = item.get("citekey", "?").lstrip("@")
                 src = src_lookup.get(ck, {})
                 t.add_row(
                     str(i),

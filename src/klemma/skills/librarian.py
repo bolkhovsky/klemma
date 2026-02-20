@@ -225,13 +225,15 @@ def _save_report_to_vault(
             content += f"### Drop ({len(drop)} sources)\n\n"
             content += "| Citekey | Reason |\n|---------|--------|\n"
             for item in drop:
-                content += f"| @{item.get('citekey', '?')} | {item.get('reason', '')} |\n"
+                ck = item.get('citekey', '?').lstrip('@')
+                content += f"| @{ck} | {item.get('reason', '')} |\n"
             content += "\n"
         if maybe:
             content += f"### Maybe ({len(maybe)} sources)\n\n"
             content += "| Citekey | Reason |\n|---------|--------|\n"
             for item in maybe:
-                content += f"| @{item.get('citekey', '?')} | {item.get('reason', '')} |\n"
+                ck = item.get('citekey', '?').lstrip('@')
+                content += f"| @{ck} | {item.get('reason', '')} |\n"
             content += "\n"
 
     if report.report_text:

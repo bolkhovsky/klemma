@@ -1107,7 +1107,7 @@ class StateManager:
         with self._conn() as conn:
             conn.execute("DELETE FROM prune_verdicts")
             for item in drop:
-                ck = item.get("citekey", "")
+                ck = item.get("citekey", "").lstrip("@")
                 if not ck or self._is_protected(conn, ck):
                     continue
                 conn.execute(
@@ -1115,7 +1115,7 @@ class StateManager:
                     (ck, item.get("reason", "")),
                 )
             for item in maybe:
-                ck = item.get("citekey", "")
+                ck = item.get("citekey", "").lstrip("@")
                 if not ck or self._is_protected(conn, ck):
                     continue
                 conn.execute(
