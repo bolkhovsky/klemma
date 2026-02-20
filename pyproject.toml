@@ -1,10 +1,25 @@
 [project]
 name = "klemma"
-version = "0.1.0"
-description = "AI academic assistant template"
+version = "0.4.1"
+description = "AI-powered CLI assistant for PhD dissertation research — manages literature, extracts citations, generates plans"
 requires-python = ">=3.11"
-readme = "CLAUDE.md"
+readme = "README.md"
 license = {text = "MIT"}
+authors = [{name = "Ilya Bolkhovsky"}]
+keywords = ["academic", "dissertation", "research", "zotero", "obsidian", "ai", "pdf", "citations"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/bolkhovsky/klemma"
+Repository = "https://github.com/bolkhovsky/klemma"
+"Bug Reports" = "https://github.com/bolkhovsky/klemma/issues"
 
 dependencies = [
     "click==8.1.8",

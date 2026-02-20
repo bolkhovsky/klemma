@@ -44,7 +44,7 @@ Return a JSON object:
       "chapter": 2,
       "section": "2.3.1",
       "relevance": 4,
-      "usage_hint": "Use as evidence for IceNet architecture choice in section 2.3.1",
+      "usage_hint": "Use as evidence for method choice in section 2.3.1",
       "page": 5
     }
   ],
@@ -55,11 +55,11 @@ Return a JSON object:
 Guidelines:
 1. Extract 3-10 fragments per paper, prioritizing high-relevance ones
 2. Include at least one verbatim quote suitable for direct citation
-3. Identify methodology descriptions that could be referenced in Chapter 3
+3. Identify methodology descriptions that could be referenced
 4. Look for results/metrics that support or contrast with the dissertation's approach
-5. Flag definitions of key terms (SIC, IIEE, AEE, ME, etc.)
+5. Flag definitions of key terms
 6. Map each fragment to the most specific section possible
-7. Usage hints should be in Russian
+7. Usage hints should be in {{ language }}
 8. Fragments text stays in original paper language
 
 Respond with ONLY valid JSON.

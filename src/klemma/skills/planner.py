@@ -155,12 +155,12 @@ def generate_morning_plan(
     # Название главы
     if project:
         current_chapter = project.current_chapter
-        chapter_name = project.chapters.get(current_chapter, "Неизвестно")
+        chapter_name = project.chapters.get(current_chapter, "Unknown")
         current_section = project.current_section
         writing_constraints = project.writing_constraints
     else:
         current_chapter = config.dissertation.current_chapter
-        chapter_name = config.dissertation.chapters.get(current_chapter, "Неизвестно")
+        chapter_name = config.dissertation.chapters.get(current_chapter, "Unknown")
         current_section = config.dissertation.current_section
         writing_constraints = config.dissertation.writing_constraints
 
@@ -188,7 +188,7 @@ def generate_morning_plan(
         days_without_progress=writing_streak["days_without_progress"],
         streak=writing_streak["streak"],
         yesterday_plan=yesterday,
-        chapter_plan=chapter_plan or "План сессий не найден.",
+        chapter_plan=chapter_plan or "Session plan not found.",
         coverage=coverage,
         gaps=gaps,
         fragment_stats=fragment_stats,
@@ -196,13 +196,14 @@ def generate_morning_plan(
         min_sources=min_sources,
         writing_constraints=writing_constraints,
         library_summary=lib_digest,
+        language=config.ai.language,
         range=range,
     )
 
     system = (
-        "Ты — ассистент для написания кандидатской диссертации. "
-        "Генерируй утренний брифинг по принципу «один фокус в день». "
-        "Отвечай на русском. Верни только JSON."
+        "You are a PhD dissertation writing assistant. "
+        "Generate a morning briefing following the 'one focus per day' principle. "
+        "Output only valid JSON."
     )
 
     data = ai.call_json(system, user_prompt, max_tokens=2048)

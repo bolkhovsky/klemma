@@ -47,11 +47,12 @@ def analyze_library(
     )
 
     prompt_path = resolve_prompt("librarian.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "librarian.md"
+    context["language"] = config.ai.language
     user_prompt = ai.render_prompt(prompt_path, **context)
 
     system = (
-        "Ты — библиотекарь-аналитик PhD-библиотеки. "
-        "Отвечай только валидным JSON."
+        "You are a library analyst for a PhD dissertation. "
+        "Output only valid JSON."
     )
 
     data = ai.call_json(system, user_prompt, max_tokens=8192, timeout=LIBRARY_TIMEOUT)
@@ -331,9 +332,11 @@ def _run_prune_analysis(
     For >300 sources, batches per-chapter in parallel.
     """
     if len(active_sources) <= 300:
-        return _prune_batch(active_sources, entry_lookup, ai, klemma_home=klemma_home)
+        lang = config.ai.language
+        return _prune_batch(active_sources, entry_lookup, ai, klemma_home=klemma_home, language=lang)
 
     # Per-chapter parallel batching
+    lang = config.ai.language
     by_chapter: dict[int, list] = {}
     for s in active_sources:
         ch = s.get("primary_chapter") or 0
@@ -344,7 +347,7 @@ def _run_prune_analysis(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = {
-            pool.submit(_prune_batch, sources, entry_lookup, ai, klemma_home=klemma_home): ch
+            pool.submit(_prune_batch, sources, entry_lookup, ai, klemma_home=klemma_home, language=lang): ch
             for ch, sources in by_chapter.items()
         }
         for future in as_completed(futures):
@@ -365,6 +368,7 @@ def _run_prune_analysis(
 def _prune_batch(
     sources: list[dict], entry_lookup: dict, ai: AIProvider,
     klemma_home: Optional[Path] = None,
+    language: str = "en",
 ) -> Optional[dict]:
     """Run prune on a batch of sources."""
     sources_compact = _format_sources_compact(sources, entry_lookup)
@@ -374,12 +378,13 @@ def _prune_batch(
         prompt_path,
         sources_compact=sources_compact,
         source_count=len(sources),
+        language=language,
     )
 
     system = (
-        "Ты — библиотекарь-аналитик. "
-        "Задача: отсеять нерелевантные источники. "
-        "Отвечай только валидным JSON."
+        "You are a library analyst. "
+        "Task: identify irrelevant sources for removal. "
+        "Output only valid JSON."
     )
 
     return ai.call_json(system, user_prompt, max_tokens=4096, timeout=LIBRARY_TIMEOUT)
