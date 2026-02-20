@@ -80,7 +80,7 @@ def annotate_source(
     entry: ZoteroEntry,
     pdf_text: str,
     config: KlemmaConfig,
-    ai: "ClaudeClient",
+    ai: "AIProvider",
     entry_lookup: Optional[dict] = None,
 ) -> Optional[dict]:
     """Generate AI annotation (summary, methodology, key findings, relevance).
@@ -374,7 +374,7 @@ def create_vault_note(
     vault: VaultAdapter,
     state: Optional["StateManager"] = None,
     pdf_text: Optional[str] = None,
-    ai: Optional["ClaudeClient"] = None,
+    ai: Optional["AIProvider"] = None,
     entry_lookup: Optional[dict] = None,
 ) -> Path:
     """Create @citekey.md vault note from BetterBibTeX metadata.

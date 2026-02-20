@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from ..ai import ClaudeClient
+from ..ai import AIProvider
 from ..config import KlemmaConfig
 from ..literature.models import ExtractionResult, Fragment, ZoteroEntry
 from ..literature.pdf import PDFExtractor
@@ -31,7 +31,7 @@ def extract_fragments(
     pdf_text: str,
     config: KlemmaConfig,
     state: StateManager,
-    ai: ClaudeClient,
+    ai: AIProvider,
 ) -> Optional[ExtractionResult]:
     """Extract citation fragments from a paper's PDF text."""
 
@@ -127,7 +127,7 @@ def save_fragments_to_vault(
     config: Optional[KlemmaConfig] = None,
     state: Optional[StateManager] = None,
     pdf_text: Optional[str] = None,
-    ai: Optional["ClaudeClient"] = None,
+    ai: Optional["AIProvider"] = None,
     entry_lookup: Optional[dict] = None,
 ) -> Optional[str]:
     """Save extracted fragments to the @citekey note in vault.
@@ -167,7 +167,7 @@ def extract_from_citekey(
     citekey: str,
     config: KlemmaConfig,
     state: StateManager,
-    ai: ClaudeClient,
+    ai: AIProvider,
     pdf_extractor: PDFExtractor,
     pdf_search_paths: list[Path],
     pdf_lookup: Optional[dict[str, str]] = None,
