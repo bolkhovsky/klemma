@@ -8,28 +8,12 @@ from pathlib import Path
 from typing import Optional
 
 from ..ai import AIProvider
-from ..config import KlemmaConfig
+from ..config import KlemmaConfig, resolve_prompt
 from ..literature.models import DailyPlan
 from ..state import StateManager
 from ..vault import VaultAdapter
 
 logger = logging.getLogger(__name__)
-
-DISSERTATION_CONTEXT = """\
-Тема: «Геоинформационная методология представления и анализа оперативной НГГМИ
-для оценки ледовой обстановки в арктических акваториях с использованием нейронных сетей»
-
-НР1: Геоинформационная модель валидации прогнозов ледовой обстановки (AMSR2, Баренцево море)
-НР2: Геоинформационная методика оценки качества прогнозов (IIEE-декомпозиция: AEE + ME)
-
-Главы:
-1. Анализ предметной области прогнозирования ледовой обстановки (дедлайн: 15 марта 2026)
-2. Геоинформационная модель оценки качества прогнозов (дедлайн: 31 мая 2026)
-3. Методика валидации прогнозов ледовой обстановки (дедлайн: 31 августа 2026)
-4. Алгоритм и программная реализация валидации (дедлайн: 31 октября 2026)
-
-Ключевые понятия: SIC, IIEE, AEE, ME, IceNet, AMSR2, ДЗЗ, РСА, НГГМИ, НГО, АЗРФ, СМП\
-"""
 
 
 def _get_current_deadline(config: KlemmaConfig) -> tuple[str, int]:
@@ -123,6 +107,8 @@ def generate_morning_plan(
     state: StateManager,
     vault: VaultAdapter,
     ai: AIProvider,
+    dissertation_context: str = "",
+    klemma_home: Optional[Path] = None,
 ) -> DailyPlan:
     """Сгенерировать утренний брифинг через Claude."""
 
@@ -159,10 +145,10 @@ def generate_morning_plan(
         lib_digest += f" Разделы без источников: {', '.join(library_summary['zero_sections'][:5])}."
 
     # Рендер промпта
-    prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "morning.md"
+    prompt_path = resolve_prompt("morning.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "morning.md"
     user_prompt = ai.render_prompt(
         prompt_path,
-        dissertation_context=DISSERTATION_CONTEXT,
+        dissertation_context=dissertation_context,
         current_chapter=config.dissertation.current_chapter,
         current_section=config.dissertation.current_section,
         chapter_name=chapter_name,

@@ -11,7 +11,7 @@ from rich.table import Table
 
 from . import __version__, get_banner
 from .ai import create_ai
-from .config import load_config
+from .config import get_klemma_home, load_available_tags, load_config, load_dissertation_context
 from .context import KlemmaContext
 from .library_provider import create_library
 from .state import StateManager
@@ -21,14 +21,42 @@ from .vault import VaultAdapter
 console = Console()
 
 
-def _init_components(config_path: str) -> KlemmaContext:
-    """Initialize all components from config."""
-    cfg = load_config(config_path)
-    state = StateManager(cfg.state.db_path)
+def _init_components(config_path: str | None) -> KlemmaContext:
+    """Initialize all components from config.
+
+    If config_path is the default sentinel, loads from klemma_home.
+    """
+    klemma_home = get_klemma_home()
+
+    # Use explicit --config if provided, otherwise default to klemma_home
+    if config_path is None:
+        cfg = load_config(None)  # uses get_klemma_home() / "config.yaml"
+    else:
+        cfg = load_config(config_path)
+
+    # Resolve db_path relative to klemma_home if relative
+    db_path = cfg.state.db_path
+    if not Path(db_path).is_absolute():
+        db_path = str(klemma_home / db_path)
+
+    state = StateManager(db_path)
     vault = VaultAdapter(cfg.obsidian.vault_path, use_cli=cfg.obsidian.use_cli)
     library = create_library(cfg)
     tools = ToolRegistry(cfg) if cfg.mcp.servers else None
-    return KlemmaContext(config=cfg, state=state, vault=vault, library=library, tools=tools)
+
+    dissertation_context = load_dissertation_context(klemma_home, cfg)
+    available_tags = load_available_tags(klemma_home, cfg)
+
+    return KlemmaContext(
+        config=cfg,
+        state=state,
+        vault=vault,
+        library=library,
+        tools=tools,
+        klemma_home=klemma_home,
+        dissertation_context=dissertation_context,
+        available_tags=available_tags,
+    )
 
 
 def _init_ai(cfg):
@@ -226,7 +254,7 @@ def _print_ref_gaps_table(state: StateManager, limit: int = 20):
 
 @click.group(invoke_without_command=True)
 @click.version_option(version=__version__)
-@click.option("--config", "-c", default="config.yaml", help="Config file path")
+@click.option("--config", "-c", default=None, help="Config file path (default: ~/.klemma/config.yaml)")
 @click.pass_context
 def main(ctx, config):
     """Klemma — AI academic assistant.
@@ -235,6 +263,21 @@ def main(ctx, config):
     """
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config
+
+    # Check klemma_home exists for all commands except init
+    klemma_home = get_klemma_home()
+    if (
+        ctx.invoked_subcommand is not None
+        and ctx.invoked_subcommand != "init"
+        and config is None
+        and not (klemma_home / "config.yaml").exists()
+    ):
+        console.print(
+            f"[yellow]Config not found at {klemma_home / 'config.yaml'}[/yellow]\n"
+            "Run [bold]klemma init[/bold] to set up, or use --config to specify a config file."
+        )
+        ctx.exit(1)
+        return
 
     # Banner
     console.print(get_banner(cwd=str(Path.cwd())))
@@ -253,6 +296,31 @@ def main(ctx, config):
 
 @main.command()
 @click.pass_context
+def init(ctx):
+    """Initialize ~/.klemma/ with config templates."""
+    from .setup import init_klemma_home
+
+    klemma_home = get_klemma_home()
+    result = init_klemma_home(klemma_home)
+
+    if result["created"]:
+        console.print(f"[green]Created {klemma_home}/[/green]")
+        for name in result["created"]:
+            console.print(f"  + {name}")
+    if result["skipped"]:
+        for name in result["skipped"]:
+            console.print(f"  [dim]~ {name} (already exists, skipped)[/dim]")
+
+    console.print()
+    console.print("[bold]Next steps:[/bold]")
+    console.print(f"  1. Edit [cyan]{klemma_home / 'config.yaml'}[/cyan] — set Zotero/Obsidian paths")
+    console.print(f"  2. Edit [cyan]{klemma_home / 'context.md'}[/cyan] — describe your dissertation")
+    console.print(f"  3. Edit [cyan]{klemma_home / 'tags.yaml'}[/cyan] — define your topic taxonomy")
+    console.print(f"  4. Run [bold]klemma status[/bold] to verify")
+
+
+@main.command()
+@click.pass_context
 def plan(ctx):
     """Daily plan — focus, recommendations, deadlines."""
     config_path = ctx.obj["config_path"]
@@ -263,7 +331,11 @@ def plan(ctx):
     from .skills.planner import generate_morning_plan
 
     with console.status("Генерация утреннего брифинга", spinner="dots"):
-        plan = generate_morning_plan(cfg, state, vault, ai)
+        plan = generate_morning_plan(
+            cfg, state, vault, ai,
+            dissertation_context=kctx.dissertation_context,
+            klemma_home=kctx.klemma_home,
+        )
 
     console.print()
 
@@ -367,7 +439,9 @@ def process(ctx, citekeys, serial):
         ):
             with ThreadPoolExecutor(max_workers=3) as pool:
                 futures = {
-                    pool.submit(_process_single, ck, cfg, state, vault, ai, pdf_extractor, kctx.library, quiet=True): ck
+                    pool.submit(_process_single, ck, cfg, state, vault, ai, pdf_extractor, kctx.library, quiet=True,
+                               dissertation_context=kctx.dissertation_context, available_tags=kctx.available_tags,
+                               klemma_home=kctx.klemma_home): ck
                     for ck in keys
                 }
                 for future in as_completed(futures):
@@ -392,14 +466,18 @@ def process(ctx, citekeys, serial):
         for idx, ck in enumerate(keys, 1):
             if len(keys) > 1:
                 console.print(f"\n[bold][{idx}/{len(keys)}] {ck}[/bold]")
-            n_frags, _ = _process_single(ck, cfg, state, vault, ai, pdf_extractor, kctx.library)
+            n_frags, _ = _process_single(ck, cfg, state, vault, ai, pdf_extractor, kctx.library,
+                                         dissertation_context=kctx.dissertation_context,
+                                         available_tags=kctx.available_tags,
+                                         klemma_home=kctx.klemma_home)
             if n_frags > 0:
                 processed += 1
         if len(keys) > 1:
             console.print(f"\n[green]Done: {processed}/{len(keys)} processed.[/green]")
 
 
-def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quiet=False):
+def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quiet=False,
+                    dissertation_context="", available_tags=None, klemma_home=None):
     """Process a single source: find PDF, extract fragments, save to vault.
 
     Returns (fragment_count, status_message). When quiet=True, suppresses console output
@@ -442,7 +520,12 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
         return (0, "text too short")
 
     # Extract fragments
-    result = extract_fragments(entry, pdf_text, cfg, state, ai)
+    result = extract_fragments(
+        entry, pdf_text, cfg, state, ai,
+        dissertation_context=dissertation_context,
+        available_tags=available_tags,
+        klemma_home=klemma_home,
+    )
 
     if not result or not result.fragments:
         if not quiet:
@@ -457,6 +540,9 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
         citekey, result.fragments, vault,
         entry=entry, config=cfg, state=state,
         pdf_text=pdf_text, ai=ai, entry_lookup=library.entries,
+        dissertation_context=dissertation_context,
+        available_tags=available_tags,
+        klemma_home=klemma_home,
     )
     if not quiet:
         if saved_path:
@@ -633,6 +719,9 @@ def research(ctx, section, no_save, force, enrich):
             force=force,
             library=kctx.library,
             on_progress=lambda ck, st, i, n: None,  # suppress inside spinner
+            dissertation_context=kctx.dissertation_context,
+            available_tags=kctx.available_tags,
+            klemma_home=kctx.klemma_home,
         )
 
     extracted = extract_result["extracted"]
@@ -664,7 +753,11 @@ def research(ctx, section, no_save, force, enrich):
         spinner_text = f"Анализ раздела {section}"
 
     with console.status(spinner_text, spinner="dots"):
-        result = research_section(section, cfg, state, vault, ai, save_to_vault=not no_save)
+        result = research_section(
+            section, cfg, state, vault, ai, save_to_vault=not no_save,
+            dissertation_context=kctx.dissertation_context,
+            klemma_home=kctx.klemma_home,
+        )
 
     if not result.section_status:
         console.print("[red]Не удалось сгенерировать брифинг.[/red]")
@@ -827,7 +920,11 @@ def ask(ctx, query, section, chapter):
     from .skills.agent import build_agent_context
 
     with console.status("Сборка контекста исследования", spinner="dots"):
-        context = build_agent_context(cfg, state, vault, section=section, chapter=chapter)
+        context = build_agent_context(
+            cfg, state, vault, section=section, chapter=chapter,
+            dissertation_context=kctx.dissertation_context,
+            klemma_home=kctx.klemma_home,
+        )
 
     console.print(f"[dim]Query: {query}[/dim]")
 
@@ -873,7 +970,11 @@ def library(ctx, section, audit):
     mode = "audit" if audit else "recommend" if section else "status"
 
     with console.status(f"Analyzing library ({mode})", spinner="dots"):
-        report = analyze_library(cfg, state, vault, ai, entry_lookup, mode=mode, focus_section=section)
+        report = analyze_library(
+            cfg, state, vault, ai, entry_lookup, mode=mode, focus_section=section,
+            dissertation_context=kctx.dissertation_context,
+            klemma_home=kctx.klemma_home,
+        )
 
     if not report:
         console.print("[red]Failed to generate library analysis.[/red]")
@@ -1127,7 +1228,10 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
                     from .literature.pdf import PDFExtractor
                     pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
                     with console.status(f"Extracting fragments from @{result.citekey}", spinner="arc"):
-                        _process_single(result.citekey, cfg, state, kctx.vault, ai, pdf_extractor, kctx.library)
+                        _process_single(result.citekey, cfg, state, kctx.vault, ai, pdf_extractor, kctx.library,
+                                        dissertation_context=kctx.dissertation_context,
+                                        available_tags=kctx.available_tags,
+                                        klemma_home=kctx.klemma_home)
 
             ok += 1
         else:

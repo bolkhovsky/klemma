@@ -10,13 +10,21 @@ Click CLI entry point. Defines all 11 commands + hidden aliases.
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
 
-### context.py (30 lines)
+### context.py (35 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.
-Holds: `config`, `state`, `vault`, `ai` (optional), `library` (optional), `tools` (optional).
+Holds: `config`, `state`, `vault`, `ai` (optional), `library` (optional), `tools` (optional), `klemma_home`, `dissertation_context`, `available_tags`.
 
-### config.py (164 lines)
+### config.py (~200 lines)
 Pydantic config models loaded from `config.yaml`.
 Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `DissertationConfig`, `MCPConfig`, `MCPServerConfig`.
+- `get_klemma_home()` — returns `Path(KLEMMA_HOME)` or `~/.klemma`
+- `load_dissertation_context(klemma_home, config)` — reads `context.md`, fallback from config fields
+- `load_available_tags(klemma_home, config)` — reads `tags.yaml`, fallback from `tags.auto_mapping`
+- `resolve_prompt(name, klemma_home)` — user override in `klemma_home/prompts/`, then shipped `prompts/`
+
+### setup.py (42 lines)
+`klemma init` logic — creates `~/.klemma/` from example template files.
+- `init_klemma_home(klemma_home)` — copies config.example.yaml → config.yaml, etc.
 
 ### state.py (1207 lines)
 SQLite state manager. Tables:

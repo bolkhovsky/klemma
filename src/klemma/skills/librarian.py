@@ -7,15 +7,14 @@ from pathlib import Path
 from typing import Optional
 
 from ..ai import AIProvider
-from ..config import KlemmaConfig
+from ..config import KlemmaConfig, resolve_prompt
 from ..literature.models import LibraryReport
 from ..state import StateManager
 from ..vault import VaultAdapter
-from .planner import DISSERTATION_CONTEXT, _get_current_deadline
+from .planner import _get_current_deadline
 
 logger = logging.getLogger(__name__)
 
-PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
 LIBRARY_TIMEOUT = 300  # 5 min — library analysis needs more time than other skills
 
 
@@ -27,6 +26,8 @@ def analyze_library(
     entry_lookup: dict,
     mode: str = "status",
     focus_section: Optional[str] = None,
+    dissertation_context: str = "",
+    klemma_home: Optional[Path] = None,
 ) -> Optional[LibraryReport]:
     """Run AI library analysis and return structured report.
 
@@ -40,10 +41,11 @@ def analyze_library(
     active_sources = [s for s in all_sources if s["id"] not in drop_ids]
 
     context = _gather_library_context(
-        config, state, vault, entry_lookup, active_sources, mode, focus_section
+        config, state, vault, entry_lookup, active_sources, mode, focus_section,
+        dissertation_context=dissertation_context,
     )
 
-    prompt_path = PROMPTS_DIR / "librarian.md"
+    prompt_path = resolve_prompt("librarian.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "librarian.md"
     user_prompt = ai.render_prompt(prompt_path, **context)
 
     system = (
@@ -71,7 +73,7 @@ def analyze_library(
     # Stage 2: separate prune pass if library is oversaturated
     if len(active_sources) > 100:
         logger.info("Running prune analysis (%d active sources)...", len(active_sources))
-        prune_result = _run_prune_analysis(active_sources, entry_lookup, config, ai)
+        prune_result = _run_prune_analysis(active_sources, entry_lookup, config, ai, klemma_home=klemma_home)
         if prune_result:
             report.prune = prune_result
             state.save_prune_verdicts(
@@ -198,6 +200,7 @@ def _gather_library_context(
     active_sources: list[dict],
     mode: str,
     focus_section: Optional[str],
+    dissertation_context: str = "",
 ) -> dict:
     """Collect all data needed for the librarian prompt."""
     deadline, days_remaining = _get_current_deadline(config)
@@ -210,7 +213,7 @@ def _gather_library_context(
     sources_compact = _format_sources_compact(selected, entry_lookup)
 
     context = {
-        "dissertation_context": DISSERTATION_CONTEXT,
+        "dissertation_context": dissertation_context,
         "current_chapter": config.dissertation.current_chapter,
         "chapter_name": config.dissertation.chapters.get(
             config.dissertation.current_chapter, ""
@@ -313,13 +316,14 @@ def _run_prune_analysis(
     entry_lookup: dict,
     config: KlemmaConfig,
     ai: AIProvider,
+    klemma_home: Optional[Path] = None,
 ) -> Optional[dict]:
     """Run focused prune analysis as a separate AI call.
 
     For >300 sources, batches per-chapter in parallel.
     """
     if len(active_sources) <= 300:
-        return _prune_batch(active_sources, entry_lookup, ai)
+        return _prune_batch(active_sources, entry_lookup, ai, klemma_home=klemma_home)
 
     # Per-chapter parallel batching
     by_chapter: dict[int, list] = {}
@@ -332,7 +336,7 @@ def _run_prune_analysis(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = {
-            pool.submit(_prune_batch, sources, entry_lookup, ai): ch
+            pool.submit(_prune_batch, sources, entry_lookup, ai, klemma_home=klemma_home): ch
             for ch, sources in by_chapter.items()
         }
         for future in as_completed(futures):
@@ -351,12 +355,13 @@ def _run_prune_analysis(
 
 
 def _prune_batch(
-    sources: list[dict], entry_lookup: dict, ai: AIProvider
+    sources: list[dict], entry_lookup: dict, ai: AIProvider,
+    klemma_home: Optional[Path] = None,
 ) -> Optional[dict]:
     """Run prune on a batch of sources."""
     sources_compact = _format_sources_compact(sources, entry_lookup)
 
-    prompt_path = PROMPTS_DIR / "librarian_prune.md"
+    prompt_path = resolve_prompt("librarian_prune.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "librarian_prune.md"
     user_prompt = ai.render_prompt(
         prompt_path,
         sources_compact=sources_compact,

@@ -2,25 +2,22 @@
 
 AI-powered features that compose config + state + vault + ai + literature into higher-level operations.
 All skills receive dependencies via function arguments (not global state).
-
-Shared constant: `planner.DISSERTATION_CONTEXT` is imported by extractor, researcher, librarian, agent.
+Dissertation context and tags are loaded from `~/.klemma/` at CLI startup and passed as parameters.
 
 ## Modules
 
-### planner.py (229 lines)
+### planner.py (~215 lines)
 Morning briefing generation. Gathers: deadline, streak, yesterday's plan, chapter plan, library digest, coverage stats, ref-gaps.
-- `generate_morning_plan()` — full context → `prompts/morning.md` → Claude → `DailyPlan` → state + vault
-- `DISSERTATION_CONTEXT` — shared constant (topic, chapters, deadlines, keywords), imported by all other skills
-- `_get_current_deadline()` — calculate days remaining for current chapter
+- `generate_morning_plan(config, state, vault, ai, dissertation_context, klemma_home)` — full context → `prompts/morning.md` → Claude → `DailyPlan` → state + vault
+- `_get_current_deadline()` — calculate days remaining for current chapter (also used by librarian, agent)
 - `_read_chapter_plan()` — load session plan from vault
 - Intervention types: `NONE`, `REPLAN`, `BOOST`, `SKIP`
 
-### extractor.py (205 lines)
+### extractor.py (~205 lines)
 Fragment extraction from PDFs.
-- `extract_fragments()` — renders `prompts/extract.md` with paper text + dissertation context → Claude → `ExtractionResult`
+- `extract_fragments(entry, pdf_text, config, state, ai, dissertation_context, available_tags, klemma_home)` — renders `prompts/extract.md` → Claude → `ExtractionResult`
 - `extract_from_citekey()` — full pipeline (find PDF → extract text → analyze)
-- `save_fragments_to_vault()` — appends to `@citekey.md` under quotes section; auto-creates note if missing
-- Domain-specific `AVAILABLE_TAGS` for sea ice / ML / remote sensing taxonomy
+- `save_fragments_to_vault(citekey, fragments, vault, ..., dissertation_context, available_tags, klemma_home)` — appends to `@citekey.md`; auto-creates note if missing
 
 ### researcher.py (730 lines — largest skill)
 Section research briefings. Two modes:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -28,3 +29,6 @@ class KlemmaContext:
     ai: Optional[AIProvider] = None
     library: Optional[LibraryProvider] = None
     tools: Optional[ToolRegistry] = None
+    klemma_home: Path = field(default_factory=lambda: Path.home() / ".klemma")
+    dissertation_context: str = ""
+    available_tags: list[str] = field(default_factory=list)
