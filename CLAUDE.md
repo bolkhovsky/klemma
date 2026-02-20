@@ -78,69 +78,17 @@ Hidden aliases (backward compat): `morning`→`plan`, `extract`→`process`, `ag
 - `daily_plans` — generated daily plans
 - `reading_queue` — prioritized reading list
 
-## Key data flows
+## Module documentation
 
-### PDF finding (3-tier)
-1. `direct_path` from DB
-2. BetterBibTeX JSON lookup (`library_json` → citekey → attachment path)
-3. Fuzzy filename matching (exact citekey, title words + year, author in prefix)
+Detailed documentation for each subsystem lives in its directory, loaded incrementally as the agent navigates:
 
-### Fragment extraction
-PDF → PyMuPDF text → AI analysis → fragments to SQLite + vault (`## 💬 Цитаты для диссертации`)
-
-### Vault note creation
-`klemma extract <citekey>` → if @citekey.md missing, auto-creates it via `note_factory.create_vault_note()`:
-1. AI annotation (`annotate.md` prompt) analyzes PDF with full library context (174 entries)
-2. Extracts: summary, methodology, relevance, key_references (bibliography analysis)
-3. Renders structured vault note with sections: metadata, summary, methods, relevance, key references, quotes
-4. Saves reference gaps (missing refs from bibliography) to `reference_gaps` table
-
-### Reference gap tracking
-Each annotated paper's bibliography is cross-checked against our library. Missing relevant refs accumulate across sources.
-- **Score formula**: `count × avg_source_quality × section_weight` (section_weight=2.0 for НР1/НР2 sections)
-- **Auto-resolve**: when a gap's author+year matches a newly added source, it's marked resolved
-- **Surfacing**: CLI status line (every command), `klemma status` (gaps section)
-
-### Research briefing
-`klemma research -s X.X` → auto-extract fragments → collect context (draft, fragments, sources, coverage) → Claude analysis → `Research_X.X.md` in vault
-
-Incremental mode: if Research note exists, reads `## ✏️ Что нового` (user notes), computes delta (new sources, fragments), sends incremental prompt. User notes archived to `## 📋 История изменений` with timestamp.
-
-### Paper acquisition
-`klemma acquire <url> --title "..." --authors "..." --year N --section X.X` or `klemma acquire --batch papers.json`.
-Pipeline: download PDF → pyzotero `create_items` → `create_attachment_record` (metadata only, no cloud upload) → place PDF in `{storage_path}/{attachment_key}/` → poll BBT JSON for citekey → `state.register_sources([citekey])` + `set_pdf_path()` → optional `klemma process`.
-PDF storage: bypasses Zotero cloud (paid quota), stores locally in Zotero storage dir. Zotero sees attachment record and finds file locally.
-Core logic in `skills/acquirer.py`. Zotero write methods: `ZoteroLibrary.create_item()`, `ZoteroLibrary.create_attachment_record()`.
-Requires: `ZOTERO_API_KEY` env var, `zotero.library_id` in config.yaml.
-
-### Agent
-`klemma ask "query"` → build_agent_context() gathers all research data (sources, coverage, gaps, fragments, plan) → renders Jinja2 system prompt → launches `claude --system-prompt <context> <query>` interactively. Claude saves response to `Agent/Agent_<date>.md` in vault. For non-Claude backends (no interactive mode): `ai.call()` with full context → prints response to terminal.
-
-### Agent Skills (Claude Code)
-Agent uses Claude Code Skills from `.claude/skills/` instead of reading source code:
-- `klemma-acquire` — full acquire pipeline instructions (single + batch JSON format)
-- `klemma-process` — fragment extraction (single, batch, parallel)
-- `klemma-status` — coverage and gaps check
-
-Skills are auto-discovered by Claude Code in `--system-prompt` mode. Agent prompt (`agent.md`) references Skills via `/klemma-acquire`, `/klemma-process`, `/klemma-status`.
-
-### Library analysis
-`klemma library` → gather library context (summary, quality tiers, ref-gaps, sources compact list) → Claude analysis via `librarian.md` prompt → structured LibraryReport → saved to `Library/Library_{mode}_{date}.md` in vault. Three modes: status (health), recommend (section-focused), audit (deep quality check).
-
-### MCP tool integration
-`klemma tools add <name> --command <cmd> --args <args>` registers an MCP server in `config.yaml → mcp.servers`. ToolRegistry lazily creates MCPClient instances (sync wrapper over async MCP SDK, stdio transport). Each `call_tool()` spawns a fresh connection. Servers are not installed by Klemma — only launch commands are registered.
-
-### Paper search
-`klemma search "query"` → ToolRegistry.call("academia", "arxiv_search", ...) → rich table output. Requires registered `academia` MCP server.
-
-### Discovery pipeline
-`klemma discover -s X.X` → Phase 1 (deterministic: MCP search per ref-gap + section keywords, deduplicate against library) → Phase 2 (Claude: relevance assessment, usage type, priority) → results saved to `discoveries` table. Can run as background subprocess via `--background`. Review with `--review`.
-
-### Auto-sync sections
-On every `research`, `library`, `status` command: `_sync_sections()` → reads all vault @citekey.md frontmatter (~60ms), compares with DB, updates section assignments where vault differs. Also discovers new Zotero entries not yet in DB (auto-classified via config regex patterns, registered as `pending`).
-
-### Multi-section sources
-Frontmatter `sections: [1.1, 1.4.1, 3.2.2]` → `source_sections` table → `get_by_section()` uses JOIN to find all relevant sources.
+- [Core infrastructure](src/klemma/CLAUDE.md) — config, state, AI providers, vault, library, CLI, context
+- [AI Skills](src/klemma/skills/CLAUDE.md) — planner, extractor, researcher, librarian, agent, acquirer
+- [MCP Tools](src/klemma/tools/CLAUDE.md) — MCPClient, ToolRegistry, discovery pipeline
+- [Literature](src/klemma/literature/CLAUDE.md) — Zotero, PDF extraction, models, vault note factory
+- [TUI](src/klemma/tui/CLAUDE.md) — Textual dashboard and screens
+- [Prompts](prompts/CLAUDE.md) — Jinja2 templates for AI calls
+- [Tests](tests/CLAUDE.md) — testing patterns and conventions
 
 ## Development
 ```bash
@@ -150,3 +98,51 @@ pip install -e ".[litellm]"    # LiteLLM universal backend (100+ providers)
 pip install -e ".[all-ai]"     # all AI backends
 klemma --help
 ```
+
+## Maintaining CLAUDE.md documentation
+
+This documentation is a modular knowledge graph — 8 interconnected CLAUDE.md files loaded incrementally as the agent navigates directories. **Keep it up to date when changing code.**
+
+### When to update
+- **Adding a module**: add entry to the parent directory's CLAUDE.md (module name, line count, purpose, key functions)
+- **Adding a CLI command**: update "Key commands" section here + relevant skill/tool CLAUDE.md
+- **Adding a SQLite table**: update "SQLite tables" here + `src/klemma/CLAUDE.md` state.py section
+- **Adding a prompt template**: update `prompts/CLAUDE.md` (template table + variables) + skill's CLAUDE.md
+- **Adding a data flow**: document in the primary owner's CLAUDE.md, add cross-references
+- **Renaming/removing a module**: update the CLAUDE.md where it's documented, fix any cross-reference links
+- **Changing function signatures or key behavior**: update the relevant module entry
+
+### When to create a new CLAUDE.md
+Create a new child CLAUDE.md when a **new subdirectory** is added that contains 2+ modules with shared context. Follow this template:
+
+```markdown
+# <Subsystem Name>
+
+<One-line purpose.>
+
+## Modules
+
+### module.py (N lines)
+<Purpose.>
+- `key_function()` — what it does
+- `KeyClass` — what it represents
+
+## Data flows
+
+### <Flow name>
+<Step-by-step description of the end-to-end flow.>
+
+## Maintaining this file
+Update when modules are added/removed/renamed in this directory, or when key functions/classes change.
+
+See: [links to related CLAUDE.md files]
+```
+
+After creating a new child, add a link to the **Module documentation** section above.
+
+### Structure rules
+- **Primary owner**: each data flow is documented fully in one CLAUDE.md, other files only link to it
+- **Line counts**: listed as `(N lines)` next to module names — update after significant changes
+- **Cross-references**: every child ends with `See:` links to related CLAUDE.md files; use relative paths
+- **Self-contained**: each child should be understandable without reading the root
+- **Concise**: document what an agent needs to navigate and modify code, not exhaustive API docs
