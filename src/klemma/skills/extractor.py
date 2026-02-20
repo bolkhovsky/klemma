@@ -38,6 +38,7 @@ def extract_fragments(
         pdf_text=pdf_text,
         dissertation_context=dissertation_context,
         available_tags=", ".join(available_tags) if available_tags else "",
+        language=config.ai.language,
     )
 
     system = (

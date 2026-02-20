@@ -60,14 +60,14 @@ def test_base_call_json_delegates_to_call():
     config = AIConfig()
     base = AIProviderBase(config)
     # Override call to return JSON text
-    base.call = lambda system, user, max_tokens=8192, temperature=0.2: '{"result": 42}'
+    base.call = lambda system, user, max_tokens=8192, temperature=0.2, timeout=None: '{"result": 42}'
     assert base.call_json("sys", "usr") == {"result": 42}
 
 
 def test_base_call_json_returns_none_on_empty():
     config = AIConfig()
     base = AIProviderBase(config)
-    base.call = lambda system, user, max_tokens=8192, temperature=0.2: None
+    base.call = lambda system, user, max_tokens=8192, temperature=0.2, timeout=None: None
     assert base.call_json("sys", "usr") is None
 
 

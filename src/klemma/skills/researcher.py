@@ -506,7 +506,7 @@ def research_section(
     """
     # Определить главу
     chapter = int(section.split(".")[0])
-    chapter_name = config.dissertation.chapters.get(chapter, f"Глава {chapter}")
+    chapter_name = config.dissertation.chapters.get(chapter, f"Chapter {chapter}")
 
     # 0. Проверить предыдущий брифинг (инкрементальный режим)
     prev = _load_previous_research(section, chapter, state, vault)
@@ -608,11 +608,11 @@ def research_section(
             new_citekeys=new_citekeys,
             previous_fragment_count=prev["previous_fragment_count"],
             current_fragment_count=len(section_fragments),
-            section_text=section_text or "Раздел ещё не написан.",
+            section_text=section_text or "Section not written yet.",
             full_chapter_draft=(
                 draft_content[:30000]
                 if draft_content
-                else "Черновик главы не найден."
+                else "Chapter draft not found."
             ),
             fragments=json.dumps(
                 formatted_fragments, ensure_ascii=False, indent=2
@@ -623,13 +623,14 @@ def research_section(
             coverage=coverage,
             gaps=gaps,
             min_sources=config.dissertation.min_sources_per_section,
+            language=config.ai.language,
             range=range,
         )
 
         system = (
-            "Ты — исследовательский аналитик для кандидатской диссертации. "
-            "Это ПОВТОРНЫЙ анализ — обнови предыдущий брифинг, не переписывая с нуля. "
-            "Отвечай на русском. Верни только JSON."
+            "You are a research analyst for a PhD dissertation. "
+            "This is a REPEAT analysis — update the previous briefing, do not rewrite from scratch. "
+            "Output only valid JSON."
         )
 
         logger.info(
@@ -648,13 +649,13 @@ def research_section(
             target_section=section,
             chapter_num=chapter,
             chapter_name=chapter_name,
-            section_text=section_text or "Раздел ещё не написан.",
+            section_text=section_text or "Section not written yet.",
             full_chapter_draft=(
                 draft_content[:30000]
                 if draft_content
-                else "Черновик главы не найден."
+                else "Chapter draft not found."
             ),
-            chapter_plan=chapter_plan or "План сессий не найден.",
+            chapter_plan=chapter_plan or "Session plan not found.",
             fragments=json.dumps(
                 formatted_fragments, ensure_ascii=False, indent=2
             ),
@@ -665,13 +666,14 @@ def research_section(
             gaps=gaps,
             fragment_stats=fragment_stats,
             min_sources=config.dissertation.min_sources_per_section,
+            language=config.ai.language,
             range=range,
         )
 
         system = (
-            "Ты — исследовательский аналитик для кандидатской диссертации. "
-            "Анализируй готовность раздела и предложи структуру аргументации. "
-            "Отвечай на русском. Верни только JSON."
+            "You are a research analyst for a PhD dissertation. "
+            "Analyze section readiness and suggest an argumentation structure. "
+            "Output only valid JSON."
         )
 
     # 9. Вызов Claude

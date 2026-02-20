@@ -90,12 +90,13 @@ def annotate_source(
         year=entry.year or "Unknown",
         journal=entry.container_title or "N/A",
         doi=entry.DOI or "N/A",
-        language=entry.language or "Unknown",
+        paper_language=entry.language or "Unknown",
         abstract=entry.abstract or "Not available",
         pdf_text=pdf_text,
         dissertation_context=dissertation_context,
         available_tags=", ".join(available_tags) if available_tags else "",
         library_entries=_format_library_entries(entry_lookup),
+        language=config.ai.language,
     )
 
     system = (

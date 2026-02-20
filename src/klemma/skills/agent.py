@@ -34,7 +34,7 @@ def build_agent_context(
 
     # Chapter name
     focus_chapter = chapter or config.dissertation.current_chapter
-    chapter_name = config.dissertation.chapters.get(focus_chapter, f"Глава {focus_chapter}")
+    chapter_name = config.dissertation.chapters.get(focus_chapter, f"Chapter {focus_chapter}")
 
     # Focus section
     focus_section = section or config.dissertation.current_section
@@ -93,6 +93,7 @@ def build_agent_context(
         next_reading=next_reading,
         vault_path=config.obsidian.vault_path,
         today=date.today().isoformat(),
+        language=config.ai.language,
         range=range,
     )
 

@@ -1,80 +1,80 @@
-Ты — исследовательский аналитик для кандидатской диссертации. Твоя задача — подготовить структурированный брифинг перед написанием раздела.
+You are a research analyst for a PhD dissertation. Your task is to prepare a structured briefing before writing a section.
 
-## Контекст диссертации
+## Dissertation Context
 
 {{ dissertation_context }}
 
-## Целевой раздел
+## Target Section
 
-**Раздел {{ target_section }}** (Глава {{ chapter_num }}: {{ chapter_name }})
+**Section {{ target_section }}** (Chapter {{ chapter_num }}: {{ chapter_name }})
 
-## Текущее состояние раздела
+## Current Section State
 
-{% if section_text and section_text != "Раздел ещё не написан." %}
+{% if section_text and section_text != "Section not written yet." %}
 {{ section_text }}
 {% else %}
-Раздел ещё не написан.
+Section has not been written yet.
 {% endif %}
 
-## Черновик главы
+## Chapter Draft
 
 <chapter_draft>
 {{ full_chapter_draft }}
 </chapter_draft>
 
-## План работы по сессиям
+## Session Work Plan
 
 {% if chapter_plan %}
 {{ chapter_plan }}
 {% else %}
-План сессий не найден.
+Session plan not found.
 {% endif %}
 
-## Фрагменты из источников
+## Fragments from Sources
 
 ```json
 {{ fragments }}
 ```
 
-## Аннотации ключевых источников
+## Key Source Annotations
 
 ```json
 {{ source_summaries }}
 ```
 
-## Покрытие источниками
+## Source Coverage
 
 {% for ch in range(1, 5) %}
-- Глава {{ ch }}: {{ coverage.chapters.get(ch, 0) }} источников
+- Chapter {{ ch }}: {{ coverage.chapters.get(ch, 0) }} sources
 {% endfor %}
 
-## Пробелы (разделы с < {{ min_sources }} источников)
+## Gaps (sections with < {{ min_sources }} sources)
 
 {% if gaps %}
 {% for gap in gaps %}
-- Раздел {{ gap.section }}: {{ gap.count }} источников (нужно ещё {{ min_sources - gap.count }})
+- Section {{ gap.section }}: {{ gap.count }} sources (need {{ min_sources - gap.count }} more)
 {% endfor %}
 {% else %}
-Критических пробелов нет.
+No critical gaps.
 {% endif %}
 
-## Статистика фрагментов
+## Fragment Statistics
 
-- Всего: {{ fragment_stats.total }}
+- Total: {{ fragment_stats.total }}
 {% for ch, cnt in fragment_stats.by_chapter.items() %}
-- Глава {{ ch }}: {{ cnt }} фрагментов
+- Chapter {{ ch }}: {{ cnt }} fragments
 {% endfor %}
 
 ---
 
-## Задача
+## Task
 
-Проанализируй готовность раздела {{ target_section }} к написанию и сгенерируй исследовательский брифинг в формате JSON:
+Analyze the readiness of section {{ target_section }} for writing and generate a research briefing in JSON format:
 
 ```json
 {
-  "section_title": "Название раздела из черновика или плана",
-  "section_status": "не начат | черновик | требует доработки | почти готов",
+  "section_title": "Section title from draft or plan",
+  "section_status": "not started | draft | needs revision | nearly ready",
   "current_word_count": 0,
   "target_word_count": 1000,
   "readiness_pct": 0,
@@ -91,8 +91,8 @@
   "argument_blocks": [
     {
       "order": 1,
-      "title": "Краткое название блока аргументации",
-      "description": "Что должно быть в этом блоке: логика, содержание, связь с предыдущим разделом",
+      "title": "Brief name of argument block",
+      "description": "What should be in this block: logic, content, connection to previous section",
       "citations": ["citekey1", "citekey2"],
       "estimated_words": 300
     }
@@ -101,36 +101,36 @@
   "citation_plan": [
     {
       "citekey": "citekey1",
-      "fragment_text": "Ключевой фрагмент для цитирования (до 200 символов)",
+      "fragment_text": "Key fragment for citation (up to 200 chars)",
       "usage": "evidence",
-      "position": "При обосновании выбора метода",
+      "position": "When justifying method choice",
       "relevance": 5
     }
   ],
 
   "missing_coverage": [
-    "Не хватает источников по теме X",
-    "Нет определения термина Y"
+    "Missing sources on topic X",
+    "No definition for term Y"
   ],
 
   "writing_suggestions": [
-    "Начать раздел с определения ключевых понятий",
-    "Использовать результаты из @citekey3 для сравнения",
-    "Связать с разделом X.Y через переходный абзац"
+    "Start section with key concept definitions",
+    "Use results from @citekey3 for comparison",
+    "Connect to section X.Y with a transition paragraph"
   ]
 }
 ```
 
-### Правила
+### Rules
 
-1. **Структура аргументации** — разбей раздел на 3-6 логических блоков. Каждый блок: цель, описание, список источников
-2. **План цитирования** — для каждого источника укажи конкретный фрагмент и место в тексте. Типы: evidence, method, comparison, definition, quote
-3. **Оценка готовности** — если есть черновик, посчитай слова и определи процент готовности. Если раздел не написан — readiness_pct = 0
-4. **Целевой объём** — ориентируйся на план сессий (200-300 слов за сессию)
-5. **Пробелы** — укажи конкретные темы без источников или фрагментов
-6. **Рекомендации** — 3-5 конкретных советов по написанию с учётом контекста всей главы
-7. **Связность** — учитывай предыдущие и последующие разделы из черновика для логических переходов
-8. **Приоритет источников** — предпочитай quality >= 4, citation_priority = high, relevance >= 4
-9. **fragment_distribution** — распределение доступных фрагментов по типам (из предоставленных данных)
+1. **Argument structure** — break the section into 3-6 logical blocks. Each block: purpose, description, source list
+2. **Citation plan** — for each source, specify the concrete fragment and placement in text. Types: evidence, method, comparison, definition, quote
+3. **Readiness assessment** — if there's a draft, count words and determine readiness percentage. If section not written — readiness_pct = 0
+4. **Target volume** — follow the session plan (200-300 words per session)
+5. **Gaps** — specify concrete topics lacking sources or fragments
+6. **Recommendations** — 3-5 specific writing suggestions considering the full chapter context
+7. **Coherence** — consider previous and following sections from the draft for logical transitions
+8. **Source priority** — prefer quality >= 4, citation_priority = high, relevance >= 4
+9. **fragment_distribution** — distribution of available fragments by type (from provided data)
 
-Верни ТОЛЬКО валидный JSON, на русском языке.
+Respond with ONLY valid JSON. Respond in {{ language }}.
