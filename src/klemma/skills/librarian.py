@@ -87,9 +87,13 @@ def _gather_library_context(
     quality_data = state.get_sources_by_quality()
     ref_gaps = state.get_reference_gaps(limit=15)
 
-    # Compact sources list for prompt
+    # Compact sources list for prompt (exclude already-verdicted drops)
     all_sources = state.get_all_sources()
-    sources_compact = _format_sources_compact(all_sources, entry_lookup)
+    drop_ids = state.get_prune_drop_ids()
+    active_sources = [s for s in all_sources if s["id"] not in drop_ids]
+    sources_compact = _format_sources_compact(active_sources, entry_lookup)
+
+    active_total = len(active_sources)
 
     context = {
         "dissertation_context": DISSERTATION_CONTEXT,
@@ -108,7 +112,7 @@ def _gather_library_context(
         "section": focus_section or "",
         "section_title": "",
         "section_summaries": "",
-        "prune_needed": summary.get("total", 0) > 100,
+        "prune_needed": active_total > 100,
         "target_range": "100-120",
     }
 
