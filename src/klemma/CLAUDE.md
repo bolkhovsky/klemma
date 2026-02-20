@@ -72,4 +72,7 @@ Also discovers new Zotero entries not in DB (auto-classified via config regex pa
 ### Multi-section sources
 Frontmatter `sections: [1.1, 1.4.1, 3.2.2]` → `source_sections` table → `get_by_section()` uses JOIN.
 
+## Maintaining this file
+Update when: adding/removing/renaming root-level modules in `src/klemma/`, changing key class/function signatures, adding SQLite tables to `state.py`, modifying `KlemmaContext` fields, or adding new CLI commands to `cli.py`. Line counts should be refreshed after significant changes.
+
 See: [AI Skills](skills/CLAUDE.md) | [MCP Tools](tools/CLAUDE.md) | [Literature](literature/CLAUDE.md) | [TUI](tui/CLAUDE.md) | [Prompts](../../prompts/CLAUDE.md) | [Tests](../../tests/CLAUDE.md)

@@ -53,4 +53,7 @@ Each annotated paper's bibliography is cross-checked against the library.
 - **Auto-resolve**: when a gap's author+year matches a newly added source, it's marked resolved
 - **Surfacing**: CLI status line, `klemma status`, TUI dashboard, TUI gaps screen
 
+## Maintaining this file
+Update when: adding/changing Pydantic models in `models.py`, modifying PDF finding tiers, changing vault note structure in `note_factory.py`, adding Zotero write methods, or changing the reference gap scoring formula. If `annotate.md` variables change, also update [Prompts](../../../prompts/CLAUDE.md).
+
 See: [Core infrastructure](../CLAUDE.md) for `state.py` tables | [AI Skills](../skills/CLAUDE.md) for extraction pipeline | [Prompts](../../../prompts/CLAUDE.md) for `annotate.md` template

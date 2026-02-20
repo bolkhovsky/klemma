@@ -19,4 +19,7 @@ Entry point: `app.py` → `KlemmaApp` → mounts screens.
 - Data via: `state.get_stats()`, `state.get_fragment_stats()`, `state.get_plan()`, `state.get_gap_summary()`, `state.get_coverage_stats()`, `state.get_fragments()`
 - Status colors: green (ok), yellow (low), red (gap)
 
+## Maintaining this file
+Update when: adding new TUI screens, changing screen data dependencies, or modifying the state query methods that screens rely on.
+
 See: [Core infrastructure](../CLAUDE.md) for state query methods used by TUI

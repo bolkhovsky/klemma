@@ -39,4 +39,7 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 - `{{ variable }}` syntax with Jinja2 control flow (`{% for %}`, `{% if %}`)
 - Rendered by `AIProviderBase.render_prompt()` which loads file and applies `Template()`
 
+## Maintaining this file
+Update when: adding a new prompt template (add to table + variables section), changing template variables (update the variables list), or changing which skill uses a template. The template table and variable lists must stay in sync with the actual `.md` files in this directory.
+
 See: [AI Skills](../src/klemma/skills/CLAUDE.md) for the skill that uses each template

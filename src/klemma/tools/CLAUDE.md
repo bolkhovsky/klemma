@@ -39,4 +39,7 @@ Requires registered `academia` MCP server.
 `klemma discover -s X.X` → `discovery.run_discovery()` → Phase 1 + Phase 2 → `state.save_discovery()`.
 Background mode: `--background` spawns subprocess; `--status` checks progress; `--review` shows results.
 
+## Maintaining this file
+Update when: adding new MCP server types, changing `MCPClient`/`ToolRegistry` interfaces, modifying discovery pipeline phases, or adding new tool-related CLI commands.
+
 See: [Core infrastructure](../CLAUDE.md) for `ToolRegistry` in `KlemmaContext` | [AI Skills](../skills/CLAUDE.md) for how discovery feeds research briefings

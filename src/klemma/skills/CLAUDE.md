@@ -82,4 +82,7 @@ Agent uses Claude Code Skills from `.claude/skills/` instead of reading source c
 
 Skills auto-discovered by Claude Code in `--system-prompt` mode. Agent prompt references via `/klemma-acquire`, `/klemma-process`, `/klemma-status`.
 
+## Maintaining this file
+Update when: adding a new skill module, changing skill function signatures or data flow steps, adding new Claude Code skills to `.claude/skills/`, or modifying how skills compose with infrastructure. If a new skill uses a prompt template, also update [Prompts](../../../prompts/CLAUDE.md).
+
 See: [Literature](../literature/CLAUDE.md) for PDF extraction and note creation | [MCP Tools](../tools/CLAUDE.md) for search and discovery | [Prompts](../../../prompts/CLAUDE.md) for template variables | [Core](../CLAUDE.md) for AI providers and state
