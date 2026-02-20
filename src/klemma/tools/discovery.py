@@ -9,8 +9,6 @@ Can be run as subprocess for background execution:
 
 import json
 import logging
-import sys
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -221,7 +219,6 @@ def _phase2_assess(section: str, state, cfg) -> int:
         state.review_discovery(disc_id, "assessed")
         # Update relevance in raw — we store it via a simple update
         try:
-            from contextlib import contextmanager
 
             with state._conn() as conn:
                 conn.execute(

@@ -3,7 +3,6 @@
 import shutil
 from pathlib import Path
 
-
 # Example files shipped with the package (repo root)
 _EXAMPLES_DIR = Path(__file__).parent.parent.parent
 
