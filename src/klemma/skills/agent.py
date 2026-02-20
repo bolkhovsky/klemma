@@ -36,7 +36,7 @@ def build_agent_context(
     # Chapter name
     if project:
         focus_chapter = chapter or project.current_chapter
-        chapter_name = project.chapters.get(focus_chapter, f"Глава {focus_chapter}")
+        chapter_name = project.chapters.get(focus_chapter, f"Chapter {focus_chapter}")
         focus_section = section or project.current_section
         chapters = project.chapters
         scientific_results = project.scientific_results
@@ -44,7 +44,7 @@ def build_agent_context(
         min_sources = project.min_sources_per_section
     else:
         focus_chapter = chapter or config.dissertation.current_chapter
-        chapter_name = config.dissertation.chapters.get(focus_chapter, f"Глава {focus_chapter}")
+        chapter_name = config.dissertation.chapters.get(focus_chapter, f"Chapter {focus_chapter}")
         focus_section = section or config.dissertation.current_section
         chapters = config.dissertation.chapters
         scientific_results = config.dissertation.scientific_results
@@ -105,6 +105,7 @@ def build_agent_context(
         next_reading=next_reading,
         vault_path=config.obsidian.vault_path,
         today=date.today().isoformat(),
+        language=config.ai.language,
         range=range,
     )
 

@@ -24,6 +24,7 @@ obsidian:
 
 ai:
   model: "sonnet"                      # claude model: "opus", "sonnet", "haiku"
+  language: "ru"                       # AI response language: "en", "ru", "de", etc.
   max_pdf_chars: 50000
   timeout: 300
   retries: 2

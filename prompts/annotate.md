@@ -1,45 +1,45 @@
-Проанализируй научную статью и создай структурированную аннотацию для кандидатской диссертации.
+Analyze a scientific paper and create a structured annotation for a PhD dissertation.
 
-## Метаданные статьи
-- **Название**: {{ title }}
-- **Авторы**: {{ authors }}
-- **Год**: {{ year }}
-- **Журнал**: {{ journal }}
+## Paper Metadata
+- **Title**: {{ title }}
+- **Authors**: {{ authors }}
+- **Year**: {{ year }}
+- **Journal**: {{ journal }}
 - **DOI**: {{ doi }}
-- **Язык**: {{ language }}
+- **Language**: {{ paper_language }}
 
-## Аннотация (из метаданных)
+## Abstract (from metadata)
 {{ abstract }}
 
-## Полный текст
+## Full Text
 {{ pdf_text }}
 
 ---
 
-## Контекст диссертации
+## Dissertation Context
 {{ dissertation_context }}
 
 ---
 
-## Наша библиотека (существующие источники)
+## Our Library (existing sources)
 {{ library_entries }}
 
 ---
 
-## Задача
+## Task
 
-Создай JSON-аннотацию со следующей структурой:
+Create a JSON annotation with the following structure:
 
 ```json
 {
-  "summary": "3-5 предложений, описывающих основной вклад и результаты статьи",
-  "methodology": "Описание методов исследования, источников данных и аналитических подходов",
+  "summary": "3-5 sentences describing the paper's main contribution and results",
+  "methodology": "Description of research methods, data sources, and analytical approaches",
   "key_findings": [
-    "Первый ключевой результат",
-    "Второй ключевой результат",
-    "Третий ключевой результат"
+    "First key result",
+    "Second key result",
+    "Third key result"
   ],
-  "relevance_to_dissertation": "Конкретное объяснение, как статья связана с исследованием валидации прогнозов ледовой обстановки",
+  "relevance_to_dissertation": "Specific explanation of how the paper relates to the dissertation topic",
   "quality_score": 4,
   "citation_priority": "medium",
   "dissertation_relevance": {
@@ -47,17 +47,17 @@
     "primary_section": "2.3.1",
     "relevance_nr1": 3,
     "relevance_nr2": 4,
-    "rationale": "Почему статья релевантна для НР1/НР2"
+    "rationale": "Why the paper is relevant for scientific results NR1/NR2"
   },
   "chapters": [1, 2],
   "sections": ["1.3.1", "2.3.1"],
-  "suggested_tags": ["Sea Ice", "Machine Learning"],
+  "suggested_tags": ["Tag1", "Tag2"],
   "key_references": [
     {
       "authors": "Smith et al.",
       "year": 2020,
       "title": "Exact title from References section",
-      "why_relevant": "Краткое объяснение релевантности для диссертации",
+      "why_relevant": "Brief explanation of relevance to the dissertation",
       "dissertation_sections": ["2.3.1"],
       "in_library": true,
       "citekey": "Smith2020"
@@ -66,34 +66,34 @@
 }
 ```
 
-## Инструкции
+## Instructions
 
-1. **summary**: Краткое содержание статьи — что сделано, какие данные, какой результат. На русском.
-2. **methodology**: Какие методы использованы, какие данные, какой временной период. На русском.
-3. **key_findings**: 2-5 ключевых результатов. На русском.
-4. **relevance_to_dissertation**: Как конкретно статья связана с темой диссертации. На русском.
-5. **quality_score**: Оценка 1-5 по релевантности для диссертации:
-   - 5 = Непосредственно о валидации прогнозов морского льда / ML для Арктики
-   - 4 = О ДЗЗ морского льда или ML-методах применимых к ледовой обстановке
-   - 3 = Об Арктике / ML для геонаук в целом
-   - 2 = Косвенная связь (ГИС-методы, общее ДЗЗ)
-   - 1 = Минимальная релевантность, фоновый источник
-6. **citation_priority**: "high" (ключевой источник), "medium" (поддерживающий), "low" (фоновый)
+1. **summary**: Brief paper overview — what was done, what data, what result
+2. **methodology**: What methods, data, time period
+3. **key_findings**: 2-5 key results
+4. **relevance_to_dissertation**: How specifically the paper connects to the dissertation topic
+5. **quality_score**: Rating 1-5 by relevance to the dissertation:
+   - 5 = Directly about the dissertation's core topic and methods
+   - 4 = About closely related methods or data applicable to the dissertation
+   - 3 = About the broader domain or general methods
+   - 2 = Indirect connection (general methodology, related field)
+   - 1 = Minimal relevance, background source
+6. **citation_priority**: "high" (key source), "medium" (supporting), "low" (background)
 7. **dissertation_relevance**:
-   - primary_chapter: Основная глава (1-4)
-   - primary_section: Конкретный раздел (например "2.3.1")
-   - relevance_nr1: Релевантность для НР1 (модель валидации AMSR2) 0-5
-   - relevance_nr2: Релевантность для НР2 (методика IIEE-декомпозиции) 0-5
-   - rationale: Краткое обоснование
-8. **chapters**: Все релевантные главы [1-4]
-9. **sections**: Все релевантные разделы
-10. **suggested_tags**: 1-5 тегов из списка: {{ available_tags }}
-11. **key_references**: 5-15 наиболее релевантных для диссертации ссылок из списка литературы (References) анализируемой статьи:
-   - Найди раздел References/Bibliography/Литература в полном тексте
-   - Выбери 5-15 ссылок, наиболее важных для тематики диссертации (морской лёд, ДЗЗ, ML, валидация, Арктика)
-   - Для каждой: authors (краткая форма), year, title (точно из References), why_relevant (на русском), dissertation_sections (к каким разделам относится)
-   - **in_library**: true если ссылка соответствует одному из источников в разделе «Наша библиотека» выше (сопоставляй по автору + году + названию). Укажи citekey
-   - **in_library**: false если ссылки нет в нашей библиотеке. citekey = null
-   - Приоритет: выбирай ссылки которых НЕТ в нашей библиотеке — это gap'ы
+   - primary_chapter: Main chapter (1-4)
+   - primary_section: Specific section (e.g. "2.3.1")
+   - relevance_nr1: Relevance for scientific result NR1, scale 0-5
+   - relevance_nr2: Relevance for scientific result NR2, scale 0-5
+   - rationale: Brief justification
+8. **chapters**: All relevant chapters [1-4]
+9. **sections**: All relevant sections
+10. **suggested_tags**: 1-5 tags from the list: {{ available_tags }}
+11. **key_references**: 5-15 most relevant references from the paper's bibliography:
+   - Find the References/Bibliography section in the full text
+   - Select 5-15 references most important for the dissertation topic
+   - For each: authors (short form), year, title (exact from References), why_relevant, dissertation_sections
+   - **in_library**: true if the reference matches a source in "Our Library" above (match by author + year + title). Include citekey
+   - **in_library**: false if the reference is not in our library. citekey = null
+   - Priority: prefer references NOT in our library — these are gaps
 
-Верни ТОЛЬКО валидный JSON. Без markdown-форматирования, без пояснений.
+Respond with ONLY valid JSON. No markdown formatting, no explanations. Respond in {{ language }}.

@@ -1,38 +1,38 @@
-Библиотека перенасыщена: {{ source_count }} источников (цель: 100-120).
-Проанализируй список и предложи кандидатов на отсев.
+The library is oversaturated: {{ source_count }} sources (target: 100-120).
+Analyze the list and suggest candidates for removal.
 
-## Критерии DROP (уверенный отсев)
+## DROP Criteria (confident removal)
 
-- Нет фрагментов (f=0) И нет привязки к секции (s пусто) — orphan источники
-- quality <= 2 на неприоритетных секциях
-- Дублирующее покрытие: секция уже имеет 8+ источников, этот не добавляет уникальной ценности
-- Статус pending + low quality/relevance (не стоит тратить время на обработку)
+- No fragments (f=0) AND no section assignment (s empty) — orphan sources
+- quality <= 2 in non-priority sections
+- Duplicate coverage: section already has 8+ sources, this one adds no unique value
+- Status pending + low quality/relevance (not worth processing time)
 
-## Критерии MAYBE (на усмотрение пользователя)
+## MAYBE Criteria (user's discretion)
 
-- quality 3 с малым числом фрагментов в перенасыщенной секции
-- Устаревший (>10 лет) при наличии свежего аналога в той же секции
+- quality 3 with few fragments in an oversaturated section
+- Outdated (>10 years) when a newer equivalent exists in the same section
 
-## НЕ трогать (защищённые)
+## Protected (do NOT touch)
 
-- Источники с высоким quality (4-5) в приоритетных секциях
-- Единственный или один из <=3 источников в секции
+- Sources with high quality (4-5) in priority sections
+- The only source or one of <=3 sources in a section
 
-## Источники
+## Sources
 
 {{ sources_compact }}
 
-## Формат ответа (JSON)
+## Response Format (JSON)
 
 ```json
 {
   "drop": [
-    {"citekey": "authorTitleYear", "reason": "f=0, нет секции, quality=1"}
+    {"citekey": "authorTitleYear", "reason": "f=0, no section, quality=1"}
   ],
   "maybe": [
-    {"citekey": "authorTitleYear", "reason": "quality=3, 1 фрагмент, секция 1.3 имеет 12 источников"}
+    {"citekey": "authorTitleYear", "reason": "quality=3, 1 fragment, section 1.3 has 12 sources"}
   ]
 }
 ```
 
-Отвечай ТОЛЬКО валидным JSON. Включай только реальные citekey из списка выше.
+Respond with ONLY valid JSON. Include only real citekeys from the list above. Respond in {{ language }}.

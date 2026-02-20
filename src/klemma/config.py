@@ -50,6 +50,7 @@ class AIConfig(BaseModel):
     base_url: Optional[str] = None  # URL for OpenAI-compatible endpoints
     api_key_env: str = ""  # env var name for API key (e.g. "OPENAI_API_KEY")
     json_mode: bool = False  # use structured JSON mode when backend supports it
+    language: str = "ru"  # AI response language (e.g. "en", "ru", "de")
 
     @property
     def api_key(self) -> Optional[str]:
