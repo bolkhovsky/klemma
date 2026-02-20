@@ -32,52 +32,44 @@ pip install -e .
 ## Быстрый старт
 
 ```bash
-# 1. Открыть TUI-дашборд
-klemma
-
-# 2. Сгенерировать план на день (включает дайджест библиотеки)
+# 1. Сгенерировать план на день (включает дайджест библиотеки)
 klemma plan
 
-# 3. Посмотреть статистику, покрытие, пробелы
+# 2. Посмотреть статистику, покрытие, пробелы
 klemma status              # компактный обзор
 klemma status --verbose    # полные таблицы
 klemma status --chapter 2  # фильтр по главе
 
-# 4. Обработать источник (фрагменты + аннотация + vault note)
+# 3. Обработать источник (фрагменты + аннотация + vault note)
 klemma process anderssonSeasonalArcticSea2021   # один источник
 klemma process                                  # все pending
 
-# 5. Исследовательский брифинг по разделу
+# 4. Исследовательский брифинг по разделу
 klemma research -s 1.3.2
 
-# 6. AI-анализ библиотеки
+# 5. AI-анализ библиотеки
 klemma library             # здоровье библиотеки
 klemma library -s 2.3      # рекомендации для раздела
 klemma library --audit     # глубокий аудит качества
 
-# 7. Задать вопрос агенту с полным контекстом диссертации
+# 6. Задать вопрос агенту с полным контекстом диссертации
 klemma ask "Какие основные методы валидации прогнозов ледовой обстановки?"
 
-# 8. Управление MCP-серверами (Zotero, arXiv, ...)
+# 7. Управление MCP-серверами (Zotero, arXiv, ...)
 klemma tools add zotero --command "uvx" --args "zotero-mcp" --env ZOTERO_LOCAL=true
 klemma tools list --probe     # подключиться и показать доступные инструменты
 
-# 9. Поиск статей через MCP (arXiv, Semantic Scholar)
+# 8. Поиск статей через MCP (arXiv, Semantic Scholar)
 klemma tools add academia --command "python3" --args "-m academia_mcp --transport stdio"
 klemma search "AMSR2 sea ice forecast validation"
 
-# 10. Автоматический поиск новой литературы для раздела
+# 9. Автоматический поиск новой литературы для раздела
 klemma discover -s 1.3.2              # запустить discovery pipeline
 klemma discover --status              # статус
 klemma discover --review              # просмотр найденного
 ```
 
-## Команды (10)
-
-### `klemma`
-Интерактивный TUI-дашборд (Textual). Показывает план на день, статистику, покрытие по главам, пробелы, reference gaps.
-
-Горячие клавиши: `d` — дашборд, `f` — фрагменты, `r` — обновить, `q` — выход.
+## Команды (9)
 
 ### `klemma plan`
 Генерирует ежедневный план через Claude: фокус дня, рекомендации по чтению, задача для ассистента, стратегические предложения. Включает дайджест библиотеки. Учитывает вчерашний план, покрытие глав, пробелы, дедлайны. План сохраняется в базу и дописывается в daily note Obsidian.
@@ -267,7 +259,7 @@ tags: ["Sea-Ice", "Machine-Learning"]
 ## Архитектура
 
 ```
-klemma (CLI/TUI)
+klemma (CLI)
 ├── AI Provider ─────── AI-анализ (pluggable backend)
 │   ├── ClaudeClient ── Claude Code CLI (claude -p) — default
 │   ├── OpenAIClient ── OpenAI / Ollama / vLLM / LM Studio (openai SDK)

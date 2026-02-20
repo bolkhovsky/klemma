@@ -210,7 +210,7 @@ def generate_morning_plan(
         sources_needed=data.get("sources_needed", []),
         strategy_suggestions=data.get("strategy_suggestions", []),
         briefing_text=_format_briefing(data),
-        # Обратная совместимость (TUI)
+        # Legacy plan fields (CLI output + DB)
         dissertation_task=focus,
         assistant_task=data.get("assistant_task", ""),
         reading_target=data.get("reading_target", ""),

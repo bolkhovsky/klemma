@@ -1,4 +1,4 @@
-"""Klemma CLI — dual-mode: headless commands + TUI dashboard."""
+"""Klemma CLI — AI academic assistant."""
 
 import json
 import sys
@@ -231,7 +231,7 @@ def _print_ref_gaps_table(state: StateManager, limit: int = 20):
 def main(ctx, config):
     """Klemma — AI academic assistant.
 
-    Run without arguments to launch TUI dashboard.
+    Run a subcommand or use --help for usage info.
     """
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config
@@ -248,19 +248,7 @@ def main(ctx, config):
             pass
 
     if ctx.invoked_subcommand is None:
-        # No subcommand → launch TUI
-        try:
-            from .app import KlemmaApp
-            kctx = _init_components(config)
-            app = KlemmaApp(cfg=kctx.config, state=kctx.state, vault=kctx.vault)
-            app.run()
-        except ImportError as e:
-            console.print(f"[red]TUI not available: {e}[/red]")
-            console.print("Install textual: pip install textual")
-            sys.exit(1)
-        except Exception as e:
-            console.print(f"[red]Error launching TUI: {e}[/red]")
-            sys.exit(1)
+        click.echo(ctx.get_help())
 
 
 @main.command()
