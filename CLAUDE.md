@@ -1,12 +1,12 @@
 # Klemma — AI Academic Assistant
 
 ## What is this
-Klemma is a dual-mode CLI/TUI tool for PhD dissertation work. It manages literature (via Zotero), extracts citation fragments from PDFs (via Claude AI), generates research briefings, daily plans, and tracks dissertation coverage.
+Klemma is a CLI tool for PhD dissertation work. It manages literature (via Zotero), extracts citation fragments from PDFs (via Claude AI), generates research briefings, daily plans, and tracks dissertation coverage.
 
 ## Architecture
-- **Dual mode**: `klemma` → Textual TUI dashboard; `klemma plan/process/research/library` → headless CLI
-- **Stack**: Python 3.11+, Click, Textual, pyzotero, PyMuPDF, MCP, SQLite
-- **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/TUI/Obsidian)
+- **CLI mode**: `klemma <command>` — all commands are headless CLI
+- **Stack**: Python 3.11+, Click, pyzotero, PyMuPDF, MCP, SQLite
+- **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/Obsidian)
 - **MCP layer**: ToolRegistry → MCPClient (stdio transport) → external servers (zotero-mcp, academia-mcp)
 - **Library abstraction**: LibraryProvider protocol with LocalLibrary (BBT JSON) and MCPLibrary (zotero-mcp) backends
 - **AI abstraction**: AIProvider protocol with ClaudeClient (CLI), OpenAIClient, LiteLLMClient backends + `create_ai()` factory
@@ -16,7 +16,6 @@ Klemma is a dual-mode CLI/TUI tool for PhD dissertation work. It manages literat
 ```
 src/klemma/
 ├── cli.py              — Click CLI entry point
-├── app.py              — Textual TUI app
 ├── config.py           — Pydantic config models (incl. MCPServerConfig, MCPConfig)
 ├── context.py          — KlemmaContext dataclass (single object per CLI command)
 ├── state.py            — SQLite state manager
@@ -25,7 +24,6 @@ src/klemma/
 ├── ai_litellm.py       — LiteLLM universal backend (100+ providers)
 ├── vault.py            — Obsidian adapter (CLI/file I/O, update_section)
 ├── library_provider.py — LibraryProvider protocol + LocalLibrary + MCPLibrary
-├── tui/                — Textual screens (dashboard, fragments, coverage, gaps, stats)
 ├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, acquirer)
 ├── literature/         — Zotero, PDF, models, note_factory
 └── tools/              — MCP tool integration
@@ -46,8 +44,7 @@ prompts/
 └── klemma-status/SKILL.md  — Agent skill: coverage & gaps check
 ```
 
-## Key commands (11)
-- `klemma` — TUI dashboard
+## Key commands (10)
 - `klemma plan` — daily plan generation (library digest included)
 - `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
 - `klemma process [<citekeys>...]` — extract fragments from PDF; no arg = batch all pending; parallel by default
@@ -102,7 +99,7 @@ PDF → PyMuPDF text → AI analysis → fragments to SQLite + vault (`## 💬 �
 Each annotated paper's bibliography is cross-checked against our library. Missing relevant refs accumulate across sources.
 - **Score formula**: `count × avg_source_quality × section_weight` (section_weight=2.0 for НР1/НР2 sections)
 - **Auto-resolve**: when a gap's author+year matches a newly added source, it's marked resolved
-- **Surfacing**: CLI status line (every command), `klemma gaps`, TUI dashboard, TUI gaps screen
+- **Surfacing**: CLI status line (every command), `klemma status` (gaps section)
 
 ### Research briefing
 `klemma research -s X.X` → auto-extract fragments → collect context (draft, fragments, sources, coverage) → Claude analysis → `Research_X.X.md` in vault
