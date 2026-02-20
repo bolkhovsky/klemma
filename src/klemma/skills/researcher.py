@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-from ..ai import ClaudeClient
+from ..ai import AIProvider
 from ..config import KlemmaConfig
 from ..literature.models import ArgumentBlock, CitationEntry, ResearchResult, ZoteroEntry
 from ..literature.pdf import PDFExtractor
@@ -308,7 +308,7 @@ def pre_extract_sources(
     config: KlemmaConfig,
     state: StateManager,
     vault: VaultAdapter,
-    ai: ClaudeClient,
+    ai: AIProvider,
     force: bool = False,
     on_progress: Optional[Callable] = None,
     max_sources: int = 50,
@@ -480,7 +480,7 @@ def research_section(
     config: KlemmaConfig,
     state: StateManager,
     vault: VaultAdapter,
-    ai: ClaudeClient,
+    ai: AIProvider,
     save_to_vault: bool = True,
 ) -> ResearchResult:
     """Сгенерировать исследовательский брифинг для раздела диссертации.

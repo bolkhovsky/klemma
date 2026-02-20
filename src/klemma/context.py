@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from .ai import ClaudeClient
+    from .ai import AIProvider
     from .config import KlemmaConfig
     from .library_provider import LibraryProvider
     from .state import StateManager
@@ -25,6 +25,6 @@ class KlemmaContext:
     config: KlemmaConfig
     state: StateManager
     vault: VaultAdapter
-    ai: Optional[ClaudeClient] = None
+    ai: Optional[AIProvider] = None
     library: Optional[LibraryProvider] = None
     tools: Optional[ToolRegistry] = None

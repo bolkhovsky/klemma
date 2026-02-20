@@ -30,10 +30,21 @@ class ObsidianConfig(BaseModel):
 
 
 class AIConfig(BaseModel):
+    backend: str = "claude"  # "claude" | "openai" | "litellm"
     model: str = "opus"
     max_pdf_chars: int = 50000
     timeout: int = 180
     retries: int = 2
+    base_url: Optional[str] = None  # URL for OpenAI-compatible endpoints
+    api_key_env: str = ""  # env var name for API key (e.g. "OPENAI_API_KEY")
+    json_mode: bool = False  # use structured JSON mode when backend supports it
+
+    @property
+    def api_key(self) -> Optional[str]:
+        """Resolve API key from environment variable."""
+        if self.api_key_env:
+            return os.environ.get(self.api_key_env)
+        return None
 
 
 class StateConfig(BaseModel):

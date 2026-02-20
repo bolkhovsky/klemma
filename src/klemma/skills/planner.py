@@ -7,7 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
-from ..ai import ClaudeClient
+from ..ai import AIProvider
 from ..config import KlemmaConfig
 from ..literature.models import DailyPlan
 from ..state import StateManager
@@ -122,7 +122,7 @@ def generate_morning_plan(
     config: KlemmaConfig,
     state: StateManager,
     vault: VaultAdapter,
-    ai: ClaudeClient,
+    ai: AIProvider,
 ) -> DailyPlan:
     """Сгенерировать утренний брифинг через Claude."""
 

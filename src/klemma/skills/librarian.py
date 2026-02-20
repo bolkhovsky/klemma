@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from ..ai import ClaudeClient
+from ..ai import AIProvider
 from ..config import KlemmaConfig
 from ..literature.models import LibraryReport
 from ..state import StateManager
@@ -19,7 +19,7 @@ def analyze_library(
     config: KlemmaConfig,
     state: StateManager,
     vault: VaultAdapter,
-    ai: ClaudeClient,
+    ai: AIProvider,
     entry_lookup: dict,
     mode: str = "status",
     focus_section: Optional[str] = None,

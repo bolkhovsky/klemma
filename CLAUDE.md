@@ -5,10 +5,11 @@ Klemma is a dual-mode CLI/TUI tool for PhD dissertation work. It manages literat
 
 ## Architecture
 - **Dual mode**: `klemma` → Textual TUI dashboard; `klemma plan/process/research/library` → headless CLI
-- **Stack**: Python 3.11+, Click, Textual, Claude Code CLI, pyzotero, PyMuPDF, MCP, SQLite
+- **Stack**: Python 3.11+, Click, Textual, pyzotero, PyMuPDF, MCP, SQLite
 - **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/TUI/Obsidian)
 - **MCP layer**: ToolRegistry → MCPClient (stdio transport) → external servers (zotero-mcp, academia-mcp)
 - **Library abstraction**: LibraryProvider protocol with LocalLibrary (BBT JSON) and MCPLibrary (zotero-mcp) backends
+- **AI abstraction**: AIProvider protocol with ClaudeClient (CLI), OpenAIClient, LiteLLMClient backends + `create_ai()` factory
 - **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/tools
 
 ## Project structure
@@ -19,7 +20,9 @@ src/klemma/
 ├── config.py           — Pydantic config models (incl. MCPServerConfig, MCPConfig)
 ├── context.py          — KlemmaContext dataclass (single object per CLI command)
 ├── state.py            — SQLite state manager
-├── ai.py               — Claude Code CLI wrapper (claude -p)
+├── ai.py               — AIProvider protocol + AIProviderBase + ClaudeClient + create_ai() factory
+├── ai_openai.py        — OpenAI-compatible backend (OpenAI, Ollama, vLLM, LM Studio)
+├── ai_litellm.py       — LiteLLM universal backend (100+ providers)
 ├── vault.py            — Obsidian adapter (CLI/file I/O, update_section)
 ├── library_provider.py — LibraryProvider protocol + LocalLibrary + MCPLibrary
 ├── tui/                — Textual screens (dashboard, fragments, coverage, gaps, stats)
@@ -63,7 +66,11 @@ Hidden aliases (backward compat): `morning`→`plan`, `extract`→`process`, `ag
 - `zotero.library_json` — path to BetterBibTeX JSON export (for PDF lookup)
 - `zotero.backend` — `"local"` (default, BBT JSON) or `"mcp"` (zotero-mcp server)
 - `mcp.servers` — registered MCP servers (managed via `klemma tools add/remove`)
-- Requires: Claude Code CLI (`claude` in PATH), `ZOTERO_API_KEY` env var (for acquire + Zotero API access)
+- `ai.backend` — `"claude"` (default, CLI), `"openai"` (OpenAI-compatible API), or `"litellm"` (100+ providers)
+- `ai.base_url` — endpoint URL for OpenAI-compatible servers (Ollama, vLLM, LM Studio)
+- `ai.api_key_env` — env var name for API key (e.g. `"OPENAI_API_KEY"`)
+- `ai.json_mode` — enable structured JSON output when backend supports it
+- Requires: AI backend (`claude` CLI by default, or `pip install klemma[openai]` / `klemma[litellm]`), optionally `ZOTERO_API_KEY`
 
 ## SQLite tables
 - `sources` — Zotero entries with processing status and dissertation metadata
@@ -82,7 +89,7 @@ Hidden aliases (backward compat): `morning`→`plan`, `extract`→`process`, `ag
 3. Fuzzy filename matching (exact citekey, title words + year, author in prefix)
 
 ### Fragment extraction
-PDF → PyMuPDF text → Claude analysis → fragments to SQLite + vault (`## 💬 Цитаты для диссертации`)
+PDF → PyMuPDF text → AI analysis → fragments to SQLite + vault (`## 💬 Цитаты для диссертации`)
 
 ### Vault note creation
 `klemma extract <citekey>` → if @citekey.md missing, auto-creates it via `note_factory.create_vault_note()`:
@@ -110,7 +117,7 @@ Core logic in `skills/acquirer.py`. Zotero write methods: `ZoteroLibrary.create_
 Requires: `ZOTERO_API_KEY` env var, `zotero.library_id` in config.yaml.
 
 ### Agent
-`klemma ask "query"` → build_agent_context() gathers all research data (sources, coverage, gaps, fragments, plan) → renders Jinja2 system prompt → launches `claude --system-prompt <context> <query>` interactively. Claude saves response to `Agent/Agent_<date>.md` in vault.
+`klemma ask "query"` → build_agent_context() gathers all research data (sources, coverage, gaps, fragments, plan) → renders Jinja2 system prompt → launches `claude --system-prompt <context> <query>` interactively. Claude saves response to `Agent/Agent_<date>.md` in vault. For non-Claude backends (no interactive mode): `ai.call()` with full context → prints response to terminal.
 
 ### Agent Skills (Claude Code)
 Agent uses Claude Code Skills from `.claude/skills/` instead of reading source code:
@@ -141,5 +148,8 @@ Frontmatter `sections: [1.1, 1.4.1, 3.2.2]` → `source_sections` table → `get
 ## Development
 ```bash
 pip install -e ".[dev]"
+pip install -e ".[openai]"     # OpenAI / Ollama / vLLM / LM Studio backend
+pip install -e ".[litellm]"    # LiteLLM universal backend (100+ providers)
+pip install -e ".[all-ai]"     # all AI backends
 klemma --help
 ```

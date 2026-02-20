@@ -10,7 +10,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from . import __version__, get_banner
-from .ai import ClaudeClient
+from .ai import create_ai
 from .config import load_config
 from .context import KlemmaContext
 from .library_provider import create_library
@@ -33,7 +33,7 @@ def _init_components(config_path: str) -> KlemmaContext:
 
 def _init_ai(cfg):
     """Initialize AI client (separate to allow commands without API key)."""
-    return ClaudeClient(cfg.ai)
+    return create_ai(cfg.ai)
 
 
 def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
@@ -832,11 +832,10 @@ def ask(ctx, query, section, chapter):
 
     Example: klemma ask "What are the main ice forecast validation methods?"
     """
-    import subprocess
-
     config_path = ctx.obj["config_path"]
     kctx = _init_components(config_path)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
+    ai = _init_ai(cfg)
 
     from .skills.agent import build_agent_context
 
@@ -844,10 +843,19 @@ def ask(ctx, query, section, chapter):
     context = build_agent_context(cfg, state, vault, section=section, chapter=chapter)
 
     console.print(f"[dim]Query: {query}[/dim]")
-    console.print("[blue]Запуск агента...[/blue]\n")
 
-    # Launch Claude interactively — stdin/stdout pass through
-    subprocess.run(["claude", "--system-prompt", context, query])
+    if ai.interactive_available:
+        import subprocess
+
+        console.print("[blue]Запуск агента...[/blue]\n")
+        subprocess.run(["claude", "--system-prompt", context, query])
+    else:
+        console.print("[blue]Генерация ответа...[/blue]\n")
+        response = ai.call(system=context, user=query, max_tokens=8192)
+        if response:
+            console.print(response)
+        else:
+            console.print("[red]Не удалось получить ответ.[/red]")
 
     console.print("\n[dim]Сессия агента завершена.[/dim]")
 

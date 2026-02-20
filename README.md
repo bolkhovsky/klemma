@@ -12,7 +12,7 @@
 
 </div>
 
-AI-ассистент для работы над диссертацией. Управляет библиотекой источников (Zotero), извлекает цитируемые фрагменты из PDF (Claude), генерирует ежедневные планы, исследовательские брифинги, анализ библиотеки и отслеживает покрытие глав диссертации.
+AI-ассистент для работы над диссертацией. Управляет библиотекой источников (Zotero), извлекает цитируемые фрагменты из PDF (AI — Claude, OpenAI, Ollama, LiteLLM), генерирует ежедневные планы, исследовательские брифинги, анализ библиотеки и отслеживает покрытие глав диссертации.
 
 ## Установка
 
@@ -23,7 +23,10 @@ pip install -e .
 
 Требуется:
 - Python 3.11+
-- Claude Code CLI (`claude` в PATH)
+- AI-бэкенд (один из):
+  - Claude Code CLI (`claude` в PATH) — по умолчанию
+  - `pip install klemma[openai]` — OpenAI API / Ollama / vLLM / LM Studio
+  - `pip install klemma[litellm]` — 100+ провайдеров через LiteLLM
 - Obsidian vault с заметками источников
 
 ## Быстрый старт
@@ -189,9 +192,13 @@ klemma discover --review                # просмотр и принятие/�
 
 ```yaml
 ai:
-  model: "opus"              # модель Claude Code CLI (sonnet/opus)
+  backend: "claude"          # "claude" (default) | "openai" | "litellm"
+  model: "opus"              # имя модели для выбранного бэкенда
   max_pdf_chars: 50000       # максимум символов из PDF
-  timeout: 180               # таймаут на вызов Claude (сек)
+  timeout: 180               # таймаут на вызов AI (сек)
+  # base_url: "http://localhost:11434/v1"  # для Ollama/vLLM/LM Studio
+  # api_key_env: "OPENAI_API_KEY"          # имя env-переменной для API-ключа
+  # json_mode: false                       # структурированный JSON вывод
 
 obsidian:
   vault_path: "/path/to/vault"
@@ -261,7 +268,10 @@ tags: ["Sea-Ice", "Machine-Learning"]
 
 ```
 klemma (CLI/TUI)
-├── Claude Code CLI ── AI-анализ
+├── AI Provider ─────── AI-анализ (pluggable backend)
+│   ├── ClaudeClient ── Claude Code CLI (claude -p) — default
+│   ├── OpenAIClient ── OpenAI / Ollama / vLLM / LM Studio (openai SDK)
+│   ├── LiteLLMClient ─ 100+ провайдеров (litellm SDK)
 │   ├── планирование (plan)
 │   ├── извлечение фрагментов (process)
 │   ├── research briefing
