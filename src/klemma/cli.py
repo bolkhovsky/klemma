@@ -1118,11 +1118,18 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
                 console.print(f"  [dim]sections: {', '.join(meta.sections)}[/dim]")
 
             if not no_process:
-                console.print(f"  [blue]Processing...[/blue]")
-                ai = _init_ai(cfg)
-                from .literature.pdf import PDFExtractor
-                pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
-                _process_single(result.citekey, cfg, state, kctx.vault, ai, pdf_extractor, kctx.library)
+                try:
+                    ai = _init_ai(cfg)
+                except Exception as e:
+                    console.print(f"  [yellow]Skipping auto-process (AI unavailable: {e})[/yellow]")
+                    console.print(f"  [dim]Run manually: klemma process {result.citekey}[/dim]")
+                    ai = None
+
+                if ai:
+                    console.print(f"  [blue]Processing...[/blue]")
+                    from .literature.pdf import PDFExtractor
+                    pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
+                    _process_single(result.citekey, cfg, state, kctx.vault, ai, pdf_extractor, kctx.library)
 
             ok += 1
         else:
