@@ -37,6 +37,7 @@ class ZoteroEntry(BaseModel):
     issue: Optional[str] = None
     keywords: Optional[str] = None
     pdf_path: Optional[str] = None
+    item_key: Optional[str] = None  # Zotero internal key (immutable, survives citekey renames)
 
     model_config = {"populate_by_name": True, "extra": "ignore"}
 
@@ -196,5 +197,6 @@ class LibraryReport(BaseModel):
     recommendations: list[dict] = Field(default_factory=list)
     section_detail: dict = Field(default_factory=dict)
     audit_findings: list[dict] = Field(default_factory=list)
+    prune: Optional[dict] = None  # {"drop": [{citekey, reason}], "maybe": [{citekey, reason}]}
     report_text: str = ""
     generated_at: datetime = Field(default_factory=datetime.now)

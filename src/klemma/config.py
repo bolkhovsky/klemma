@@ -14,6 +14,8 @@ class ZoteroConfig(BaseModel):
     api_key_env: str = "ZOTERO_API_KEY"
     local: bool = False
     library_json: Optional[str] = None  # Path to BetterBibTeX JSON export
+    storage_path: str = str(Path.home() / "Zotero" / "storage")  # Zotero PDF storage
+    backend: str = "local"  # "local" (BBT JSON) | "mcp" (zotero-mcp server)
 
     @property
     def api_key(self) -> Optional[str]:
@@ -106,6 +108,16 @@ class InstanceConfig(BaseModel):
     type: str = "academic"
 
 
+class MCPServerConfig(BaseModel):
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+
+
+class MCPConfig(BaseModel):
+    servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+
+
 class KlemmaConfig(BaseModel):
     instance: InstanceConfig = Field(default_factory=InstanceConfig)
     zotero: ZoteroConfig = Field(default_factory=ZoteroConfig)
@@ -118,6 +130,7 @@ class KlemmaConfig(BaseModel):
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
     tags: TagsConfig = Field(default_factory=TagsConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
 
 
 def load_config(config_path: str | Path = "config.yaml") -> KlemmaConfig:
@@ -128,5 +141,13 @@ def load_config(config_path: str | Path = "config.yaml") -> KlemmaConfig:
 
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
+
+    # Migration: Zotero fields were originally under instance:
+    if "zotero" not in raw and "instance" in raw:
+        inst = raw["instance"]
+        zotero_fields = {"library_id", "library_type", "api_key_env", "local", "library_json"}
+        migrated = {k: v for k, v in inst.items() if k in zotero_fields}
+        if migrated:
+            raw["zotero"] = migrated
 
     return KlemmaConfig.model_validate(raw)

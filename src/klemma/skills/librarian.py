@@ -43,7 +43,7 @@ def analyze_library(
         "Отвечай только валидным JSON."
     )
 
-    data = ai.call_json(system, user_prompt, max_tokens=4096)
+    data = ai.call_json(system, user_prompt, max_tokens=16384)
     if not data:
         logger.error("Failed to get library analysis from Claude")
         return None
@@ -56,8 +56,16 @@ def analyze_library(
         recommendations=data.get("recommendations", []),
         section_detail=data.get("section_detail", {}),
         audit_findings=data.get("audit_findings", []),
+        prune=data.get("prune"),
         report_text=data.get("report_text", ""),
     )
+
+    # Persist prune verdicts (with hard protection)
+    if report.prune:
+        state.save_prune_verdicts(
+            drop=report.prune.get("drop", []),
+            maybe=report.prune.get("maybe", []),
+        )
 
     # Save to vault
     _save_report_to_vault(report, vault, mode, focus_section)
@@ -79,9 +87,13 @@ def _gather_library_context(
     quality_data = state.get_sources_by_quality()
     ref_gaps = state.get_reference_gaps(limit=15)
 
-    # Compact sources list for prompt
+    # Compact sources list for prompt (exclude already-verdicted drops)
     all_sources = state.get_all_sources()
-    sources_compact = _format_sources_compact(all_sources, entry_lookup)
+    drop_ids = state.get_prune_drop_ids()
+    active_sources = [s for s in all_sources if s["id"] not in drop_ids]
+    sources_compact = _format_sources_compact(active_sources, entry_lookup)
+
+    active_total = len(active_sources)
 
     context = {
         "dissertation_context": DISSERTATION_CONTEXT,
@@ -100,12 +112,14 @@ def _gather_library_context(
         "section": focus_section or "",
         "section_title": "",
         "section_summaries": "",
+        "prune_needed": active_total > 100,
+        "target_range": "100-120",
     }
 
     # For recommend mode: load vault summaries for the section
     if mode == "recommend" and focus_section:
         chapter = int(focus_section.split(".")[0])
-        context["section_title"] = config.dissertation.sections.get(focus_section, "")
+        context["section_title"] = config.dissertation.chapters.get(chapter, "")
         context["section_summaries"] = _load_section_summaries(
             focus_section, chapter, state, vault
         )
@@ -206,6 +220,25 @@ def _save_report_to_vault(
             marker = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(priority, "")
             content += f"- {marker} **{rec.get('action', '')}** — {rec.get('reason', '')}\n"
         content += "\n"
+
+    if report.prune:
+        content += "## Prune Recommendations\n\n"
+        drop = report.prune.get("drop", [])
+        maybe = report.prune.get("maybe", [])
+        if drop:
+            content += f"### Drop ({len(drop)} sources)\n\n"
+            content += "| Citekey | Reason |\n|---------|--------|\n"
+            for item in drop:
+                ck = item.get('citekey', '?').lstrip('@')
+                content += f"| @{ck} | {item.get('reason', '')} |\n"
+            content += "\n"
+        if maybe:
+            content += f"### Maybe ({len(maybe)} sources)\n\n"
+            content += "| Citekey | Reason |\n|---------|--------|\n"
+            for item in maybe:
+                ck = item.get('citekey', '?').lstrip('@')
+                content += f"| @{ck} | {item.get('reason', '')} |\n"
+            content += "\n"
 
     if report.report_text:
         content += "---\n\n"

@@ -12,6 +12,7 @@ zotero:
   api_key_env: "ZOTERO_API_KEY"
   local: false
   library_json: "/Users/ilya/research/zobsidian-processor/data/pubs-bibtex.json"
+  storage_path: "/Users/ilya/Zotero/storage"
 
 obsidian:
   vault_path: "/Users/ilya/Documents/Obsidian Vault"
@@ -22,7 +23,7 @@ obsidian:
 ai:
   model: "opus"
   max_pdf_chars: 50000
-  timeout: 180
+  timeout: 300
   retries: 2
 
 state:
@@ -228,3 +229,12 @@ export:
   pandoc:
     timeout: 300
     number_sections: true
+
+mcp:
+  servers:
+    zotero:
+      command: "uvx"
+      args:
+        - "zotero-mcp"
+      env:
+        ZOTERO_LOCAL: "true"

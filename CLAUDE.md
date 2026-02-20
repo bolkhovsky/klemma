@@ -5,21 +5,30 @@ Klemma is a dual-mode CLI/TUI tool for PhD dissertation work. It manages literat
 
 ## Architecture
 - **Dual mode**: `klemma` → Textual TUI dashboard; `klemma plan/process/research/library` → headless CLI
-- **Stack**: Python 3.11+, Click, Textual, Claude Code CLI, pyzotero, PyMuPDF, SQLite
+- **Stack**: Python 3.11+, Click, Textual, Claude Code CLI, pyzotero, PyMuPDF, MCP, SQLite
 - **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/TUI/Obsidian)
+- **MCP layer**: ToolRegistry → MCPClient (stdio transport) → external servers (zotero-mcp, academia-mcp)
+- **Library abstraction**: LibraryProvider protocol with LocalLibrary (BBT JSON) and MCPLibrary (zotero-mcp) backends
+- **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/tools
 
 ## Project structure
 ```
 src/klemma/
-├── cli.py          — Click CLI entry point
-├── app.py          — Textual TUI app
-├── config.py       — Pydantic config models
-├── state.py        — SQLite state manager
-├── ai.py           — Claude Code CLI wrapper (claude -p)
-├── vault.py        — Obsidian adapter (CLI/file I/O, update_section)
-├── tui/            — Textual screens (dashboard, fragments, coverage, gaps, stats)
-├── skills/         — AI skills (planner, extractor, researcher, librarian, agent)
-└── literature/     — Zotero, PDF, models, note_factory
+├── cli.py              — Click CLI entry point
+├── app.py              — Textual TUI app
+├── config.py           — Pydantic config models (incl. MCPServerConfig, MCPConfig)
+├── context.py          — KlemmaContext dataclass (single object per CLI command)
+├── state.py            — SQLite state manager
+├── ai.py               — Claude Code CLI wrapper (claude -p)
+├── vault.py            — Obsidian adapter (CLI/file I/O, update_section)
+├── library_provider.py — LibraryProvider protocol + LocalLibrary + MCPLibrary
+├── tui/                — Textual screens (dashboard, fragments, coverage, gaps, stats)
+├── skills/             — AI skills (planner, extractor, researcher, librarian, agent)
+├── literature/         — Zotero, PDF, models, note_factory
+└── tools/              — MCP tool integration
+    ├── client.py       — MCPClient (sync wrapper over async MCP SDK)
+    ├── registry.py     — ToolRegistry (server management, lazy client creation)
+    └── discovery.py    — Hybrid discovery pipeline (MCP search + Claude assessment)
 prompts/
 ├── morning.md              — Jinja2 prompt for daily plans
 ├── extract.md              — Jinja2 prompt for fragment extraction
@@ -30,20 +39,25 @@ prompts/
 └── agent.md                — Jinja2 system prompt for interactive agent
 ```
 
-## Key commands (7)
+## Key commands (10)
 - `klemma` — TUI dashboard
 - `klemma plan` — daily plan generation (library digest included)
 - `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
-- `klemma process [<citekey>]` — extract fragments from PDF; no arg = batch (up to 10 pending)
-- `klemma research -s 1.3.2` — research briefing for a section (auto-extracts fragments)
+- `klemma process [<citekey>]` — extract fragments from PDF; no arg = batch all pending
+- `klemma research -s 1.3.2` — research briefing for a section (`--enrich` for MCP enrichment)
 - `klemma library [-s 2.3] [--audit]` — AI library analysis (status / recommend / audit)
 - `klemma ask "query"` — interactive research agent with full dissertation context
+- `klemma tools {add,list,remove,call}` — manage MCP servers (zotero, academia, etc.)
+- `klemma search "query"` — search papers via MCP (arXiv, Semantic Scholar)
+- `klemma discover -s X.X` — hybrid discovery pipeline (`--background`, `--status`, `--review`)
 
 Hidden aliases (backward compat): `morning`→`plan`, `extract`→`process`, `agent`→`ask`, `stats`/`coverage`/`gaps`→`status`, `prepopulate`→`import`
 
 ## Config
-- `config.yaml` — main config (Zotero, Obsidian, AI, dissertation structure)
+- `config.yaml` — main config (Zotero, Obsidian, AI, dissertation structure, MCP servers)
 - `zotero.library_json` — path to BetterBibTeX JSON export (for PDF lookup)
+- `zotero.backend` — `"local"` (default, BBT JSON) or `"mcp"` (zotero-mcp server)
+- `mcp.servers` — registered MCP servers (managed via `klemma tools add/remove`)
 - Requires: Claude Code CLI (`claude` in PATH), optionally `ZOTERO_API_KEY`
 
 ## SQLite tables
@@ -51,6 +65,7 @@ Hidden aliases (backward compat): `morning`→`plan`, `extract`→`process`, `ag
 - `source_sections` — junction table: source_id × section (multi-section support)
 - `fragments` — extracted citation fragments mapped to chapters/sections
 - `reference_gaps` — missing references found in source bibliographies (status: open/resolved)
+- `discoveries` — papers found by discovery pipeline (MCP search + Claude assessment, status: pending/accepted/rejected)
 - `daily_plans` — generated daily plans
 - `reading_queue` — prioritized reading list
 
@@ -87,6 +102,15 @@ Incremental mode: if Research note exists, reads `## ✏️ Что нового`
 
 ### Library analysis
 `klemma library` → gather library context (summary, quality tiers, ref-gaps, sources compact list) → Claude analysis via `librarian.md` prompt → structured LibraryReport → saved to `Library/Library_{mode}_{date}.md` in vault. Three modes: status (health), recommend (section-focused), audit (deep quality check).
+
+### MCP tool integration
+`klemma tools add <name> --command <cmd> --args <args>` registers an MCP server in `config.yaml → mcp.servers`. ToolRegistry lazily creates MCPClient instances (sync wrapper over async MCP SDK, stdio transport). Each `call_tool()` spawns a fresh connection. Servers are not installed by Klemma — only launch commands are registered.
+
+### Paper search
+`klemma search "query"` → ToolRegistry.call("academia", "arxiv_search", ...) → rich table output. Requires registered `academia` MCP server.
+
+### Discovery pipeline
+`klemma discover -s X.X` → Phase 1 (deterministic: MCP search per ref-gap + section keywords, deduplicate against library) → Phase 2 (Claude: relevance assessment, usage type, priority) → results saved to `discoveries` table. Can run as background subprocess via `--background`. Review with `--review`.
 
 ### Auto-sync sections
 On every `research`, `library`, `status` command: `_sync_sections()` → reads all vault @citekey.md frontmatter (~60ms), compares with DB, updates section assignments where vault differs. Also discovers new Zotero entries not yet in DB (auto-classified via config regex patterns, registered as `pending`).
