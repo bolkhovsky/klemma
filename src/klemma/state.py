@@ -911,6 +911,7 @@ class StateManager:
             avg_fragments = round(row["avg_f"], 1) if row["avg_f"] else 0
 
             # Sections with zero sources
+            _all_sections = set(cov["sections"].keys()) if cov["sections"] else set()  # noqa: F841
             zero_sections = [s for s, c in cov["sections"].items() if c == 0] if cov["sections"] else []
 
             return {

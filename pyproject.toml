@@ -15,12 +15,6 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-
-[project.urls]
-Homepage = "https://github.com/bolkhovsky/klemma"
-Repository = "https://github.com/bolkhovsky/klemma"
-"Bug Reports" = "https://github.com/bolkhovsky/klemma/issues"
-
 dependencies = [
     "click==8.1.8",
     "pydantic==2.10.6",
@@ -45,6 +39,11 @@ all-ai = ["openai>=1.0", "litellm>=1.40"]
 
 [project.scripts]
 klemma = "klemma.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/bolkhovsky/klemma"
+Repository = "https://github.com/bolkhovsky/klemma"
+"Bug Reports" = "https://github.com/bolkhovsky/klemma/issues"
 
 [build-system]
 requires = ["hatchling"]
