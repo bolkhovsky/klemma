@@ -8,13 +8,12 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..ai import AIProvider
-from ..config import KlemmaConfig
+from ..config import KlemmaConfig, resolve_prompt
 from ..literature.models import ArgumentBlock, CitationEntry, ResearchResult, ZoteroEntry
 from ..literature.pdf import PDFExtractor
 from ..state import StateManager
 from ..vault import VaultAdapter
 from .extractor import extract_fragments, save_fragments_to_vault
-from .planner import DISSERTATION_CONTEXT
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +312,9 @@ def pre_extract_sources(
     on_progress: Optional[Callable] = None,
     max_sources: int = 50,
     library=None,
+    dissertation_context: str = "",
+    available_tags: list[str] | None = None,
+    klemma_home: Optional[Path] = None,
 ) -> dict:
     """Извлечь фрагменты из источников раздела, если ещё не извлечены.
 
@@ -389,13 +391,21 @@ def pre_extract_sources(
             continue
 
         # Claude анализ
-        result = extract_fragments(entry, pdf_text, config, state, ai)
+        result = extract_fragments(
+            entry, pdf_text, config, state, ai,
+            dissertation_context=dissertation_context,
+            available_tags=available_tags,
+            klemma_home=klemma_home,
+        )
 
         if result and result.fragments:
             save_fragments_to_vault(
                 ck, result.fragments, vault,
                 entry=entry, config=config, state=state,
                 pdf_text=pdf_text, ai=ai, entry_lookup=entry_lookup,
+                dissertation_context=dissertation_context,
+                available_tags=available_tags,
+                klemma_home=klemma_home,
             )
             extracted += 1
             if on_progress:
@@ -482,6 +492,8 @@ def research_section(
     vault: VaultAdapter,
     ai: AIProvider,
     save_to_vault: bool = True,
+    dissertation_context: str = "",
+    klemma_home: Optional[Path] = None,
 ) -> ResearchResult:
     """Сгенерировать исследовательский брифинг для раздела диссертации.
 
@@ -581,14 +593,12 @@ def research_section(
         current_citekeys = {src["id"] for src in source_summaries}
         new_citekeys = sorted(current_citekeys - prev["previous_citekeys"])
 
-        prompt_path = (
-            Path(__file__).parent.parent.parent.parent
-            / "prompts"
-            / "research_incremental.md"
+        prompt_path = resolve_prompt("research_incremental.md", klemma_home) if klemma_home else (
+            Path(__file__).parent.parent.parent.parent / "prompts" / "research_incremental.md"
         )
         user_prompt = ai.render_prompt(
             prompt_path,
-            dissertation_context=DISSERTATION_CONTEXT,
+            dissertation_context=dissertation_context,
             target_section=section,
             chapter_num=chapter,
             chapter_name=chapter_name,
@@ -629,14 +639,12 @@ def research_section(
             "да" if prev["user_notes"] else "нет",
         )
     else:
-        prompt_path = (
-            Path(__file__).parent.parent.parent.parent
-            / "prompts"
-            / "research.md"
+        prompt_path = resolve_prompt("research.md", klemma_home) if klemma_home else (
+            Path(__file__).parent.parent.parent.parent / "prompts" / "research.md"
         )
         user_prompt = ai.render_prompt(
             prompt_path,
-            dissertation_context=DISSERTATION_CONTEXT,
+            dissertation_context=dissertation_context,
             target_section=section,
             chapter_num=chapter,
             chapter_name=chapter_name,

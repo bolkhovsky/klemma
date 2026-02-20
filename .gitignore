@@ -20,3 +20,9 @@ exports/
 *.swp
 *.swo
 .claude/settings.local.json
+
+# User-specific files (use config.example.yaml as template)
+config.yaml
+PROJECT_LOG.md
+*.code-workspace
+secure-ai-assistant-roadmap.md
