@@ -6,7 +6,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from ..ai import AIProvider
 from ..config import KlemmaConfig, resolve_prompt
+from ..state import StateManager
 from ..vault import VaultAdapter
 from .models import ZoteroEntry
 
@@ -68,7 +70,7 @@ def annotate_source(
     entry: ZoteroEntry,
     pdf_text: str,
     config: KlemmaConfig,
-    ai: "AIProvider",
+    ai: AIProvider,
     entry_lookup: Optional[dict] = None,
     dissertation_context: str = "",
     available_tags: list[str] | None = None,
@@ -362,9 +364,9 @@ def create_vault_note(
     entry: ZoteroEntry,
     config: KlemmaConfig,
     vault: VaultAdapter,
-    state: Optional["StateManager"] = None,
+    state: Optional[StateManager] = None,
     pdf_text: Optional[str] = None,
-    ai: Optional["AIProvider"] = None,
+    ai: Optional[AIProvider] = None,
     entry_lookup: Optional[dict] = None,
     dissertation_context: str = "",
     available_tags: list[str] | None = None,
