@@ -94,6 +94,55 @@ class ZoteroLibrary:
             logger.error("Collections error: %s", e)
             return []
 
+    def create_item(
+        self,
+        title: str,
+        creators: list[dict],
+        date: str,
+        item_type: str = "journalArticle",
+        **kwargs,
+    ) -> str:
+        """Create a Zotero item and return its item key.
+
+        creators: [{'creatorType': 'author', 'lastName': '...', 'firstName': '...'}]
+        kwargs: publicationTitle, volume, issue, pages, DOI, url, language, abstractNote
+        """
+        template = self.zot.item_template(item_type)
+        template["title"] = title
+        template["creators"] = creators
+        template["date"] = date
+        for k, v in kwargs.items():
+            if k in template and v is not None:
+                template[k] = v
+        resp = self.zot.create_items([template])
+        successful = resp.get("successful", resp.get("success", {}))
+        key = successful.get("0", {})
+        if isinstance(key, dict):
+            return key.get("key", key.get("data", {}).get("key", ""))
+        return str(key) if key else ""
+
+    def attach_pdf(self, parent_key: str, pdf_path: Path) -> None:
+        """Upload a PDF file as child attachment of an item."""
+        self.zot.attachment_simple([str(pdf_path)], parent_key)
+
+    def create_attachment_record(self, parent_key: str, filename: str) -> str:
+        """Create attachment metadata record without uploading file.
+
+        Returns the attachment item key. Caller should place the PDF at
+        {zotero_storage}/{attachment_key}/{filename} for Zotero to find it.
+        """
+        template = self.zot.item_template("attachment", "imported_file")
+        template["parentItem"] = parent_key
+        template["title"] = filename
+        template["filename"] = filename
+        template["contentType"] = "application/pdf"
+        resp = self.zot.create_items([template])
+        successful = resp.get("successful", resp.get("success", {}))
+        key = successful.get("0", {})
+        if isinstance(key, dict):
+            return key.get("key", key.get("data", {}).get("key", ""))
+        return str(key) if key else ""
+
     @staticmethod
     def _to_entry(item: dict) -> Optional[ZoteroEntry]:
         """Convert pyzotero item to ZoteroEntry."""

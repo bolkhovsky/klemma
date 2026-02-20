@@ -179,6 +179,11 @@ class StateManager:
                 [(sid,) for sid in source_ids],
             )
 
+    def set_pdf_path(self, source_id: str, path: str):
+        """Set the direct PDF path for a source."""
+        with self._conn() as conn:
+            conn.execute("UPDATE sources SET pdf_path = ? WHERE id = ?", (path, source_id))
+
     def get_pending_sources(self, limit: int = 0) -> list[str]:
         with self._conn() as conn:
             if limit > 0:
