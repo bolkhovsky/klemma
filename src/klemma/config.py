@@ -233,6 +233,17 @@ class ProjectConfig(BaseModel):
         )
 
 
+def parse_chapter_from_section(section: str) -> Optional[int]:
+    """Extract chapter number from 'X.Y.Z' section string.
+
+    Returns None for topic-based sections (e.g. 'methods', 'introduction').
+    """
+    try:
+        return int(section.split(".")[0])
+    except (ValueError, IndexError):
+        return None
+
+
 class PlanningConfig(BaseModel):
     dissertation_focus: str = ""
     assistant_roadmap: list[str] = Field(default_factory=list)

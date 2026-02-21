@@ -1029,16 +1029,23 @@ def research(ctx, section, no_save, force, enrich):
     _sync_sections(kctx)
     ai = _init_ai(cfg)
 
+    from .config import parse_chapter_from_section
     from .skills.researcher import pre_extract_sources, research_section
 
-    chapter = int(section.split(".")[0])
+    chapter = parse_chapter_from_section(section)
 
     # Optional: enrich with external search via MCP
     enrichment_context = ""
     if enrich and kctx.tools and kctx.tools.has("academia"):
-        chapter_name = (project.chapters.get(chapter, "") if project
-                        else cfg.dissertation.chapters.get(chapter, ""))
-        search_query = f"{chapter_name} {section}"
+        if chapter:
+            chapter_name = (project.chapters.get(chapter, "") if project
+                            else cfg.dissertation.chapters.get(chapter, ""))
+            search_query = f"{chapter_name} {section}"
+        else:
+            # Paper/topic-based section: use section name + project description
+            search_query = section
+            if project and project.description:
+                search_query = f"{project.description} {section}"
         with console.status(f"Searching arXiv for section {section}", spinner="dots2"):
             result = kctx.tools.call("academia", "arxiv_search", {"query": search_query, "limit": 5})
         if not result.is_error and result.content:
@@ -1263,6 +1270,7 @@ def ask(ctx, query, section, chapter):
             project=kctx.project,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
+            project_name=kctx.project_name,
         )
 
     console.print(f"[dim]Query: {query}[/dim]")
@@ -1313,6 +1321,7 @@ def library(ctx, section, audit):
             project=kctx.project,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
+            project_name=kctx.project_name,
         )
 
     if not report:
@@ -1618,7 +1627,7 @@ def search(ctx, query, source, limit):
 # --- Discover: background literature discovery ---
 
 @main.command()
-@click.option("--section", "-s", help="Section to discover papers for")
+@click.option("--section", "-s", help="Section to discover papers for (optional for paper projects)")
 @click.option("--status", "show_status", is_flag=True, help="Show discovery status")
 @click.option("--review", is_flag=True, help="Review pending discoveries")
 @click.option("--background", "-bg", is_flag=True, help="Run in background")
@@ -1628,15 +1637,21 @@ def discover(ctx, section, show_status, review, background):
 
     Requires academia MCP server.
 
+    For paper projects, --section is optional — uses project keywords/description.
+    For dissertation/thesis, --section is required (e.g. -s 1.3.2).
+
     \b
     Examples:
-      klemma discover -s 1.3.2           # search and assess
+      klemma discover                    # paper: search by keywords
+      klemma discover -s methods         # paper: search for a topic
+      klemma discover -s 1.3.2           # dissertation: search and assess
       klemma discover -s 1.3.2 -bg       # run in background
-      klemma discover --status            # show all discoveries
-      klemma discover --review            # review pending results
+      klemma discover --status           # show all discoveries
+      klemma discover --review           # review pending results
     """
     kctx = _get_context(ctx)
     cfg, state = kctx.config, kctx.state
+    project = kctx.project
     config_path = ctx.obj["config_path"]
 
     if show_status:
@@ -1647,9 +1662,27 @@ def discover(ctx, section, show_status, review, background):
         _discover_review(state)
         return
 
+    # Build project context for search
+    project_context = None
+    if project:
+        project_context = {
+            "title": project.title,
+            "description": project.description,
+            "keywords": project.priority_terms,
+            "type": project.type,
+        }
+
     if not section:
-        console.print("[red]--section required for discovery. Example: klemma discover -s 1.3.2[/red]")
-        return
+        if project and project.type == "paper":
+            # Papers: use project metadata as search context
+            if not project.priority_terms and not project.description:
+                console.print("[red]No keywords or description set. Run: klemma init --force[/red]")
+                return
+            section = "general"  # label for DB storage
+        else:
+            example = "1.3.2" if not project or project.type != "paper" else "methods"
+            console.print(f"[red]--section required for discovery. Example: klemma discover -s {example}[/red]")
+            return
 
     if "academia" not in cfg.mcp.servers:
         console.print("[red]Academia MCP server not configured.[/red]")
@@ -1677,15 +1710,20 @@ def discover(ctx, section, show_status, review, background):
             stderr=sp.STDOUT,
         )
         log_file.close()  # child process inherits the fd
-        console.print(f"[green]Discovery started in background for section {section}[/green]")
+        console.print(f"[green]Discovery started in background for {section}[/green]")
         console.print(f"[dim]Log: {log_path}[/dim]")
         console.print("[dim]Review results: klemma discover --review[/dim]")
         return
 
     from .tools.discovery import run_discovery
 
-    with console.status(f"Discovering papers for section {section}", spinner="earth"):
-        result = run_discovery(section=section, config_path=effective_config)
+    label = section if section != "general" else "project keywords"
+    with console.status(f"Discovering papers for {label}", spinner="earth"):
+        result = run_discovery(
+            section=section,
+            config_path=effective_config,
+            project_context=project_context,
+        )
 
     console.print(
         f"[green]Done:[/green] searched {result['searched']}, "

@@ -19,8 +19,17 @@ def run_discovery(
     config_path: str,
     max_results: int = 20,
     skip_assessment: bool = False,
+    project_context: dict | None = None,
 ) -> dict:
     """Run the full discovery pipeline for a section.
+
+    Args:
+        section: Section identifier (e.g. "1.3.2" or "methods" or "general").
+        config_path: Path to project config.
+        max_results: Max results to return.
+        skip_assessment: Skip Claude assessment phase.
+        project_context: Optional dict with {title, description, keywords, type}
+            for paper projects where section alone is insufficient.
 
     Returns dict with keys: searched, found, assessed, errors.
     """
@@ -34,12 +43,21 @@ def run_discovery(
         logger.error("Academia MCP server not configured")
         return {"searched": 0, "found": 0, "assessed": 0, "errors": ["academia MCP not configured"]}
 
+    # Build project context from config if not provided
+    if not project_context and hasattr(cfg, "project") and cfg.project:
+        project_context = {
+            "title": cfg.project.title,
+            "description": cfg.project.description,
+            "keywords": cfg.project.priority_terms,
+            "type": cfg.project.type,
+        }
+
     from .registry import ToolRegistry
 
     registry = ToolRegistry(cfg)
 
     # Phase 1: deterministic search
-    raw_results = _phase1_search(section, state, registry, max_results)
+    raw_results = _phase1_search(section, state, registry, max_results, project_context)
 
     if not raw_results:
         return {"searched": raw_results.get("queries", 0) if isinstance(raw_results, dict) else 0,
@@ -71,7 +89,7 @@ def run_discovery(
     # Phase 2: Claude assessment (if not skipped and AI available)
     if not skip_assessment and found > 0:
         try:
-            assessed = _phase2_assess(section, state, cfg)
+            assessed = _phase2_assess(section, state, cfg, project_context)
         except Exception as e:
             logger.warning("Assessment phase failed: %s", e)
 
@@ -83,23 +101,68 @@ def run_discovery(
     }
 
 
+def _build_search_queries(
+    section: str,
+    project_context: dict | None = None,
+) -> list[str]:
+    """Build meaningful search queries from section + project context.
+
+    For numbered sections (dissertations): uses section as-is (fallback).
+    For topic sections or "general": uses keywords and description.
+    """
+    queries = []
+    pc = project_context or {}
+    keywords = pc.get("keywords", [])
+    description = pc.get("description", "")
+    title = pc.get("title", "")
+
+    # Topic-based section or paper with "general" label
+    is_topic = section == "general" or not any(c.isdigit() for c in section.split(".")[0])
+
+    if is_topic:
+        # Use project keywords as individual queries
+        for kw in keywords[:5]:
+            queries.append(kw)
+        # Use description words as a compound query
+        if description:
+            # Take first ~100 chars as a focused query
+            queries.append(description[:120])
+        # Use section name if it's a real topic (not "general")
+        if section != "general":
+            queries.append(section)
+        # Fallback to title
+        if not queries and title:
+            queries.append(title)
+    else:
+        # Numbered section: use section + any available context
+        if keywords:
+            queries.append(f"{section} {' '.join(keywords[:3])}")
+        queries.append(section)
+
+    return queries
+
+
 def _phase1_search(
     section: str,
     state,
     registry,
     max_results: int,
+    project_context: dict | None = None,
 ) -> list[dict]:
     """Phase 1: deterministic MCP search.
 
     Searches by:
     1. Open reference gaps for this section
-    2. Section topic keywords
+    2. Project keywords and description (papers) or section topic (dissertations)
     """
     results = []
 
     # 1. Search for open reference gaps
     ref_gaps = state.get_reference_gaps(limit=10)
-    section_gaps = [g for g in ref_gaps if section in (g.get("dissertation_sections") or "")]
+    if section != "general":
+        section_gaps = [g for g in ref_gaps if section in (g.get("dissertation_sections") or "")]
+    else:
+        section_gaps = ref_gaps[:5]  # papers: use all open gaps
 
     for gap in section_gaps[:5]:
         authors = gap.get("ref_authors", "")
@@ -114,12 +177,16 @@ def _phase1_search(
             parsed = _parse_search_results(result.content, "arxiv", gap_id=gap.get("id"))
             results.extend(parsed)
 
-    # 2. General section topic search if few gap results
+    # 2. Keyword/topic search if few gap results
     if len(results) < max_results // 2:
-        result = registry.call("academia", "arxiv_search", {"query": section, "limit": 5})
-        if not result.is_error and result.content:
-            parsed = _parse_search_results(result.content, "arxiv")
-            results.extend(parsed)
+        queries = _build_search_queries(section, project_context)
+        for query in queries:
+            if len(results) >= max_results:
+                break
+            result = registry.call("academia", "arxiv_search", {"query": query, "limit": 5})
+            if not result.is_error and result.content:
+                parsed = _parse_search_results(result.content, "arxiv")
+                results.extend(parsed)
 
     # Deduplicate by external_id
     seen = set()
@@ -183,7 +250,12 @@ def _parse_search_results(content: str, source: str, gap_id: Optional[int] = Non
     return results
 
 
-def _phase2_assess(section: str, state, cfg) -> int:
+def _phase2_assess(
+    section: str,
+    state,
+    cfg,
+    project_context: dict | None = None,
+) -> int:
     """Phase 2: Claude assesses relevance of pending discoveries."""
     from ..ai import create_ai
 
@@ -197,14 +269,38 @@ def _phase2_assess(section: str, state, cfg) -> int:
         for d in pending
     )
 
-    system = "You are a research librarian. Assess paper relevance for a dissertation section. Return JSON only."
-    prompt = (
-        f"Section: {section}\n\n"
-        f"Papers to assess:\n{papers_text}\n\n"
-        f"For each paper, return a JSON array with objects: "
-        f'{{"id": <int>, "relevance": 1-5, "usage": "evidence|method|comparison|background", '
-        f'"priority": "high|medium|low"}}'
-    )
+    # Build context-aware assessment prompt
+    pc = project_context or {}
+    context_lines = []
+    if pc.get("title"):
+        context_lines.append(f"Project: {pc['title']}")
+    if pc.get("description"):
+        context_lines.append(f"Description: {pc['description']}")
+    if pc.get("keywords"):
+        context_lines.append(f"Keywords: {', '.join(pc['keywords'])}")
+    context_block = "\n".join(context_lines)
+
+    is_paper = pc.get("type") == "paper"
+    if is_paper:
+        system = "You are a research librarian. Assess paper relevance for a research paper. Return JSON only."
+        prompt = (
+            f"{context_block}\n"
+            f"Topic: {section}\n\n"
+            f"Papers to assess:\n{papers_text}\n\n"
+            f"For each paper, return a JSON array with objects: "
+            f'{{"id": <int>, "relevance": 1-5, "usage": "evidence|method|comparison|background", '
+            f'"priority": "high|medium|low"}}'
+        )
+    else:
+        system = "You are a research librarian. Assess paper relevance for a dissertation section. Return JSON only."
+        prompt = (
+            f"Section: {section}\n"
+            f"{context_block}\n\n" if context_block else f"Section: {section}\n\n"
+            f"Papers to assess:\n{papers_text}\n\n"
+            f"For each paper, return a JSON array with objects: "
+            f'{{"id": <int>, "relevance": 1-5, "usage": "evidence|method|comparison|background", '
+            f'"priority": "high|medium|low"}}'
+        )
 
     data = ai.call_json(system, prompt, max_tokens=2048)
     if not data:

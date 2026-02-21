@@ -110,6 +110,26 @@ def _build_klemma_md(values: InitValues) -> str:
     return "\n".join(lines)
 
 
+def _setup_claude_skills(project_dir: Path, created: list[str], skipped: list[str]):
+    """Symlink Claude Code skills from the klemma package into the project."""
+    source_skills = _EXAMPLES_DIR / ".claude" / "skills"
+    if not source_skills.is_dir():
+        return
+
+    target_dir = project_dir / ".claude" / "skills"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    for skill_dir in source_skills.iterdir():
+        if not skill_dir.is_dir() or skill_dir.name.startswith("."):
+            continue
+        target = target_dir / skill_dir.name
+        if target.exists() or target.is_symlink():
+            skipped.append(f".claude/skills/{skill_dir.name}")
+        else:
+            target.symlink_to(skill_dir)
+            created.append(f".claude/skills/{skill_dir.name}")
+
+
 def init_project(
     project_dir: Path,
     project_type: str = "dissertation",
@@ -187,6 +207,9 @@ def init_project(
                     encoding="utf-8",
                 )
         created.append("KLEMMA.md")
+
+    # Claude Code skills (symlink from package)
+    _setup_claude_skills(project_dir, created, skipped)
 
     # .gitignore: exclude DB but keep config in VCS
     gitignore = project_dir / ".gitignore"
