@@ -16,7 +16,6 @@ from .config import (
     discover_project_root,
     ensure_system_home,
     load_available_tags,
-    load_config,
     load_project_context,
     resolve_effective_config,
 )
@@ -382,9 +381,9 @@ def init(ctx, project_type, global_only):
 
     console.print()
     console.print("[bold]Next steps:[/bold]")
-    console.print(f"  1. Edit [cyan].klemma/config.yaml[/cyan] — set Zotero/Obsidian paths")
-    console.print(f"  2. Edit [cyan]KLEMMA.md[/cyan] — describe your project")
-    console.print(f"  3. Edit [cyan].klemma/tags.yaml[/cyan] — define your topic taxonomy")
+    console.print("  1. Edit [cyan].klemma/config.yaml[/cyan] — set Zotero/Obsidian paths")
+    console.print("  2. Edit [cyan]KLEMMA.md[/cyan] — describe your project")
+    console.print("  3. Edit [cyan].klemma/tags.yaml[/cyan] — define your topic taxonomy")
     console.print("  4. Run [bold]klemma status[/bold] to verify")
 
 
@@ -1847,7 +1846,7 @@ def migrate(ctx, dry_run):
     else:
         gitignore.write_text(f"# Klemma data\n{ignore_line}\n", encoding="utf-8")
 
-    console.print(f"\n[green]Migration complete.[/green]")
+    console.print("\n[green]Migration complete.[/green]")
     console.print(f"[dim]Project created in {project_dir}/[/dim]")
     console.print(f"[dim]System config at {system_home}/[/dim]")
 

@@ -1,12 +1,8 @@
 """Tests for Git-style project discovery, config merging, and context aggregation."""
 
-import os
-import textwrap
 from pathlib import Path
 
-import pytest
 import yaml
-
 
 # --- Discovery tests ---
 
