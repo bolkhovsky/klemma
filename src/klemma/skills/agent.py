@@ -58,8 +58,10 @@ def build_agent_context(
         if chapter:
             ch_sources = state.get_by_chapter(chapter)
         else:
-            ch = int(section.split(".")[0])
-            ch_sources = state.get_by_chapter(ch)
+            from ..config import parse_chapter_from_section
+
+            ch = parse_chapter_from_section(section)
+            ch_sources = state.get_by_chapter(ch) if ch else []
         seen = {s["id"] for s in sources}
         for cs in ch_sources:
             if cs["id"] not in seen:

@@ -104,8 +104,17 @@ def _select_sources_for_mode(
     total = len(active_sources)
 
     if mode == "recommend" and focus_section:
-        chapter = int(focus_section.split(".")[0])
-        selected = [s for s in active_sources if s.get("primary_chapter") == chapter]
+        from ..config import parse_chapter_from_section
+
+        chapter = parse_chapter_from_section(focus_section)
+        if chapter:
+            selected = [s for s in active_sources if s.get("primary_chapter") == chapter]
+        else:
+            # Topic-based section (papers): filter by section match
+            selected = [s for s in active_sources
+                        if focus_section in (s.get("sections") or [])]
+            if not selected:
+                selected = active_sources  # fallback: show all
         other_count = total - len(selected)
         detail = f"{other_count} sources from other chapters omitted"
         return selected, {
@@ -243,9 +252,14 @@ def _gather_library_context(
 
     # For recommend mode: load vault summaries for the section
     if mode == "recommend" and focus_section:
-        chapter = int(focus_section.split(".")[0])
-        context["section_title"] = (project.chapters.get(chapter, "") if project
-                                    else config.dissertation.chapters.get(chapter, ""))
+        from ..config import parse_chapter_from_section
+
+        chapter = parse_chapter_from_section(focus_section)
+        if chapter:
+            context["section_title"] = (project.chapters.get(chapter, "") if project
+                                        else config.dissertation.chapters.get(chapter, ""))
+        else:
+            context["section_title"] = focus_section  # topic-based
         context["section_summaries"] = _load_section_summaries(
             focus_section, chapter, state, vault
         )

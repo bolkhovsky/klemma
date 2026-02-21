@@ -511,9 +511,14 @@ def research_section(
     фрагменты, заметки пользователя) и обновляет брифинг инкрементально.
     """
     # Определить главу
-    chapter = int(section.split(".")[0])
-    chapter_name = (project.chapters.get(chapter, f"Chapter {chapter}") if project
-                    else config.dissertation.chapters.get(chapter, f"Chapter {chapter}"))
+    from ..config import parse_chapter_from_section
+
+    chapter = parse_chapter_from_section(section)
+    if chapter:
+        chapter_name = (project.chapters.get(chapter, f"Chapter {chapter}") if project
+                        else config.dissertation.chapters.get(chapter, f"Chapter {chapter}"))
+    else:
+        chapter_name = section  # topic-based section for papers
 
     # 0. Проверить предыдущий брифинг (инкрементальный режим)
     prev = _load_previous_research(section, chapter, state, vault)
