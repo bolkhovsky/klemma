@@ -6,14 +6,119 @@ Two modes:
 """
 
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
+
+import yaml
 
 # Example files shipped with the package (repo root)
 _EXAMPLES_DIR = Path(__file__).parent.parent.parent
 
 
-def init_project(project_dir: Path, project_type: str = "dissertation") -> dict:
+@dataclass
+class InitValues:
+    """Values collected by the interactive wizard (or auto-discovery)."""
+
+    project_type: str = "dissertation"
+    title: str = ""
+    description: str = ""
+    keywords: list[str] = None  # type: ignore[assignment]
+    language: str = "ru"
+    vault_path: str = ""
+    notes_folder: str = "References"
+    tags_folder: str = "Tags"
+    zotero_storage: str = ""
+    zotero_library_json: str = ""
+
+    def __post_init__(self):
+        if self.keywords is None:
+            self.keywords = []
+
+
+def _build_project_config(values: InitValues) -> dict:
+    """Build config dict from wizard values."""
+    cfg: dict = {}
+
+    # Zotero (only if paths provided)
+    zotero: dict = {}
+    if values.zotero_library_json:
+        zotero["library_json"] = values.zotero_library_json
+    if values.zotero_storage:
+        zotero["storage_path"] = values.zotero_storage
+    if zotero:
+        cfg["zotero"] = zotero
+
+    # Obsidian (only if vault provided)
+    if values.vault_path:
+        obsidian: dict = {"vault_path": values.vault_path}
+        if values.notes_folder:
+            obsidian["notes_folder"] = values.notes_folder
+        if values.tags_folder:
+            obsidian["tags_folder"] = values.tags_folder
+        cfg["obsidian"] = obsidian
+
+    # AI
+    cfg["ai"] = {"model": "sonnet", "language": values.language}
+
+    # Project
+    project: dict = {"type": values.project_type}
+    if values.title:
+        project["title"] = values.title
+    if values.description:
+        project["description"] = values.description
+    if values.keywords:
+        project["priority_terms"] = values.keywords
+    cfg["project"] = project
+
+    # State
+    cfg["state"] = {"db_path": "./data/klemma.db"}
+
+    # MCP
+    cfg["mcp"] = {"servers": {}}
+
+    return cfg
+
+
+def _build_klemma_md(values: InitValues) -> str:
+    """Build KLEMMA.md content from wizard values."""
+    title = values.title or "Your project title here"
+    lines = [
+        "# Project Context\n",
+        "<!-- This file describes your project for AI. It is passed as context to all",
+        "     AI-powered commands (plan, research, process, ask, etc.).",
+        "",
+        "     For nested projects, context is aggregated: parent context first, then child.",
+        "     For example, if this is a paper inside a dissertation directory, AI will see",
+        "     the dissertation context followed by this paper's context. -->\n",
+        f'Topic: "{title}"\n',
+    ]
+
+    if values.description:
+        lines.append(f"Description: {values.description}\n")
+
+    lines.append("Scientific Results:")
+    lines.append("- NR1: First scientific result")
+    lines.append("- NR2: Second scientific result\n")
+
+    if values.keywords:
+        lines.append(f"Key terms: {', '.join(values.keywords)}")
+    else:
+        lines.append("Key terms: term1, term2, term3")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def init_project(
+    project_dir: Path,
+    project_type: str = "dissertation",
+    values: Optional[InitValues] = None,
+) -> dict:
     """Create .klemma/ project in project_dir + KLEMMA.md.
+
+    If values is provided (interactive mode), writes config from discovered/prompted
+    values. Otherwise falls back to example template (--no-input / legacy).
 
     Returns dict with keys: created (list of file names), skipped (list).
     """
@@ -29,19 +134,25 @@ def init_project(project_dir: Path, project_type: str = "dissertation") -> dict:
     if config_target.exists():
         skipped.append(".klemma/config.yaml")
     else:
-        source = _EXAMPLES_DIR / "config.project.example.yaml"
-        if source.exists():
-            text = source.read_text(encoding="utf-8")
-            text = text.replace("type: dissertation", f"type: {project_type}")
+        if values:
+            values.project_type = project_type
+            cfg = _build_project_config(values)
+            text = yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False)
             config_target.write_text(text, encoding="utf-8")
         else:
-            config_target.write_text(
-                f"# Klemma project config\n"
-                f"project:\n"
-                f"  type: {project_type}\n"
-                f"  title: \"\"\n",
-                encoding="utf-8",
-            )
+            source = _EXAMPLES_DIR / "config.project.example.yaml"
+            if source.exists():
+                text = source.read_text(encoding="utf-8")
+                text = text.replace("type: dissertation", f"type: {project_type}")
+                config_target.write_text(text, encoding="utf-8")
+            else:
+                config_target.write_text(
+                    f"# Klemma project config\n"
+                    f"project:\n"
+                    f"  type: {project_type}\n"
+                    f"  title: \"\"\n",
+                    encoding="utf-8",
+                )
         created.append(".klemma/config.yaml")
 
     # Tags
@@ -61,17 +172,20 @@ def init_project(project_dir: Path, project_type: str = "dissertation") -> dict:
     if klemma_md.exists():
         skipped.append("KLEMMA.md")
     else:
-        source = _EXAMPLES_DIR / "klemma.example.md"
-        if source.exists():
-            shutil.copy2(source, klemma_md)
+        if values:
+            klemma_md.write_text(_build_klemma_md(values), encoding="utf-8")
         else:
-            klemma_md.write_text(
-                f"# Project Context\n\n"
-                f"Type: {project_type}\n"
-                f"Title: \"\"\n\n"
-                f"<!-- Describe your project here. This context is passed to AI. -->\n",
-                encoding="utf-8",
-            )
+            source = _EXAMPLES_DIR / "klemma.example.md"
+            if source.exists():
+                shutil.copy2(source, klemma_md)
+            else:
+                klemma_md.write_text(
+                    f"# Project Context\n\n"
+                    f"Type: {project_type}\n"
+                    f"Title: \"\"\n\n"
+                    f"<!-- Describe your project here. This context is passed to AI. -->\n",
+                    encoding="utf-8",
+                )
         created.append("KLEMMA.md")
 
     # .gitignore: exclude DB but keep config in VCS

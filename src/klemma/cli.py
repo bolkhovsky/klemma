@@ -143,15 +143,20 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
         })
 
     # 2. Discover new Zotero entries not in DB + detect renames
+    # Papers: explicit-only model — skip auto-registration from BBT JSON or vault
+    project = ctx.project
+    auto_register = not project or project.type != "paper"
+
+    # Load existing DB source IDs (needed for paper filtering + new entry detection)
+    with state._conn() as conn:
+        cur = conn.execute("SELECT id FROM sources")
+        existing = {row["id"] for row in cur.fetchall()}
+
     new_entries = []
     renames = []
     if ctx.library:
         entry_lookup = ctx.library.entries
         vault_citekeys = {vd["citekey"] for vd in vault_data}
-
-        with state._conn() as conn:
-            cur = conn.execute("SELECT id FROM sources")
-            existing = {row["id"] for row in cur.fetchall()}
 
         # Rename detection via immutable Zotero itemKey
         db_zotero_keys = state.get_zotero_key_map()  # {itemKey: old_citekey}
@@ -166,7 +171,7 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
                     existing.add(citekey)
                     renames.append((old_ck, citekey))
                     continue
-            if citekey not in vault_citekeys:
+            if auto_register and citekey not in vault_citekeys:
                 classification = auto_classify(entry, cfg)
                 new_entries.append((citekey, classification))
 
@@ -211,6 +216,10 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
             state.populate_zotero_keys(backfill)
 
     # 3. Sync to DB
+    # Papers: only sync vault notes for sources already registered in DB
+    if not auto_register:
+        vault_data = [vd for vd in vault_data if vd["citekey"] in existing]
+
     result = state.sync_source_sections(vault_data, new_entries)
 
     if not quiet:
@@ -337,17 +346,23 @@ def main(ctx, config):
               type=click.Choice(["dissertation", "paper", "thesis"]),
               help="Project type")
 @click.option("--global-only", is_flag=True, help="Only create/update ~/.klemma/ system config")
+@click.option("--no-input", is_flag=True, help="Skip interactive prompts, use defaults")
+@click.option("--force", is_flag=True, help="Re-run wizard even if project exists (prefills from current config)")
 @click.pass_context
-def init(ctx, project_type, global_only):
+def init(ctx, project_type, global_only, no_input, force):
     """Initialize a new klemma project in current directory.
 
     Creates .klemma/ and KLEMMA.md in the current directory.
     Also ensures ~/.klemma/ system config exists.
 
+    Runs an interactive setup wizard by default. Use --no-input to skip prompts.
+
     \b
     Examples:
-      klemma init                    # dissertation project
+      klemma init                    # interactive setup
       klemma init --type paper       # paper project
+      klemma init --no-input         # skip prompts, use defaults
+      klemma init --force            # re-run wizard, prefill from existing config
       klemma init --global-only      # only create system config
     """
     from .setup import init_project, init_system
@@ -367,24 +382,252 @@ def init(ctx, project_type, global_only):
     # Ensure system config exists
     init_system(system_home)
 
-    # Create project in current directory
     project_dir = Path.cwd()
-    result = init_project(project_dir, project_type=project_type)
+    config_path = project_dir / ".klemma" / "config.yaml"
+
+    # Load existing config as prefill for --force
+    prefill = None
+    if force and config_path.exists():
+        prefill = _load_prefill(config_path)
+        # Remove existing files so init_project recreates them
+        config_path.unlink()
+        klemma_md = project_dir / "KLEMMA.md"
+        if klemma_md.exists():
+            klemma_md.unlink()
+
+    # Check if config already exists (skip wizard unless --force)
+    if not force and config_path.exists():
+        no_input = True
+
+    values = None
+    if not no_input:
+        values = _interactive_init(project_type, prefill=prefill)
+        project_type = values.project_type
+
+    result = init_project(project_dir, project_type=project_type, values=values)
 
     if result["created"]:
-        console.print(f"[green]Initialized klemma {project_type} project in {project_dir}/[/green]")
+        console.print(f"\n[green]Initialized klemma {project_type} project in {project_dir}/[/green]")
         for name in result["created"]:
             console.print(f"  + {name}")
     if result["skipped"]:
         for name in result["skipped"]:
             console.print(f"  [dim]~ {name} (already exists, skipped)[/dim]")
 
+    # Paper: discover relevant sources from vault + BBT JSON
+    if (
+        values
+        and project_type == "paper"
+        and (values.keywords or values.description)
+        and values.vault_path
+        and values.zotero_library_json
+    ):
+        _discover_paper_sources(project_dir, values)
+
     console.print()
-    console.print("[bold]Next steps:[/bold]")
-    console.print("  1. Edit [cyan].klemma/config.yaml[/cyan] — set Zotero/Obsidian paths")
-    console.print("  2. Edit [cyan]KLEMMA.md[/cyan] — describe your project")
-    console.print("  3. Edit [cyan].klemma/tags.yaml[/cyan] — define your topic taxonomy")
-    console.print("  4. Run [bold]klemma status[/bold] to verify")
+    console.print("Run [bold]klemma status[/bold] to verify.")
+
+
+def _load_prefill(config_path: Path) -> dict:
+    """Read existing .klemma/config.yaml and return values for prefilling the wizard."""
+    import yaml as _yaml
+
+    try:
+        raw = _yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+    project = raw.get("project", {}) if isinstance(raw.get("project"), dict) else {}
+    ai = raw.get("ai", {}) if isinstance(raw.get("ai"), dict) else {}
+    obsidian = raw.get("obsidian", {}) if isinstance(raw.get("obsidian"), dict) else {}
+    zotero = raw.get("zotero", {}) if isinstance(raw.get("zotero"), dict) else {}
+
+    return {
+        "project_type": project.get("type", "dissertation"),
+        "title": project.get("title", ""),
+        "description": project.get("description", ""),
+        "keywords": project.get("priority_terms", []),
+        "language": ai.get("language", "ru"),
+        "vault_path": obsidian.get("vault_path", ""),
+        "notes_folder": obsidian.get("notes_folder", "References"),
+        "tags_folder": obsidian.get("tags_folder", "Tags"),
+        "zotero_storage": zotero.get("storage_path", ""),
+        "zotero_library_json": zotero.get("library_json", ""),
+    }
+
+
+def _discover_paper_sources(project_dir: Path, values):
+    """Scan vault + BBT JSON for sources matching paper keywords, register matches."""
+    from .discovery import discover_relevant_sources
+    from .library_provider import LocalLibrary
+
+    library = LocalLibrary(Path(values.zotero_library_json))
+    if not library.entries:
+        return
+
+    matches = discover_relevant_sources(
+        vault_path=Path(values.vault_path),
+        notes_folder=values.notes_folder,
+        library_entries=library.entries,
+        keywords=values.keywords,
+        description=values.description,
+    )
+
+    if not matches:
+        click.echo("\n  No matching sources found in vault.")
+        click.echo("  Add sources later with: klemma process <citekey>")
+        return
+
+    total_in_vault = 0
+    notes_dir = Path(values.vault_path) / values.notes_folder
+    if notes_dir.is_dir():
+        total_in_vault = sum(1 for f in notes_dir.iterdir() if f.name.startswith("@"))
+
+    click.echo("\n  Scanning vault for relevant sources...")
+    click.echo(f"  Found {len(matches)} matching sources (of {total_in_vault} in vault):")
+
+    shown = matches[:10]
+    for m in shown:
+        title_short = m["title"][:60] + "..." if len(m["title"]) > 60 else m["title"]
+        click.echo(f"    @{m['citekey']} — {title_short}")
+    if len(matches) > 10:
+        click.echo(f"    ... and {len(matches) - 10} more")
+
+    if not click.confirm("  Include these sources?", default=True):
+        click.echo("  Skipped. Add sources later with: klemma process <citekey>")
+        return
+
+    # Register sources in the project's DB
+    from .config import resolve_effective_config
+    from .state import StateManager
+
+    cfg, project_cfg, project_root = resolve_effective_config()
+    klemma_dir = project_dir / ".klemma"
+    db_path = klemma_dir / "data" / "klemma.db"
+    state = StateManager(str(db_path))
+
+    citekeys = [m["citekey"] for m in matches]
+    state.register_sources(citekeys)
+    click.echo(f"  {len(citekeys)} sources registered.")
+
+
+def _interactive_init(project_type: str, prefill: dict | None = None):
+    """Run interactive setup wizard, return collected values.
+
+    If prefill is provided (from --force), uses those values as defaults.
+    """
+    from .discovery import (
+        detect_language,
+        discover_bbt_json,
+        discover_obsidian_vault,
+        discover_zotero_storage,
+    )
+    from .setup import InitValues
+
+    pf = prefill or {}
+
+    click.echo("\nKlemma project setup\n")
+
+    # --- Project basics ---
+    project_type = click.prompt(
+        "  Project type",
+        type=click.Choice(["dissertation", "paper", "thesis"], case_sensitive=False),
+        default=pf.get("project_type", project_type),
+    )
+    title = click.prompt(
+        "  Project title",
+        default=pf.get("title", ""),
+        show_default=bool(pf.get("title")),
+    )
+
+    # Paper-specific: description and keywords are essential for source discovery
+    description = ""
+    keywords: list[str] = []
+    if project_type == "paper":
+        description = click.prompt(
+            "  Research description (1-2 sentences)",
+            default=pf.get("description", ""),
+            show_default=bool(pf.get("description")),
+        )
+        kw_default = ", ".join(pf["keywords"]) if pf.get("keywords") else ""
+        kw_str = click.prompt(
+            "  Keywords (comma-separated)",
+            default=kw_default,
+            show_default=bool(kw_default),
+        )
+        keywords = [k.strip() for k in kw_str.split(",") if k.strip()] if kw_str else []
+
+    language = click.prompt(
+        "  AI language",
+        default=pf.get("language", detect_language()),
+    )
+
+    # --- Auto-discovery (prefill overrides discovery) ---
+    click.echo("\n  Detecting paths...")
+
+    values = InitValues(
+        project_type=project_type,
+        title=title,
+        description=description,
+        keywords=keywords,
+        language=language,
+    )
+
+    # Obsidian vault
+    prefill_vault = pf.get("vault_path", "")
+    vault = discover_obsidian_vault()
+    discovered_vault = str(vault) if vault else ""
+    # Use prefill if available, otherwise use discovery
+    effective_vault = prefill_vault or discovered_vault
+
+    if effective_vault:
+        click.echo(f"  + Obsidian vault: {effective_vault}")
+        if not click.confirm("    Use this path?", default=True):
+            vault_str = click.prompt("    Obsidian vault path", default="")
+            values.vault_path = vault_str
+        else:
+            values.vault_path = effective_vault
+    else:
+        vault_str = click.prompt(
+            "  ? Obsidian vault not found. Path (empty to skip)",
+            default="",
+            show_default=False,
+        )
+        values.vault_path = vault_str
+
+    # Zotero storage
+    prefill_storage = pf.get("zotero_storage", "")
+    storage = discover_zotero_storage()
+    effective_storage = prefill_storage or (str(storage) if storage else "")
+
+    if effective_storage:
+        click.echo(f"  + Zotero storage: {effective_storage}")
+        values.zotero_storage = effective_storage
+    else:
+        storage_str = click.prompt(
+            "  ? Zotero storage not found. Path (empty to skip)",
+            default="",
+            show_default=False,
+        )
+        values.zotero_storage = storage_str
+
+    # BBT JSON
+    prefill_bbt = pf.get("zotero_library_json", "")
+    bbt = discover_bbt_json()
+    effective_bbt = prefill_bbt or (str(bbt) if bbt else "")
+
+    if effective_bbt:
+        click.echo(f"  + BBT JSON export: {effective_bbt}")
+        values.zotero_library_json = effective_bbt
+    else:
+        bbt_str = click.prompt(
+            "  ? BBT JSON export not found. Path (empty to skip)",
+            default="",
+            show_default=False,
+        )
+        values.zotero_library_json = bbt_str
+
+    return values
 
 
 @main.command()
@@ -647,33 +890,57 @@ def status(ctx, verbose, chapter):
     console.print(f"Processing: {' | '.join(parts)}  [dim]({total} total, {frag_stats.get('total', 0)} fragments)[/dim]")
     console.print()
 
-    # --- Coverage by chapter (dynamic from project config) ---
-    chapter_numbers = project.chapter_numbers if project else list(range(1, 5))
-    table = Table(title="Coverage by Chapter", show_edge=False, pad_edge=False)
-    table.add_column("Chapter", style="cyan")
-    table.add_column("Sources", justify="right", width=8)
-    for ch in chapter_numbers:
-        if chapter and ch != chapter:
-            continue
-        count = cov["chapters"].get(ch, 0)
-        style = "green" if count >= 10 else "yellow" if count >= 5 else "red"
-        name = (project.chapters.get(ch, "") if project
-                else cfg.dissertation.chapters.get(ch, ""))
-        table.add_row(f"Ch {ch}: {name}", f"[{style}]{count}[/{style}]")
-    console.print(table)
+    # --- Coverage (chapter-based for dissertation/thesis, simple for paper) ---
+    has_chapters = project and project.chapters and project.type != "paper"
 
-    # --- Sections (verbose or filtered by chapter) ---
-    if (verbose or chapter) and cov["sections"]:
-        console.print()
-        sec_table = Table(title="Coverage by Section", show_edge=False, pad_edge=False)
-        sec_table.add_column("Section", style="cyan")
-        sec_table.add_column("Sources", justify="right", width=8)
-        for sec, count in sorted(cov["sections"].items()):
-            if chapter and not sec.startswith(f"{chapter}."):
+    if has_chapters:
+        chapter_numbers = project.chapter_numbers
+        table = Table(title="Coverage by Chapter", show_edge=False, pad_edge=False)
+        table.add_column("Chapter", style="cyan")
+        table.add_column("Sources", justify="right", width=8)
+        for ch in chapter_numbers:
+            if chapter and ch != chapter:
                 continue
-            style = "green" if count >= 3 else "yellow" if count >= 1 else "red"
-            sec_table.add_row(sec, f"[{style}]{count}[/{style}]")
-        console.print(sec_table)
+            count = cov["chapters"].get(ch, 0)
+            style = "green" if count >= 10 else "yellow" if count >= 5 else "red"
+            name = project.chapters.get(ch, "")
+            table.add_row(f"Ch {ch}: {name}", f"[{style}]{count}[/{style}]")
+        console.print(table)
+
+        # Sections (verbose or filtered by chapter)
+        if (verbose or chapter) and cov["sections"]:
+            console.print()
+            sec_table = Table(title="Coverage by Section", show_edge=False, pad_edge=False)
+            sec_table.add_column("Section", style="cyan")
+            sec_table.add_column("Sources", justify="right", width=8)
+            for sec, count in sorted(cov["sections"].items()):
+                if chapter and not sec.startswith(f"{chapter}."):
+                    continue
+                style = "green" if count >= 3 else "yellow" if count >= 1 else "red"
+                sec_table.add_row(sec, f"[{style}]{count}[/{style}]")
+            console.print(sec_table)
+    elif not project or project.type == "paper":
+        # Paper: show section coverage if any, no chapter structure
+        if cov["sections"]:
+            sec_table = Table(title="Coverage by Section", show_edge=False, pad_edge=False)
+            sec_table.add_column("Section", style="cyan")
+            sec_table.add_column("Sources", justify="right", width=8)
+            for sec, count in sorted(cov["sections"].items()):
+                style = "green" if count >= 3 else "yellow" if count >= 1 else "red"
+                sec_table.add_row(sec, f"[{style}]{count}[/{style}]")
+            console.print(sec_table)
+    else:
+        # Fallback: legacy dissertation config
+        chapter_numbers = list(range(1, 5))
+        table = Table(title="Coverage by Chapter", show_edge=False, pad_edge=False)
+        table.add_column("Chapter", style="cyan")
+        table.add_column("Sources", justify="right", width=8)
+        for ch in chapter_numbers:
+            count = cov["chapters"].get(ch, 0)
+            style = "green" if count >= 10 else "yellow" if count >= 5 else "red"
+            name = cfg.dissertation.chapters.get(ch, "")
+            table.add_row(f"Ch {ch}: {name}", f"[{style}]{count}[/{style}]")
+        console.print(table)
 
     # --- Top gaps ---
     min_sources = (project.min_sources_per_section if project
