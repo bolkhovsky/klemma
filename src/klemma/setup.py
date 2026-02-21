@@ -30,6 +30,7 @@ class InitValues:
     tags_folder: str = "Tags"
     zotero_storage: str = ""
     zotero_library_json: str = ""
+    zotero_library_id: str = ""
 
     def __post_init__(self):
         if self.keywords is None:

@@ -238,6 +238,64 @@ def acquire_paper(
     )
 
 
+def _generate_citekey(meta: PaperMetadata) -> str:
+    """Generate citekey from metadata: author2024_title_slug."""
+    first_author = ""
+    if meta.authors:
+        # Take first author's last name (before comma or space+initial)
+        first_author = re.split(r"[,\s]", meta.authors.strip())[0]
+        first_author = re.sub(r"[^\w]", "", first_author)
+    if not first_author:
+        first_author = "unknown"
+    year = str(meta.year) if meta.year else ""
+    slug = _slugify(meta.title, max_len=30)
+    return f"{first_author}{year}_{slug}"
+
+
+def acquire_paper_local(
+    meta: PaperMetadata,
+    storage_path: str,
+    state=None,
+) -> AcquireResult:
+    """Local acquire: download PDF → generate citekey → store → register in DB.
+
+    No Zotero API calls. Used when ZOTERO_API_KEY is not set.
+    """
+    # 1. Download PDF
+    pdf_path = download_pdf(meta.url)
+    if not pdf_path:
+        return AcquireResult(status="download_failed")
+
+    # 2. Generate citekey locally
+    citekey = _generate_citekey(meta)
+
+    # 3. Store PDF in local storage
+    permanent_path = ""
+    if storage_path:
+        try:
+            dest = _store_pdf_locally(pdf_path, storage_path, citekey, meta.title)
+            permanent_path = str(dest)
+        except Exception as e:
+            logger.error("Local PDF storage failed: %s", e)
+
+    # 4. Register in klemma DB
+    if state:
+        state.register_sources([citekey])
+        if permanent_path:
+            state.set_pdf_path(citekey, permanent_path)
+        if meta.sections:
+            chapters = list({int(s.split(".")[0]) for s in meta.sections if "." in s})
+            with state._conn() as conn:
+                state._set_sections_inline(conn, citekey, meta.sections, chapters)
+
+    pdf_path.unlink(missing_ok=True)
+    return AcquireResult(
+        citekey=citekey,
+        pdf_path=permanent_path or str(pdf_path),
+        status="ok",
+    )
+
+
 def load_batch(path: str) -> list[PaperMetadata]:
     """Load papers from a JSON batch file."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))

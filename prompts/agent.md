@@ -83,6 +83,8 @@ Rules:
 3. Reference @citekey when mentioning known sources
 4. When working with vault files — path: {{ vault_path }}
 5. **ALWAYS save query results to a note** — even if the user doesn't explicitly ask
+6. **NEVER modify config files** (.klemma/config.yaml, ~/.klemma/config.yaml, KLEMMA.md) without explicit user request. Config is managed via `klemma init` and manual editing. If a config value seems missing, check `klemma info` first — it may be inherited from parent/system config via deep merge.
+7. **NEVER write custom scripts** that bypass klemma CLI (no direct SQLite writes, no raw file manipulation of .klemma/ or Zotero storage). If a klemma command fails, report the error to the user — do not work around it.
 
 Saving results:
 - Path: {{ vault_path }}/Agent/Agent_{% if project_name %}{{ project_name }}_{% endif %}{{ today }}_<brief_name>.md

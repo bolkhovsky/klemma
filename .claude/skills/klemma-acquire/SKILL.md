@@ -7,6 +7,33 @@ allowed-tools: Bash(klemma acquire:*)
 
 Автоматический pipeline: скачать PDF → добавить в Zotero → дождаться BBT citekey → зарегистрировать в klemma.
 
+## Режимы работы
+
+Режим определяется автоматически:
+
+- **Zotero API** (если `ZOTERO_API_KEY` задан + `library_id` в конфиге): скачать PDF → создать запись в Zotero → BBT citekey → зарегистрировать в DB
+- **Local** (если `ZOTERO_API_KEY` не задан): скачать PDF → сгенерировать citekey из метаданных → сохранить в storage → зарегистрировать в DB
+
+В local-режиме Zotero не нужен. Citekey генерируется как `Автор2024_slug_заголовка`.
+
+## Предусловия
+
+Перед запуском acquire убедись:
+
+1. `klemma info` — показывает секцию Zotero (storage_path)
+2. Для API-режима: `ZOTERO_API_KEY` + `library_id` + Zotero запущен
+3. Для local-режима: достаточно storage_path
+
+## Перед batch
+
+Проверь pipeline на одной статье:
+
+```bash
+klemma acquire <одна_ссылка> --title "Test Paper" --no-process
+```
+
+Если статус = ok — запускай batch. Если ошибка — исправь конфиг.
+
 ## Одна статья
 
 ```bash
@@ -69,12 +96,20 @@ klemma acquire --batch /tmp/papers.json
 
 ## Что происходит внутри
 
+**API-режим:**
 1. Скачивает PDF (проверяет размер > 10KB)
 2. Создаёт запись в Zotero через API
 3. Прикрепляет PDF как attachment
 4. Ожидает появления BBT citekey (до 30 сек)
 5. Регистрирует в klemma DB с привязкой к разделам
 6. Запускает `klemma process <citekey>` (если нет `--no-process`)
+
+**Local-режим:**
+1. Скачивает PDF (проверяет размер > 10KB)
+2. Генерирует citekey: `Автор2024_slug_заголовка`
+3. Сохраняет PDF в `storage_path/<citekey>/`
+4. Регистрирует в klemma DB с привязкой к разделам
+5. Запускает `klemma process <citekey>` (если нет `--no-process`)
 
 ## Типичный агентский workflow
 

@@ -404,6 +404,10 @@ def init(ctx, project_type, global_only, no_input, force):
         values = _interactive_init(project_type, prefill=prefill)
         project_type = values.project_type
 
+    # Save library_id to system config (shared across all projects)
+    if values and values.zotero_library_id:
+        _save_system_zotero_library_id(values.zotero_library_id)
+
     result = init_project(project_dir, project_type=project_type, values=values)
 
     if result["created"]:
@@ -426,6 +430,38 @@ def init(ctx, project_type, global_only, no_input, force):
 
     console.print()
     console.print("Run [bold]klemma status[/bold] to verify.")
+
+
+def _read_system_zotero_library_id() -> str:
+    """Read zotero.library_id from system config (~/.klemma/config.yaml)."""
+    import yaml as _yaml
+
+    system_cfg = ensure_system_home() / "config.yaml"
+    try:
+        raw = _yaml.safe_load(system_cfg.read_text(encoding="utf-8")) or {}
+        return str(raw.get("zotero", {}).get("library_id", ""))
+    except Exception:
+        return ""
+
+
+def _save_system_zotero_library_id(library_id: str):
+    """Write zotero.library_id to system config if not already set."""
+    import yaml as _yaml
+
+    system_cfg = ensure_system_home() / "config.yaml"
+    try:
+        raw = _yaml.safe_load(system_cfg.read_text(encoding="utf-8")) or {}
+    except Exception:
+        raw = {}
+
+    zotero = raw.setdefault("zotero", {})
+    if zotero.get("library_id"):
+        return  # already set
+    zotero["library_id"] = library_id
+    system_cfg.write_text(
+        _yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
 
 
 def _load_prefill(config_path: Path) -> dict:
@@ -453,6 +489,7 @@ def _load_prefill(config_path: Path) -> dict:
         "tags_folder": obsidian.get("tags_folder", "Tags"),
         "zotero_storage": zotero.get("storage_path", ""),
         "zotero_library_json": zotero.get("library_json", ""),
+        "zotero_library_id": zotero.get("library_id", ""),
     }
 
 
@@ -498,12 +535,9 @@ def _discover_paper_sources(project_dir: Path, values):
         return
 
     # Register sources in the project's DB
-    from .config import resolve_effective_config
     from .state import StateManager
 
-    cfg, project_cfg, project_root = resolve_effective_config()
-    klemma_dir = project_dir / ".klemma"
-    db_path = klemma_dir / "data" / "klemma.db"
+    db_path = project_dir / ".klemma" / "data" / "klemma.db"
     state = StateManager(str(db_path))
 
     citekeys = [m["citekey"] for m in matches]
@@ -627,6 +661,22 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
         )
         values.zotero_library_json = bbt_str
 
+    # Zotero library ID (needed for acquire pipeline)
+    prefill_lid = pf.get("zotero_library_id", "")
+    system_lid = _read_system_zotero_library_id()
+    effective_lid = prefill_lid or system_lid
+
+    if effective_lid:
+        click.echo(f"  + Zotero library ID: {effective_lid}")
+        values.zotero_library_id = effective_lid
+    else:
+        lid = click.prompt(
+            "  ? Zotero library ID (numeric, empty to skip)",
+            default="",
+            show_default=False,
+        )
+        values.zotero_library_id = lid
+
     return values
 
 
@@ -719,9 +769,10 @@ def process(ctx, citekeys, serial):
     pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
 
     # Auto-resolve previously detected reference gaps against current library
-    resolved = state.resolve_gaps(kctx.library.entries)
-    if resolved:
-        console.print(f"[green]Auto-resolved {resolved} reference gap(s)[/green]")
+    if kctx.library:
+        resolved = state.resolve_gaps(kctx.library.entries)
+        if resolved:
+            console.print(f"[green]Auto-resolved {resolved} reference gap(s)[/green]")
 
     # Build citekey list: explicit or all pending
     if citekeys:
@@ -1311,7 +1362,7 @@ def library(ctx, section, audit):
 
     from .skills.librarian import analyze_library
 
-    entry_lookup = kctx.library.entries
+    entry_lookup = kctx.library.entries if kctx.library else {}
 
     mode = "audit" if audit else "recommend" if section else "status"
 
@@ -1505,26 +1556,26 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
     Single paper: klemma acquire <pdf_url> --title "..." --authors "..." --year 2022 --section 1.2
     Batch: klemma acquire --batch papers.json
     """
-    from .literature.zotero import ZoteroLibrary
-    from .skills.acquirer import PaperMetadata, acquire_paper, load_batch
+    from .skills.acquirer import PaperMetadata, acquire_paper, acquire_paper_local, load_batch
 
     kctx = _get_context(ctx)
     cfg, state = kctx.config, kctx.state
 
-    # Validate Zotero config
-    if not cfg.zotero.library_id:
-        console.print("[red]zotero.library_id not set in config.yaml[/red]")
-        return
+    # Auto-detect mode: API if key+library_id available, local otherwise
     api_key = cfg.zotero.api_key
-    if not api_key:
-        console.print(f"[red]{cfg.zotero.api_key_env} not set in environment[/red]")
-        return
+    use_api = bool(api_key and cfg.zotero.library_id)
+    zot_lib = None
 
-    zot_lib = ZoteroLibrary(
-        library_id=cfg.zotero.library_id,
-        library_type=cfg.zotero.library_type,
-        api_key=api_key,
-    )
+    if use_api:
+        from .literature.zotero import ZoteroLibrary
+        zot_lib = ZoteroLibrary(
+            library_id=cfg.zotero.library_id,
+            library_type=cfg.zotero.library_type,
+            api_key=api_key,
+        )
+        console.print("[blue]Mode: Zotero API[/blue]")
+    else:
+        console.print("[blue]Mode: local (no API key)[/blue]")
 
     # Build paper list
     if batch_path:
@@ -1552,13 +1603,19 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
         label = meta.title[:50] if meta.title else meta.url[:50]
         console.print(f"\n[bold][{i}/{len(papers)}] {label}[/bold]")
 
-        result = acquire_paper(
-            meta, zot_lib, library_json,
-            storage_path=cfg.zotero.storage_path, state=state,
-        )
+        if use_api:
+            result = acquire_paper(
+                meta, zot_lib, library_json,
+                storage_path=cfg.zotero.storage_path, state=state,
+            )
+        else:
+            result = acquire_paper_local(
+                meta, storage_path=cfg.zotero.storage_path, state=state,
+            )
 
         if result.status == "ok":
-            console.print(f"  [green]@{result.citekey}[/green] (item: {result.item_key})")
+            item_info = f" (item: {result.item_key})" if result.item_key else ""
+            console.print(f"  [green]@{result.citekey}[/green]{item_info}")
             if meta.sections:
                 console.print(f"  [dim]sections: {', '.join(meta.sections)}[/dim]")
 
@@ -1978,6 +2035,24 @@ def info(ctx):
         title=f"Project: {kctx.project_name}",
         border_style="blue",
     ))
+
+    # Effective Zotero config (merged from system + parent + project)
+    zot = kctx.config.zotero
+    zot_parts = []
+    if zot.library_id:
+        zot_parts.append(f"Library ID: {zot.library_id} ({zot.library_type})")
+    if zot.library_json:
+        zot_parts.append(f"BBT JSON: {zot.library_json}")
+    if zot.storage_path:
+        zot_parts.append(f"Storage: {zot.storage_path}")
+    if zot.backend != "local":
+        zot_parts.append(f"Backend: {zot.backend}")
+    if zot_parts:
+        console.print(Panel(
+            "\n".join(zot_parts),
+            title="Zotero (effective)",
+            border_style="dim",
+        ))
 
     # Parent chain
     if len(kctx.project_chain) > 1:
