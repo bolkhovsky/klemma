@@ -181,6 +181,7 @@ class ProjectConfig(BaseModel):
 
     type: str = "dissertation"  # dissertation | paper | thesis
     title: str = ""
+    description: str = ""  # 1-2 sentence research description (used for source discovery)
     current_focus: str = ""  # e.g. "2.3.1" for dissertation, "methods" for paper
     chapters: dict[int, str] = Field(default_factory=dict)
     scientific_results: dict[str, str] = Field(default_factory=dict)
