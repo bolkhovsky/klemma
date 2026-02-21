@@ -400,10 +400,6 @@ def init(ctx, project_type, global_only, no_input, force):
         values = _interactive_init(project_type, prefill=prefill)
         project_type = values.project_type
 
-    # Save library_id to system config (shared across all projects)
-    if values and values.zotero_library_id:
-        _save_system_zotero_library_id(values.zotero_library_id)
-
     result = init_project(project_dir, project_type=project_type, values=values)
 
     if result["created"]:
@@ -426,38 +422,6 @@ def init(ctx, project_type, global_only, no_input, force):
 
     console.print()
     console.print("Run [bold]klemma status[/bold] to verify.")
-
-
-def _read_system_zotero_library_id() -> str:
-    """Read zotero.library_id from system config (~/.klemma/config.yaml)."""
-    import yaml as _yaml
-
-    system_cfg = ensure_system_home() / "config.yaml"
-    try:
-        raw = _yaml.safe_load(system_cfg.read_text(encoding="utf-8")) or {}
-        return str(raw.get("zotero", {}).get("library_id", ""))
-    except Exception:
-        return ""
-
-
-def _save_system_zotero_library_id(library_id: str):
-    """Write zotero.library_id to system config if not already set."""
-    import yaml as _yaml
-
-    system_cfg = ensure_system_home() / "config.yaml"
-    try:
-        raw = _yaml.safe_load(system_cfg.read_text(encoding="utf-8")) or {}
-    except Exception:
-        raw = {}
-
-    zotero = raw.setdefault("zotero", {})
-    if zotero.get("library_id"):
-        return  # already set
-    zotero["library_id"] = library_id
-    system_cfg.write_text(
-        _yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
-    )
 
 
 def _load_prefill(config_path: Path) -> dict:
@@ -485,7 +449,6 @@ def _load_prefill(config_path: Path) -> dict:
         "tags_folder": obsidian.get("tags_folder", "Tags"),
         "zotero_storage": zotero.get("storage_path", ""),
         "zotero_library_json": zotero.get("library_json", ""),
-        "zotero_library_id": zotero.get("library_id", ""),
     }
 
 
@@ -656,22 +619,6 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
             show_default=False,
         )
         values.zotero_library_json = bbt_str
-
-    # Zotero library ID (needed for acquire pipeline)
-    prefill_lid = pf.get("zotero_library_id", "")
-    system_lid = _read_system_zotero_library_id()
-    effective_lid = prefill_lid or system_lid
-
-    if effective_lid:
-        click.echo(f"  + Zotero library ID: {effective_lid}")
-        values.zotero_library_id = effective_lid
-    else:
-        lid = click.prompt(
-            "  ? Zotero library ID (numeric, empty to skip)",
-            default="",
-            show_default=False,
-        )
-        values.zotero_library_id = lid
 
     return values
 
@@ -1634,14 +1581,10 @@ def info(ctx):
     # Effective Zotero config (merged from system + parent + project)
     zot = kctx.config.zotero
     zot_parts = []
-    if zot.library_id:
-        zot_parts.append(f"Library ID: {zot.library_id} ({zot.library_type})")
     if zot.library_json:
         zot_parts.append(f"BBT JSON: {zot.library_json}")
     if zot.storage_path:
         zot_parts.append(f"Storage: {zot.storage_path}")
-    if zot.backend != "local":
-        zot_parts.append(f"Backend: {zot.backend}")
     if zot_parts:
         console.print(Panel(
             "\n".join(zot_parts),
