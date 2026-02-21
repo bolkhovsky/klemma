@@ -1558,26 +1558,26 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
     Single paper: klemma acquire <pdf_url> --title "..." --authors "..." --year 2022 --section 1.2
     Batch: klemma acquire --batch papers.json
     """
-    from .literature.zotero import ZoteroLibrary
-    from .skills.acquirer import PaperMetadata, acquire_paper, load_batch
+    from .skills.acquirer import PaperMetadata, acquire_paper, acquire_paper_local, load_batch
 
     kctx = _get_context(ctx)
     cfg, state = kctx.config, kctx.state
 
-    # Validate Zotero config
-    if not cfg.zotero.library_id:
-        console.print("[red]zotero.library_id not set in config.yaml[/red]")
-        return
+    # Auto-detect mode: API if key+library_id available, local otherwise
     api_key = cfg.zotero.api_key
-    if not api_key:
-        console.print(f"[red]{cfg.zotero.api_key_env} not set in environment[/red]")
-        return
+    use_api = bool(api_key and cfg.zotero.library_id)
+    zot_lib = None
 
-    zot_lib = ZoteroLibrary(
-        library_id=cfg.zotero.library_id,
-        library_type=cfg.zotero.library_type,
-        api_key=api_key,
-    )
+    if use_api:
+        from .literature.zotero import ZoteroLibrary
+        zot_lib = ZoteroLibrary(
+            library_id=cfg.zotero.library_id,
+            library_type=cfg.zotero.library_type,
+            api_key=api_key,
+        )
+        console.print("[blue]Mode: Zotero API[/blue]")
+    else:
+        console.print("[blue]Mode: local (no API key)[/blue]")
 
     # Build paper list
     if batch_path:
@@ -1605,13 +1605,19 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
         label = meta.title[:50] if meta.title else meta.url[:50]
         console.print(f"\n[bold][{i}/{len(papers)}] {label}[/bold]")
 
-        result = acquire_paper(
-            meta, zot_lib, library_json,
-            storage_path=cfg.zotero.storage_path, state=state,
-        )
+        if use_api:
+            result = acquire_paper(
+                meta, zot_lib, library_json,
+                storage_path=cfg.zotero.storage_path, state=state,
+            )
+        else:
+            result = acquire_paper_local(
+                meta, storage_path=cfg.zotero.storage_path, state=state,
+            )
 
         if result.status == "ok":
-            console.print(f"  [green]@{result.citekey}[/green] (item: {result.item_key})")
+            item_info = f" (item: {result.item_key})" if result.item_key else ""
+            console.print(f"  [green]@{result.citekey}[/green]{item_info}")
             if meta.sections:
                 console.print(f"  [dim]sections: {', '.join(meta.sections)}[/dim]")
 
