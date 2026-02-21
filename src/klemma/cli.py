@@ -535,12 +535,9 @@ def _discover_paper_sources(project_dir: Path, values):
         return
 
     # Register sources in the project's DB
-    from .config import resolve_effective_config
     from .state import StateManager
 
-    cfg, project_cfg, project_root = resolve_effective_config()
-    klemma_dir = project_dir / ".klemma"
-    db_path = klemma_dir / "data" / "klemma.db"
+    db_path = project_dir / ".klemma" / "data" / "klemma.db"
     state = StateManager(str(db_path))
 
     citekeys = [m["citekey"] for m in matches]
@@ -772,9 +769,10 @@ def process(ctx, citekeys, serial):
     pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
 
     # Auto-resolve previously detected reference gaps against current library
-    resolved = state.resolve_gaps(kctx.library.entries)
-    if resolved:
-        console.print(f"[green]Auto-resolved {resolved} reference gap(s)[/green]")
+    if kctx.library:
+        resolved = state.resolve_gaps(kctx.library.entries)
+        if resolved:
+            console.print(f"[green]Auto-resolved {resolved} reference gap(s)[/green]")
 
     # Build citekey list: explicit or all pending
     if citekeys:
@@ -1364,7 +1362,7 @@ def library(ctx, section, audit):
 
     from .skills.librarian import analyze_library
 
-    entry_lookup = kctx.library.entries
+    entry_lookup = kctx.library.entries if kctx.library else {}
 
     mode = "audit" if audit else "recommend" if section else "status"
 
