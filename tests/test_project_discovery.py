@@ -53,6 +53,38 @@ class TestDiscoverProjectRoot:
         assert result == tmp_path
 
 
+    def test_skips_system_home_directory(self, tmp_path, monkeypatch):
+        """discover_project_root must not treat ~/.klemma/ (system home) as a project."""
+        # Simulate: tmp_path acts as $HOME, has .klemma/ (system dir)
+        system_home = tmp_path / ".klemma"
+        system_home.mkdir()
+        # Start search from a subdirectory under tmp_path (no project .klemma/)
+        subdir = tmp_path / "projects" / "myproject"
+        subdir.mkdir(parents=True)
+
+        from klemma.config import discover_project_root
+
+        monkeypatch.setattr("klemma.config.get_system_home", lambda: system_home)
+
+        result = discover_project_root(subdir)
+        assert result is None  # should NOT find tmp_path as a project
+
+    def test_finds_project_even_when_system_home_exists(self, tmp_path, monkeypatch):
+        """A real project .klemma/ should still be found even with system home present."""
+        system_home = tmp_path / ".klemma"
+        system_home.mkdir()
+        # Create a real project below
+        project = tmp_path / "projects" / "diss"
+        (project / ".klemma").mkdir(parents=True)
+
+        from klemma.config import discover_project_root
+
+        monkeypatch.setattr("klemma.config.get_system_home", lambda: system_home)
+
+        result = discover_project_root(project)
+        assert result == project
+
+
 class TestDiscoverProjectChain:
     def test_single_project(self, tmp_path):
         (tmp_path / ".klemma").mkdir()

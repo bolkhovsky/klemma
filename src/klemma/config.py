@@ -57,10 +57,15 @@ def discover_project_root(start: Optional[Path] = None) -> Optional[Path]:
 
     Returns the directory containing .klemma/, or None if not found.
     Like `git rev-parse --show-toplevel` but for klemma projects.
+
+    Skips the system home directory (~/.klemma/) — that's the global config,
+    not a project.
     """
     current = (start or Path.cwd()).resolve()
+    system_home = get_system_home().resolve()
     for _ in range(20):  # safety limit
-        if (current / ".klemma").is_dir():
+        klemma_dir = current / ".klemma"
+        if klemma_dir.is_dir() and klemma_dir.resolve() != system_home:
             return current
         parent = current.parent
         if parent == current:
