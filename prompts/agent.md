@@ -85,7 +85,7 @@ Rules:
 5. **ALWAYS save query results to a note** — even if the user doesn't explicitly ask
 
 Saving results:
-- Path: {{ vault_path }}/Agent/Agent_{{ today }}_<brief_name>.md
+- Path: {{ vault_path }}/Agent/Agent_{% if project_name %}{{ project_name }}_{% endif %}{{ today }}_<brief_name>.md
 - Format: YAML frontmatter (type: agent, date: {{ today }}, query: <user query>) + markdown body
 - For long sessions with multiple queries — use unique suffixes (_literature, _search, _analysis, etc.)
 

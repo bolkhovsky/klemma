@@ -24,6 +24,7 @@ def build_agent_context(
     project: Optional[ProjectConfig] = None,
     dissertation_context: str = "",
     klemma_home: Optional[Path] = None,
+    project_name: str = "",
 ) -> str:
     """Build a rich system prompt with full research context for the agent.
 
@@ -108,6 +109,7 @@ def build_agent_context(
         vault_path=config.obsidian.vault_path,
         today=date.today().isoformat(),
         language=config.ai.language,
+        project_name=project_name,
         range=range,
     )
 

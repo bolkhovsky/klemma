@@ -29,6 +29,7 @@ def analyze_library(
     project: Optional[ProjectConfig] = None,
     dissertation_context: str = "",
     klemma_home: Optional[Path] = None,
+    project_name: str = "",
 ) -> Optional[LibraryReport]:
     """Run AI library analysis and return structured report.
 
@@ -84,7 +85,7 @@ def analyze_library(
             )
 
     # Save to vault
-    _save_report_to_vault(report, vault, mode, focus_section)
+    _save_report_to_vault(report, vault, mode, focus_section, project_name=project_name)
 
     return report
 
@@ -413,11 +414,13 @@ def _save_report_to_vault(
     vault: VaultAdapter,
     mode: str,
     section: Optional[str],
+    project_name: str = "",
 ) -> Optional[str]:
-    """Save report to vault as Library/Library_{mode}_{date}.md."""
+    """Save report to vault as Library/Library_{project}_{mode}_{date}.md."""
     today = date.today().isoformat()
+    project_tag = f"_{project_name}" if project_name else ""
     suffix = f"_{section}" if section else ""
-    note_name = f"Library_{mode}{suffix}_{today}"
+    note_name = f"Library{project_tag}_{mode}{suffix}_{today}"
 
     content = f"---\ntype: library-report\nmode: {mode}\ndate: {today}\n---\n\n"
     content += f"# Library Report: {mode.title()}\n\n"

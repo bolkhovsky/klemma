@@ -1270,6 +1270,7 @@ def ask(ctx, query, section, chapter):
             project=kctx.project,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
+            project_name=kctx.project_name,
         )
 
     console.print(f"[dim]Query: {query}[/dim]")
@@ -1320,6 +1321,7 @@ def library(ctx, section, audit):
             project=kctx.project,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
+            project_name=kctx.project_name,
         )
 
     if not report:
