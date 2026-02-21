@@ -196,11 +196,13 @@ def generate_morning_plan(
         writing_constraints=writing_constraints,
         library_summary=lib_digest,
         language=config.ai.language,
+        project_type=project.type if project else "dissertation",
         range=range,
     )
 
+    project_type = project.type if project else "dissertation"
     system = (
-        "You are a PhD dissertation writing assistant. "
+        f"You are an academic writing assistant for a {project_type}. "
         "Generate a morning briefing following the 'one focus per day' principle. "
         "Output only valid JSON."
     )

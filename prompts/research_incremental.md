@@ -1,6 +1,6 @@
-You are a research analyst for a PhD dissertation. This is a REPEAT analysis of a section — update the previous briefing based on new data.
+You are a research analyst for a {{ project_type }}. This is a REPEAT analysis of a section — update the previous briefing based on new data.
 
-## Dissertation Context
+## Project Context
 
 {{ dissertation_context }}
 
