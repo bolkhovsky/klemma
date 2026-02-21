@@ -31,6 +31,11 @@ class KlemmaContext:
     tools: Optional[ToolRegistry] = None
     project: Optional[ProjectConfig] = None
     project_name: str = "default"
+    # Points to active project's .klemma/ dir (backward-compat with skills)
     klemma_home: Path = field(default_factory=lambda: Path.home() / ".klemma")
     dissertation_context: str = ""
     available_tags: list[str] = field(default_factory=list)
+    # New: per-directory project support
+    project_root: Optional[Path] = None  # directory containing .klemma/
+    project_chain: list[Path] = field(default_factory=list)  # child-first chain
+    system_home: Path = field(default_factory=lambda: Path.home() / ".klemma")

@@ -1,0 +1,60 @@
+# =============================================================================
+# KLEMMA PROJECT CONFIG — per-project settings
+# =============================================================================
+# This file lives in .klemma/config.yaml inside your project directory.
+# Shared resources (obsidian, zotero, ai, mcp) are inherited from parent
+# project if this is a nested project. Override only what you need.
+
+# --- Shared resources (inherited from parent if nested) ---
+
+zotero:
+  library_json: "/path/to/your/bibtex-export.json"  # BetterBibTeX JSON export
+  storage_path: "/path/to/Zotero/storage"            # Zotero attachment storage
+
+obsidian:
+  vault_path: "/path/to/your/obsidian/vault"
+  notes_folder: "References"           # folder with @citekey.md notes
+  tags_folder: "Tags"                  # optional folder for tag notes
+
+ai:
+  model: "sonnet"                      # claude model: "opus", "sonnet", "haiku"
+  language: "ru"                       # AI response language
+  # Uncomment for OpenAI-compatible backends:
+  # backend: "openai"
+  # base_url: "http://localhost:11434/v1"
+  # api_key_env: "OPENAI_API_KEY"
+
+# --- Per-project settings (NOT inherited from parent) ---
+
+project:
+  type: dissertation                   # dissertation | paper | thesis
+  title: "Your project title"
+  current_focus: "1.1"
+  chapters:
+    1: "Literature review"
+    2: "Methodology"
+    3: "Results and discussion"
+  scientific_results:
+    nr1: "First scientific result"
+    nr2: "Second scientific result"
+  deadlines:
+    - chapter: "1"
+      deadline: "2026-06-01"
+      label: "Chapter 1"
+  writing_constraints: "1-2 hours/day, 200-400 words/day"
+  priority_terms:
+    - your_key_term_1
+    - your_key_term_2
+
+state:
+  db_path: "./data/klemma.db"          # relative to .klemma/
+
+tags:
+  auto_mapping:
+    - pattern: "review|survey|meta.?analysis"
+      tag: "Review"
+    - pattern: "methodology|method"
+      tag: "Methodology"
+
+mcp:
+  servers: {}

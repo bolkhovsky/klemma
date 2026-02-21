@@ -3,6 +3,7 @@
 ## Current test suite
 - `test_ai.py` (112 lines) — `extract_json()`, `AIProviderBase`, `create_ai()` factory, `ClaudeClient` detection
 - `test_ai_openai.py` (118 lines) — `OpenAIClient` with mocked openai SDK
+- `test_project_discovery.py` (~590 lines) — 42 tests for Git-style project discovery, config merging, context aggregation, prompt resolution, tags inheritance, setup, and deep merge
 
 ## Patterns
 - pytest + `unittest.mock` (`patch`, `MagicMock`)

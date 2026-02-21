@@ -11,15 +11,15 @@ Klemma is a CLI tool for academic writing. It manages literature (via Zotero), e
 - **Library abstraction**: LibraryProvider protocol with LocalLibrary (BBT JSON) and MCPLibrary (zotero-mcp) backends
 - **AI abstraction**: AIProvider protocol with ClaudeClient (CLI), OpenAIClient, LiteLLMClient backends + `create_ai()` factory
 - **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/tools/project
-- **Multi-project**: workspace.yaml maps project names → config files; each project gets own DB, bibliography, vault area
+- **Multi-project**: Git/NPM-style per-directory projects. `klemma init` in any dir creates `.klemma/` + `KLEMMA.md`. Nested projects inherit shared resources (vault, zotero) from parent. System config in `~/.klemma/`.
 
 ## Project structure
 ```
 src/klemma/
 ├── cli.py              — Click CLI entry point
-├── config.py           — Pydantic config models (ProjectConfig, WorkspaceConfig, KlemmaConfig) + get_klemma_home(), load helpers, resolve_prompt()
-├── context.py          — KlemmaContext dataclass (single object per CLI command, includes project)
-├── setup.py            — `klemma init` logic — scaffolds ~/.klemma/ from example files
+├── config.py           — Pydantic config models (ProjectConfig, SystemConfig, KlemmaConfig) + discover_project_root(), resolve_effective_config(), resolve_prompt()
+├── context.py          — KlemmaContext dataclass (single object per CLI command, includes project_root/project_chain)
+├── setup.py            — `klemma init` logic — init_project() (per-dir .klemma/) + init_system() (~/.klemma/)
 ├── state.py            — SQLite state manager
 ├── ai.py               — AIProvider protocol + AIProviderBase + ClaudeClient + create_ai() factory
 ├── ai_openai.py        — OpenAI-compatible backend (OpenAI, Ollama, vLLM, LM Studio)
@@ -40,8 +40,11 @@ prompts/                    — Shipped Jinja2 prompt templates (overridable via
 ├── research_incremental.md — incremental research update
 ├── librarian.md            — library analysis (3 modes)
 └── agent.md                — interactive agent system prompt
-config.example.yaml         — Template config for `klemma init`
-context.example.md          — Template dissertation context
+config.project.example.yaml — Template for per-project .klemma/config.yaml
+config.system.example.yaml  — Template for ~/.klemma/config.yaml (system defaults)
+config.example.yaml         — Legacy template config (kept for migration)
+klemma.example.md           — Template KLEMMA.md (project context)
+context.example.md          — Legacy template context (kept for migration)
 tags.example.yaml           — Template tag taxonomy
 .claude/skills/
 ├── klemma-acquire/SKILL.md — Agent skill: paper acquisition pipeline
@@ -49,8 +52,8 @@ tags.example.yaml           — Template tag taxonomy
 └── klemma-status/SKILL.md  — Agent skill: coverage & gaps check
 ```
 
-## Key commands (12)
-- `klemma init` — scaffold `~/.klemma/` with config templates (first-time setup)
+## Key commands (14)
+- `klemma init [--type paper|thesis]` — create project in current directory (.klemma/ + KLEMMA.md)
 - `klemma plan` — daily plan generation (library digest included)
 - `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
 - `klemma process [<citekeys>...]` — extract fragments from PDF; no arg = batch all pending; parallel by default
@@ -61,57 +64,80 @@ tags.example.yaml           — Template tag taxonomy
 - `klemma tools {add,list,remove,call}` — manage MCP servers (zotero, academia, etc.)
 - `klemma search "query"` — search papers via MCP (arXiv, Semantic Scholar)
 - `klemma discover -s X.X` — hybrid discovery pipeline (`--background`, `--status`, `--review`)
-- `klemma projects {list,switch,info}` — manage multiple projects (workspace mode)
-- Global options: `--project/-p <name>`, `--workspace/-w <path>`, `--config/-c <path>`
+- `klemma info` — show current project info (root, chain, config, DB)
+- `klemma tree` — show nested project tree from current root
+- `klemma migrate [--dry-run]` — migrate from old ~/.klemma/ to per-directory project
+- Global options: `--config/-c <path>`
 
 Hidden aliases (backward compat): `morning`→`plan`, `extract`→`process`, `agent`→`ask`, `stats`/`coverage`/`gaps`→`status`, `prepopulate`→`import`
 
 ## Config
 
-User data lives in `~/.klemma/` (overridable via `KLEMMA_HOME` env var):
+Two-level configuration: system (global) and project (per-directory).
+
+### System directory (`~/.klemma/`) — global defaults
 ```
 ~/.klemma/
-├── config.yaml    — main config (Zotero, Obsidian, AI, dissertation structure, MCP)
-├── context.md     — dissertation context (topic, results, chapters, key terms)
-├── tags.yaml      — tag taxonomy for fragment classification (list of strings)
-├── prompts/       — optional user overrides for shipped Jinja2 prompt templates
-└── data/
-    └── klemma.db  — SQLite database
+├── config.yaml    — AI defaults, global MCP servers
+└── prompts/       — optional global prompt overrides
 ```
+Created automatically on first `klemma init`. Override location via `KLEMMA_HOME` env var.
 
-Run `klemma init` to scaffold from `config.example.yaml`, `context.example.md`, `tags.example.yaml`.
-- `workspace.yaml` — optional: maps project names to per-project config files, shared defaults
+### Project directory (`.klemma/` in any dir) — per-project data
+```
+project_dir/
+├── KLEMMA.md          — project context for AI (visible, like CLAUDE.md)
+└── .klemma/
+    ├── config.yaml    — project config (zotero, obsidian, project, MCP overrides)
+    ├── tags.yaml      — tag taxonomy for fragment classification
+    ├── prompts/       — optional project-level prompt overrides
+    └── data/
+        └── klemma.db  — SQLite database
+```
+Created by `klemma init` in any directory. Navigate to project dir and run commands.
 
-**Config keys:**
+**Config keys (project-level):**
 - `zotero.library_json` — path to BetterBibTeX JSON export (for PDF lookup)
 - `zotero.backend` — `"local"` (default, BBT JSON) or `"mcp"` (zotero-mcp server)
 - `zotero.collection` — optional Zotero collection ID for filtering
 - `mcp.servers` — registered MCP servers (managed via `klemma tools add/remove`)
-- `project:` — optional inline ProjectConfig (type, title, chapters, scientific_results, etc.)
+- `project:` — ProjectConfig (type, title, chapters, scientific_results, etc.)
 - `ai.backend` — `"claude"` (default, CLI), `"openai"` (OpenAI-compatible API), or `"litellm"` (100+ providers)
 - `ai.base_url` — endpoint URL for OpenAI-compatible servers (Ollama, vLLM, LM Studio)
 - `ai.api_key_env` — env var name for API key (e.g. `"OPENAI_API_KEY"`)
 - `ai.json_mode` — enable structured JSON output when backend supports it
 - Requires: AI backend (`claude` CLI by default, or `pip install klemma[openai]` / `klemma[litellm]`), optionally `ZOTERO_API_KEY`
 
-**Prompt resolution:** `resolve_prompt(name, klemma_home)` checks `~/.klemma/prompts/<name>` first, then falls back to shipped `prompts/<name>`.
+**Project discovery:** `discover_project_root()` traverses up from cwd to find nearest `.klemma/` directory (like `git rev-parse --show-toplevel`).
 
-**Fallbacks:** If `context.md` is missing, context is built from `config.dissertation` fields. If `tags.yaml` is missing, tags are extracted from `config.tags.auto_mapping` keys.
+**Config merge order:** system (`~/.klemma/`) < parent project < child project < CLI `--config`.
 
-### Multi-project setup
-```yaml
-# workspace.yaml
-active: dissertation
-defaults:
-  ai: { model: opus }
-  mcp: { servers: { ... } }
-projects:
-  dissertation: ./configs/dissertation.yaml
-  ice_paper: ./configs/ice_paper.yaml
+**Selective inheritance:** Only shared resources (`obsidian`, `zotero`, `ai`, `mcp`) are inherited from parent. Project-specific keys (`project`, `tags`, `state`, `processing`) are NOT inherited.
+
+**Prompt resolution:** `resolve_prompt(name, klemma_home, project_chain?)` checks project → parent project → system (`~/.klemma/prompts/`) → shipped prompts.
+
+**Context aggregation:** `load_project_context()` reads `KLEMMA.md` from all project roots in chain (parent first, child last). Falls back to `.klemma/context.md` (legacy) then config fields.
+
+**Tags resolution:** `load_available_tags(klemma_home, config, project_chain?)` checks project → parent project → `config.tags.auto_mapping`.
+
+**Fallbacks:** If `KLEMMA.md` is missing, tries `.klemma/context.md`, then builds from `config.project` fields. If `tags.yaml` is missing, falls back to parent project's tags, then `config.tags.auto_mapping` keys.
+
+### Nested projects
 ```
-Each project config is a full config.yaml with its own obsidian/state/zotero/project sections.
-Workspace defaults are deep-merged under each project config (project values win).
-Without workspace.yaml, the legacy `dissertation:` block in config.yaml is auto-wrapped into a ProjectConfig.
+thesis_dir/
+├── KLEMMA.md           — dissertation context
+├── .klemma/            — dissertation project
+├── paper_ice/
+│   ├── KLEMMA.md       — paper context (AI sees both)
+│   └── .klemma/        — paper project (inherits vault/zotero from thesis)
+└── paper_climate/
+    ├── KLEMMA.md
+    └── .klemma/
+```
+Navigate into `thesis_dir/paper_ice/` and run `klemma status` — it uses the paper's DB but inherits vault/zotero from the thesis parent. AI context includes both dissertation and paper KLEMMA.md files.
+
+### Migration from old `~/.klemma/` setup
+Run `klemma migrate` in desired project directory. Splits `~/.klemma/config.yaml` into system (AI + MCP) and project (everything else), copies context.md → KLEMMA.md, tags.yaml, DB.
 
 ## SQLite tables
 - `sources` — Zotero entries with processing status and dissertation metadata
