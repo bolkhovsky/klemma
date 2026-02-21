@@ -190,6 +190,40 @@ class TestInitProjectWithValues:
         assert "ice sheets, climate, GrIS" in md
 
 
+class TestClaudeSkillsSetup:
+    def test_symlinks_skills_on_init(self, tmp_path):
+        from klemma.setup import _EXAMPLES_DIR, init_project
+
+        skills_source = _EXAMPLES_DIR / ".claude" / "skills"
+        if not skills_source.is_dir():
+            return  # skip if skills not present (CI)
+
+        result = init_project(tmp_path)
+
+        skill_names = [d.name for d in skills_source.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        for name in skill_names:
+            target = tmp_path / ".claude" / "skills" / name
+            assert target.is_symlink(), f"Expected symlink for {name}"
+            assert target.resolve() == (skills_source / name).resolve()
+            assert f".claude/skills/{name}" in result["created"]
+
+    def test_skips_existing_skill_symlinks(self, tmp_path):
+        from klemma.setup import _EXAMPLES_DIR, init_project
+
+        skills_source = _EXAMPLES_DIR / ".claude" / "skills"
+        if not skills_source.is_dir():
+            return
+
+        # First init creates symlinks
+        init_project(tmp_path)
+        # Second init skips them
+        result = init_project(tmp_path)
+
+        skill_names = [d.name for d in skills_source.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        for name in skill_names:
+            assert f".claude/skills/{name}" in result["skipped"]
+
+
 class TestDiscoverRelevantSources:
     def _make_entry(self, title="", abstract="", keywords=""):
         """Create a mock ZoteroEntry-like object."""
