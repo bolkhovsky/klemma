@@ -1,4 +1,4 @@
-Analyze a scientific paper and create a structured annotation for a PhD dissertation.
+Analyze a scientific paper and create a structured annotation for a {{ project_type }}.
 
 ## Paper Metadata
 - **Title**: {{ title }}
@@ -16,7 +16,7 @@ Analyze a scientific paper and create a structured annotation for a PhD disserta
 
 ---
 
-## Dissertation Context
+## Project Context
 {{ dissertation_context }}
 
 ---
@@ -39,7 +39,7 @@ Create a JSON annotation with the following structure:
     "Second key result",
     "Third key result"
   ],
-  "relevance_to_dissertation": "Specific explanation of how the paper relates to the dissertation topic",
+  "relevance_to_dissertation": "Specific explanation of how the paper relates to the project topic",
   "quality_score": 4,
   "citation_priority": "medium",
   "dissertation_relevance": {
@@ -57,7 +57,7 @@ Create a JSON annotation with the following structure:
       "authors": "Smith et al.",
       "year": 2020,
       "title": "Exact title from References section",
-      "why_relevant": "Brief explanation of relevance to the dissertation",
+      "why_relevant": "Brief explanation of relevance to the project",
       "dissertation_sections": ["2.3.1"],
       "in_library": true,
       "citekey": "Smith2020"
@@ -71,10 +71,10 @@ Create a JSON annotation with the following structure:
 1. **summary**: Brief paper overview — what was done, what data, what result
 2. **methodology**: What methods, data, time period
 3. **key_findings**: 2-5 key results
-4. **relevance_to_dissertation**: How specifically the paper connects to the dissertation topic
-5. **quality_score**: Rating 1-5 by relevance to the dissertation:
-   - 5 = Directly about the dissertation's core topic and methods
-   - 4 = About closely related methods or data applicable to the dissertation
+4. **relevance_to_dissertation**: How specifically the paper connects to the project topic
+5. **quality_score**: Rating 1-5 by relevance to the project:
+   - 5 = Directly about the project's core topic and methods
+   - 4 = About closely related methods or data applicable to the project
    - 3 = About the broader domain or general methods
    - 2 = Indirect connection (general methodology, related field)
    - 1 = Minimal relevance, background source
@@ -90,7 +90,7 @@ Create a JSON annotation with the following structure:
 10. **suggested_tags**: 1-5 tags from the list: {{ available_tags }}
 11. **key_references**: 5-15 most relevant references from the paper's bibliography:
    - Find the References/Bibliography section in the full text
-   - Select 5-15 references most important for the dissertation topic
+   - Select 5-15 references most important for the project topic
    - For each: authors (short form), year, title (exact from References), why_relevant, dissertation_sections
    - **in_library**: true if the reference matches a source in "Our Library" above (match by author + year + title). Include citekey
    - **in_library**: false if the reference is not in our library. citekey = null

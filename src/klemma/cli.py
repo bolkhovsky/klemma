@@ -829,7 +829,8 @@ def process(ctx, citekeys, serial):
             n_frags, _ = _process_single(ck, cfg, state, vault, ai, pdf_extractor, kctx.library,
                                          dissertation_context=kctx.dissertation_context,
                                          available_tags=kctx.available_tags,
-                                         klemma_home=kctx.klemma_home)
+                                         klemma_home=kctx.klemma_home,
+                                         project_type=kctx.project.type if kctx.project else "dissertation")
             if n_frags > 0:
                 processed += 1
         if len(keys) > 1:
@@ -837,7 +838,8 @@ def process(ctx, citekeys, serial):
 
 
 def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quiet=False,
-                    dissertation_context="", available_tags=None, klemma_home=None):
+                    dissertation_context="", available_tags=None, klemma_home=None,
+                    project_type="dissertation"):
     """Process a single source: find PDF, extract fragments, save to vault.
 
     Returns (fragment_count, status_message). When quiet=True, suppresses console output
@@ -885,6 +887,7 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
         dissertation_context=dissertation_context,
         available_tags=available_tags,
         klemma_home=klemma_home,
+        project_type=project_type,
     )
 
     if not result or not result.fragments:
@@ -1614,8 +1617,7 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
             )
 
         if result.status == "ok":
-            item_info = f" (item: {result.item_key})" if result.item_key else ""
-            console.print(f"  [green]@{result.citekey}[/green]{item_info}")
+            console.print(f"  [green]@{result.citekey}[/green]")
             if meta.sections:
                 console.print(f"  [dim]sections: {', '.join(meta.sections)}[/dim]")
 
@@ -1634,7 +1636,8 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
                         _process_single(result.citekey, cfg, state, kctx.vault, ai, pdf_extractor, kctx.library,
                                         dissertation_context=kctx.dissertation_context,
                                         available_tags=kctx.available_tags,
-                                        klemma_home=kctx.klemma_home)
+                                        klemma_home=kctx.klemma_home,
+                                        project_type=kctx.project.type if kctx.project else "dissertation")
 
             ok += 1
         else:

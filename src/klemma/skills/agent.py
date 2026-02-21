@@ -1,4 +1,4 @@
-"""Universal research agent — builds full dissertation context for interactive Claude session."""
+"""Universal research agent — builds full project context for interactive Claude session."""
 
 import logging
 from datetime import date
@@ -11,8 +11,12 @@ from ..config import KlemmaConfig, ProjectConfig, resolve_prompt
 from ..state import StateManager
 from ..vault import VaultAdapter
 from .planner import _get_current_deadline
+from .work_context import _get_labels
 
 logger = logging.getLogger(__name__)
+
+# Context separator used by load_project_context() to join parent + child
+_CONTEXT_SEPARATOR = "\n\n---\n\n"
 
 
 def build_agent_context(
@@ -28,7 +32,7 @@ def build_agent_context(
 ) -> str:
     """Build a rich system prompt with full research context for the agent.
 
-    Gathers dissertation structure, sources, coverage, gaps, fragments,
+    Gathers project structure, sources, coverage, gaps, fragments,
     today's plan, and reading queue. Renders via Jinja2 template.
     """
     # Deadline
@@ -86,12 +90,40 @@ def build_agent_context(
     # Reading queue
     next_reading = state.get_next_reading()
 
+    # Split context: parent vs current project
+    project_type = project.type if project else "dissertation"
+    parts = dissertation_context.split(_CONTEXT_SEPARATOR)
+    if len(parts) > 1:
+        parent_context = _CONTEXT_SEPARATOR.join(parts[:-1])
+        project_context = parts[-1]
+    else:
+        parent_context = ""
+        project_context = dissertation_context
+
+    # Adaptive labels based on project type and language
+    labels = _get_labels(config.ai.language)
+    ch_labels = labels["chapters"]
+    chapters_label = ch_labels.get(project_type, ch_labels["_default"])
+    # Singular form for coverage/fragment stats
+    singular_map = {
+        "Главы": "Глава", "Разделы": "Раздел",
+        "Chapters": "Chapter", "Sections": "Section",
+    }
+    chapters_label_singular = singular_map.get(chapters_label, chapters_label)
+
     # Render prompt
-    prompt_path = resolve_prompt("agent.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "agent.md"
+    prompt_path = (
+        resolve_prompt("agent.md", klemma_home)
+        if klemma_home
+        else Path(__file__).parent.parent.parent.parent / "prompts" / "agent.md"
+    )
     raw = prompt_path.read_text(encoding="utf-8")
     context = Template(raw).render(
-        dissertation_context=dissertation_context,
+        parent_context=parent_context,
+        project_context=project_context,
         chapters=chapters,
+        chapters_label=chapters_label,
+        chapters_label_singular=chapters_label_singular,
         scientific_results=scientific_results,
         priority_terms=priority_terms,
         current_chapter=focus_chapter,
@@ -109,6 +141,7 @@ def build_agent_context(
         vault_path=config.obsidian.vault_path,
         today=date.today().isoformat(),
         language=config.ai.language,
+        project_type=project_type,
         project_name=project_name,
         range=range,
     )

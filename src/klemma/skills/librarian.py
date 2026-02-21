@@ -48,11 +48,13 @@ def analyze_library(
     )
 
     prompt_path = resolve_prompt("librarian.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "librarian.md"
+    project_type = project.type if project else "dissertation"
     context["language"] = config.ai.language
+    context["project_type"] = project_type
     user_prompt = ai.render_prompt(prompt_path, **context)
 
     system = (
-        "You are a library analyst for a PhD dissertation. "
+        f"You are a library analyst for a {project_type}. "
         "Output only valid JSON."
     )
 
