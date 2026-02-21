@@ -114,11 +114,13 @@ Created by `klemma init` in any directory. Navigate to project dir and run comma
 
 **Selective inheritance:** Only shared resources (`obsidian`, `zotero`, `ai`, `mcp`) are inherited from parent. Project-specific keys (`project`, `tags`, `state`, `processing`) are NOT inherited.
 
-**Prompt resolution:** `resolve_prompt(name, klemma_home)` checks project → parent project → system (`~/.klemma/prompts/`) → shipped prompts.
+**Prompt resolution:** `resolve_prompt(name, klemma_home, project_chain?)` checks project → parent project → system (`~/.klemma/prompts/`) → shipped prompts.
 
 **Context aggregation:** `load_project_context()` reads `KLEMMA.md` from all project roots in chain (parent first, child last). Falls back to `.klemma/context.md` (legacy) then config fields.
 
-**Fallbacks:** If `KLEMMA.md` is missing, tries `.klemma/context.md`, then builds from `config.project` fields. If `tags.yaml` is missing, tags are extracted from `config.tags.auto_mapping` keys.
+**Tags resolution:** `load_available_tags(klemma_home, config, project_chain?)` checks project → parent project → `config.tags.auto_mapping`.
+
+**Fallbacks:** If `KLEMMA.md` is missing, tries `.klemma/context.md`, then builds from `config.project` fields. If `tags.yaml` is missing, falls back to parent project's tags, then `config.tags.auto_mapping` keys.
 
 ### Nested projects
 ```
@@ -135,7 +137,7 @@ thesis_dir/
 Navigate into `thesis_dir/paper_ice/` and run `klemma status` — it uses the paper's DB but inherits vault/zotero from the thesis parent. AI context includes both dissertation and paper KLEMMA.md files.
 
 ### Migration from old `~/.klemma/` setup
-Run `klemma migrate` in desired project directory. Splits `~/.klemma/config.yaml` into system (AI) and project (everything else), copies context.md → KLEMMA.md, tags.yaml, DB.
+Run `klemma migrate` in desired project directory. Splits `~/.klemma/config.yaml` into system (AI + MCP) and project (everything else), copies context.md → KLEMMA.md, tags.yaml, DB.
 
 ## SQLite tables
 - `sources` — Zotero entries with processing status and dissertation metadata

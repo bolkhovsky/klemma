@@ -36,19 +36,15 @@ get_klemma_home = get_system_home
 
 
 def ensure_system_home() -> Path:
-    """Create ~/.klemma/ with minimal config if it doesn't exist. Return path."""
+    """Create ~/.klemma/ with system config if it doesn't exist. Return path.
+
+    Delegates to setup.init_system() for config creation to ensure
+    consistent content with 'klemma init --global-only'.
+    """
     system_home = get_system_home()
     if not system_home.exists():
-        system_home.mkdir(parents=True, exist_ok=True)
-        config_path = system_home / "config.yaml"
-        if not config_path.exists():
-            config_path.write_text(
-                "# Klemma global config — AI defaults, shared MCP servers\n"
-                "ai:\n"
-                "  model: sonnet\n"
-                "  language: ru\n",
-                encoding="utf-8",
-            )
+        from .setup import init_system
+        init_system(system_home)
         logger.info("Created system config at %s", system_home)
     return system_home
 
@@ -363,6 +359,7 @@ def resolve_effective_config(
     """Resolve effective config by merging: system → parent → child → CLI override.
 
     project_chain is child-first: [child_root, parent_root].
+    Can be empty if only config_override is given (fallback to override path).
 
     Selective inheritance: only shared resource keys (obsidian, zotero, ai, mcp)
     are inherited from parent. Project structure (project, tags, state, etc.)
@@ -395,7 +392,17 @@ def resolve_effective_config(
         effective = _deep_merge(effective, override_raw)
 
     cfg = KlemmaConfig.model_validate(effective)
-    project_root = project_chain[0]
+
+    # Determine project root
+    if project_chain:
+        project_root = project_chain[0]
+    elif config_override:
+        # No project discovered — derive root from config file location
+        project_root = Path(config_override).resolve().parent
+        if project_root.name == ".klemma":
+            project_root = project_root.parent
+    else:
+        project_root = Path.cwd()
 
     # Extract ProjectConfig
     if cfg.project:
@@ -488,12 +495,16 @@ def _build_context_from_config(config: KlemmaConfig) -> str:
 load_dissertation_context = load_project_context
 
 
-def load_available_tags(klemma_home: Path, config: KlemmaConfig) -> list[str]:
-    """Load available tags from tags.yaml or extract from config.
+def load_available_tags(
+    klemma_home: Path,
+    config: KlemmaConfig,
+    project_chain: Optional[list[Path]] = None,
+) -> list[str]:
+    """Load available tags with fallback through project chain.
 
-    Looks for klemma_home/tags.yaml first. If not found, extracts unique
-    tag names from config.tags.auto_mapping as fallback.
+    Resolution order: project → parent projects → config.tags.auto_mapping.
     """
+    # 1. Active project
     tags_path = klemma_home / "tags.yaml"
     if tags_path.exists():
         with open(tags_path, "r", encoding="utf-8") as f:
@@ -501,7 +512,17 @@ def load_available_tags(klemma_home: Path, config: KlemmaConfig) -> list[str]:
         if isinstance(data, list):
             return data
 
-    # Fallback: extract from auto_mapping
+    # 2. Parent projects in chain
+    if project_chain:
+        for root in project_chain[1:]:  # skip child (already checked above)
+            parent_tags = root / ".klemma" / "tags.yaml"
+            if parent_tags.exists():
+                with open(parent_tags, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f)
+                if isinstance(data, list):
+                    return data
+
+    # 3. Fallback: extract from auto_mapping
     seen: set[str] = set()
     tags: list[str] = []
     for mapping in config.tags.auto_mapping:
@@ -511,28 +532,41 @@ def load_available_tags(klemma_home: Path, config: KlemmaConfig) -> list[str]:
     return tags
 
 
-def resolve_prompt(name: str, klemma_home: Path) -> Path:
+def resolve_prompt(
+    name: str,
+    klemma_home: Path,
+    project_chain: Optional[list[Path]] = None,
+) -> Path:
     """Resolve prompt template path with 4-level lookup.
 
     Priority: project → parent project → system (~/.klemma/) → shipped.
     klemma_home is the active project's .klemma/ directory.
+    If project_chain is given, uses it directly instead of re-discovering.
     """
     # 1. Active project
     user_path = klemma_home / "prompts" / name
     if user_path.exists():
         return user_path
 
-    # 2. Parent projects (traverse up from project root)
-    project_root = klemma_home.parent
-    search_from = project_root.parent
-    for _ in range(2):
-        parent_root = discover_project_root(search_from)
-        if parent_root is None or parent_root == project_root:
-            break
-        parent_path = parent_root / ".klemma" / "prompts" / name
-        if parent_path.exists():
-            return parent_path
-        search_from = parent_root.parent
+    # 2. Parent projects
+    if project_chain is not None:
+        # Use known chain (skip child at index 0 — already checked above)
+        for root in project_chain[1:]:
+            parent_path = root / ".klemma" / "prompts" / name
+            if parent_path.exists():
+                return parent_path
+    else:
+        # Fallback: traverse up from project root
+        project_root = klemma_home.parent
+        search_from = project_root.parent
+        for _ in range(2):
+            parent_root = discover_project_root(search_from)
+            if parent_root is None or parent_root == project_root:
+                break
+            parent_path = parent_root / ".klemma" / "prompts" / name
+            if parent_path.exists():
+                return parent_path
+            search_from = parent_root.parent
 
     # 3. System-level override (~/.klemma/prompts/)
     system_path = get_system_home() / "prompts" / name

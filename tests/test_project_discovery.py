@@ -478,3 +478,140 @@ class TestDeepMerge:
 
         result = _deep_merge({"x": {"a": 1}}, {"x": "replaced"})
         assert result == {"x": "replaced"}
+
+
+# --- Config override with empty chain tests ---
+
+
+class TestResolveEffectiveConfigOverride:
+    def test_config_override_with_empty_chain(self, tmp_path, monkeypatch):
+        """When no project found but --config given, still merges system defaults."""
+        system_home = tmp_path / "system"
+        system_home.mkdir()
+        _write_config(system_home / "config.yaml", {
+            "ai": {"model": "haiku", "language": "en"},
+        })
+        monkeypatch.setenv("KLEMMA_HOME", str(system_home))
+
+        override = tmp_path / "custom" / ".klemma" / "config.yaml"
+        _write_config(override, {
+            "obsidian": {"vault_path": "/vault"},
+            "project": {"type": "paper", "title": "Standalone"},
+        })
+
+        from klemma.config import resolve_effective_config
+
+        cfg, project, root = resolve_effective_config([], config_override=override)
+        assert project.title == "Standalone"
+        assert cfg.ai.model == "haiku"  # from system defaults
+        assert cfg.ai.language == "en"
+        assert root == tmp_path / "custom"
+
+    def test_config_override_with_chain_merges_all(self, tmp_path, monkeypatch):
+        """--config override works together with project chain and system defaults."""
+        system_home = tmp_path / "system"
+        system_home.mkdir()
+        _write_config(system_home / "config.yaml", {
+            "ai": {"model": "haiku", "timeout": 300},
+        })
+        monkeypatch.setenv("KLEMMA_HOME", str(system_home))
+
+        project = tmp_path / "project"
+        _write_config(project / ".klemma" / "config.yaml", {
+            "obsidian": {"vault_path": "/vault"},
+            "ai": {"model": "sonnet"},
+        })
+
+        override = tmp_path / "override.yaml"
+        _write_config(override, {
+            "ai": {"model": "opus"},
+        })
+
+        from klemma.config import resolve_effective_config
+
+        cfg, _, _ = resolve_effective_config([project], config_override=override)
+        assert cfg.ai.model == "opus"  # override wins
+        assert cfg.ai.timeout == 300  # system default preserved
+        assert cfg.obsidian.vault_path == "/vault"  # project preserved
+
+
+# --- Tags inheritance tests ---
+
+
+class TestTagsInheritance:
+    def test_tags_from_parent_when_child_has_none(self, tmp_path):
+        """Child without tags.yaml falls back to parent's tags."""
+        parent = tmp_path / "thesis"
+        child = parent / "paper1"
+        (parent / ".klemma").mkdir(parents=True)
+        (child / ".klemma").mkdir(parents=True)
+        (parent / ".klemma" / "tags.yaml").write_text("- Review\n- Theory\n- Method")
+
+        from klemma.config import KlemmaConfig, load_available_tags
+
+        cfg = KlemmaConfig.model_validate({"obsidian": {"vault_path": "/v"}})
+        tags = load_available_tags(child / ".klemma", cfg, project_chain=[child, parent])
+        assert tags == ["Review", "Theory", "Method"]
+
+    def test_child_tags_override_parent(self, tmp_path):
+        """Child with own tags.yaml does not inherit from parent."""
+        parent = tmp_path / "thesis"
+        child = parent / "paper1"
+        (parent / ".klemma").mkdir(parents=True)
+        (child / ".klemma").mkdir(parents=True)
+        (parent / ".klemma" / "tags.yaml").write_text("- Review\n- Theory")
+        (child / ".klemma" / "tags.yaml").write_text("- Dataset\n- Algorithm")
+
+        from klemma.config import KlemmaConfig, load_available_tags
+
+        cfg = KlemmaConfig.model_validate({"obsidian": {"vault_path": "/v"}})
+        tags = load_available_tags(child / ".klemma", cfg, project_chain=[child, parent])
+        assert tags == ["Dataset", "Algorithm"]
+
+    def test_no_chain_falls_back_to_auto_mapping(self, tmp_path):
+        """Without project_chain, falls back to auto_mapping as before."""
+        klemma_home = tmp_path / ".klemma"
+        klemma_home.mkdir()
+
+        from klemma.config import KlemmaConfig, load_available_tags
+
+        cfg = KlemmaConfig.model_validate({
+            "obsidian": {"vault_path": "/v"},
+            "tags": {"auto_mapping": [
+                {"pattern": "review", "tag": "Review"},
+            ]},
+        })
+        tags = load_available_tags(klemma_home, cfg)
+        assert tags == ["Review"]
+
+
+# --- Prompt resolution with project_chain tests ---
+
+
+class TestResolvePromptWithChain:
+    def test_parent_prompt_override(self, tmp_path):
+        """When child has no prompt but parent does, parent wins over system."""
+        parent = tmp_path / "thesis"
+        child = parent / "paper1"
+        (parent / ".klemma" / "prompts").mkdir(parents=True)
+        (child / ".klemma" / "prompts").mkdir(parents=True)
+        (parent / ".klemma" / "prompts" / "extract.md").write_text("parent prompt")
+
+        from klemma.config import resolve_prompt
+
+        result = resolve_prompt("extract.md", child / ".klemma", project_chain=[child, parent])
+        assert result == parent / ".klemma" / "prompts" / "extract.md"
+
+    def test_child_prompt_wins_over_parent(self, tmp_path):
+        """Child prompt overrides parent prompt."""
+        parent = tmp_path / "thesis"
+        child = parent / "paper1"
+        (parent / ".klemma" / "prompts").mkdir(parents=True)
+        (child / ".klemma" / "prompts").mkdir(parents=True)
+        (parent / ".klemma" / "prompts" / "extract.md").write_text("parent")
+        (child / ".klemma" / "prompts" / "extract.md").write_text("child")
+
+        from klemma.config import resolve_prompt
+
+        result = resolve_prompt("extract.md", child / ".klemma", project_chain=[child, parent])
+        assert result == child / ".klemma" / "prompts" / "extract.md"

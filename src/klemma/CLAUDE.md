@@ -4,9 +4,10 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 
 ## Modules
 
-### cli.py (~1780 lines)
+### cli.py (~1890 lines)
 Click CLI entry point. Defines 14 commands + hidden aliases.
 - `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery
+- `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
 - Commands: `init`, `plan`, `status`, `process`, `acquire`, `research`, `library`, `ask`, `tools`, `search`, `discover`, `info`, `tree`, `migrate`
@@ -15,17 +16,17 @@ Click CLI entry point. Defines 14 commands + hidden aliases.
 `KlemmaContext` dataclass — single object per CLI command invocation.
 Holds: `config`, `state`, `vault`, `ai` (optional), `library` (optional), `tools` (optional), `project` (optional), `klemma_home`, `dissertation_context`, `available_tags`, `project_root`, `project_chain`, `system_home`.
 
-### config.py (~440 lines)
+### config.py (~577 lines)
 Pydantic config models + Git-style project discovery.
 Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `DissertationConfig`, `MCPConfig`, `MCPServerConfig`, `SystemConfig`, `ProjectConfig`.
 - `discover_project_root(start)` — traverse up from cwd to find nearest `.klemma/`
 - `discover_project_chain(start)` — find all project roots child-first, max depth 3
 - `resolve_effective_config(project_chain, config_override)` — merge: system < parent < child < CLI override
 - `load_project_context(project_chain, config)` — aggregate KLEMMA.md files parent-first
-- `ensure_system_home()` — auto-create `~/.klemma/` with minimal config on first run
+- `ensure_system_home()` — auto-create `~/.klemma/` via `init_system()` on first run
 - `get_system_home()` / `get_klemma_home()` — returns `Path(KLEMMA_HOME)` or `~/.klemma`
-- `load_available_tags(klemma_home, config)` — reads `tags.yaml`, fallback from `tags.auto_mapping`
-- `resolve_prompt(name, klemma_home)` — 4-level: project → parent → system → shipped
+- `load_available_tags(klemma_home, config, project_chain?)` — reads `tags.yaml` with parent fallback
+- `resolve_prompt(name, klemma_home, project_chain?)` — 4-level: project → parent → system → shipped
 - Selective inheritance: only `_INHERITED_KEYS = {"obsidian", "zotero", "ai", "mcp"}` from parent projects
 
 ### setup.py (~134 lines)

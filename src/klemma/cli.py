@@ -36,32 +36,28 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     """
     system_home = ensure_system_home()
 
-    if config_path:
-        # Explicit --config: load directly, skip discovery
-        cfg = load_config(config_path)
-        project = cfg.project
-        if not project:
-            from .config import ProjectConfig, DissertationConfig
-            if cfg.dissertation and cfg.dissertation.title:
-                project = ProjectConfig.from_dissertation(cfg.dissertation)
-            else:
-                project = ProjectConfig()
-        project_root = Path(config_path).resolve().parent
-        if project_root.name == ".klemma":
-            project_root = project_root.parent
-        project_chain = [project_root]
+    # Git-style discovery: find .klemma/ by traversing up from cwd
+    project_chain = discover_project_chain()
+
+    if project_chain:
+        # Discovered project — merge config with system defaults and inheritance
+        cfg, project, project_root = resolve_effective_config(
+            project_chain, config_override=config_path,
+        )
+        klemma_home = project_root / ".klemma"
+    elif config_path:
+        # No project found, but explicit --config given — use it with system defaults
+        cfg, project, project_root = resolve_effective_config(
+            [], config_override=config_path,
+        )
         klemma_home = project_root / ".klemma"
         if not klemma_home.is_dir():
             klemma_home = system_home
+        project_chain = [project_root]
     else:
-        # Git-style discovery: find .klemma/ by traversing up from cwd
-        project_chain = discover_project_chain()
-        if not project_chain:
-            raise click.ClickException(
-                "Not in a klemma project. Run 'klemma init' to create one here."
-            )
-        cfg, project, project_root = resolve_effective_config(project_chain)
-        klemma_home = project_root / ".klemma"
+        raise click.ClickException(
+            "Not in a klemma project. Run 'klemma init' to create one here."
+        )
 
     # Resolve db_path relative to project's .klemma/ directory
     db_path = cfg.state.db_path
@@ -74,7 +70,7 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     tools = ToolRegistry(cfg) if cfg.mcp.servers else None
 
     dissertation_context = load_project_context(project_chain, cfg)
-    available_tags = load_available_tags(klemma_home, cfg)
+    available_tags = load_available_tags(klemma_home, cfg, project_chain=project_chain)
 
     return KlemmaContext(
         config=cfg, state=state, vault=vault, library=library, tools=tools,
@@ -86,6 +82,15 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
         project_chain=project_chain,
         system_home=system_home,
     )
+
+
+def _get_context(ctx) -> KlemmaContext:
+    """Get KlemmaContext from cache (set in main()) or initialize fresh."""
+    if "kctx" in ctx.obj:
+        return ctx.obj["kctx"]
+    kctx = _init_components(ctx.obj["config_path"])
+    ctx.obj["kctx"] = kctx
+    return kctx
 
 
 def _init_ai(cfg):
@@ -315,10 +320,11 @@ def main(ctx, config):
         ctx.exit(1)
         return
 
-    if ctx.invoked_subcommand is not None:
-        # Print status line for CLI subcommands
+    if ctx.invoked_subcommand is not None and ctx.invoked_subcommand not in skip_check:
+        # Initialize once and cache for subcommands to reuse
         try:
             kctx = _init_components(config)
+            ctx.obj["kctx"] = kctx
             _print_status_line(kctx.state, project_name=kctx.project_name)
         except Exception:
             pass
@@ -386,8 +392,7 @@ def init(ctx, project_type, global_only):
 @click.pass_context
 def plan(ctx):
     """Daily plan — focus, recommendations, deadlines."""
-    config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
     ai = _init_ai(cfg)
 
@@ -463,8 +468,7 @@ def process(ctx, citekeys, serial):
     With CITEKEY(s): process specified sources (parallel when >1).
     Without arguments: process all pending sources.
     """
-    config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
     ai = _init_ai(cfg)
 
@@ -622,8 +626,7 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
 @click.pass_context
 def status(ctx, verbose, chapter):
     """Unified status: processing, coverage, gaps, reference gaps."""
-    config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _get_context(ctx)
     cfg, state = kctx.config, kctx.state
     project = kctx.project
     _sync_sections(kctx, quiet=True)
@@ -754,8 +757,7 @@ def research(ctx, section, no_save, force, enrich):
 
     Example: klemma research --section 1.3.2
     """
-    config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
     project = kctx.project
     _sync_sections(kctx)
@@ -930,8 +932,7 @@ def import_vault(ctx, with_queue):
     Scans @*.md files in the vault's notes folder, reads YAML frontmatter,
     and syncs source metadata and section assignments with the database.
     """
-    config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
     project = kctx.project
 
@@ -984,8 +985,7 @@ def ask(ctx, query, section, chapter):
 
     Example: klemma ask "What are the main ice forecast validation methods?"
     """
-    config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
     ai = _init_ai(cfg)
 
@@ -1030,8 +1030,7 @@ def library(ctx, section, audit):
     if ctx.invoked_subcommand is not None:
         return
 
-    config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
     _sync_sections(kctx)
     ai = _init_ai(cfg)
@@ -1156,8 +1155,7 @@ def library(ctx, section, audit):
 @click.pass_context
 def prune(ctx, chapter, verdict, clear_key):
     """Browse and manage prune verdicts from library analysis."""
-    config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _get_context(ctx)
     state = kctx.state
 
     if clear_key and (chapter is not None or verdict is not None):
@@ -1235,8 +1233,7 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
     from .literature.zotero import ZoteroLibrary
     from .skills.acquirer import PaperMetadata, acquire_paper, load_batch
 
-    config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _get_context(ctx)
     cfg, state = kctx.config, kctx.state
 
     # Validate Zotero config
@@ -1328,8 +1325,7 @@ def search(ctx, query, source, limit):
 
     Example: klemma search "AMSR2 sea ice forecast validation"
     """
-    config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _get_context(ctx)
     cfg = kctx.config
 
     if "academia" not in cfg.mcp.servers:
@@ -1373,9 +1369,9 @@ def discover(ctx, section, show_status, review, background):
       klemma discover --status            # show all discoveries
       klemma discover --review            # review pending results
     """
-    config_path = ctx.obj["config_path"]
-    kctx = _init_components(config_path)
+    kctx = _get_context(ctx)
     cfg, state = kctx.config, kctx.state
+    config_path = ctx.obj["config_path"]
 
     if show_status:
         _discover_status(state)
@@ -1407,12 +1403,14 @@ def discover(ctx, section, show_status, review, background):
 
         log_path = (kctx.project_root or Path.home()) / f".klemma/discovery_{section}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file = open(log_path, "w")  # noqa: SIM115
         sp.Popen(
             [sys.executable, "-m", "klemma.tools.discovery",
              "--section", section, "--config", effective_config],
-            stdout=open(log_path, "w"),
+            stdout=log_file,
             stderr=sp.STDOUT,
         )
+        log_file.close()  # child process inherits the fd
         console.print(f"[green]Discovery started in background for section {section}[/green]")
         console.print(f"[dim]Log: {log_path}[/dim]")
         console.print("[dim]Review results: klemma discover --review[/dim]")
@@ -1550,7 +1548,7 @@ def tools_add(ctx, name, command, args, env, is_global):
 @click.pass_context
 def tools_list(ctx, probe):
     """List registered MCP servers."""
-    kctx = _init_components(ctx.obj["config_path"])
+    kctx = _get_context(ctx)
     cfg = kctx.config
 
     servers = cfg.mcp.servers
@@ -1616,7 +1614,7 @@ def tools_call(ctx, server, tool, args_json):
 
     Example: klemma tools call zotero zotero_search_items '{"query": "ice"}'
     """
-    kctx = _init_components(ctx.obj["config_path"])
+    kctx = _get_context(ctx)
     cfg = kctx.config
 
     if server not in cfg.mcp.servers:
@@ -1645,16 +1643,14 @@ def tools_call(ctx, server, tool, args_json):
 @click.pass_context
 def info(ctx):
     """Show current project info: root, parent chain, config, DB."""
-    config_path = ctx.obj["config_path"]
-
     project_chain = discover_project_chain()
-    if not project_chain and not config_path:
+    if not project_chain and not ctx.obj["config_path"]:
         console.print("[yellow]Not in a klemma project.[/yellow]")
         console.print("[dim]Run 'klemma init' to create a project here.[/dim]")
         return
 
     try:
-        kctx = _init_components(config_path)
+        kctx = _get_context(ctx)
     except Exception as e:
         console.print(f"[red]Error loading project: {e}[/red]")
         return
@@ -1786,7 +1782,7 @@ def migrate(ctx, dry_run):
     klemma_dir = project_dir / ".klemma"
 
     # Split config
-    system_keys = {"ai"}
+    system_keys = {"ai", "mcp"}
     system_raw = {k: v for k, v in old_raw.items() if k in system_keys}
     project_raw = {k: v for k, v in old_raw.items() if k not in system_keys}
 
