@@ -1,28 +1,17 @@
 ---
-description: Add papers to klemma library — download PDF, create Zotero item, register in DB. Use when agent finds relevant papers and needs to add them.
-allowed-tools: Bash(klemma acquire:*)
+description: Add papers to klemma library — download PDF, generate citekey, register in DB. Use when agent finds relevant papers and needs to add them.
 ---
 
 # klemma acquire — добавление статей в библиотеку
 
-Автоматический pipeline: скачать PDF → добавить в Zotero → дождаться BBT citekey → зарегистрировать в klemma.
-
-## Режимы работы
-
-Режим определяется автоматически:
-
-- **Zotero API** (если `ZOTERO_API_KEY` задан + `library_id` в конфиге): скачать PDF → создать запись в Zotero → BBT citekey → зарегистрировать в DB
-- **Local** (если `ZOTERO_API_KEY` не задан): скачать PDF → сгенерировать citekey из метаданных → сохранить в storage → зарегистрировать в DB
-
-В local-режиме Zotero не нужен. Citekey генерируется как `Автор2024_slug_заголовка`.
+Pipeline: скачать PDF → сгенерировать citekey из метаданных → сохранить в storage → зарегистрировать в klemma DB.
 
 ## Предусловия
 
 Перед запуском acquire убедись:
 
 1. `klemma info` — показывает секцию Zotero (storage_path)
-2. Для API-режима: `ZOTERO_API_KEY` + `library_id` + Zotero запущен
-3. Для local-режима: достаточно storage_path
+2. storage_path существует и доступен для записи
 
 ## Перед batch
 
@@ -32,7 +21,7 @@ allowed-tools: Bash(klemma acquire:*)
 klemma acquire <одна_ссылка> --title "Test Paper" --no-process
 ```
 
-Если статус = ok — запускай batch. Если ошибка — исправь конфиг.
+Если статус = ok — запускай batch. Если ошибка — сообщи пользователю.
 
 ## Одна статья
 
@@ -84,7 +73,7 @@ klemma acquire --batch /tmp/papers.json
 
 ## Флаги
 
-- `--no-process` — только скачать и добавить в Zotero, не запускать извлечение фрагментов
+- `--no-process` — только скачать и добавить, не запускать извлечение фрагментов
 - `--section` / `-s` — привязать к разделу диссертации (только для single mode; в batch используй `sections` в JSON)
 
 ## Формат authors
@@ -96,15 +85,6 @@ klemma acquire --batch /tmp/papers.json
 
 ## Что происходит внутри
 
-**API-режим:**
-1. Скачивает PDF (проверяет размер > 10KB)
-2. Создаёт запись в Zotero через API
-3. Прикрепляет PDF как attachment
-4. Ожидает появления BBT citekey (до 30 сек)
-5. Регистрирует в klemma DB с привязкой к разделам
-6. Запускает `klemma process <citekey>` (если нет `--no-process`)
-
-**Local-режим:**
 1. Скачивает PDF (проверяет размер > 10KB)
 2. Генерирует citekey: `Автор2024_slug_заголовка`
 3. Сохраняет PDF в `storage_path/<citekey>/`
@@ -114,7 +94,8 @@ klemma acquire --batch /tmp/papers.json
 ## Типичный агентский workflow
 
 1. Найти релевантные статьи (веб-поиск, архивы журналов)
-2. Собрать метаданные и прямые ссылки на PDF
-3. Сформировать `/tmp/papers.json`
-4. `klemma acquire --batch /tmp/papers.json`
-5. Проверить результат: `klemma status -ch N`
+2. Показать результаты пользователю — получить одобрение
+3. Собрать метаданные и прямые ссылки на PDF
+4. Сформировать `/tmp/papers.json`
+5. `klemma acquire --batch /tmp/papers.json`
+6. Проверить результат: `klemma status -ch N`

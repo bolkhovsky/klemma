@@ -1,6 +1,6 @@
 # Literature Management
 
-Zotero library access, PDF text extraction, Pydantic data models, and vault note generation.
+PDF text extraction, Pydantic data models, and vault note generation.
 
 ## Modules
 
@@ -21,12 +21,6 @@ All Pydantic models for the data layer:
 - `load_pdf_lookup()` — citekey → pdf_path from BBT JSON
 - `load_entry_lookup()` — citekey → `ZoteroEntry` from BBT JSON
 - CamelCase splitting: `wagnerSeaiceInformation2020` → `[wagner, seaice, information, 2020]`
-
-### zotero.py (205 lines)
-`ZoteroLibrary` — pyzotero wrapper for Zotero API access.
-- Read: `get_all_items()`, `get_item()`, `search()`
-- Write (used by acquirer): `create_item()`, `create_attachment_record()` (metadata-only, no cloud upload)
-- Citekey discovery: `extra` field `"Citation Key:"` → fallback to `item_key`
 
 ### note_factory.py (470 lines)
 Vault note creation pipeline — largest module in the package:
@@ -54,6 +48,6 @@ Each annotated paper's bibliography is cross-checked against the library.
 - **Surfacing**: CLI status line, `klemma status`, TUI dashboard, TUI gaps screen
 
 ## Maintaining this file
-Update when: adding/changing Pydantic models in `models.py`, modifying PDF finding tiers, changing vault note structure in `note_factory.py`, adding Zotero write methods, or changing the reference gap scoring formula. If `annotate.md` variables change, also update [Prompts](../../../prompts/CLAUDE.md).
+Update when: adding/changing Pydantic models in `models.py`, modifying PDF finding tiers, changing vault note structure in `note_factory.py`, or changing the reference gap scoring formula. If `annotate.md` variables change, also update [Prompts](../../../prompts/CLAUDE.md).
 
 See: [Core infrastructure](../CLAUDE.md) for `state.py` tables | [AI Skills](../skills/CLAUDE.md) for extraction pipeline | [Prompts](../../../prompts/CLAUDE.md) for `annotate.md` template

@@ -110,27 +110,6 @@ CREATE TABLE IF NOT EXISTS reference_gaps (
 CREATE INDEX IF NOT EXISTS idx_reference_gaps_source ON reference_gaps(source_id);
 CREATE INDEX IF NOT EXISTS idx_reference_gaps_status ON reference_gaps(status);
 
-CREATE TABLE IF NOT EXISTS discoveries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    section TEXT NOT NULL,
-    source_type TEXT NOT NULL,
-    external_id TEXT,
-    title TEXT,
-    authors TEXT,
-    year INTEGER,
-    abstract TEXT,
-    relevance_score INTEGER,
-    usage_type TEXT,
-    priority TEXT,
-    matched_gap_id INTEGER,
-    status TEXT DEFAULT 'pending',
-    raw_data TEXT,
-    discovered_at TEXT DEFAULT (datetime('now')),
-    reviewed_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_discoveries_section ON discoveries(section);
-CREATE INDEX IF NOT EXISTS idx_discoveries_status ON discoveries(status);
-
 CREATE TABLE IF NOT EXISTS prune_verdicts (
     source_id TEXT PRIMARY KEY REFERENCES sources(id),
     verdict TEXT NOT NULL,
@@ -1057,53 +1036,6 @@ class StateManager:
             "new_registered": new_registered,
             "unchanged": unchanged,
         }
-
-    # ── Discoveries ──────────────────────────────────────────────────────
-
-    def save_discovery(self, section: str, source_type: str, external_id: str,
-                       title: str, authors: str, year: Optional[int],
-                       abstract: str = "", raw_data: str = "",
-                       relevance_score: Optional[int] = None,
-                       usage_type: str = "", priority: str = "medium",
-                       matched_gap_id: Optional[int] = None):
-        """Save a discovered paper."""
-        with self._conn() as conn:
-            conn.execute(
-                """INSERT INTO discoveries
-                   (section, source_type, external_id, title, authors, year,
-                    abstract, relevance_score, usage_type, priority,
-                    matched_gap_id, raw_data)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (section, source_type, external_id, title, authors, year,
-                 abstract, relevance_score, usage_type, priority,
-                 matched_gap_id, raw_data),
-            )
-
-    def get_discoveries(self, section: Optional[str] = None,
-                        status: str = "pending", limit: int = 50) -> list[dict]:
-        """Get discoveries, optionally filtered by section."""
-        with self._conn() as conn:
-            if section:
-                cur = conn.execute(
-                    "SELECT * FROM discoveries WHERE section = ? AND status = ? "
-                    "ORDER BY relevance_score DESC NULLS LAST, discovered_at DESC LIMIT ?",
-                    (section, status, limit),
-                )
-            else:
-                cur = conn.execute(
-                    "SELECT * FROM discoveries WHERE status = ? "
-                    "ORDER BY relevance_score DESC NULLS LAST, discovered_at DESC LIMIT ?",
-                    (status, limit),
-                )
-            return [dict(row) for row in cur.fetchall()]
-
-    def review_discovery(self, discovery_id: int, new_status: str):
-        """Update discovery status (accepted/rejected)."""
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE discoveries SET status = ?, reviewed_at = datetime('now') WHERE id = ?",
-                (new_status, discovery_id),
-            )
 
     # ── Prune Verdicts ──────────────────────────────────────────────────
 

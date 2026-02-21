@@ -5,20 +5,20 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 ## Modules
 
 ### cli.py (~1890 lines)
-Click CLI entry point. Defines 14 commands + hidden aliases.
+Click CLI entry point. Defines 11 commands + hidden aliases.
 - `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
-- Commands: `init`, `plan`, `status`, `process`, `acquire`, `research`, `library`, `ask`, `tools`, `search`, `discover`, `info`, `tree`, `migrate`
+- Commands: `init`, `plan`, `status`, `process`, `acquire`, `research`, `library`, `ask`, `info`, `tree`, `migrate`
 
 ### context.py (~42 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.
-Holds: `config`, `state`, `vault`, `ai` (optional), `library` (optional), `tools` (optional), `project` (optional), `klemma_home`, `dissertation_context`, `available_tags`, `project_root`, `project_chain`, `system_home`.
+Holds: `config`, `state`, `vault`, `ai` (optional), `library` (optional), `project` (optional), `klemma_home`, `dissertation_context`, `available_tags`, `project_root`, `project_chain`, `system_home`.
 
 ### config.py (~577 lines)
 Pydantic config models + Git-style project discovery.
-Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `DissertationConfig`, `MCPConfig`, `MCPServerConfig`, `SystemConfig`, `ProjectConfig`.
+Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `DissertationConfig`, `SystemConfig`, `ProjectConfig`.
 - `discover_project_root(start)` — traverse up from cwd to find nearest `.klemma/`
 - `discover_project_chain(start)` — find all project roots child-first, max depth 3
 - `resolve_effective_config(project_chain, config_override)` — merge: system < parent < child < CLI override
@@ -27,7 +27,7 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `Disse
 - `get_system_home()` / `get_klemma_home()` — returns `Path(KLEMMA_HOME)` or `~/.klemma`
 - `load_available_tags(klemma_home, config, project_chain?)` — reads `tags.yaml` with parent fallback
 - `resolve_prompt(name, klemma_home, project_chain?)` — 4-level: project → parent → system → shipped
-- Selective inheritance: only `_INHERITED_KEYS = {"obsidian", "zotero", "ai", "mcp"}` from parent projects
+- Selective inheritance: only `_INHERITED_KEYS = {"obsidian", "zotero", "ai"}` from parent projects
 
 ### setup.py (~134 lines)
 `klemma init` logic — creates per-directory `.klemma/` projects and `~/.klemma/` system config.
@@ -41,12 +41,11 @@ SQLite state manager. Tables:
 - `source_sections` — junction table: source_id × section (multi-section support)
 - `fragments` — extracted citation fragments (text, type, chapter, section, relevance, page)
 - `reference_gaps` — missing references from bibliographies (status: open/resolved, score)
-- `discoveries` — papers from discovery pipeline (status: pending/accepted/rejected)
 - `daily_plans` — generated daily plans
 - `reading_queue` — prioritized reading list
 - `prune_verdicts` — librarian audit results
 
-Key methods: `register_sources()`, `get_by_section()` (JOIN on `source_sections`), `get_coverage_stats()`, `get_gap_summary()`, `save_discovery()`, `save_plan()`.
+Key methods: `register_sources()`, `get_by_section()` (JOIN on `source_sections`), `get_coverage_stats()`, `get_gap_summary()`, `save_plan()`.
 
 ### ai.py (243 lines)
 `AIProvider` protocol → `AIProviderBase` → `ClaudeClient` + `create_ai()` factory.
@@ -71,10 +70,9 @@ Works with: OpenAI, Ollama, vLLM, LM Studio (via `base_url`).
 - `list_notes()` — enumerate vault notes
 
 ### library_provider.py (195 lines)
-`LibraryProvider` protocol with two backends:
+`LibraryProvider` protocol with LocalLibrary backend:
 - `LocalLibrary` — wraps `PDFExtractor.load_entry_lookup()` (BBT JSON)
-- `MCPLibrary` — uses zotero-mcp server via MCP protocol
-- `create_library(config)` — factory, selects based on `config.zotero.backend`
+- `create_library(config)` — factory, creates LocalLibrary from config
 
 ### app.py (124 lines)
 `KlemmaApp` — Textual TUI application. Mounts screens from `tui/` package.
@@ -92,4 +90,4 @@ Frontmatter `sections: [1.1, 1.4.1, 3.2.2]` → `source_sections` table → `get
 ## Maintaining this file
 Update when: adding/removing/renaming root-level modules in `src/klemma/`, changing key class/function signatures, adding SQLite tables to `state.py`, modifying `KlemmaContext` fields, or adding new CLI commands to `cli.py`. Line counts should be refreshed after significant changes.
 
-See: [AI Skills](skills/CLAUDE.md) | [MCP Tools](tools/CLAUDE.md) | [Literature](literature/CLAUDE.md) | [TUI](tui/CLAUDE.md) | [Prompts](../../prompts/CLAUDE.md) | [Tests](../../tests/CLAUDE.md)
+See: [AI Skills](skills/CLAUDE.md) | [Literature](literature/CLAUDE.md) | [TUI](tui/CLAUDE.md) | [Prompts](../../prompts/CLAUDE.md) | [Tests](../../tests/CLAUDE.md)

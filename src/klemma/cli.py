@@ -1,7 +1,5 @@
 """Klemma CLI — AI academic assistant."""
 
-import json
-import sys
 from pathlib import Path
 
 import click
@@ -22,7 +20,6 @@ from .config import (
 from .context import KlemmaContext
 from .library_provider import create_library
 from .state import StateManager
-from .tools.registry import ToolRegistry
 from .vault import VaultAdapter
 
 console = Console()
@@ -66,13 +63,12 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     state = StateManager(db_path)
     vault = VaultAdapter(cfg.obsidian.vault_path, use_cli=cfg.obsidian.use_cli)
     library = create_library(cfg)
-    tools = ToolRegistry(cfg) if cfg.mcp.servers else None
 
     dissertation_context = load_project_context(project_chain, cfg)
     available_tags = load_available_tags(klemma_home, cfg, project_chain=project_chain)
 
     return KlemmaContext(
-        config=cfg, state=state, vault=vault, library=library, tools=tools,
+        config=cfg, state=state, vault=vault, library=library,
         project=project, project_name=project_root.name,
         klemma_home=klemma_home,
         dissertation_context=dissertation_context,
@@ -1063,20 +1059,17 @@ def gaps(ctx, min_sources):
 @click.option("--section", "-s", required=True, help="Идентификатор раздела, например 1.3.2")
 @click.option("--no-save", is_flag=True, help="Не сохранять в vault")
 @click.option("--force", is_flag=True, help="Переизвлечь фрагменты даже если уже есть")
-@click.option("--enrich", is_flag=True, help="Enrich with external search via MCP (requires academia server)")
 @click.pass_context
-def research(ctx, section, no_save, force, enrich):
+def research(ctx, section, no_save, force):
     """Deep section analysis — argument structure, citation plan, gaps.
 
     Auto-processes unextracted sources before analysis.
     Use --force to re-extract all fragments.
-    Use --enrich to add external paper search results to the analysis context.
 
     Example: klemma research --section 1.3.2
     """
     kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
-    project = kctx.project
     _sync_sections(kctx)
     ai = _init_ai(cfg)
 
@@ -1084,28 +1077,6 @@ def research(ctx, section, no_save, force, enrich):
     from .skills.researcher import pre_extract_sources, research_section
 
     chapter = parse_chapter_from_section(section)
-
-    # Optional: enrich with external search via MCP
-    enrichment_context = ""
-    if enrich and kctx.tools and kctx.tools.has("academia"):
-        if chapter:
-            chapter_name = (project.chapters.get(chapter, "") if project
-                            else cfg.dissertation.chapters.get(chapter, ""))
-            search_query = f"{chapter_name} {section}"
-        else:
-            # Paper/topic-based section: use section name + project description
-            search_query = section
-            if project and project.description:
-                search_query = f"{project.description} {section}"
-        with console.status(f"Searching arXiv for section {section}", spinner="dots2"):
-            result = kctx.tools.call("academia", "arxiv_search", {"query": search_query, "limit": 5})
-        if not result.is_error and result.content:
-            enrichment_context = f"\n\n## External Search Results (ArXiv)\n{result.content}"  # noqa: F841
-            console.print("[green]Found external papers for context[/green]")
-        else:
-            console.print("[yellow]External search returned no results[/yellow]")
-    elif enrich:
-        console.print("[yellow]--enrich requires academia MCP server (klemma tools add academia ...)[/yellow]")
 
     # Auto-process unextracted sources
     with console.status(f"Auto-processing unextracted sources for section {section}", spinner="arc"):
@@ -1556,26 +1527,10 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
     Single paper: klemma acquire <pdf_url> --title "..." --authors "..." --year 2022 --section 1.2
     Batch: klemma acquire --batch papers.json
     """
-    from .skills.acquirer import PaperMetadata, acquire_paper, acquire_paper_local, load_batch
+    from .skills.acquirer import PaperMetadata, acquire_paper_local, load_batch
 
     kctx = _get_context(ctx)
     cfg, state = kctx.config, kctx.state
-
-    # Auto-detect mode: API if key+library_id available, local otherwise
-    api_key = cfg.zotero.api_key
-    use_api = bool(api_key and cfg.zotero.library_id)
-    zot_lib = None
-
-    if use_api:
-        from .literature.zotero import ZoteroLibrary
-        zot_lib = ZoteroLibrary(
-            library_id=cfg.zotero.library_id,
-            library_type=cfg.zotero.library_type,
-            api_key=api_key,
-        )
-        console.print("[blue]Mode: Zotero API[/blue]")
-    else:
-        console.print("[blue]Mode: local (no API key)[/blue]")
 
     # Build paper list
     if batch_path:
@@ -1596,22 +1551,15 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
         console.print("[red]Provide a URL or --batch file[/red]")
         return
 
-    library_json = cfg.zotero.library_json or ""
     ok = 0
 
     for i, meta in enumerate(papers, 1):
         label = meta.title[:50] if meta.title else meta.url[:50]
         console.print(f"\n[bold][{i}/{len(papers)}] {label}[/bold]")
 
-        if use_api:
-            result = acquire_paper(
-                meta, zot_lib, library_json,
-                storage_path=cfg.zotero.storage_path, state=state,
-            )
-        else:
-            result = acquire_paper_local(
-                meta, storage_path=cfg.zotero.storage_path, state=state,
-            )
+        result = acquire_paper_local(
+            meta, storage_path=cfg.zotero.storage_path, state=state,
+        )
 
         if result.status == "ok":
             item_info = f" (item: {result.item_key})" if result.item_key else ""
@@ -1643,359 +1591,6 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
     console.print(f"\n[green]Done: {ok}/{len(papers)} acquired.[/green]")
 
 
-# --- Search: external paper search via MCP ---
-
-@main.command()
-@click.argument("query")
-@click.option("--source", "-src", default="arxiv", type=click.Choice(["arxiv", "s2"]), help="Search source")
-@click.option("--limit", "-n", default=10, help="Max results")
-@click.pass_context
-def search(ctx, query, source, limit):
-    """Search for papers via external MCP servers.
-
-    Requires academia MCP server: klemma tools add academia --command python3 --args "-m" --args "academia_mcp"
-
-    Example: klemma search "AMSR2 sea ice forecast validation"
-    """
-    kctx = _get_context(ctx)
-    cfg = kctx.config
-
-    if "academia" not in cfg.mcp.servers:
-        console.print("[red]Academia MCP server not configured.[/red]")
-        console.print(
-            '[dim]Add it with: klemma tools add academia '
-            '--command python3 --args "-m" --args academia_mcp[/dim]'
-        )
-        return
-
-    registry = ToolRegistry(cfg)
-    tool_name = "arxiv_search" if source == "arxiv" else "s2_search"
-
-    with console.status(f"Searching {source}: {query}", spinner="dots2"):
-        result = registry.call("academia", tool_name, {"query": query, "limit": limit})
-
-    if result.is_error:
-        console.print(f"[red]Search failed: {result.content}[/red]")
-        return
-
-    console.print(result.content)
-
-
-# --- Discover: background literature discovery ---
-
-@main.command()
-@click.option("--section", "-s", help="Section to discover papers for (optional for paper projects)")
-@click.option("--status", "show_status", is_flag=True, help="Show discovery status")
-@click.option("--review", is_flag=True, help="Review pending discoveries")
-@click.option("--background", "-bg", is_flag=True, help="Run in background")
-@click.pass_context
-def discover(ctx, section, show_status, review, background):
-    """Discover new literature via external search.
-
-    Requires academia MCP server.
-
-    For paper projects, --section is optional — uses project keywords/description.
-    For dissertation/thesis, --section is required (e.g. -s 1.3.2).
-
-    \b
-    Examples:
-      klemma discover                    # paper: search by keywords
-      klemma discover -s methods         # paper: search for a topic
-      klemma discover -s 1.3.2           # dissertation: search and assess
-      klemma discover -s 1.3.2 -bg       # run in background
-      klemma discover --status           # show all discoveries
-      klemma discover --review           # review pending results
-    """
-    kctx = _get_context(ctx)
-    cfg, state = kctx.config, kctx.state
-    project = kctx.project
-    config_path = ctx.obj["config_path"]
-
-    if show_status:
-        _discover_status(state)
-        return
-
-    if review:
-        _discover_review(state)
-        return
-
-    # Build project context for search
-    project_context = None
-    if project:
-        project_context = {
-            "title": project.title,
-            "description": project.description,
-            "keywords": project.priority_terms,
-            "type": project.type,
-        }
-
-    if not section:
-        if project and project.type == "paper":
-            # Papers: use project metadata as search context
-            if not project.priority_terms and not project.description:
-                console.print("[red]No keywords or description set. Run: klemma init --force[/red]")
-                return
-            section = "general"  # label for DB storage
-        else:
-            example = "1.3.2" if not project or project.type != "paper" else "methods"
-            console.print(f"[red]--section required for discovery. Example: klemma discover -s {example}[/red]")
-            return
-
-    if "academia" not in cfg.mcp.servers:
-        console.print("[red]Academia MCP server not configured.[/red]")
-        console.print(
-            '[dim]Add it with: klemma tools add academia '
-            '--command python3 --args "-m" --args academia_mcp[/dim]'
-        )
-        return
-
-    # Resolve config_path for subprocess/discovery
-    effective_config = config_path
-    if not effective_config and kctx.project_root:
-        effective_config = str(kctx.project_root / ".klemma" / "config.yaml")
-
-    if background:
-        import subprocess as sp
-
-        log_path = (kctx.project_root or Path.home()) / f".klemma/discovery_{section}.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_file = open(log_path, "w")  # noqa: SIM115
-        sp.Popen(
-            [sys.executable, "-m", "klemma.tools.discovery",
-             "--section", section, "--config", effective_config],
-            stdout=log_file,
-            stderr=sp.STDOUT,
-        )
-        log_file.close()  # child process inherits the fd
-        console.print(f"[green]Discovery started in background for {section}[/green]")
-        console.print(f"[dim]Log: {log_path}[/dim]")
-        console.print("[dim]Review results: klemma discover --review[/dim]")
-        return
-
-    from .tools.discovery import run_discovery
-
-    label = section if section != "general" else "project keywords"
-    with console.status(f"Discovering papers for {label}", spinner="earth"):
-        result = run_discovery(
-            section=section,
-            config_path=effective_config,
-            project_context=project_context,
-        )
-
-    console.print(
-        f"[green]Done:[/green] searched {result['searched']}, "
-        f"found {result['found']} new, assessed {result['assessed']}"
-    )
-    if result["errors"]:
-        for err in result["errors"]:
-            console.print(f"[red]  {err}[/red]")
-
-    if result["found"] > 0:
-        console.print("\n[dim]Review results: klemma discover --review[/dim]")
-
-
-def _discover_status(state):
-    """Show discovery status across all sections."""
-    for status_type in ("pending", "assessed", "accepted", "rejected"):
-        discoveries = state.get_discoveries(status=status_type, limit=100)
-        if not discoveries:
-            continue
-
-        sections = {}
-        for d in discoveries:
-            sec = d["section"]
-            sections[sec] = sections.get(sec, 0) + 1
-
-        label = {"pending": "yellow", "assessed": "blue", "accepted": "green", "rejected": "dim"}
-        style = label.get(status_type, "white")
-        console.print(f"[{style}]{status_type.title()}:[/{style}] ", end="")
-        parts = [f"{sec} ({cnt})" for sec, cnt in sorted(sections.items())]
-        console.print(", ".join(parts))
-
-    if not any(state.get_discoveries(status=s) for s in ("pending", "assessed", "accepted", "rejected")):
-        console.print("[dim]No discoveries yet. Run: klemma discover -s <section>[/dim]")
-
-
-def _discover_review(state):
-    """Interactive review of pending/assessed discoveries."""
-    discoveries = state.get_discoveries(status="pending", limit=50)
-    assessed = state.get_discoveries(status="assessed", limit=50)
-    all_pending = discoveries + assessed
-
-    if not all_pending:
-        console.print("[dim]No discoveries to review.[/dim]")
-        return
-
-    table = Table(title=f"Discoveries to Review ({len(all_pending)})", show_edge=False, pad_edge=False)
-    table.add_column("ID", width=4, style="dim")
-    table.add_column("Sec", width=6, style="cyan")
-    table.add_column("Rel", width=3, justify="right")
-    table.add_column("Year", width=5)
-    table.add_column("Authors", width=20)
-    table.add_column("Title", max_width=40)
-    table.add_column("Use", width=10, style="dim")
-
-    for d in all_pending:
-        rel = d.get("relevance_score")
-        rel_str = str(rel) if rel else "?"
-        rel_style = "green" if rel and rel >= 4 else "yellow" if rel and rel >= 3 else "dim"
-        table.add_row(
-            str(d["id"]),
-            d.get("section", ""),
-            f"[{rel_style}]{rel_str}[/{rel_style}]",
-            str(d.get("year") or ""),
-            (d.get("authors") or "")[:20],
-            (d.get("title") or "")[:40],
-            d.get("usage_type") or "",
-        )
-
-    console.print(table)
-    console.print("\n[dim]Accept/reject via: klemma discover --review (interactive coming soon)[/dim]")
-
-
-# --- Tools: MCP server management ---
-
-@main.group()
-def tools():
-    """Manage MCP tool servers (add, list, remove, call)."""
-    pass
-
-
-@tools.command(name="add")
-@click.argument("name")
-@click.option("--command", "-cmd", required=True, help="Command to launch server (e.g. uvx, python3)")
-@click.option("--args", "-a", multiple=True, help="Arguments (repeatable)")
-@click.option("--env", "-e", multiple=True, help="Environment vars as KEY=VALUE (repeatable)")
-@click.option("--global", "is_global", is_flag=True, help="Add to global ~/.klemma/ config")
-@click.pass_context
-def tools_add(ctx, name, command, args, env, is_global):
-    """Register an MCP server.
-
-    Example: klemma tools add zotero --command uvx --args zotero-mcp --env ZOTERO_LOCAL=true
-    """
-    from .tools.registry import add_server
-
-    env_dict = {}
-    for item in env:
-        if "=" in item:
-            k, v = item.split("=", 1)
-            env_dict[k] = v
-        else:
-            console.print(f"[red]Invalid env format: {item} (use KEY=VALUE)[/red]")
-            return
-
-    if is_global:
-        config_path = str(ensure_system_home() / "config.yaml")
-    elif ctx.obj["config_path"]:
-        config_path = ctx.obj["config_path"]
-    else:
-        project_root = discover_project_root()
-        if project_root is None:
-            console.print("[red]Not in a klemma project. Use --global or 'klemma init' first.[/red]")
-            return
-        config_path = str(project_root / ".klemma" / "config.yaml")
-
-    add_server(config_path, name, command, list(args), env_dict)
-    scope = "global" if is_global else "project"
-    console.print(f"[green]Added MCP server '{name}' ({scope})[/green]")
-    console.print(f"  command: {command} {' '.join(args)}")
-    if env_dict:
-        console.print(f"  env: {env_dict}")
-    console.print("\n[dim]Verify with: klemma tools list[/dim]")
-
-
-@tools.command(name="list")
-@click.option("--probe", is_flag=True, help="Connect to each server and list available tools")
-@click.pass_context
-def tools_list(ctx, probe):
-    """List registered MCP servers."""
-    kctx = _get_context(ctx)
-    cfg = kctx.config
-
-    servers = cfg.mcp.servers
-    if not servers:
-        console.print("[dim]No MCP servers registered.[/dim]")
-        console.print("[dim]Add one with: klemma tools add <name> --command <cmd> --args <arg>[/dim]")
-        return
-
-    table = Table(title="MCP Servers", show_edge=False, pad_edge=False)
-    table.add_column("Name", style="cyan")
-    table.add_column("Command", max_width=40)
-    if probe:
-        table.add_column("Tools", max_width=50)
-
-    for name, srv in servers.items():
-        cmd_str = f"{srv.command} {' '.join(srv.args)}"
-        if probe:
-            try:
-                registry = ToolRegistry(cfg)
-                tool_names = registry.available_tools(name)
-                tools_str = f"[green]{len(tool_names)}[/green]: {', '.join(tool_names)}"
-            except Exception as e:
-                tools_str = f"[red]error: {e}[/red]"
-            table.add_row(name, cmd_str, tools_str)
-        else:
-            table.add_row(name, cmd_str)
-
-    console.print(table)
-
-
-@tools.command(name="remove")
-@click.argument("name")
-@click.option("--global", "is_global", is_flag=True, help="Remove from global ~/.klemma/ config")
-@click.pass_context
-def tools_remove(ctx, name, is_global):
-    """Remove an MCP server registration."""
-    from .tools.registry import remove_server
-
-    if is_global:
-        config_path = str(ensure_system_home() / "config.yaml")
-    elif ctx.obj["config_path"]:
-        config_path = ctx.obj["config_path"]
-    else:
-        project_root = discover_project_root()
-        if project_root is None:
-            console.print("[red]Not in a klemma project.[/red]")
-            return
-        config_path = str(project_root / ".klemma" / "config.yaml")
-
-    if remove_server(config_path, name):
-        console.print(f"[green]Removed MCP server '{name}'[/green]")
-    else:
-        console.print(f"[red]Server '{name}' not found[/red]")
-
-
-@tools.command(name="call")
-@click.argument("server")
-@click.argument("tool")
-@click.argument("args_json", default="{}")
-@click.pass_context
-def tools_call(ctx, server, tool, args_json):
-    """Call a tool directly (debug/power user).
-
-    Example: klemma tools call zotero zotero_search_items '{"query": "ice"}'
-    """
-    kctx = _get_context(ctx)
-    cfg = kctx.config
-
-    if server not in cfg.mcp.servers:
-        console.print(f"[red]Server '{server}' not registered[/red]")
-        return
-
-    try:
-        tool_args = json.loads(args_json)
-    except json.JSONDecodeError as e:
-        console.print(f"[red]Invalid JSON: {e}[/red]")
-        return
-
-    registry = ToolRegistry(cfg)
-    with console.status(f"Calling {server}.{tool}", spinner="bounce"):
-        result = registry.call(server, tool, tool_args)
-
-    if result.is_error:
-        console.print(f"[red]Error: {result.content}[/red]")
-    else:
-        console.print(result.content)
 
 
 # --- Info & Tree: project introspection ---

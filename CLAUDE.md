@@ -5,12 +5,11 @@ Klemma is a CLI tool for academic writing. It manages literature (via Zotero), e
 
 ## Architecture
 - **CLI mode**: `klemma <command>` — all commands are headless CLI
-- **Stack**: Python 3.11+, Click, pyzotero, PyMuPDF, MCP, SQLite
+- **Stack**: Python 3.11+, Click, PyMuPDF, SQLite
 - **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/Obsidian)
-- **MCP layer**: ToolRegistry → MCPClient (stdio transport) → external servers (zotero-mcp, academia-mcp)
-- **Library abstraction**: LibraryProvider protocol with LocalLibrary (BBT JSON) and MCPLibrary (zotero-mcp) backends
+- **Library abstraction**: LocalLibrary backend (BBT JSON)
 - **AI abstraction**: AIProvider protocol with ClaudeClient (CLI), OpenAIClient, LiteLLMClient backends + `create_ai()` factory
-- **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/tools/project
+- **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/project
 - **Multi-project**: Git/NPM-style per-directory projects. `klemma init` in any dir creates `.klemma/` + `KLEMMA.md`. Nested projects inherit shared resources (vault, zotero) from parent. System config in `~/.klemma/`.
 
 ## Project structure
@@ -25,13 +24,9 @@ src/klemma/
 ├── ai_openai.py        — OpenAI-compatible backend (OpenAI, Ollama, vLLM, LM Studio)
 ├── ai_litellm.py       — LiteLLM universal backend (100+ providers)
 ├── vault.py            — Obsidian adapter (CLI/file I/O, update_section)
-├── library_provider.py — LibraryProvider protocol + LocalLibrary + MCPLibrary
+├── library_provider.py — LibraryProvider protocol + LocalLibrary (BBT JSON)
 ├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, acquirer, work_context)
-├── literature/         — Zotero, PDF, models, note_factory
-└── tools/              — MCP tool integration
-    ├── client.py       — MCPClient (sync wrapper over async MCP SDK)
-    ├── registry.py     — ToolRegistry (server management, lazy client creation)
-    └── discovery.py    — Hybrid discovery pipeline (MCP search + Claude assessment)
+└── literature/         — PDF extraction, models, note_factory
 prompts/                    — Shipped Jinja2 prompt templates (overridable via ~/.klemma/prompts/)
 ├── morning.md              — daily plans
 ├── extract.md              — fragment extraction
@@ -52,18 +47,15 @@ tags.example.yaml           — Template tag taxonomy
 └── klemma-status/SKILL.md  — Agent skill: coverage & gaps check
 ```
 
-## Key commands (14)
+## Key commands (11)
 - `klemma init [--type paper|thesis]` — create project in current directory (.klemma/ + KLEMMA.md)
 - `klemma plan` — daily plan generation (library digest included)
 - `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
 - `klemma process [<citekeys>...]` — extract fragments from PDF; no arg = batch all pending; parallel by default
-- `klemma acquire <url> [--batch file.json]` — download PDF → Zotero → BBT citekey → register in DB
-- `klemma research -s 1.3.2` — research briefing for a section (`--enrich` for MCP enrichment)
+- `klemma acquire <url> [--batch file.json]` — download PDF locally → register in DB
+- `klemma research -s 1.3.2` — research briefing for a section
 - `klemma library [-s 2.3] [--audit]` — AI library analysis (status / recommend / audit)
 - `klemma ask "query"` — interactive research agent with full dissertation context
-- `klemma tools {add,list,remove,call}` — manage MCP servers (zotero, academia, etc.)
-- `klemma search "query"` — search papers via MCP (arXiv, Semantic Scholar)
-- `klemma discover -s X.X` — hybrid discovery pipeline (`--background`, `--status`, `--review`)
 - `klemma info` — show current project info (root, chain, config, DB)
 - `klemma tree` — show nested project tree from current root
 - `klemma migrate [--dry-run]` — migrate from old ~/.klemma/ to per-directory project
@@ -78,7 +70,7 @@ Two-level configuration: system (global) and project (per-directory).
 ### System directory (`~/.klemma/`) — global defaults
 ```
 ~/.klemma/
-├── config.yaml    — AI defaults, global MCP servers
+├── config.yaml    — AI defaults
 └── prompts/       — optional global prompt overrides
 ```
 Created automatically on first `klemma init`. Override location via `KLEMMA_HOME` env var.
@@ -88,7 +80,7 @@ Created automatically on first `klemma init`. Override location via `KLEMMA_HOME
 project_dir/
 ├── KLEMMA.md          — project context for AI (visible, like CLAUDE.md)
 └── .klemma/
-    ├── config.yaml    — project config (zotero, obsidian, project, MCP overrides)
+    ├── config.yaml    — project config (zotero, obsidian, project)
     ├── tags.yaml      — tag taxonomy for fragment classification
     ├── prompts/       — optional project-level prompt overrides
     └── data/
@@ -98,21 +90,19 @@ Created by `klemma init` in any directory. Navigate to project dir and run comma
 
 **Config keys (project-level):**
 - `zotero.library_json` — path to BetterBibTeX JSON export (for PDF lookup)
-- `zotero.backend` — `"local"` (default, BBT JSON) or `"mcp"` (zotero-mcp server)
 - `zotero.collection` — optional Zotero collection ID for filtering
-- `mcp.servers` — registered MCP servers (managed via `klemma tools add/remove`)
 - `project:` — ProjectConfig (type, title, chapters, scientific_results, etc.)
 - `ai.backend` — `"claude"` (default, CLI), `"openai"` (OpenAI-compatible API), or `"litellm"` (100+ providers)
 - `ai.base_url` — endpoint URL for OpenAI-compatible servers (Ollama, vLLM, LM Studio)
 - `ai.api_key_env` — env var name for API key (e.g. `"OPENAI_API_KEY"`)
 - `ai.json_mode` — enable structured JSON output when backend supports it
-- Requires: AI backend (`claude` CLI by default, or `pip install klemma[openai]` / `klemma[litellm]`), optionally `ZOTERO_API_KEY`
+- Requires: AI backend (`claude` CLI by default, or `pip install klemma[openai]` / `klemma[litellm]`)
 
 **Project discovery:** `discover_project_root()` traverses up from cwd to find nearest `.klemma/` directory (like `git rev-parse --show-toplevel`).
 
 **Config merge order:** system (`~/.klemma/`) < parent project < child project < CLI `--config`.
 
-**Selective inheritance:** Only shared resources (`obsidian`, `zotero`, `ai`, `mcp`) are inherited from parent. Project-specific keys (`project`, `tags`, `state`, `processing`) are NOT inherited.
+**Selective inheritance:** Only shared resources (`obsidian`, `zotero`, `ai`) are inherited from parent. Project-specific keys (`project`, `tags`, `state`, `processing`) are NOT inherited.
 
 **Prompt resolution:** `resolve_prompt(name, klemma_home, project_chain?)` checks project → parent project → system (`~/.klemma/prompts/`) → shipped prompts.
 
@@ -137,14 +127,13 @@ thesis_dir/
 Navigate into `thesis_dir/paper_ice/` and run `klemma status` — it uses the paper's DB but inherits vault/zotero from the thesis parent. AI context includes both dissertation and paper KLEMMA.md files.
 
 ### Migration from old `~/.klemma/` setup
-Run `klemma migrate` in desired project directory. Splits `~/.klemma/config.yaml` into system (AI + MCP) and project (everything else), copies context.md → KLEMMA.md, tags.yaml, DB.
+Run `klemma migrate` in desired project directory. Splits `~/.klemma/config.yaml` into system (AI) and project (everything else), copies context.md → KLEMMA.md, tags.yaml, DB.
 
 ## SQLite tables
 - `sources` — Zotero entries with processing status and dissertation metadata
 - `source_sections` — junction table: source_id × section (multi-section support)
 - `fragments` — extracted citation fragments mapped to chapters/sections
 - `reference_gaps` — missing references found in source bibliographies (status: open/resolved)
-- `discoveries` — papers found by discovery pipeline (MCP search + Claude assessment, status: pending/accepted/rejected)
 - `daily_plans` — generated daily plans
 - `reading_queue` — prioritized reading list
 
@@ -154,8 +143,7 @@ Detailed documentation for each subsystem lives in its directory, loaded increme
 
 - [Core infrastructure](src/klemma/CLAUDE.md) — config, state, AI providers, vault, library, CLI, context
 - [AI Skills](src/klemma/skills/CLAUDE.md) — planner, extractor, researcher, librarian, agent, acquirer
-- [MCP Tools](src/klemma/tools/CLAUDE.md) — MCPClient, ToolRegistry, discovery pipeline
-- [Literature](src/klemma/literature/CLAUDE.md) — Zotero, PDF extraction, models, vault note factory
+- [Literature](src/klemma/literature/CLAUDE.md) — PDF extraction, models, vault note factory
 - [TUI](src/klemma/tui/CLAUDE.md) — Textual dashboard and screens
 - [Prompts](prompts/CLAUDE.md) — Jinja2 templates for AI calls
 - [Tests](tests/CLAUDE.md) — testing patterns and conventions
@@ -173,7 +161,7 @@ klemma --help
 
 ## Maintaining CLAUDE.md documentation
 
-This documentation is a modular knowledge graph — 8 interconnected CLAUDE.md files loaded incrementally as the agent navigates directories. **Keep it up to date when changing code.**
+This documentation is a modular knowledge graph — 7 interconnected CLAUDE.md files loaded incrementally as the agent navigates directories. **Keep it up to date when changing code.**
 
 ### When to update
 - **Adding a module**: add entry to the parent directory's CLAUDE.md (module name, line count, purpose, key functions)

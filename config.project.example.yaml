@@ -2,7 +2,7 @@
 # KLEMMA PROJECT CONFIG — per-project settings
 # =============================================================================
 # This file lives in .klemma/config.yaml inside your project directory.
-# Shared resources (obsidian, zotero, ai, mcp) are inherited from parent
+# Shared resources (obsidian, zotero, ai) are inherited from parent
 # project if this is a nested project. Override only what you need.
 
 # --- Shared resources (inherited from parent if nested) ---
@@ -55,6 +55,3 @@ tags:
       tag: "Review"
     - pattern: "methodology|method"
       tag: "Methodology"
-
-mcp:
-  servers: {}
