@@ -23,6 +23,7 @@ def extract_fragments(
     dissertation_context: str = "",
     available_tags: list[str] | None = None,
     klemma_home: Optional[Path] = None,
+    project_type: str = "dissertation",
 ) -> Optional[ExtractionResult]:
     """Extract citation fragments from a paper's PDF text."""
 
@@ -39,6 +40,7 @@ def extract_fragments(
         dissertation_context=dissertation_context,
         available_tags=", ".join(available_tags) if available_tags else "",
         language=config.ai.language,
+        project_type=project_type,
     )
 
     system = (
@@ -173,6 +175,7 @@ def extract_from_citekey(
     dissertation_context: str = "",
     available_tags: list[str] | None = None,
     klemma_home: Optional[Path] = None,
+    project_type: str = "dissertation",
 ) -> Optional[ExtractionResult]:
     """Full extraction pipeline: find source, get PDF, extract fragments."""
 
@@ -208,4 +211,5 @@ def extract_from_citekey(
         dissertation_context=dissertation_context,
         available_tags=available_tags,
         klemma_home=klemma_home,
+        project_type=project_type,
     )

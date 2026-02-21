@@ -639,11 +639,13 @@ def research_section(
             gaps=gaps,
             min_sources=min_sources,
             language=config.ai.language,
+            project_type=project.type if project else "dissertation",
             range=range,
         )
 
+        project_type = project.type if project else "dissertation"
         system = (
-            "You are a research analyst for a PhD dissertation. "
+            f"You are a research analyst for a {project_type}. "
             "This is a REPEAT analysis — update the previous briefing, do not rewrite from scratch. "
             "Output only valid JSON."
         )
@@ -682,11 +684,13 @@ def research_section(
             fragment_stats=fragment_stats,
             min_sources=min_sources,
             language=config.ai.language,
+            project_type=project.type if project else "dissertation",
             range=range,
         )
 
+        project_type = project.type if project else "dissertation"
         system = (
-            "You are a research analyst for a PhD dissertation. "
+            f"You are a research analyst for a {project_type}. "
             "Analyze section readiness and suggest an argumentation structure. "
             "Output only valid JSON."
         )

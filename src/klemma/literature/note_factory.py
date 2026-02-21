@@ -81,6 +81,7 @@ def annotate_source(
     dissertation_context: str = "",
     available_tags: list[str] | None = None,
     klemma_home: Optional[Path] = None,
+    project_type: str = "dissertation",
 ) -> Optional[dict]:
     """Generate AI annotation (summary, methodology, key findings, relevance).
 
@@ -105,10 +106,11 @@ def annotate_source(
         available_tags=", ".join(available_tags) if available_tags else "",
         library_entries=_format_library_entries(entry_lookup),
         language=config.ai.language,
+        project_type=project_type,
     )
 
     system = (
-        "You are a research assistant annotating scientific papers for a PhD dissertation. "
+        f"You are a research assistant annotating scientific papers for a {project_type}. "
         "Output only valid JSON."
     )
 
@@ -377,6 +379,7 @@ def create_vault_note(
     dissertation_context: str = "",
     available_tags: list[str] | None = None,
     klemma_home: Optional[Path] = None,
+    project_type: str = "dissertation",
 ) -> Path:
     """Create @citekey.md vault note from BetterBibTeX metadata.
 
@@ -394,6 +397,7 @@ def create_vault_note(
             dissertation_context=dissertation_context,
             available_tags=available_tags,
             klemma_home=klemma_home,
+            project_type=project_type,
         )
 
     # 2. Classification: prefer AI result, fallback to regex
