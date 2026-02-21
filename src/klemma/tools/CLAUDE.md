@@ -28,7 +28,8 @@ Hybrid discovery pipeline for finding new literature:
 ## Data flows
 
 ### MCP tool integration
-`klemma tools add <name> --command <cmd> --args <args>` → `registry.add_server()` writes to `config.yaml`.
+`klemma tools add <name> --command <cmd> --args <args>` → writes to project `.klemma/config.yaml` (or `~/.klemma/config.yaml` with `--global` flag).
+`klemma tools remove <name>` → removes from project config (or global with `--global`).
 `klemma tools call <server> <tool> <args>` → `registry.call()` → `client.call_tool()` → MCP stdio.
 
 ### Paper search

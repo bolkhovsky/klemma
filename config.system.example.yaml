@@ -1,0 +1,24 @@
+# =============================================================================
+# KLEMMA SYSTEM CONFIG — global defaults (~/.klemma/config.yaml)
+# =============================================================================
+# Shared settings for all klemma projects. Project-level configs override these.
+
+ai:
+  model: "sonnet"                      # default AI model: "opus", "sonnet", "haiku"
+  language: "ru"                       # default AI response language
+  timeout: 300
+  retries: 2
+  # Uncomment for OpenAI-compatible backends:
+  # backend: "openai"
+  # base_url: "http://localhost:11434/v1"
+  # api_key_env: "OPENAI_API_KEY"
+
+mcp:
+  servers: {}
+  # Global MCP servers available to all projects:
+  # servers:
+  #   zotero:
+  #     command: "uvx"
+  #     args: ["zotero-mcp"]
+  #     env:
+  #       ZOTERO_LOCAL: "true"

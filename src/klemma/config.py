@@ -1,4 +1,10 @@
-"""Configuration loader with Pydantic validation."""
+"""Configuration loader with Pydantic validation.
+
+Supports Git/NPM-style per-directory projects:
+- System config: ~/.klemma/config.yaml (AI defaults, global MCP)
+- Project config: .klemma/config.yaml (per-project settings)
+- Context: KLEMMA.md next to .klemma/ (project context for AI)
+"""
 
 import logging
 import os
@@ -13,10 +19,86 @@ logger = logging.getLogger(__name__)
 # Shipped prompts directory (relative to this file → repo root / prompts)
 _SHIPPED_PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
+# Config keys inherited from parent project (shared resources)
+_INHERITED_KEYS = {"obsidian", "zotero", "ai", "mcp"}
 
-def get_klemma_home() -> Path:
-    """Return klemma home directory (~/.klemma/ or KLEMMA_HOME env var)."""
+
+# --- System home ---
+
+
+def get_system_home() -> Path:
+    """Return klemma system directory (~/.klemma/ or KLEMMA_HOME env var)."""
     return Path(os.environ.get("KLEMMA_HOME", "~/.klemma")).expanduser()
+
+
+# Backward-compatible alias
+get_klemma_home = get_system_home
+
+
+def ensure_system_home() -> Path:
+    """Create ~/.klemma/ with minimal config if it doesn't exist. Return path."""
+    system_home = get_system_home()
+    if not system_home.exists():
+        system_home.mkdir(parents=True, exist_ok=True)
+        config_path = system_home / "config.yaml"
+        if not config_path.exists():
+            config_path.write_text(
+                "# Klemma global config — AI defaults, shared MCP servers\n"
+                "ai:\n"
+                "  model: sonnet\n"
+                "  language: ru\n",
+                encoding="utf-8",
+            )
+        logger.info("Created system config at %s", system_home)
+    return system_home
+
+
+# --- Project discovery (Git-style) ---
+
+
+def discover_project_root(start: Optional[Path] = None) -> Optional[Path]:
+    """Find nearest directory containing .klemma/ by traversing up from start.
+
+    Returns the directory containing .klemma/, or None if not found.
+    Like `git rev-parse --show-toplevel` but for klemma projects.
+    """
+    current = (start or Path.cwd()).resolve()
+    for _ in range(20):  # safety limit
+        if (current / ".klemma").is_dir():
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+    return None
+
+
+def discover_project_chain(start: Optional[Path] = None) -> list[Path]:
+    """Find all project roots from current to topmost ancestor.
+
+    Returns list ordered child-first: [child_root, parent_root, grandparent_root].
+    Max nesting depth: 3.
+    """
+    chain: list[Path] = []
+    project_root = discover_project_root(start)
+    if project_root is None:
+        return []
+    chain.append(project_root)
+
+    # Look for parent projects
+    search_from = project_root.parent
+    for _ in range(2):  # max 2 more levels
+        parent_project = discover_project_root(search_from)
+        if parent_project is None or parent_project == project_root:
+            break
+        chain.append(parent_project)
+        search_from = parent_project.parent
+        project_root = parent_project
+
+    return chain
+
+
+# --- Pydantic config models ---
 
 
 class ZoteroConfig(BaseModel):
@@ -35,7 +117,7 @@ class ZoteroConfig(BaseModel):
 
 
 class ObsidianConfig(BaseModel):
-    vault_path: str
+    vault_path: str = ""
     notes_folder: str = "2 - Refs"
     tags_folder: str = "3 - Tags"
     use_cli: Optional[bool] = None
@@ -77,6 +159,8 @@ class ChapterDeadline(BaseModel):
 
 
 class DissertationConfig(BaseModel):
+    """Legacy dissertation config — kept for migration from old ~/.klemma/ format."""
+
     current_chapter: int = 2
     current_section: str = "2.3.1"
     title: str = ""
@@ -89,9 +173,6 @@ class DissertationConfig(BaseModel):
     chapter_plan_pattern: str = "План_Глава{chapter}"
     writing_constraints: str = "1-1.5 ч/день, 200-300 слов/день, Pomodoro"
     chapter_draft_pattern: str = "Глава_{chapter}"
-
-
-# --- Multi-project support ---
 
 
 class ProjectConfig(BaseModel):
@@ -150,14 +231,6 @@ class ProjectConfig(BaseModel):
         )
 
 
-class WorkspaceConfig(BaseModel):
-    """Workspace configuration — maps project names to config file paths."""
-
-    active: str = "default"
-    defaults: dict[str, Any] = Field(default_factory=dict)
-    projects: dict[str, str] = Field(default_factory=dict)  # name → config path
-
-
 class PlanningConfig(BaseModel):
     dissertation_focus: str = ""
     assistant_roadmap: list[str] = Field(default_factory=list)
@@ -209,10 +282,20 @@ class MCPConfig(BaseModel):
     servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 
+class SystemConfig(BaseModel):
+    """Global system configuration (~/.klemma/config.yaml).
+
+    Contains defaults that apply across all projects unless overridden.
+    """
+
+    ai: AIConfig = Field(default_factory=AIConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
+
+
 class KlemmaConfig(BaseModel):
     instance: InstanceConfig = Field(default_factory=InstanceConfig)
     zotero: ZoteroConfig = Field(default_factory=ZoteroConfig)
-    obsidian: ObsidianConfig
+    obsidian: ObsidianConfig = Field(default_factory=ObsidianConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
     state: StateConfig = Field(default_factory=StateConfig)
     dissertation: DissertationConfig = Field(default_factory=DissertationConfig)
@@ -222,8 +305,10 @@ class KlemmaConfig(BaseModel):
     tags: TagsConfig = Field(default_factory=TagsConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
-    # Multi-project: optional project config embedded in same file
     project: Optional[ProjectConfig] = None
+
+
+# --- Config loading and merging ---
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -237,21 +322,28 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _load_yaml(path: Path) -> dict:
+    """Load a YAML file, returning empty dict if missing or empty."""
+    if not path.exists():
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
 def load_config(config_path: str | Path | None = None) -> KlemmaConfig:
     """Load and validate configuration from YAML file.
 
-    If config_path is None, uses get_klemma_home() / "config.yaml".
+    If config_path is None, uses get_system_home() / "config.yaml".
     Supports both legacy single-project configs and new project-aware configs.
     """
     if config_path is None:
-        path = get_klemma_home() / "config.yaml"
+        path = get_system_home() / "config.yaml"
     else:
         path = Path(config_path)
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
 
-    with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
+    raw = _load_yaml(path)
 
     # Migration: Zotero fields were originally under instance:
     if "zotero" not in raw and "instance" in raw:
@@ -264,117 +356,136 @@ def load_config(config_path: str | Path | None = None) -> KlemmaConfig:
     return KlemmaConfig.model_validate(raw)
 
 
-def load_workspace(
-    workspace_path: str | Path = "workspace.yaml",
-    project_name: Optional[str] = None,
-) -> tuple[KlemmaConfig, ProjectConfig, str]:
-    """Load workspace and resolve a project config.
+def resolve_effective_config(
+    project_chain: list[Path],
+    config_override: Optional[str | Path] = None,
+) -> tuple[KlemmaConfig, ProjectConfig, Path]:
+    """Resolve effective config by merging: system → parent → child → CLI override.
 
-    Returns (config, project, project_name).
+    project_chain is child-first: [child_root, parent_root].
 
-    The workspace.yaml points to per-project config files.
-    Shared defaults from workspace are merged under each project config.
+    Selective inheritance: only shared resource keys (obsidian, zotero, ai, mcp)
+    are inherited from parent. Project structure (project, tags, state, etc.)
+    is always per-project.
+
+    Returns (merged_config, project_config, active_project_root).
     """
-    ws_path = Path(workspace_path)
-    if not ws_path.exists():
-        raise FileNotFoundError(f"Workspace file not found: {ws_path}")
+    # 1. System defaults
+    system_raw = _load_yaml(get_system_home() / "config.yaml")
 
-    with open(ws_path, "r", encoding="utf-8") as f:
-        ws_raw = yaml.safe_load(f) or {}
+    # 2. Project chain: parent first, child last (child wins)
+    #    Only inherit shared resource keys from parents
+    merged: dict[str, Any] = {}
+    for root in reversed(project_chain):  # parent first
+        project_raw = _load_yaml(root / ".klemma" / "config.yaml")
+        if root == project_chain[0]:
+            # Active (child) project: merge everything
+            merged = _deep_merge(merged, project_raw)
+        else:
+            # Parent project: only inherit shared resource keys
+            inherited = {k: v for k, v in project_raw.items() if k in _INHERITED_KEYS}
+            merged = _deep_merge(merged, inherited)
 
-    ws = WorkspaceConfig.model_validate(ws_raw)
-    name = project_name or ws.active
+    # 3. System provides defaults for unset keys
+    effective = _deep_merge(system_raw, merged)
 
-    if name not in ws.projects:
-        available = ", ".join(ws.projects.keys()) or "(none)"
-        raise ValueError(f"Project '{name}' not found in workspace. Available: {available}")
+    # 4. CLI --config override wins over everything
+    if config_override:
+        override_raw = _load_yaml(Path(config_override))
+        effective = _deep_merge(effective, override_raw)
 
-    # Resolve project config path (relative to workspace file)
-    project_config_path = ws_path.parent / ws.projects[name]
-    if not project_config_path.exists():
-        raise FileNotFoundError(
-            f"Project config not found: {project_config_path} (for project '{name}')"
-        )
+    cfg = KlemmaConfig.model_validate(effective)
+    project_root = project_chain[0]
 
-    with open(project_config_path, "r", encoding="utf-8") as f:
-        proj_raw = yaml.safe_load(f) or {}
-
-    # Merge workspace defaults under project config (project values win)
-    merged = _deep_merge(ws.defaults, proj_raw)
-
-    # Load the merged config as KlemmaConfig
-    cfg = KlemmaConfig.model_validate(merged)
-
-    # Extract ProjectConfig: prefer explicit 'project:' block, else synthesize from 'dissertation:'
-    if "project" in merged and merged["project"]:
-        project = ProjectConfig.model_validate(merged["project"])
-    else:
-        project = ProjectConfig.from_dissertation(cfg.dissertation)
-
-    return cfg, project, name
-
-
-def resolve_project(
-    config_path: str | Path | None = None,
-    workspace_path: Optional[str | Path] = None,
-    project_name: Optional[str] = None,
-) -> tuple[KlemmaConfig, ProjectConfig, str]:
-    """Unified entry point: resolve config + project from either workspace or direct config.
-
-    Priority:
-    1. If workspace_path is given and exists, use workspace mode
-    2. If workspace.yaml exists in cwd, use workspace mode
-    3. Fall back to direct config mode (legacy)
-    """
-    # Try workspace mode
-    ws_path = Path(workspace_path) if workspace_path else Path("workspace.yaml")
-    if ws_path.exists():
-        return load_workspace(ws_path, project_name=project_name)
-
-    # Direct config mode (legacy or new-style single project)
-    cfg = load_config(config_path)
-
-    # If config has explicit project: block, use it
+    # Extract ProjectConfig
     if cfg.project:
-        name = project_name or "default"
-        return cfg, cfg.project, name
+        project = cfg.project
+    elif cfg.dissertation and cfg.dissertation.title:
+        project = ProjectConfig.from_dissertation(cfg.dissertation)
+    else:
+        project = ProjectConfig()
 
-    # Legacy: synthesize ProjectConfig from DissertationConfig
-    project = ProjectConfig.from_dissertation(cfg.dissertation)
-    name = project_name or "default"
-    return cfg, project, name
+    return cfg, project, project_root
 
 
-def load_dissertation_context(klemma_home: Path, config: KlemmaConfig) -> str:
-    """Load dissertation context from context.md or build from config fields.
+# --- Context and tags ---
 
-    Looks for klemma_home/context.md first. If not found, builds a basic
-    context string from config.dissertation fields as fallback.
+
+def load_project_context(project_chain: list[Path], config: Optional[KlemmaConfig] = None) -> str:
+    """Load and aggregate KLEMMA.md files from project chain.
+
+    project_chain is child-first. Result: parent context first, then child.
+    Falls back to .klemma/context.md (legacy) and then config fields.
     """
-    context_path = klemma_home / "context.md"
-    if context_path.exists():
-        text = context_path.read_text(encoding="utf-8").strip()
-        if text:
-            return text
+    contexts: list[str] = []
 
-    # Fallback: build from config fields
-    parts = []
-    if config.dissertation.title:
-        parts.append(f"Topic: {config.dissertation.title}")
-    if config.dissertation.scientific_results:
+    for root in reversed(project_chain):  # parent first
+        # Try KLEMMA.md first
+        klemma_md = root / "KLEMMA.md"
+        if klemma_md.exists():
+            text = klemma_md.read_text(encoding="utf-8").strip()
+            if text:
+                contexts.append(text)
+                continue
+
+        # Legacy fallback: .klemma/context.md
+        context_md = root / ".klemma" / "context.md"
+        if context_md.exists():
+            text = context_md.read_text(encoding="utf-8").strip()
+            if text:
+                contexts.append(text)
+
+    if contexts:
+        return "\n\n---\n\n".join(contexts)
+
+    # Final fallback: build from config fields
+    if config:
+        return _build_context_from_config(config)
+    return ""
+
+
+def _build_context_from_config(config: KlemmaConfig) -> str:
+    """Build context string from config.dissertation or config.project fields."""
+    # Try project config first
+    if config.project and config.project.title:
+        p = config.project
+        parts = [f"Topic: {p.title}"]
+        if p.scientific_results:
+            parts.append("")
+            for key, val in p.scientific_results.items():
+                parts.append(f"{key.upper()}: {val}")
+        if p.chapters:
+            parts.append("")
+            parts.append("Chapters:")
+            for ch_num, ch_name in sorted(p.chapters.items()):
+                parts.append(f"{ch_num}. {ch_name}")
+        if p.priority_terms:
+            parts.append("")
+            parts.append(f"Key terms: {', '.join(p.priority_terms)}")
+        return "\n".join(parts)
+
+    # Legacy dissertation config fallback
+    d = config.dissertation
+    parts: list[str] = []
+    if d.title:
+        parts.append(f"Topic: {d.title}")
+    if d.scientific_results:
         parts.append("")
-        for key, val in config.dissertation.scientific_results.items():
+        for key, val in d.scientific_results.items():
             parts.append(f"{key.upper()}: {val}")
-    if config.dissertation.chapters:
+    if d.chapters:
         parts.append("")
         parts.append("Chapters:")
-        for ch_num, ch_name in sorted(config.dissertation.chapters.items()):
+        for ch_num, ch_name in sorted(d.chapters.items()):
             parts.append(f"{ch_num}. {ch_name}")
-    if config.dissertation.priority_terms:
+    if d.priority_terms:
         parts.append("")
-        parts.append(f"Key terms: {', '.join(config.dissertation.priority_terms)}")
-
+        parts.append(f"Key terms: {', '.join(d.priority_terms)}")
     return "\n".join(parts)
+
+
+# Keep old name as alias for backward compatibility
+load_dissertation_context = load_project_context
 
 
 def load_available_tags(klemma_home: Path, config: KlemmaConfig) -> list[str]:
@@ -401,11 +512,32 @@ def load_available_tags(klemma_home: Path, config: KlemmaConfig) -> list[str]:
 
 
 def resolve_prompt(name: str, klemma_home: Path) -> Path:
-    """Resolve prompt template path: user override first, then shipped.
+    """Resolve prompt template path with 4-level lookup.
 
-    Looks in klemma_home/prompts/ first, then the shipped prompts/ directory.
+    Priority: project → parent project → system (~/.klemma/) → shipped.
+    klemma_home is the active project's .klemma/ directory.
     """
+    # 1. Active project
     user_path = klemma_home / "prompts" / name
     if user_path.exists():
         return user_path
+
+    # 2. Parent projects (traverse up from project root)
+    project_root = klemma_home.parent
+    search_from = project_root.parent
+    for _ in range(2):
+        parent_root = discover_project_root(search_from)
+        if parent_root is None or parent_root == project_root:
+            break
+        parent_path = parent_root / ".klemma" / "prompts" / name
+        if parent_path.exists():
+            return parent_path
+        search_from = parent_root.parent
+
+    # 3. System-level override (~/.klemma/prompts/)
+    system_path = get_system_home() / "prompts" / name
+    if system_path.exists():
+        return system_path
+
+    # 4. Shipped prompts
     return _SHIPPED_PROMPTS_DIR / name

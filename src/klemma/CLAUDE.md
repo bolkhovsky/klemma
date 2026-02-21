@@ -4,27 +4,35 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 
 ## Modules
 
-### cli.py (1480 lines)
-Click CLI entry point. Defines all 11 commands + hidden aliases.
-- `_init_components()` — creates `KlemmaContext` from config
+### cli.py (~1780 lines)
+Click CLI entry point. Defines 14 commands + hidden aliases.
+- `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
+- Commands: `init`, `plan`, `status`, `process`, `acquire`, `research`, `library`, `ask`, `tools`, `search`, `discover`, `info`, `tree`, `migrate`
 
-### context.py (35 lines)
+### context.py (~42 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.
-Holds: `config`, `state`, `vault`, `ai` (optional), `library` (optional), `tools` (optional), `klemma_home`, `dissertation_context`, `available_tags`.
+Holds: `config`, `state`, `vault`, `ai` (optional), `library` (optional), `tools` (optional), `project` (optional), `klemma_home`, `dissertation_context`, `available_tags`, `project_root`, `project_chain`, `system_home`.
 
-### config.py (~200 lines)
-Pydantic config models loaded from `config.yaml`.
-Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `DissertationConfig`, `MCPConfig`, `MCPServerConfig`.
-- `get_klemma_home()` — returns `Path(KLEMMA_HOME)` or `~/.klemma`
-- `load_dissertation_context(klemma_home, config)` — reads `context.md`, fallback from config fields
+### config.py (~440 lines)
+Pydantic config models + Git-style project discovery.
+Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `DissertationConfig`, `MCPConfig`, `MCPServerConfig`, `SystemConfig`, `ProjectConfig`.
+- `discover_project_root(start)` — traverse up from cwd to find nearest `.klemma/`
+- `discover_project_chain(start)` — find all project roots child-first, max depth 3
+- `resolve_effective_config(project_chain, config_override)` — merge: system < parent < child < CLI override
+- `load_project_context(project_chain, config)` — aggregate KLEMMA.md files parent-first
+- `ensure_system_home()` — auto-create `~/.klemma/` with minimal config on first run
+- `get_system_home()` / `get_klemma_home()` — returns `Path(KLEMMA_HOME)` or `~/.klemma`
 - `load_available_tags(klemma_home, config)` — reads `tags.yaml`, fallback from `tags.auto_mapping`
-- `resolve_prompt(name, klemma_home)` — user override in `klemma_home/prompts/`, then shipped `prompts/`
+- `resolve_prompt(name, klemma_home)` — 4-level: project → parent → system → shipped
+- Selective inheritance: only `_INHERITED_KEYS = {"obsidian", "zotero", "ai", "mcp"}` from parent projects
 
-### setup.py (42 lines)
-`klemma init` logic — creates `~/.klemma/` from example template files.
-- `init_klemma_home(klemma_home)` — copies config.example.yaml → config.yaml, etc.
+### setup.py (~134 lines)
+`klemma init` logic — creates per-directory `.klemma/` projects and `~/.klemma/` system config.
+- `init_project(project_dir, project_type)` — creates `.klemma/`, `KLEMMA.md`, updates `.gitignore`
+- `init_system(system_home)` — creates `~/.klemma/config.yaml` (AI defaults only)
+- `init_klemma_home()` — legacy alias for `init_system()`
 
 ### state.py (1207 lines)
 SQLite state manager. Tables:
