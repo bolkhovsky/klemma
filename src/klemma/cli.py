@@ -2032,6 +2032,24 @@ def info(ctx):
         border_style="blue",
     ))
 
+    # Effective Zotero config (merged from system + parent + project)
+    zot = kctx.config.zotero
+    zot_parts = []
+    if zot.library_id:
+        zot_parts.append(f"Library ID: {zot.library_id} ({zot.library_type})")
+    if zot.library_json:
+        zot_parts.append(f"BBT JSON: {zot.library_json}")
+    if zot.storage_path:
+        zot_parts.append(f"Storage: {zot.storage_path}")
+    if zot.backend != "local":
+        zot_parts.append(f"Backend: {zot.backend}")
+    if zot_parts:
+        console.print(Panel(
+            "\n".join(zot_parts),
+            title="Zotero (effective)",
+            border_style="dim",
+        ))
+
     # Parent chain
     if len(kctx.project_chain) > 1:
         console.print("\n[bold]Project Chain[/bold] (child → parent):")
