@@ -3,6 +3,12 @@
 # =============================================================================
 # Shared settings for all klemma projects. Project-level configs override these.
 
+zotero:
+  # library_id: "12345678"             # Zotero user/group library ID (required for acquire)
+  # library_type: "user"               # "user" or "group"
+  # api_key_env: "ZOTERO_API_KEY"      # env var with API key (optional for local Zotero)
+  # storage_path: ~/Zotero/storage     # local Zotero PDF storage
+
 ai:
   model: "sonnet"                      # default AI model: "opus", "sonnet", "haiku"
   language: "ru"                       # default AI response language

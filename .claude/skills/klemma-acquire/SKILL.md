@@ -7,6 +7,27 @@ allowed-tools: Bash(klemma acquire:*)
 
 Автоматический pipeline: скачать PDF → добавить в Zotero → дождаться BBT citekey → зарегистрировать в klemma.
 
+## Предусловия
+
+Перед запуском acquire убедись:
+
+1. `klemma info` — показывает секцию Zotero (library_id, storage_path)
+2. `zotero.library_id` задан в конфиге (системный `~/.klemma/config.yaml` или проектный)
+3. Zotero запущен (для BBT polling citekey)
+4. Опционально: `ZOTERO_API_KEY` (нужен для cloud Zotero; для local — не обязателен)
+
+Если `library_id` не задан — не переходи к batch. Сначала исправь конфиг.
+
+## Перед batch
+
+Проверь pipeline на одной статье:
+
+```bash
+klemma acquire <одна_ссылка> --title "Test Paper" --no-process
+```
+
+Если статус = ok — запускай batch. Если ошибка — исправь конфиг.
+
 ## Одна статья
 
 ```bash
