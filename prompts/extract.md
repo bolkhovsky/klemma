@@ -23,9 +23,28 @@ You are an AI research assistant extracting citation-worthy fragments from scien
 
 ---
 
-## Your Task
+## Step 1: Analyze the Paper Structure
 
-Extract key citation fragments from this paper. For each fragment, identify:
+Before extracting fragments, analyze the **original paper's** structure:
+- What are the main sections? (Introduction / Methods / Results / Discussion / Related Work / Other)
+- What is the core methodology or approach?
+- What are the key claims and contributions?
+
+This structural understanding helps you extract higher-quality, better-targeted fragments.
+
+## Step 2: Identify Citation-Worthy Statements
+
+Scan the paper for statements containing **verifiable facts**:
+- Numerical results, benchmarks, performance metrics
+- Specific methods, algorithms, or techniques with concrete descriptions
+- Empirical findings supported by data
+- Formal definitions of key concepts
+
+These statements are the highest-priority candidates for fragment extraction.
+
+## Step 3: Extract Fragments
+
+Now extract key citation fragments from this paper. For each fragment, identify:
 1. The exact text (verbatim or close paraphrase)
 2. Fragment type: quote, methodology, result, conclusion, definition, key_idea
 3. Which chapter/section it fits
