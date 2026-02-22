@@ -571,3 +571,56 @@ def resolve_prompt(
 
     # 4. Shipped prompts
     return _SHIPPED_PROMPTS_DIR / name
+
+
+# --- Project file scanning ---
+
+_SCAN_EXTENSIONS = {".md", ".tex", ".bib", ".txt", ".rst"}
+_SCAN_EXCLUDE_DIRS = {".klemma", ".git", "__pycache__", ".venv", "node_modules", ".claude"}
+
+
+def scan_project_files(
+    project_root: Path, max_chars_per_file: int = 3000,
+) -> list[dict]:
+    """Scan project directory for text files useful as AI context.
+
+    Returns list of dicts: {name, path, size, content_preview}.
+    Excludes internal dirs (.klemma/, .git/, etc.).
+    """
+    results = []
+    for p in sorted(project_root.rglob("*")):
+        if not p.is_file() or p.suffix not in _SCAN_EXTENSIONS:
+            continue
+        # Skip excluded directories
+        if any(part in _SCAN_EXCLUDE_DIRS for part in p.relative_to(project_root).parts):
+            continue
+        try:
+            content = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        results.append({
+            "name": p.name,
+            "path": str(p.relative_to(project_root)),
+            "size": p.stat().st_size,
+            "content_preview": content[:max_chars_per_file],
+        })
+    return results
+
+
+def update_project_config(project_root: Path, updates: dict) -> None:
+    """Merge updates into .klemma/config.yaml (project section only).
+
+    Only updates keys present in `updates`. Preserves other config.
+    """
+    config_path = project_root / ".klemma" / "config.yaml"
+    if not config_path.exists():
+        logger.warning("Config not found: %s", config_path)
+        return
+
+    raw = _load_yaml(config_path)
+    project_section = raw.get("project", {})
+    project_section.update(updates)
+    raw["project"] = project_section
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(raw, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

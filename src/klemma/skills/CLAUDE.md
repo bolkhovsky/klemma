@@ -42,6 +42,13 @@ Builds full dissertation context for interactive Claude sessions.
 - For non-Claude backends: `ai.call()` with full context → terminal output
 - Saves responses to `Agent/Agent_<date>.md` in vault
 
+### outliner.py (~120 lines)
+Project outline generation from directory contents + database context.
+- `generate_outline(config, state, ai, project_root, ...)` — scans files → library context → `prompts/outline.md` → Claude → `OutlineResult`
+- `format_klemma_md(result, project_type)` — formats OutlineResult into enriched KLEMMA.md content
+- `save_outline_to_vault(result, project_name, vault, config)` — saves full outline as vault note
+- `OutlineResult` dataclass: title, description, chapters, sections, scientific_results, outline_text
+
 ### acquirer.py (258 lines)
 Local-only paper acquisition pipeline: download → local storage → DB.
 - `acquire_paper()` — orchestrates full pipeline
@@ -65,6 +72,9 @@ If vault note missing: triggers `literature.note_factory.create_vault_note()` fi
 
 ### Library analysis
 `klemma library` → `librarian.analyze_library()` → `LibraryReport` → `Library/Library_{mode}_{date}.md` in vault.
+
+### Project outline
+`klemma outline` → `scan_project_files()` → `outliner.generate_outline()` → Claude → `OutlineResult` → config.yaml (chapters) + KLEMMA.md + vault note.
 
 ### Agent context
 `klemma ask "query"` → `agent.build_agent_context()` → system prompt → interactive Claude or `ai.call()`.

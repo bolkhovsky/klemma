@@ -44,8 +44,8 @@ Session plan not found.
 
 ## Source Coverage
 
-{% for ch in range(1, 5) %}
-- Chapter {{ ch }}: {{ coverage.chapters.get(ch, 0) }} sources
+{% for ch, cnt in coverage.chapters.items() %}
+- Chapter {{ ch }}: {{ cnt }} sources
 {% endfor %}
 
 ## Gaps (sections with < {{ min_sources }} sources)

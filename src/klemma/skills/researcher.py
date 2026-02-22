@@ -428,10 +428,12 @@ def pre_extract_sources(
     }
 
 
-def _save_to_vault(section: str, content: str, vault: VaultAdapter) -> Path:
+def _save_to_vault(
+    section: str, content: str, vault: VaultAdapter, config: KlemmaConfig,
+) -> Path:
     """Сохранить исследовательский брифинг в vault."""
     note_name = f"Research_{section}"
-    folder = "6 - Main Notes/Диссертация"
+    folder = config.obsidian.notes_folder
     return vault.create_note(note_name, content, folder=folder)
 
 
@@ -753,7 +755,7 @@ def research_section(
 
     # 11. Сохранить в vault
     if save_to_vault:
-        saved_path = _save_to_vault(section, research_text, vault)
+        saved_path = _save_to_vault(section, research_text, vault, config)
         logger.info("Исследовательский брифинг сохранён: %s", saved_path)
 
     return result

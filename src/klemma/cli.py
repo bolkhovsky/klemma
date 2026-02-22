@@ -1168,6 +1168,127 @@ def research(ctx, section, no_save, force):
         console.print(f"\n[dim]Брифинг сохранён: Research_{section}.md[/dim]")
 
 
+@main.command()
+@click.option("--no-save", is_flag=True, help="Show outline without saving")
+@click.option("--scan-only", is_flag=True, help="Show found files without AI generation")
+@click.pass_context
+def outline(ctx, no_save, scan_only):
+    """Generate project outline from directory contents + database context.
+
+    Scans project files (.md, .tex, .bib), combines with library data,
+    and uses AI to generate chapters, sections, and scientific results.
+
+    Example: klemma outline
+    """
+    kctx = _get_context(ctx)
+    cfg, state, vault = kctx.config, kctx.state, kctx.vault
+
+    from .config import scan_project_files, update_project_config
+    from .skills.outliner import (
+        format_klemma_md,
+        save_outline_to_vault,
+    )
+    from .skills.outliner import (
+        generate_outline as gen_outline,
+    )
+
+
+    # 1. Scan project files
+    project_files = scan_project_files(kctx.project_root)
+
+    if not project_files:
+        console.print("[yellow]No files found in project directory.[/yellow]")
+        return
+
+    # Show found files
+    table = Table(title=f"Project files ({kctx.project_root.name})")
+    table.add_column("File", style="cyan")
+    table.add_column("Size", justify="right", width=8)
+    for pf in project_files:
+        size_str = f"{pf['size']:,} B" if pf['size'] < 10000 else f"{pf['size'] // 1024} KB"
+        table.add_row(pf["path"], size_str)
+    console.print(table)
+
+    if scan_only:
+        return
+
+    # 2. AI generation
+    ai = _init_ai(cfg)
+
+    with console.status("Generating outline...", spinner="dots"):
+        result = gen_outline(
+            cfg, state, ai, kctx.project_root,
+            project=kctx.project,
+            dissertation_context=kctx.dissertation_context,
+            klemma_home=kctx.klemma_home,
+        )
+
+    if not result.title:
+        console.print("[red]Failed to generate outline.[/red]")
+        return
+
+    # 3. Display outline
+    console.print()
+    console.print(Panel(
+        f"[bold]{result.title}[/bold]\n\n{result.description}",
+        title="Outline",
+        border_style="blue",
+    ))
+
+    # Chapters + sections
+    if result.chapters:
+        console.print()
+        table = Table(title="Structure")
+        table.add_column("#", justify="right", width=5, style="dim")
+        table.add_column("Title", max_width=50)
+        table.add_column("Sections", max_width=40, style="cyan")
+
+        for ch_num in sorted(result.chapters.keys()):
+            ch_title = result.chapters[ch_num]
+            ch_prefix = f"{ch_num}."
+            ch_secs = [
+                f"{k} {v}" for k, v in sorted(result.sections.items())
+                if k.startswith(ch_prefix)
+            ]
+            table.add_row(
+                str(ch_num),
+                ch_title,
+                "\n".join(ch_secs) if ch_secs else "",
+            )
+        console.print(table)
+
+    # Scientific results
+    if result.scientific_results:
+        console.print("\n[green]Scientific Results:[/green]")
+        for key, value in result.scientific_results.items():
+            console.print(f"  [bold]{key}:[/bold] {value}")
+
+    if no_save:
+        return
+
+    # 4. Save: config.yaml
+    config_updates = {}
+    if result.chapters:
+        config_updates["chapters"] = result.chapters
+    if result.scientific_results:
+        config_updates["scientific_results"] = result.scientific_results
+
+    if config_updates:
+        update_project_config(kctx.project_root, config_updates)
+        console.print("\n[dim]Updated .klemma/config.yaml (chapters, scientific_results)[/dim]")
+
+    # 5. Save: KLEMMA.md
+    project_type = kctx.project.type if kctx.project else "dissertation"
+    klemma_md_content = format_klemma_md(result, project_type=project_type)
+    klemma_md_path = kctx.project_root / "KLEMMA.md"
+    klemma_md_path.write_text(klemma_md_content, encoding="utf-8")
+    console.print("[dim]Updated KLEMMA.md[/dim]")
+
+    # 6. Save: vault note
+    saved_path = save_outline_to_vault(result, kctx.project_root.name, vault, cfg)
+    console.print(f"[dim]Saved outline: {saved_path}[/dim]")
+
+
 @main.command(name="import", hidden=True)
 @click.option("--with-queue", is_flag=True, help="Also populate reading queue from high-priority sources")
 @click.pass_context

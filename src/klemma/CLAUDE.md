@@ -16,7 +16,7 @@ Click CLI entry point. Defines 11 commands + hidden aliases.
 `KlemmaContext` dataclass — single object per CLI command invocation.
 Holds: `config`, `state`, `vault`, `ai` (optional), `library` (optional), `project` (optional), `klemma_home`, `dissertation_context`, `available_tags`, `project_root`, `project_chain`, `system_home`.
 
-### config.py (~577 lines)
+### config.py (~630 lines)
 Pydantic config models + Git-style project discovery.
 Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `DissertationConfig`, `SystemConfig`, `ProjectConfig`.
 - `discover_project_root(start)` — traverse up from cwd to find nearest `.klemma/`
@@ -27,6 +27,8 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `Disse
 - `get_system_home()` / `get_klemma_home()` — returns `Path(KLEMMA_HOME)` or `~/.klemma`
 - `load_available_tags(klemma_home, config, project_chain?)` — reads `tags.yaml` with parent fallback
 - `resolve_prompt(name, klemma_home, project_chain?)` — 4-level: project → parent → system → shipped
+- `scan_project_files(project_root, max_chars?)` — scan .md/.tex/.bib/.txt files, returns [{name, path, size, content_preview}]
+- `update_project_config(project_root, updates)` — merge updates into .klemma/config.yaml project section
 - Selective inheritance: only `_INHERITED_KEYS = {"obsidian", "zotero", "ai"}` from parent projects
 
 ### setup.py (~134 lines)
