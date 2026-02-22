@@ -18,6 +18,54 @@ logger = logging.getLogger(__name__)
 # Context separator used by load_project_context() to join parent + child
 _CONTEXT_SEPARATOR = "\n\n---\n\n"
 
+# File extensions to list from project_root
+_AGENT_SCAN_EXTENSIONS = {".md", ".tex", ".bib", ".txt", ".rst", ".pdf", ".doc", ".docx"}
+_AGENT_SCAN_EXCLUDE = {".klemma", ".git", "__pycache__", ".venv", "node_modules", ".claude"}
+
+
+def _scan_project_reports(project_root: Path) -> dict:
+    """Scan project_root for reports and project files.
+
+    Returns dict with:
+    - outline_content: full text of Outline_*.md (truncated to 8000 chars)
+    - report_index: list of {name, size} for Research_/Library_ reports
+    - project_files: list of {name, size} for other project files
+    """
+    outline_content = ""
+    report_index = []
+    project_files = []
+
+    for p in sorted(project_root.glob("*.md")):
+        if p.name.startswith("Outline_"):
+            try:
+                outline_content = p.read_text(encoding="utf-8")[:8000]
+            except OSError:
+                pass
+        elif p.name.startswith(("Research_", "Library_", "Agent_")):
+            report_index.append({"name": p.name, "size": p.stat().st_size})
+        elif not p.name.startswith("."):
+            project_files.append({"name": p.name, "size": p.stat().st_size})
+
+    # Also list non-.md files recursively (tex, bib, pdf, etc.)
+    for p in sorted(project_root.rglob("*")):
+        if not p.is_file() or p.suffix not in _AGENT_SCAN_EXTENSIONS:
+            continue
+        if p.suffix == ".md":
+            continue  # already handled above
+        rel_parts = p.relative_to(project_root).parts
+        if any(part in _AGENT_SCAN_EXCLUDE for part in rel_parts):
+            continue
+        project_files.append({
+            "name": str(p.relative_to(project_root)),
+            "size": p.stat().st_size,
+        })
+
+    return {
+        "outline_content": outline_content,
+        "report_index": report_index,
+        "project_files": project_files,
+    }
+
 
 def build_agent_context(
     config: KlemmaConfig,
@@ -29,6 +77,7 @@ def build_agent_context(
     dissertation_context: str = "",
     klemma_home: Optional[Path] = None,
     project_name: str = "",
+    project_root: Optional[Path] = None,
 ) -> str:
     """Build a rich system prompt with full research context for the agent.
 
@@ -111,6 +160,16 @@ def build_agent_context(
     }
     chapters_label_singular = singular_map.get(chapters_label, chapters_label)
 
+    # Scan project_root for reports and project files
+    outline_content = ""
+    report_index = []
+    project_file_list = []
+    if project_root and project_root.is_dir():
+        scan = _scan_project_reports(project_root)
+        outline_content = scan["outline_content"]
+        report_index = scan["report_index"]
+        project_file_list = scan["project_files"]
+
     # Render prompt
     prompt_path = (
         resolve_prompt("agent.md", klemma_home)
@@ -143,6 +202,10 @@ def build_agent_context(
         language=config.ai.language,
         project_type=project_type,
         project_name=project_name,
+        project_root=str(project_root) if project_root else "",
+        outline_content=outline_content,
+        report_index=report_index,
+        project_file_list=project_file_list,
         range=range,
     )
 

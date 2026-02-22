@@ -36,12 +36,13 @@ Library health analysis. Three modes: `status` (health), `recommend` (section-fo
 - `_format_sources_compact()` — compact list for prompt (citekey, author, year, title, q, ch, s, f)
 - Prune verdicts (audit mode): saved to DB with "drop" and "maybe" categories
 
-### agent.py (97 lines)
-Builds full dissertation context for interactive Claude sessions.
-- `build_agent_context()` — gathers sources, coverage, gaps, fragments, plan, reading queue → `prompts/agent.md` → system prompt
+### agent.py (~155 lines)
+Builds full project context for interactive Claude sessions.
+- `build_agent_context(project_root=...)` — gathers sources, coverage, gaps, fragments, plan, reading queue + scans project_root for reports/files → `prompts/agent.md` → system prompt
+- `_scan_project_reports(project_root)` — finds Outline/Research/Library/Agent reports + project files (.md, .tex, .bib, .pdf, .doc, .docx)
 - For Claude backend: launches `claude --system-prompt` interactively
 - For non-Claude backends: `ai.call()` with full context → terminal output
-- Saves responses to `Agent/Agent_<date>.md` in vault
+- Saves responses to `project_root/Agent_<date>.md`
 
 ### outliner.py (~250 lines)
 Project outline generation from directory contents + database context. Two modes:
@@ -82,7 +83,7 @@ If vault note missing: triggers `literature.note_factory.create_vault_note()` fi
 On repeat: reads previous outline → incremental update. With `--fresh`: full regeneration. With `-p`: custom AI directive.
 
 ### Agent context
-`klemma ask "query"` → `agent.build_agent_context()` → system prompt → interactive Claude or `ai.call()`.
+`klemma ask "query"` → `agent.build_agent_context(project_root=...)` → scans project_root for outline/reports/files → system prompt → interactive Claude or `ai.call()`. Agent saves to `project_root/Agent_*.md`.
 
 ### Agent Skills (Claude Code)
 Agent uses Claude Code Skills from `.claude/skills/` instead of reading source code:

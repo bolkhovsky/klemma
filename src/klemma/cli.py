@@ -1371,6 +1371,7 @@ def ask(ctx, query, section, chapter):
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
             project_name=kctx.project_name,
+            project_root=kctx.project_root,
         )
 
     console.print(f"[dim]Query: {query}[/dim]")
