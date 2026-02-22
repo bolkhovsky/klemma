@@ -148,6 +148,22 @@ class StateManager:
     def _init_db(self):
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            self._migrate_schema(conn)
+
+    def _migrate_schema(self, conn):
+        """Idempotent schema migrations using PRAGMA user_version.
+
+        Each version bump adds new columns/tables without breaking existing data.
+        Runs on every DB open — fast (single PRAGMA check) and safe.
+        """
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        # Version 0: base schema (no migrations needed)
+        # Future migrations will be added here as:
+        # if version < 1: ...
+        # if version < 2: ...
+        if version < 0:
+            pass  # placeholder — base schema is version 0
+        conn.execute(f"PRAGMA user_version = {max(version, 0)}")
 
     # ── Sources ──────────────────────────────────────────────────────────
 
