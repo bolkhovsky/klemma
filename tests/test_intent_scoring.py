@@ -211,3 +211,94 @@ class TestSaveReferenceGapsWithIntent:
         ])
         gaps = state.get_reference_gaps()
         assert len(gaps) >= 1
+
+
+class TestIntentWeightedScoring:
+    """Tests for intent-weighted gap scoring formula."""
+
+    def _setup_gaps(self, state):
+        """Create test gaps with different intents and equal other factors."""
+        state.register_sources(["src1", "src2"])
+        # Set same quality for both sources
+        with state._conn() as conn:
+            conn.execute(
+                "UPDATE sources SET quality_score=4 WHERE id IN ('src1', 'src2')"
+            )
+
+        # Method gap — should rank highest (weight 3.0)
+        state.save_reference_gaps("src1", [
+            {
+                "authors": "Alpha et al.",
+                "year": 2020,
+                "title": "Method Paper Alpha",
+                "why_relevant": "Core method",
+                "citation_intent": "method",
+            }
+        ])
+        # Result comparison gap — mid-rank (weight 2.0)
+        state.save_reference_gaps("src2", [
+            {
+                "authors": "Beta et al.",
+                "year": 2021,
+                "title": "Results Paper Beta",
+                "why_relevant": "Compare results",
+                "citation_intent": "result_comparison",
+            },
+            # Background gap — lowest rank (weight 1.0)
+            {
+                "authors": "Gamma et al.",
+                "year": 2019,
+                "title": "Background Paper Gamma",
+                "why_relevant": "General context",
+                "citation_intent": "background",
+            },
+        ])
+
+    def test_method_gap_ranks_above_background(self, state):
+        """Method-intent gaps should score higher than background."""
+        self._setup_gaps(state)
+        gaps = state.get_reference_gaps()
+        scores = {g["ref_authors"]: g["score"] for g in gaps}
+        assert scores["Alpha et al."] > scores["Gamma et al."]
+
+    def test_result_gap_ranks_above_background(self, state):
+        """Result-comparison gaps should score higher than background."""
+        self._setup_gaps(state)
+        gaps = state.get_reference_gaps()
+        scores = {g["ref_authors"]: g["score"] for g in gaps}
+        assert scores["Beta et al."] > scores["Gamma et al."]
+
+    def test_intent_weight_in_results(self, state):
+        """intent_weight field is present in results."""
+        self._setup_gaps(state)
+        gaps = state.get_reference_gaps()
+        method_gap = [g for g in gaps if "Alpha" in g["ref_authors"]][0]
+        assert method_gap["intent_weight"] == 3.0
+
+    def test_null_intent_weight_is_one(self, state):
+        """NULL intents get weight 1.0 — backward compatible."""
+        state.register_sources(["src1"])
+        with state._conn() as conn:
+            conn.execute("UPDATE sources SET quality_score=3 WHERE id='src1'")
+        state.save_reference_gaps("src1", [
+            {
+                "authors": "Old et al.",
+                "year": 2018,
+                "title": "Legacy Paper",
+                "why_relevant": "Old data, no intent",
+            }
+        ])
+        gaps = state.get_reference_gaps()
+        old_gap = [g for g in gaps if "Old" in g["ref_authors"]][0]
+        assert old_gap["intent_weight"] == 1.0
+
+    def test_scoring_order_method_result_background(self, state):
+        """Full ordering: method > result_comparison > background."""
+        self._setup_gaps(state)
+        gaps = state.get_reference_gaps()
+        # Extract ordered names
+        ordered = [g["ref_authors"] for g in gaps]
+        alpha_idx = ordered.index("Alpha et al.")
+        beta_idx = ordered.index("Beta et al.")
+        gamma_idx = ordered.index("Gamma et al.")
+        assert alpha_idx < beta_idx < gamma_idx

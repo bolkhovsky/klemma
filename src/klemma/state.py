@@ -765,8 +765,12 @@ class StateManager:
         """Get open reference gaps aggregated by (authors, year, title).
 
         Returns list of dicts with: ref_authors, ref_year, ref_title,
-        why_relevant, dissertation_sections, count, avg_quality, score,
-        source_ids.
+        why_relevant, dissertation_sections, count, avg_quality,
+        intent_weight, score, source_ids.
+
+        Scoring formula: count * avg_quality * section_weight * intent_weight
+        where intent_weight = AVG(method=3.0, result_comparison=2.0, else=1.0)
+        NULL intents → weight 1.0 (backward compatible).
         """
         with self._conn() as conn:
             query = """
@@ -778,6 +782,11 @@ class StateManager:
                     GROUP_CONCAT(DISTINCT rg.dissertation_sections) as dissertation_sections,
                     COUNT(DISTINCT rg.source_id) as count,
                     AVG(COALESCE(s.quality_score, 3)) as avg_quality,
+                    AVG(CASE
+                        WHEN rg.citation_intent = 'method' THEN 3.0
+                        WHEN rg.citation_intent = 'result_comparison' THEN 2.0
+                        ELSE 1.0
+                    END) as intent_weight,
                     GROUP_CONCAT(DISTINCT rg.source_id) as source_ids
                 FROM reference_gaps rg
                 JOIN sources s ON rg.source_id = s.id
@@ -790,7 +799,14 @@ class StateManager:
 
             query += """
                 GROUP BY rg.ref_authors, rg.ref_year, rg.ref_title
-                ORDER BY COUNT(DISTINCT rg.source_id) * AVG(COALESCE(s.quality_score, 3)) DESC
+                ORDER BY COUNT(DISTINCT rg.source_id)
+                       * AVG(COALESCE(s.quality_score, 3))
+                       * AVG(CASE
+                           WHEN rg.citation_intent = 'method' THEN 3.0
+                           WHEN rg.citation_intent = 'result_comparison' THEN 2.0
+                           ELSE 1.0
+                         END)
+                       DESC
                 LIMIT ?
             """
             params.append(limit)
@@ -801,10 +817,11 @@ class StateManager:
                 r = dict(row)
                 count = r["count"]
                 avg_q = r["avg_quality"] or 3
+                intent_w = r.get("intent_weight") or 1.0
                 # section_weight: 2.0 if relevant to NR1/NR2 sections (2.x)
                 sections_str = r.get("dissertation_sections") or ""
                 section_weight = 2.0 if '"2.' in sections_str else 1.0
-                r["score"] = round(count * avg_q * section_weight, 1)
+                r["score"] = round(count * avg_q * section_weight * intent_w, 1)
                 results.append(r)
             return results
 
