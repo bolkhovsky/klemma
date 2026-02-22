@@ -1,7 +1,7 @@
 """Configuration loader with Pydantic validation.
 
 Supports Git/NPM-style per-directory projects:
-- System config: ~/.klemma/config.yaml (AI defaults, global MCP)
+- System config: ~/.klemma/config.yaml (AI defaults)
 - Project config: .klemma/config.yaml (per-project settings)
 - Context: KLEMMA.md next to .klemma/ (project context for AI)
 """
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _SHIPPED_PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
 # Config keys inherited from parent project (shared resources)
-_INHERITED_KEYS = {"obsidian", "zotero", "ai", "mcp"}
+_INHERITED_KEYS = {"obsidian", "zotero", "ai"}
 
 
 # --- System home ---
@@ -103,18 +103,9 @@ def discover_project_chain(start: Optional[Path] = None) -> list[Path]:
 
 
 class ZoteroConfig(BaseModel):
-    library_id: str = ""
-    library_type: str = "user"
-    api_key_env: str = "ZOTERO_API_KEY"
-    local: bool = False
     library_json: Optional[str] = None  # Path to BetterBibTeX JSON export
     storage_path: str = str(Path.home() / "Zotero" / "storage")  # Zotero PDF storage
-    backend: str = "local"  # "local" (BBT JSON) | "mcp" (zotero-mcp server)
     collection: Optional[str] = None  # Optional Zotero collection ID for filtering
-
-    @property
-    def api_key(self) -> Optional[str]:
-        return os.environ.get(self.api_key_env)
 
 
 class ObsidianConfig(BaseModel):
@@ -285,16 +276,6 @@ class InstanceConfig(BaseModel):
     type: str = "academic"
 
 
-class MCPServerConfig(BaseModel):
-    command: str = ""
-    args: list[str] = Field(default_factory=list)
-    env: dict[str, str] = Field(default_factory=dict)
-
-
-class MCPConfig(BaseModel):
-    servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
-
-
 class SystemConfig(BaseModel):
     """Global system configuration (~/.klemma/config.yaml).
 
@@ -302,7 +283,6 @@ class SystemConfig(BaseModel):
     """
 
     ai: AIConfig = Field(default_factory=AIConfig)
-    mcp: MCPConfig = Field(default_factory=MCPConfig)
 
 
 class KlemmaConfig(BaseModel):
@@ -317,7 +297,6 @@ class KlemmaConfig(BaseModel):
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
     tags: TagsConfig = Field(default_factory=TagsConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
-    mcp: MCPConfig = Field(default_factory=MCPConfig)
     project: Optional[ProjectConfig] = None
 
 
@@ -361,7 +340,7 @@ def load_config(config_path: str | Path | None = None) -> KlemmaConfig:
     # Migration: Zotero fields were originally under instance:
     if "zotero" not in raw and "instance" in raw:
         inst = raw["instance"]
-        zotero_fields = {"library_id", "library_type", "api_key_env", "local", "library_json"}
+        zotero_fields = {"library_json", "storage_path", "collection"}
         migrated = {k: v for k, v in inst.items() if k in zotero_fields}
         if migrated:
             raw["zotero"] = migrated
@@ -378,7 +357,7 @@ def resolve_effective_config(
     project_chain is child-first: [child_root, parent_root].
     Can be empty if only config_override is given (fallback to override path).
 
-    Selective inheritance: only shared resource keys (obsidian, zotero, ai, mcp)
+    Selective inheritance: only shared resource keys (obsidian, zotero, ai)
     are inherited from parent. Project structure (project, tags, state, etc.)
     is always per-project.
 

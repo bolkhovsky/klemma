@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from .config import KlemmaConfig, ProjectConfig
     from .library_provider import LibraryProvider
     from .state import StateManager
-    from .tools.registry import ToolRegistry
     from .vault import VaultAdapter
 
 
@@ -28,7 +27,6 @@ class KlemmaContext:
     vault: VaultAdapter
     ai: Optional[AIProvider] = None
     library: Optional[LibraryProvider] = None
-    tools: Optional[ToolRegistry] = None
     project: Optional[ProjectConfig] = None
     project_name: str = "default"
     # Points to active project's .klemma/ dir (backward-compat with skills)

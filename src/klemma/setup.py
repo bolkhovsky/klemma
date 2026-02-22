@@ -30,8 +30,6 @@ class InitValues:
     tags_folder: str = "Tags"
     zotero_storage: str = ""
     zotero_library_json: str = ""
-    zotero_library_id: str = ""
-
     def __post_init__(self):
         if self.keywords is None:
             self.keywords = []
@@ -74,9 +72,6 @@ def _build_project_config(values: InitValues) -> dict:
 
     # State
     cfg["state"] = {"db_path": "./data/klemma.db"}
-
-    # MCP
-    cfg["mcp"] = {"servers": {}}
 
     return cfg
 
@@ -249,13 +244,10 @@ def init_system(system_home: Path) -> dict:
             shutil.copy2(source, config_target)
         else:
             config_target.write_text(
-                "# Klemma global config — AI defaults, shared MCP servers\n"
+                "# Klemma global config — AI defaults\n"
                 "ai:\n"
                 "  model: sonnet\n"
-                "  language: ru\n"
-                "\n"
-                "mcp:\n"
-                "  servers: {}\n",
+                "  language: ru\n",
                 encoding="utf-8",
             )
         created.append("config.yaml")

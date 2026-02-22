@@ -43,12 +43,11 @@ Builds full dissertation context for interactive Claude sessions.
 - Saves responses to `Agent/Agent_<date>.md` in vault
 
 ### acquirer.py (258 lines)
-Paper acquisition pipeline: download → Zotero → DB.
+Local-only paper acquisition pipeline: download → local storage → DB.
 - `acquire_paper()` — orchestrates full pipeline
 - `download_pdf()` — HTTP stream with validation (min 10KB, content-type check)
-- `parse_authors()` — Russian name parsing (Фамилия И.О. → Zotero creators)
+- `_store_pdf_locally()` — copy to Zotero storage dir
 - `poll_bbt_citekey()` — polls BBT JSON export for new citekey (2s intervals, 30s timeout)
-- `_store_pdf_locally()` — copy to Zotero storage dir (bypasses cloud quota)
 - `load_batch()` — parse JSON batch file
 - Dataclasses: `PaperMetadata`, `AcquireResult`
 
@@ -62,8 +61,7 @@ If vault note missing: triggers `literature.note_factory.create_vault_note()` fi
 `klemma research -s X.X` → `_sync_sections()` → `researcher.research_section()` → auto-extracts fragments (if needed) → builds context → Claude → `ResearchResult` → vault note.
 
 ### Paper acquisition
-`klemma acquire <url>` → `acquirer.acquire_paper()` → download PDF → pyzotero `create_items` → `create_attachment_record` → local storage → poll BBT for citekey → `state.register_sources()`.
-Requires: `ZOTERO_API_KEY`, `zotero.library_id` in config.
+`klemma acquire <url>` → `acquirer.acquire_paper()` → download PDF → local storage → poll BBT for citekey → `state.register_sources()`.
 
 ### Library analysis
 `klemma library` → `librarian.analyze_library()` → `LibraryReport` → `Library/Library_{mode}_{date}.md` in vault.
@@ -82,4 +80,4 @@ Skills auto-discovered by Claude Code in `--system-prompt` mode. Agent prompt re
 ## Maintaining this file
 Update when: adding a new skill module, changing skill function signatures or data flow steps, adding new Claude Code skills to `.claude/skills/`, or modifying how skills compose with infrastructure. If a new skill uses a prompt template, also update [Prompts](../../../prompts/CLAUDE.md).
 
-See: [Literature](../literature/CLAUDE.md) for PDF extraction and note creation | [MCP Tools](../tools/CLAUDE.md) for search and discovery | [Prompts](../../../prompts/CLAUDE.md) for template variables | [Core](../CLAUDE.md) for AI providers and state
+See: [Literature](../literature/CLAUDE.md) for PDF extraction and note creation | [Prompts](../../../prompts/CLAUDE.md) for template variables | [Core](../CLAUDE.md) for AI providers and state

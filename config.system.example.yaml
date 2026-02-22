@@ -4,9 +4,6 @@
 # Shared settings for all klemma projects. Project-level configs override these.
 
 zotero:
-  # library_id: "12345678"             # Zotero user/group library ID (required for acquire)
-  # library_type: "user"               # "user" or "group"
-  # api_key_env: "ZOTERO_API_KEY"      # env var with API key (optional for local Zotero)
   # storage_path: ~/Zotero/storage     # local Zotero PDF storage
 
 ai:
@@ -18,13 +15,3 @@ ai:
   # backend: "openai"
   # base_url: "http://localhost:11434/v1"
   # api_key_env: "OPENAI_API_KEY"
-
-mcp:
-  servers: {}
-  # Global MCP servers available to all projects:
-  # servers:
-  #   zotero:
-  #     command: "uvx"
-  #     args: ["zotero-mcp"]
-  #     env:
-  #       ZOTERO_LOCAL: "true"
