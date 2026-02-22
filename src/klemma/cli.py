@@ -1057,7 +1057,7 @@ def research(ctx, section, no_save, force):
 
     # Проверить: первый запуск или обновление
     from .skills.researcher import _load_previous_research
-    prev = _load_previous_research(section, chapter, state, vault)
+    prev = _load_previous_research(section, chapter, state, kctx.project_root)
     if prev:
         mode_label = "Инкрементальное обновление"
         details = []
