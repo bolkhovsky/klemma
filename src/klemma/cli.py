@@ -18,6 +18,7 @@ from .config import (
     resolve_effective_config,
 )
 from .context import KlemmaContext
+from .embeddings import create_embeddings
 from .library_provider import create_library
 from .state import StateManager
 from .vault import VaultAdapter
@@ -64,11 +65,18 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     vault = VaultAdapter(cfg.obsidian.vault_path, use_cli=cfg.obsidian.use_cli)
     library = create_library(cfg)
 
+    # Embeddings: create provider if configured
+    emb_cfg = cfg.embeddings
+    emb_provider = None
+    if emb_cfg.backend:
+        emb_provider = create_embeddings(emb_cfg.model_dump())
+
     dissertation_context = load_project_context(project_chain, cfg)
     available_tags = load_available_tags(klemma_home, cfg, project_chain=project_chain)
 
     return KlemmaContext(
         config=cfg, state=state, vault=vault, library=library,
+        embeddings=emb_provider,
         project=project, project_name=project_root.name,
         klemma_home=klemma_home,
         dissertation_context=dissertation_context,
