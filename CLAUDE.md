@@ -6,7 +6,8 @@ Klemma is a CLI tool for academic writing. It manages literature (via Zotero), e
 ## Architecture
 - **CLI mode**: `klemma <command>` — all commands are headless CLI
 - **Stack**: Python 3.11+, Click, PyMuPDF, SQLite
-- **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/Obsidian)
+- **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/project_root)
+- **Report output**: All AI reports (outline, research, library) save to `project_root/` directly. Only `@citekey.md` bibliography notes go to vault `notes_folder`.
 - **Library abstraction**: LocalLibrary backend (BBT JSON)
 - **AI abstraction**: AIProvider protocol with ClaudeClient (CLI), OpenAIClient, LiteLLMClient backends + `create_ai()` factory
 - **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/project
@@ -35,7 +36,8 @@ prompts/                    — Shipped Jinja2 prompt templates (overridable via
 ├── research_incremental.md — incremental research update
 ├── librarian.md            — library analysis (3 modes)
 ├── agent.md                — interactive agent system prompt
-└── outline.md              — project outline generation
+├── outline.md              — project outline generation
+└── outline_incremental.md  — incremental outline update
 config.project.example.yaml — Template for per-project .klemma/config.yaml
 config.system.example.yaml  — Template for ~/.klemma/config.yaml (system defaults)
 config.example.yaml         — Legacy template config (kept for migration)
@@ -50,7 +52,7 @@ tags.example.yaml           — Template tag taxonomy
 
 ## Key commands (12)
 - `klemma init [--type paper|thesis]` — create project in current directory (.klemma/ + KLEMMA.md)
-- `klemma outline [--scan-only] [--no-save]` — AI-generate project structure from directory files + DB context
+- `klemma outline [-p "directive"] [--fresh] [--scan-only]` — AI-generate project structure; incremental on repeat, `-p` for custom directive, `--fresh` for full regeneration
 - `klemma plan` — daily plan generation (library digest included)
 - `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
 - `klemma process [<citekeys>...]` — extract fragments from PDF; no arg = batch all pending; parallel by default

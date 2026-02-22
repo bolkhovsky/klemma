@@ -19,18 +19,19 @@ Fragment extraction from PDFs.
 - `extract_from_citekey()` — full pipeline (find PDF → extract text → analyze)
 - `save_fragments_to_vault(citekey, fragments, vault, ..., dissertation_context, available_tags, klemma_home)` — appends to `@citekey.md`; auto-creates note if missing
 
-### researcher.py (730 lines — largest skill)
+### researcher.py (~700 lines — largest skill)
 Section research briefings. Two modes:
-- **Initial**: auto-extract fragments → collect context → `prompts/research.md` → `ResearchResult` → vault
-- **Incremental**: reads existing research note `## ✏️ Что нового` (user annotations), computes delta (new sources, fragment count), `prompts/research_incremental.md` → merged result. User notes archived to `## 📋 История изменений` with timestamp.
-- `research_section()` — main entry point
+- **Initial**: auto-extract fragments → collect context → `prompts/research.md` → `ResearchResult` → `project_root/Research_{section}.md`
+- **Incremental**: reads existing research note from project_root `## ✏️ Что нового` (user annotations), computes delta (new sources, fragment count), `prompts/research_incremental.md` → merged result. User notes archived to `## 📋 История изменений` with timestamp.
+- `research_section(project_root=...)` — main entry point
 - `pre_extract_sources()` — auto-extract fragments for section/chapter sources before research
-- `_load_previous_research()` — parse user notes, history, delta from existing research note
+- `_load_previous_research(section, chapter, state, project_root)` — reads from project_root, parses user notes, history, delta
+- `_save_report(section, content, project_root)` — writes report to project_root
 - `_load_section_sources()` — enrich sources with vault AI summaries
 
-### librarian.py (253 lines)
+### librarian.py (~260 lines)
 Library health analysis. Three modes: `status` (health), `recommend` (section-focused), `audit` (deep quality check).
-- `analyze_library()` — gathers context → `prompts/librarian.md` → `LibraryReport` → vault
+- `analyze_library(project_root=...)` — gathers context → `prompts/librarian.md` → `LibraryReport` → `project_root/Library_{mode}_{date}.md`
 - `_gather_library_context()` — summary, quality tiers, ref-gaps, sources compact list
 - `_format_sources_compact()` — compact list for prompt (citekey, author, year, title, q, ch, s, f)
 - Prune verdicts (audit mode): saved to DB with "drop" and "maybe" categories
@@ -42,12 +43,15 @@ Builds full dissertation context for interactive Claude sessions.
 - For non-Claude backends: `ai.call()` with full context → terminal output
 - Saves responses to `Agent/Agent_<date>.md` in vault
 
-### outliner.py (~120 lines)
-Project outline generation from directory contents + database context.
-- `generate_outline(config, state, ai, project_root, ...)` — scans files → library context → `prompts/outline.md` → Claude → `OutlineResult`
-- `format_klemma_md(result, project_type)` — formats OutlineResult into enriched KLEMMA.md content
-- `save_outline_to_vault(result, project_name, vault, config)` — saves full outline as vault note
-- `OutlineResult` dataclass: title, description, chapters, sections, scientific_results, outline_text
+### outliner.py (~250 lines)
+Project outline generation from directory contents + database context. Two modes:
+- **Initial**: scan files → library context → `prompts/outline.md` → Claude → `OutlineResult` → `project_root/Outline_{name}.md`
+- **Incremental**: reads previous outline from project_root `## ✏️ Что нового` (user feedback), `prompts/outline_incremental.md` → updated outline. User notes archived to `## 📋 История изменений`.
+- `generate_outline(config, state, ai, project_root, project_name, custom_prompt, force_initial)` → `(OutlineResult, mode)`
+- `save_outline(result, project_name, project_root)` — writes report with feedback sections to project_root
+- `_load_previous_outline(project_name, project_root)` — reads previous outline, extracts user notes and history
+- `OutlineResult` dataclass: title, description, chapters, sections, scientific_results, outline_text, update_summary
+- CLI options: `-p/--prompt` (custom directive), `--fresh` (force full regeneration)
 
 ### acquirer.py (258 lines)
 Local-only paper acquisition pipeline: download → local storage → DB.
@@ -65,16 +69,17 @@ Local-only paper acquisition pipeline: download → local storage → DB.
 If vault note missing: triggers `literature.note_factory.create_vault_note()` first.
 
 ### Research briefing
-`klemma research -s X.X` → `_sync_sections()` → `researcher.research_section()` → auto-extracts fragments (if needed) → builds context → Claude → `ResearchResult` → vault note.
+`klemma research -s X.X` → `_sync_sections()` → `researcher.research_section()` → auto-extracts fragments (if needed) → builds context → Claude → `ResearchResult` → `project_root/Research_{section}.md`.
 
 ### Paper acquisition
 `klemma acquire <url>` → `acquirer.acquire_paper()` → download PDF → local storage → poll BBT for citekey → `state.register_sources()`.
 
 ### Library analysis
-`klemma library` → `librarian.analyze_library()` → `LibraryReport` → `Library/Library_{mode}_{date}.md` in vault.
+`klemma library` → `librarian.analyze_library()` → `LibraryReport` → `project_root/Library_{mode}_{date}.md`.
 
 ### Project outline
-`klemma outline` → `scan_project_files()` → `outliner.generate_outline()` → Claude → `OutlineResult` → config.yaml (chapters) + KLEMMA.md + vault note.
+`klemma outline` → `scan_project_files()` → `outliner.generate_outline()` → Claude → `OutlineResult` → `project_root/Outline_{name}.md` (with feedback sections).
+On repeat: reads previous outline → incremental update. With `--fresh`: full regeneration. With `-p`: custom AI directive.
 
 ### Agent context
 `klemma ask "query"` → `agent.build_agent_context()` → system prompt → interactive Claude or `ai.call()`.

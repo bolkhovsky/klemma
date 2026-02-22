@@ -37,6 +37,12 @@ You are an academic writing advisor. Analyze the project materials and generate 
 {% endif %}
 {% endif %}
 
+{% if custom_prompt %}
+## User Directive
+
+{{ custom_prompt }}
+{% endif %}
+
 ---
 
 ## Task

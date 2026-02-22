@@ -1,6 +1,7 @@
 """Project outline generation from directory contents + database context."""
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -9,7 +10,6 @@ from typing import Optional
 from ..ai import AIProvider
 from ..config import KlemmaConfig, ProjectConfig, resolve_prompt, scan_project_files
 from ..state import StateManager
-from ..vault import VaultAdapter
 from .planner import _get_dissertation_context
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,97 @@ class OutlineResult:
     sections: dict[str, str] = field(default_factory=dict)
     scientific_results: dict[str, str] = field(default_factory=dict)
     outline_text: str = ""
+    update_summary: str = ""
+
+
+def _load_previous_outline(
+    project_name: str,
+    project_root: Path,
+) -> Optional[dict]:
+    """Read previous outline from project_root and extract context for incremental update.
+
+    Returns dict with keys:
+    - previous_text: full note text
+    - user_notes: text from '## ✏️ Что нового'
+    - history: text from '## 📋 История изменений'
+    - previous_date: date string from *Generated: ...* line
+    Returns None if no previous outline exists.
+    """
+    outline_path = project_root / f"Outline_{project_name}.md"
+    if not outline_path.exists():
+        return None
+
+    try:
+        text = outline_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    if not text.strip():
+        return None
+
+    # Extract '## ✏️ Что нового' section
+    user_notes = ""
+    whats_new_marker = "## ✏️ Что нового"
+    wn_idx = text.find(whats_new_marker)
+    if wn_idx != -1:
+        after_wn = wn_idx + len(whats_new_marker)
+        next_heading = text.find("\n## ", after_wn)
+        if next_heading != -1:
+            raw = text[after_wn:next_heading].strip()
+        else:
+            raw = text[after_wn:].strip()
+        # Skip default placeholder
+        if raw and not raw.startswith("_Запишите замечания"):
+            user_notes = raw
+
+    # Extract '## 📋 История изменений' section
+    history = ""
+    history_marker = "## 📋 История изменений"
+    hist_idx = text.find(history_marker)
+    if hist_idx != -1:
+        after_hist = hist_idx + len(history_marker)
+        next_heading = text.find("\n## ", after_hist)
+        if next_heading != -1:
+            history = text[after_hist:next_heading].strip()
+        else:
+            history = text[after_hist:].strip()
+
+    # Extract previous generation date
+    date_match = re.search(r"\*Generated:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\*", text)
+    previous_date = date_match.group(1) if date_match else ""
+
+    return {
+        "previous_text": text,
+        "user_notes": user_notes,
+        "history": history,
+        "previous_date": previous_date,
+    }
+
+
+def _build_new_history(
+    user_notes: str,
+    custom_prompt: str,
+    existing_history: str,
+    label: str = "",
+) -> str:
+    """Build updated history string from user notes, custom prompt, and existing history."""
+    entries = []
+    if label:
+        entries.append(label)
+    if user_notes:
+        entries.append(user_notes)
+    if custom_prompt:
+        entries.append(f"**Directive:** {custom_prompt}")
+
+    if not entries:
+        return existing_history
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    archived_entry = f"### {timestamp}\n\n" + "\n\n".join(entries)
+
+    if existing_history:
+        return f"{archived_entry}\n\n{existing_history}"
+    return archived_entry
 
 
 def generate_outline(
@@ -32,14 +123,16 @@ def generate_outline(
     state: StateManager,
     ai: AIProvider,
     project_root: Path,
+    project_name: str = "",
     project: Optional[ProjectConfig] = None,
     dissertation_context: str = "",
     klemma_home: Optional[Path] = None,
-) -> OutlineResult:
+    custom_prompt: str = "",
+    force_initial: bool = False,
+) -> tuple[OutlineResult, str]:
     """Generate project outline from directory files + database context.
 
-    Scans project directory for .md/.tex/.bib files, combines with
-    library statistics from DB, and sends to AI for structured analysis.
+    Returns (OutlineResult, mode) where mode is "initial" or "incremental".
     """
     # 1. Scan project files
     project_files = scan_project_files(project_root)
@@ -50,19 +143,47 @@ def generate_outline(
     # 3. Dissertation/project context
     context = dissertation_context or _get_dissertation_context(config, project)
 
-    # 4. Render prompt
+    # 4. Check for previous outline (incremental mode)
+    previous = None
+    if project_name and not force_initial:
+        previous = _load_previous_outline(project_name, project_root)
+
+    mode = "incremental" if previous else "initial"
+
+    # 5. Render prompt
     project_type = project.type if project else "dissertation"
-    prompt_path = resolve_prompt("outline.md", klemma_home) if klemma_home else (
-        Path(__file__).parent.parent.parent.parent / "prompts" / "outline.md"
-    )
-    user_prompt = ai.render_prompt(
-        prompt_path,
-        project_type=project_type,
-        dissertation_context=context,
-        project_files=project_files,
-        library_summary=library_summary,
-        language=config.ai.language,
-    )
+
+    if mode == "incremental":
+        prompt_name = "outline_incremental.md"
+        prompt_path = resolve_prompt(prompt_name, klemma_home) if klemma_home else (
+            Path(__file__).parent.parent.parent.parent / "prompts" / prompt_name
+        )
+        user_prompt = ai.render_prompt(
+            prompt_path,
+            project_type=project_type,
+            dissertation_context=context,
+            project_files=project_files,
+            library_summary=library_summary,
+            previous_outline=previous["previous_text"],
+            user_notes=previous["user_notes"],
+            previous_date=previous["previous_date"],
+            custom_prompt=custom_prompt,
+            language=config.ai.language,
+        )
+    else:
+        prompt_name = "outline.md"
+        prompt_path = resolve_prompt(prompt_name, klemma_home) if klemma_home else (
+            Path(__file__).parent.parent.parent.parent / "prompts" / prompt_name
+        )
+        user_prompt = ai.render_prompt(
+            prompt_path,
+            project_type=project_type,
+            dissertation_context=context,
+            project_files=project_files,
+            library_summary=library_summary,
+            custom_prompt=custom_prompt,
+            language=config.ai.language,
+        )
 
     system = (
         f"You are an academic writing advisor for a {project_type}. "
@@ -70,14 +191,14 @@ def generate_outline(
         "Output only valid JSON."
     )
 
-    # 5. AI call
+    # 6. AI call
     data = ai.call_json(system, user_prompt, max_tokens=4096)
 
     if not data:
         logger.error("Failed to generate outline")
-        return OutlineResult()
+        return OutlineResult(), mode
 
-    # 6. Parse chapters with int keys
+    # 7. Parse chapters with int keys
     raw_chapters = data.get("chapters", {})
     chapters = {}
     for k, v in raw_chapters.items():
@@ -86,62 +207,42 @@ def generate_outline(
         except (ValueError, TypeError):
             chapters[k] = v
 
-    return OutlineResult(
+    result = OutlineResult(
         title=data.get("title", ""),
         description=data.get("description", ""),
         chapters=chapters,
         sections=data.get("sections", {}),
         scientific_results=data.get("scientific_results", {}),
         outline_text=data.get("outline_text", ""),
+        update_summary=data.get("update_summary", ""),
     )
 
+    # 8. Compute history for the saved file
+    history = ""
+    if previous:
+        history = _build_new_history(
+            previous["user_notes"], custom_prompt, previous["history"],
+        )
+    elif force_initial and project_name:
+        # --fresh: archive previous outline reference in history
+        old = _load_previous_outline(project_name, project_root)
+        if old:
+            history = _build_new_history(
+                old["user_notes"], custom_prompt, old["history"],
+                label="🔄 Full regeneration",
+            )
 
-def format_klemma_md(result: OutlineResult, project_type: str = "paper") -> str:
-    """Format OutlineResult into enriched KLEMMA.md content."""
-    lines = [
-        "# Project Context",
-        "",
-        f'Topic: "{result.title}"',
-        "",
-        f"Description: {result.description}",
-        "",
-    ]
+    result._history = history  # noqa: SLF001
 
-    # Structure
-    if result.chapters or result.sections:
-        lines.append("## Structure")
-        lines.append("")
-        for ch_num in sorted(result.chapters.keys()):
-            ch_title = result.chapters[ch_num]
-            lines.append(f"### {ch_num}. {ch_title}")
-            # Add sections for this chapter
-            ch_prefix = f"{ch_num}."
-            ch_sections = {
-                k: v for k, v in result.sections.items()
-                if k.startswith(ch_prefix)
-            }
-            for sec_id in sorted(ch_sections.keys()):
-                lines.append(f"- {sec_id} {ch_sections[sec_id]}")
-            lines.append("")
-
-    # Scientific results
-    if result.scientific_results:
-        lines.append("Scientific Results:")
-        for key, value in result.scientific_results.items():
-            lines.append(f"- {key}: {value}")
-        lines.append("")
-
-    return "\n".join(lines)
+    return result, mode
 
 
-def save_outline_to_vault(
+def save_outline(
     result: OutlineResult,
     project_name: str,
-    vault: VaultAdapter,
-    config: KlemmaConfig,
+    project_root: Path,
 ) -> Path:
-    """Save full outline as a vault note."""
-    note_name = f"Outline_{project_name}"
+    """Save outline report to project_root with feedback sections."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     content_lines = [
@@ -154,6 +255,10 @@ def save_outline_to_vault(
         content_lines.append(f"**Description:** {result.description}")
         content_lines.append("")
 
+    if result.update_summary:
+        content_lines.append(f"> **Обновление:** {result.update_summary}")
+        content_lines.append("")
+
     if result.scientific_results:
         content_lines.append("## Scientific Contributions")
         for key, value in result.scientific_results.items():
@@ -164,7 +269,28 @@ def save_outline_to_vault(
         content_lines.append("## Detailed Outline")
         content_lines.append("")
         content_lines.append(result.outline_text)
+        content_lines.append("")
+
+    # Feedback sections
+    content_lines.extend([
+        "---",
+        "",
+        "## ✏️ Что нового",
+        "",
+        "_Запишите замечания, идеи по структуре, новые разделы —",
+        "всё, что учесть при следующем запуске `klemma outline`._",
+        "",
+        "## 📋 История изменений",
+        "",
+    ])
+
+    # Preserve history from previous runs
+    history = getattr(result, "_history", "")
+    if history:
+        content_lines.append(history)
+        content_lines.append("")
 
     content = "\n".join(content_lines)
-    folder = config.obsidian.notes_folder
-    return vault.create_note(note_name, content, folder=folder)
+    path = project_root / f"Outline_{project_name}.md"
+    path.write_text(content, encoding="utf-8")
+    return path

@@ -14,6 +14,7 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 | `librarian.md` | `skills/librarian.py` | Library analysis (3 modes) |
 | `agent.md` | `skills/agent.py` | System prompt for interactive agent |
 | `outline.md` | `skills/outliner.py` | Project outline generation |
+| `outline_incremental.md` | `skills/outliner.py` | Incremental outline update |
 
 ## Key variables by template
 
@@ -36,7 +37,10 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 `dissertation_context`, `chapters`, `scientific_results`, `priority_terms`, `current_chapter`, `chapter_name`, `current_section`, `current_deadline`, `days_until_deadline`, `sources`, `coverage`, `gaps`, `min_sources`, `fragment_stats`, `today_plan`, `next_reading`, `vault_path`, `today`
 
 ### outline.md
-`project_type`, `dissertation_context`, `project_files` (list of {name, path, size, content_preview}), `library_summary`, `language`
+`project_type`, `dissertation_context`, `project_files` (list of {name, path, size, content_preview}), `library_summary`, `custom_prompt`, `language`
+
+### outline_incremental.md
+`project_type`, `dissertation_context`, `project_files`, `library_summary`, `previous_outline`, `user_notes`, `previous_date`, `custom_prompt`, `language`
 
 ## Conventions
 - All templates in Russian (dissertation language) except `extract.md` (English for international papers)

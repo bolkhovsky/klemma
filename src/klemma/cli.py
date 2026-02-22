@@ -1074,6 +1074,7 @@ def research(ctx, section, no_save, force):
             project=kctx.project,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
+            project_root=kctx.project_root,
         )
 
     if not result.section_status:
@@ -1171,27 +1172,29 @@ def research(ctx, section, no_save, force):
 @main.command()
 @click.option("--no-save", is_flag=True, help="Show outline without saving")
 @click.option("--scan-only", is_flag=True, help="Show found files without AI generation")
+@click.option("-p", "--prompt", default="", help="Custom directive for AI (e.g. 'Focus on knowledge graph')")
+@click.option("--fresh", is_flag=True, help="Force full regeneration, ignore previous outline")
 @click.pass_context
-def outline(ctx, no_save, scan_only):
+def outline(ctx, no_save, scan_only, prompt, fresh):
     """Generate project outline from directory contents + database context.
 
     Scans project files (.md, .tex, .bib), combines with library data,
     and uses AI to generate chapters, sections, and scientific results.
 
-    Example: klemma outline
+    On repeat runs, detects previous outline in project directory and runs incrementally.
+    Use --fresh to regenerate from scratch.
+
+    Examples:
+      klemma outline
+      klemma outline -p "Focus on knowledge graph representation"
+      klemma outline --fresh
     """
     kctx = _get_context(ctx)
-    cfg, state, vault = kctx.config, kctx.state, kctx.vault
+    cfg, state = kctx.config, kctx.state
 
-    from .config import scan_project_files, update_project_config
-    from .skills.outliner import (
-        format_klemma_md,
-        save_outline_to_vault,
-    )
-    from .skills.outliner import (
-        generate_outline as gen_outline,
-    )
-
+    from .config import scan_project_files
+    from .skills.outliner import generate_outline as gen_outline
+    from .skills.outliner import save_outline
 
     # 1. Scan project files
     project_files = scan_project_files(kctx.project_root)
@@ -1214,20 +1217,42 @@ def outline(ctx, no_save, scan_only):
 
     # 2. AI generation
     ai = _init_ai(cfg)
+    project_name = kctx.project_root.name
 
-    with console.status("Generating outline...", spinner="dots"):
-        result = gen_outline(
+    spinner_msg = "Generating outline..."
+    if fresh:
+        spinner_msg = "Regenerating outline from scratch..."
+
+    with console.status(spinner_msg, spinner="dots"):
+        result, mode = gen_outline(
             cfg, state, ai, kctx.project_root,
+            project_name=project_name,
             project=kctx.project,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
+            custom_prompt=prompt,
+            force_initial=fresh,
         )
 
     if not result.title:
         console.print("[red]Failed to generate outline.[/red]")
         return
 
-    # 3. Display outline
+    # 3. Show mode label
+    if mode == "incremental":
+        console.print("\n[dim]Mode: Incremental update[/dim]")
+    elif fresh:
+        console.print("\n[dim]Mode: Fresh regeneration[/dim]")
+    else:
+        console.print("\n[dim]Mode: Initial outline[/dim]")
+
+    if prompt:
+        console.print(f"[dim]Directive: {prompt}[/dim]")
+
+    if result.update_summary:
+        console.print(f"\n[green]> {result.update_summary}[/green]")
+
+    # 4. Display outline
     console.print()
     console.print(Panel(
         f"[bold]{result.title}[/bold]\n\n{result.description}",
@@ -1266,27 +1291,9 @@ def outline(ctx, no_save, scan_only):
     if no_save:
         return
 
-    # 4. Save: config.yaml
-    config_updates = {}
-    if result.chapters:
-        config_updates["chapters"] = result.chapters
-    if result.scientific_results:
-        config_updates["scientific_results"] = result.scientific_results
-
-    if config_updates:
-        update_project_config(kctx.project_root, config_updates)
-        console.print("\n[dim]Updated .klemma/config.yaml (chapters, scientific_results)[/dim]")
-
-    # 5. Save: KLEMMA.md
-    project_type = kctx.project.type if kctx.project else "dissertation"
-    klemma_md_content = format_klemma_md(result, project_type=project_type)
-    klemma_md_path = kctx.project_root / "KLEMMA.md"
-    klemma_md_path.write_text(klemma_md_content, encoding="utf-8")
-    console.print("[dim]Updated KLEMMA.md[/dim]")
-
-    # 6. Save: vault note
-    saved_path = save_outline_to_vault(result, kctx.project_root.name, vault, cfg)
-    console.print(f"[dim]Saved outline: {saved_path}[/dim]")
+    # 5. Save to project_root (no config.yaml, KLEMMA.md, or vault writes)
+    saved_path = save_outline(result, project_name, kctx.project_root)
+    console.print(f"\n[dim]Saved: {saved_path}[/dim]")
 
 
 @main.command(name="import", hidden=True)
@@ -1415,6 +1422,7 @@ def library(ctx, section, audit):
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
             project_name=kctx.project_name,
+            project_root=kctx.project_root,
         )
 
     if not report:
