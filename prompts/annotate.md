@@ -58,6 +58,7 @@ Create a JSON annotation with the following structure:
       "year": 2020,
       "title": "Exact title from References section",
       "why_relevant": "Brief explanation of relevance to the project",
+      "citation_intent": "method",
       "dissertation_sections": ["2.3.1"],
       "in_library": true,
       "citekey": "Smith2020"
@@ -91,7 +92,11 @@ Create a JSON annotation with the following structure:
 11. **key_references**: 5-15 most relevant references from the paper's bibliography:
    - Find the References/Bibliography section in the full text
    - Select 5-15 references most important for the project topic
-   - For each: authors (short form), year, title (exact from References), why_relevant, dissertation_sections
+   - For each: authors (short form), year, title (exact from References), why_relevant, citation_intent, dissertation_sections
+   - **citation_intent**: how the paper being analyzed cites this reference:
+     - `background` — cited for context, literature review, general knowledge
+     - `method` — cited as a method, algorithm, or approach that is used or adapted
+     - `result_comparison` — cited for comparing results, benchmarks, or metrics
    - **in_library**: true if the reference matches a source in "Our Library" above (match by author + year + title). Include citekey
    - **in_library**: false if the reference is not in our library. citekey = null
    - Priority: prefer references NOT in our library — these are gaps
