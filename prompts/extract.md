@@ -32,6 +32,10 @@ Extract key citation fragments from this paper. For each fragment, identify:
 4. Relevance score (1-5) for the project
 5. Usage hint: how to cite this in the text
 6. Page number (if visible from [Page N] markers)
+7. Citation intent — how this fragment would be cited in the project:
+   - `background` — context, general knowledge, literature review (e.g. "X showed that...")
+   - `method` — a method, algorithm, or approach you adapt or build upon (e.g. "Following the approach of X...")
+   - `result_comparison` — results or metrics for comparison (e.g. "X achieved 95% accuracy, while our method...")
 
 Return a JSON object:
 
@@ -45,7 +49,8 @@ Return a JSON object:
       "section": "2.3.1",
       "relevance": 4,
       "usage_hint": "Use as evidence for method choice in section 2.3.1",
-      "page": 5
+      "page": 5,
+      "citation_intent": "method"
     }
   ],
   "summary": "2-3 sentence summary of the paper's contribution to the project"
@@ -61,5 +66,6 @@ Guidelines:
 6. Map each fragment to the most specific section possible
 7. Usage hints should be in {{ language }}
 8. Fragments text stays in original paper language
+9. citation_intent must be one of: background, method, result_comparison
 
 Respond with ONLY valid JSON.
