@@ -6,7 +6,8 @@ Klemma is a CLI tool for academic writing. It manages literature (via Zotero), e
 ## Architecture
 - **CLI mode**: `klemma <command>` — all commands are headless CLI
 - **Stack**: Python 3.11+, Click, PyMuPDF, SQLite
-- **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/Obsidian)
+- **Pattern**: Config (Pydantic) → State (SQLite) → Skills (AI-powered) → Output (CLI/project_root)
+- **Report output**: All AI reports (outline, research, library) save to `project_root/` directly. Only `@citekey.md` bibliography notes go to vault `notes_folder`.
 - **Library abstraction**: LocalLibrary backend (BBT JSON)
 - **AI abstraction**: AIProvider protocol with ClaudeClient (CLI), OpenAIClient, LiteLLMClient backends + `create_ai()` factory
 - **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/project
@@ -25,7 +26,7 @@ src/klemma/
 ├── ai_litellm.py       — LiteLLM universal backend (100+ providers)
 ├── vault.py            — Obsidian adapter (CLI/file I/O, update_section)
 ├── library_provider.py — LibraryProvider protocol + LocalLibrary (BBT JSON)
-├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, acquirer, work_context)
+├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, acquirer, outliner, work_context)
 └── literature/         — PDF extraction, models, note_factory
 prompts/                    — Shipped Jinja2 prompt templates (overridable via ~/.klemma/prompts/)
 ├── morning.md              — daily plans
@@ -34,7 +35,9 @@ prompts/                    — Shipped Jinja2 prompt templates (overridable via
 ├── research.md             — research briefing (first run)
 ├── research_incremental.md — incremental research update
 ├── librarian.md            — library analysis (3 modes)
-└── agent.md                — interactive agent system prompt
+├── agent.md                — interactive agent system prompt
+├── outline.md              — project outline generation
+└── outline_incremental.md  — incremental outline update
 config.project.example.yaml — Template for per-project .klemma/config.yaml
 config.system.example.yaml  — Template for ~/.klemma/config.yaml (system defaults)
 config.example.yaml         — Legacy template config (kept for migration)
@@ -47,8 +50,9 @@ tags.example.yaml           — Template tag taxonomy
 └── klemma-status/SKILL.md  — Agent skill: coverage & gaps check
 ```
 
-## Key commands (11)
+## Key commands (12)
 - `klemma init [--type paper|thesis]` — create project in current directory (.klemma/ + KLEMMA.md)
+- `klemma outline [-p "directive"] [--fresh] [--scan-only]` — AI-generate project structure; incremental on repeat, `-p` for custom directive, `--fresh` for full regeneration
 - `klemma plan` — daily plan generation (library digest included)
 - `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
 - `klemma process [<citekeys>...]` — extract fragments from PDF; no arg = batch all pending; parallel by default
@@ -142,7 +146,7 @@ Run `klemma migrate` in desired project directory. Splits `~/.klemma/config.yaml
 Detailed documentation for each subsystem lives in its directory, loaded incrementally as the agent navigates:
 
 - [Core infrastructure](src/klemma/CLAUDE.md) — config, state, AI providers, vault, library, CLI, context
-- [AI Skills](src/klemma/skills/CLAUDE.md) — planner, extractor, researcher, librarian, agent, acquirer
+- [AI Skills](src/klemma/skills/CLAUDE.md) — planner, extractor, researcher, librarian, agent, acquirer, outliner
 - [Literature](src/klemma/literature/CLAUDE.md) — PDF extraction, models, vault note factory
 - [TUI](src/klemma/tui/CLAUDE.md) — Textual dashboard and screens
 - [Prompts](prompts/CLAUDE.md) — Jinja2 templates for AI calls

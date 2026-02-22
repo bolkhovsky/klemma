@@ -240,9 +240,9 @@ def _load_previous_research(
     section: str,
     chapter: int,
     state: StateManager,
-    vault: VaultAdapter,
+    project_root: Path,
 ) -> Optional[dict]:
-    """Прочитать предыдущий Research-брифинг и извлечь контекст для инкрементального обновления.
+    """Прочитать предыдущий Research-брифинг из project_root.
 
     Возвращает dict с ключами:
     - previous_text: полный текст предыдущей заметки
@@ -252,9 +252,16 @@ def _load_previous_research(
     - previous_fragment_count: кол-во фрагментов на момент прошлого запуска
     Возвращает None если предыдущего брифинга нет.
     """
-    note_name = f"Research_{section}"
-    text = vault.read_note(note_name)
-    if not text:
+    report_path = project_root / f"Research_{section}.md"
+    if not report_path.exists():
+        return None
+
+    try:
+        text = report_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    if not text.strip():
         return None
 
     # Извлечь секцию '## ✏️ Что нового'
@@ -428,41 +435,13 @@ def pre_extract_sources(
     }
 
 
-def _save_to_vault(section: str, content: str, vault: VaultAdapter) -> Path:
-    """Сохранить исследовательский брифинг в vault."""
-    note_name = f"Research_{section}"
-    folder = "6 - Main Notes/Диссертация"
-    return vault.create_note(note_name, content, folder=folder)
-
-
-def _archive_user_notes(
-    section: str,
-    user_notes: str,
-    existing_history: str,
-    vault: VaultAdapter,
-) -> None:
-    """Перенести заметки пользователя из '✏️ Что нового' в '📋 История изменений'."""
-    if not user_notes:
-        return
-
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    archived_entry = f"### {timestamp}\n\n{user_notes}"
-
-    # Собрать новую историю: новая запись сверху + старая история
-    if existing_history:
-        new_history = f"{archived_entry}\n\n{existing_history}"
-    else:
-        new_history = archived_entry
-
-    note_name = f"Research_{section}"
-    vault.update_section(note_name, "## 📋 История изменений", new_history)
-
-    # Очистить секцию «Что нового» — вернуть placeholder
-    placeholder = (
-        "_Запишите здесь наблюдения, добавленные источники, новые цитаты — "
-        "всё, что учесть при следующем запуске `klemma research`._"
-    )
-    vault.update_section(note_name, "## ✏️ Что нового", placeholder)
+def _save_report(
+    section: str, content: str, project_root: Path,
+) -> Path:
+    """Сохранить исследовательский брифинг в project_root."""
+    path = project_root / f"Research_{section}.md"
+    path.write_text(content, encoding="utf-8")
+    return path
 
 
 def _format_research_with_history(
@@ -500,6 +479,7 @@ def research_section(
     project: Optional[ProjectConfig] = None,
     dissertation_context: str = "",
     klemma_home: Optional[Path] = None,
+    project_root: Optional[Path] = None,
 ) -> ResearchResult:
     """Сгенерировать исследовательский брифинг для раздела диссертации.
 
@@ -521,7 +501,9 @@ def research_section(
         chapter_name = section  # topic-based section for papers
 
     # 0. Проверить предыдущий брифинг (инкрементальный режим)
-    prev = _load_previous_research(section, chapter, state, vault)
+    prev = None
+    if project_root:
+        prev = _load_previous_research(section, chapter, state, project_root)
     is_incremental = prev is not None and prev["previous_text"]
 
     # 1. Черновик главы + текст раздела
@@ -599,11 +581,6 @@ def research_section(
 
     # 8. Рендер промпта (полный или инкрементальный)
     if is_incremental:
-        # Архивировать заметки пользователя перед перезаписью
-        _archive_user_notes(
-            section, prev["user_notes"], prev["history"], vault
-        )
-
         # Вычислить дельту: новые citekeys
         current_citekeys = {src["id"] for src in source_summaries}
         new_citekeys = sorted(current_citekeys - prev["previous_citekeys"])
@@ -751,9 +728,9 @@ def research_section(
         research_text=research_text,
     )
 
-    # 11. Сохранить в vault
-    if save_to_vault:
-        saved_path = _save_to_vault(section, research_text, vault)
+    # 11. Сохранить в project_root
+    if save_to_vault and project_root:
+        saved_path = _save_report(section, research_text, project_root)
         logger.info("Исследовательский брифинг сохранён: %s", saved_path)
 
     return result

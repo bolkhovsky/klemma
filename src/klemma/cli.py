@@ -1057,7 +1057,7 @@ def research(ctx, section, no_save, force):
 
     # Проверить: первый запуск или обновление
     from .skills.researcher import _load_previous_research
-    prev = _load_previous_research(section, chapter, state, vault)
+    prev = _load_previous_research(section, chapter, state, kctx.project_root)
     if prev:
         mode_label = "Инкрементальное обновление"
         details = []
@@ -1074,6 +1074,7 @@ def research(ctx, section, no_save, force):
             project=kctx.project,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
+            project_root=kctx.project_root,
         )
 
     if not result.section_status:
@@ -1168,6 +1169,133 @@ def research(ctx, section, no_save, force):
         console.print(f"\n[dim]Брифинг сохранён: Research_{section}.md[/dim]")
 
 
+@main.command()
+@click.option("--no-save", is_flag=True, help="Show outline without saving")
+@click.option("--scan-only", is_flag=True, help="Show found files without AI generation")
+@click.option("-p", "--prompt", default="", help="Custom directive for AI (e.g. 'Focus on knowledge graph')")
+@click.option("--fresh", is_flag=True, help="Force full regeneration, ignore previous outline")
+@click.pass_context
+def outline(ctx, no_save, scan_only, prompt, fresh):
+    """Generate project outline from directory contents + database context.
+
+    Scans project files (.md, .tex, .bib), combines with library data,
+    and uses AI to generate chapters, sections, and scientific results.
+
+    On repeat runs, detects previous outline in project directory and runs incrementally.
+    Use --fresh to regenerate from scratch.
+
+    Examples:
+      klemma outline
+      klemma outline -p "Focus on knowledge graph representation"
+      klemma outline --fresh
+    """
+    kctx = _get_context(ctx)
+    cfg, state = kctx.config, kctx.state
+
+    from .config import scan_project_files
+    from .skills.outliner import generate_outline as gen_outline
+    from .skills.outliner import save_outline
+
+    # 1. Scan project files
+    project_files = scan_project_files(kctx.project_root)
+
+    if not project_files:
+        console.print("[yellow]No files found in project directory.[/yellow]")
+        return
+
+    # Show found files
+    table = Table(title=f"Project files ({kctx.project_root.name})")
+    table.add_column("File", style="cyan")
+    table.add_column("Size", justify="right", width=8)
+    for pf in project_files:
+        size_str = f"{pf['size']:,} B" if pf['size'] < 10000 else f"{pf['size'] // 1024} KB"
+        table.add_row(pf["path"], size_str)
+    console.print(table)
+
+    if scan_only:
+        return
+
+    # 2. AI generation
+    ai = _init_ai(cfg)
+    project_name = kctx.project_root.name
+
+    spinner_msg = "Generating outline..."
+    if fresh:
+        spinner_msg = "Regenerating outline from scratch..."
+
+    with console.status(spinner_msg, spinner="dots"):
+        result, mode = gen_outline(
+            cfg, state, ai, kctx.project_root,
+            project_name=project_name,
+            project=kctx.project,
+            dissertation_context=kctx.dissertation_context,
+            klemma_home=kctx.klemma_home,
+            custom_prompt=prompt,
+            force_initial=fresh,
+        )
+
+    if not result.title:
+        console.print("[red]Failed to generate outline.[/red]")
+        return
+
+    # 3. Show mode label
+    if mode == "incremental":
+        console.print("\n[dim]Mode: Incremental update[/dim]")
+    elif fresh:
+        console.print("\n[dim]Mode: Fresh regeneration[/dim]")
+    else:
+        console.print("\n[dim]Mode: Initial outline[/dim]")
+
+    if prompt:
+        console.print(f"[dim]Directive: {prompt}[/dim]")
+
+    if result.update_summary:
+        console.print(f"\n[green]> {result.update_summary}[/green]")
+
+    # 4. Display outline
+    console.print()
+    console.print(Panel(
+        f"[bold]{result.title}[/bold]\n\n{result.description}",
+        title="Outline",
+        border_style="blue",
+    ))
+
+    # Chapters + sections
+    if result.chapters:
+        console.print()
+        table = Table(title="Structure")
+        table.add_column("#", justify="right", width=5, style="dim")
+        table.add_column("Title", max_width=50)
+        table.add_column("Sections", max_width=40, style="cyan")
+
+        for ch_num in sorted(result.chapters.keys()):
+            ch_title = result.chapters[ch_num]
+            ch_prefix = f"{ch_num}."
+            ch_secs = [
+                f"{k} {v}" for k, v in sorted(result.sections.items())
+                if k.startswith(ch_prefix)
+            ]
+            table.add_row(
+                str(ch_num),
+                ch_title,
+                "\n".join(ch_secs) if ch_secs else "",
+            )
+        console.print(table)
+
+    # Scientific results
+    if result.scientific_results:
+        console.print("\n[green]Scientific Results:[/green]")
+        for key, value in result.scientific_results.items():
+            console.print(f"  [bold]{key}:[/bold] {value}")
+
+    if no_save:
+        return
+
+    # 5. Save to project_root (no config.yaml, KLEMMA.md, or vault writes)
+    saved_path = save_outline(result, project_name, kctx.project_root)
+    console.print(f"\n[dim]Saved: {saved_path}[/dim]")
+
+
 @main.command(name="import", hidden=True)
 @click.option("--with-queue", is_flag=True, help="Also populate reading queue from high-priority sources")
 @click.pass_context
@@ -1243,6 +1371,7 @@ def ask(ctx, query, section, chapter):
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
             project_name=kctx.project_name,
+            project_root=kctx.project_root,
         )
 
     console.print(f"[dim]Query: {query}[/dim]")
@@ -1294,6 +1423,7 @@ def library(ctx, section, audit):
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
             project_name=kctx.project_name,
+            project_root=kctx.project_root,
         )
 
     if not report:

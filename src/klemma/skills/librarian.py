@@ -30,6 +30,7 @@ def analyze_library(
     dissertation_context: str = "",
     klemma_home: Optional[Path] = None,
     project_name: str = "",
+    project_root: Optional[Path] = None,
 ) -> Optional[LibraryReport]:
     """Run AI library analysis and return structured report.
 
@@ -86,8 +87,11 @@ def analyze_library(
                 maybe=prune_result.get("maybe", []),
             )
 
-    # Save to vault
-    _save_report_to_vault(report, vault, mode, focus_section, project_name=project_name)
+    # Save report
+    _save_report_to_vault(
+        report, vault, mode, focus_section,
+        project_name=project_name, project_root=project_root,
+    )
 
     return report
 
@@ -417,8 +421,9 @@ def _save_report_to_vault(
     mode: str,
     section: Optional[str],
     project_name: str = "",
+    project_root: Optional[Path] = None,
 ) -> Optional[str]:
-    """Save report to vault as Library/Library_{project}_{mode}_{date}.md."""
+    """Save report to project_root (or vault as fallback)."""
     today = date.today().isoformat()
     project_tag = f"_{project_name}" if project_name else ""
     suffix = f"_{section}" if section else ""
@@ -505,7 +510,11 @@ def _save_report_to_vault(
         content += report.report_text
 
     try:
-        path = vault.create_note(note_name, content, folder="Library")
+        if project_root:
+            path = project_root / f"{note_name}.md"
+            path.write_text(content, encoding="utf-8")
+        else:
+            path = vault.create_note(note_name, content, folder="Library")
         logger.info("Library report saved: %s", path)
         return str(path)
     except Exception as e:
