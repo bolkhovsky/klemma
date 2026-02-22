@@ -157,7 +157,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 1  # bump this when adding new migrations
+        target = 2  # bump this when adding new migrations
 
         if version < 1:
             # Step 1.1: citation_intent for fragments and reference_gaps
@@ -175,6 +175,20 @@ class StateManager:
             if "citation_intent" not in existing_gaps:
                 conn.execute(
                     "ALTER TABLE reference_gaps ADD COLUMN citation_intent TEXT"
+                )
+
+        if version < 2:
+            # Step 2.2: embedding storage for sources
+            existing_src = {
+                row[1] for row in conn.execute("PRAGMA table_info(sources)")
+            }
+            if "embedding" not in existing_src:
+                conn.execute(
+                    "ALTER TABLE sources ADD COLUMN embedding BLOB"
+                )
+            if "embedding_model" not in existing_src:
+                conn.execute(
+                    "ALTER TABLE sources ADD COLUMN embedding_model TEXT"
                 )
 
         conn.execute(f"PRAGMA user_version = {target}")
@@ -514,6 +528,85 @@ class StateManager:
                     "UPDATE sources SET zotero_key=? WHERE id=? AND (zotero_key IS NULL OR zotero_key='')",
                     (item_key, citekey),
                 )
+
+    # ── Embeddings ─────────────────────────────────────────────────────
+
+    def save_embedding(
+        self, source_id: str, embedding: list[float], model: str
+    ):
+        """Store embedding vector as BLOB with model name."""
+        import struct
+
+        blob = struct.pack(f"{len(embedding)}f", *embedding)
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE sources SET embedding=?, embedding_model=? WHERE id=?",
+                (blob, model, source_id),
+            )
+
+    def get_embedding(self, source_id: str) -> Optional[tuple[list[float], str]]:
+        """Retrieve embedding vector and model name for a source.
+
+        Returns (vector, model_name) or None if no embedding stored.
+        """
+        import struct
+
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT embedding, embedding_model FROM sources WHERE id=?",
+                (source_id,),
+            ).fetchone()
+            if not row or not row["embedding"]:
+                return None
+            blob = row["embedding"]
+            n = len(blob) // 4  # float32 = 4 bytes
+            vec = list(struct.unpack(f"{n}f", blob))
+            return (vec, row["embedding_model"] or "")
+
+    def get_all_embeddings(
+        self, model: Optional[str] = None
+    ) -> dict[str, list[float]]:
+        """Get all source embeddings, optionally filtered by model.
+
+        Returns {source_id: vector}.
+        """
+        import struct
+
+        with self._conn() as conn:
+            if model:
+                cur = conn.execute(
+                    "SELECT id, embedding FROM sources "
+                    "WHERE embedding IS NOT NULL AND embedding_model=?",
+                    (model,),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT id, embedding FROM sources WHERE embedding IS NOT NULL"
+                )
+            result = {}
+            for row in cur.fetchall():
+                blob = row["embedding"]
+                n = len(blob) // 4
+                result[row["id"]] = list(struct.unpack(f"{n}f", blob))
+            return result
+
+    def get_embedding_stats(self) -> dict:
+        """Get embedding coverage stats."""
+        with self._conn() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) as cnt FROM sources WHERE status='completed'"
+            ).fetchone()["cnt"]
+            embedded = conn.execute(
+                "SELECT COUNT(*) as cnt FROM sources WHERE embedding IS NOT NULL"
+            ).fetchone()["cnt"]
+            models = {}
+            cur = conn.execute(
+                "SELECT embedding_model, COUNT(*) as cnt FROM sources "
+                "WHERE embedding IS NOT NULL GROUP BY embedding_model"
+            )
+            for row in cur.fetchall():
+                models[row["embedding_model"] or "unknown"] = row["cnt"]
+            return {"total": total, "embedded": embedded, "models": models}
 
     # ── Fragments ────────────────────────────────────────────────────────
 

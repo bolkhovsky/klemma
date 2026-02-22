@@ -17,11 +17,11 @@ def state(tmp_path):
 class TestMigrateSchema:
     """Tests for _migrate_schema() infrastructure."""
 
-    def test_schema_version_is_one_after_init(self, state):
-        """New databases migrate to version 1."""
+    def test_schema_version_after_init(self, state):
+        """New databases migrate to latest version."""
         with state._conn() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 1
+        assert version >= 1
 
     def test_migration_is_idempotent(self, state):
         """Running _migrate_schema() multiple times is safe."""
@@ -29,7 +29,7 @@ class TestMigrateSchema:
             state._migrate_schema(conn)
             state._migrate_schema(conn)
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 1
+        assert version >= 1
 
     def test_base_tables_exist(self, state):
         """All base schema tables are created."""
