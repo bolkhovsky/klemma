@@ -302,3 +302,60 @@ class TestIntentWeightedScoring:
         beta_idx = ordered.index("Beta et al.")
         gamma_idx = ordered.index("Gamma et al.")
         assert alpha_idx < beta_idx < gamma_idx
+
+
+class TestIntentCoverage:
+    """Tests for get_intent_coverage() method."""
+
+    def test_empty_db_returns_empty(self, state):
+        """No fragments → empty dict."""
+        assert state.get_intent_coverage() == {}
+
+    def test_fragments_without_intent_excluded(self, state):
+        """Fragments with NULL intent are not counted."""
+        state.register_sources(["src1"])
+        state.save_fragments("src1", [
+            {"text": "No intent", "section": "2.1"},
+        ])
+        assert state.get_intent_coverage() == {}
+
+    def test_single_section_single_intent(self, state):
+        state.register_sources(["src1"])
+        state.save_fragments("src1", [
+            {"text": "BG frag", "section": "2.1", "citation_intent": "background"},
+        ])
+        cov = state.get_intent_coverage()
+        assert "2.1" in cov
+        assert cov["2.1"]["background"] == 1
+        assert cov["2.1"]["method"] == 0
+        assert cov["2.1"]["result_comparison"] == 0
+        assert cov["2.1"]["total"] == 1
+
+    def test_multiple_intents_per_section(self, state):
+        state.register_sources(["src1"])
+        state.save_fragments("src1", [
+            {"text": "BG1", "section": "3.1", "citation_intent": "background"},
+            {"text": "BG2", "section": "3.1", "citation_intent": "background"},
+            {"text": "M1", "section": "3.1", "citation_intent": "method"},
+            {"text": "R1", "section": "3.1", "citation_intent": "result_comparison"},
+        ])
+        cov = state.get_intent_coverage()
+        assert cov["3.1"]["background"] == 2
+        assert cov["3.1"]["method"] == 1
+        assert cov["3.1"]["result_comparison"] == 1
+        assert cov["3.1"]["total"] == 4
+
+    def test_multiple_sections(self, state):
+        state.register_sources(["src1"])
+        state.save_fragments("src1", [
+            {"text": "M1", "section": "2.1", "citation_intent": "method"},
+            {"text": "BG1", "section": "2.3", "citation_intent": "background"},
+            {"text": "R1", "section": "2.3", "citation_intent": "result_comparison"},
+        ])
+        cov = state.get_intent_coverage()
+        assert len(cov) == 2
+        assert cov["2.1"]["method"] == 1
+        assert cov["2.1"]["total"] == 1
+        assert cov["2.3"]["background"] == 1
+        assert cov["2.3"]["result_comparison"] == 1
+        assert cov["2.3"]["total"] == 2

@@ -609,6 +609,36 @@ class StateManager:
                 stats["by_section"][row["section"]] = row["cnt"]
             return stats
 
+    def get_intent_coverage(self) -> dict[str, dict[str, int]]:
+        """Get fragment counts by section × citation_intent.
+
+        Returns {section: {background: N, method: N, result_comparison: N, total: N}}.
+        Only includes sections that have at least one fragment with a non-NULL intent.
+        """
+        with self._conn() as conn:
+            cur = conn.execute(
+                """SELECT section, citation_intent, COUNT(*) as cnt
+                   FROM fragments
+                   WHERE section IS NOT NULL AND citation_intent IS NOT NULL
+                   GROUP BY section, citation_intent
+                   ORDER BY section"""
+            )
+            result: dict[str, dict[str, int]] = {}
+            for row in cur.fetchall():
+                sec = row["section"]
+                if sec not in result:
+                    result[sec] = {
+                        "background": 0,
+                        "method": 0,
+                        "result_comparison": 0,
+                        "total": 0,
+                    }
+                intent = row["citation_intent"]
+                if intent in result[sec]:
+                    result[sec][intent] = row["cnt"]
+                    result[sec]["total"] += row["cnt"]
+            return result
+
     # ── Daily Plans ──────────────────────────────────────────────────────
 
     def save_plan(

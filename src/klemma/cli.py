@@ -981,6 +981,30 @@ def status(ctx, verbose, chapter):
             ft.add_row(ftype, str(cnt))
         console.print(ft)
 
+    # --- Verbose: intent coverage matrix ---
+    if verbose:
+        intent_cov = state.get_intent_coverage()
+        if intent_cov:
+            console.print()
+            it = Table(title="Intent Coverage", show_edge=False, pad_edge=False)
+            it.add_column("Section", style="cyan")
+            it.add_column("Background", justify="right")
+            it.add_column("Method", justify="right")
+            it.add_column("Result", justify="right")
+            it.add_column("Total", justify="right", style="bold")
+            for sec in sorted(intent_cov):
+                if chapter and not sec.startswith(f"{chapter}."):
+                    continue
+                d = intent_cov[sec]
+                it.add_row(
+                    sec,
+                    str(d["background"]) if d["background"] else "[dim]0[/dim]",
+                    str(d["method"]) if d["method"] else "[dim]0[/dim]",
+                    str(d["result_comparison"]) if d["result_comparison"] else "[dim]0[/dim]",
+                    str(d["total"]),
+                )
+            console.print(it)
+
 
 # Backward-compatible aliases
 @main.command(hidden=True)
