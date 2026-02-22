@@ -17,11 +17,11 @@ def state(tmp_path):
 class TestMigrateSchema:
     """Tests for _migrate_schema() infrastructure."""
 
-    def test_initial_schema_version_is_zero(self, state):
-        """New databases start at schema version 0."""
+    def test_schema_version_is_one_after_init(self, state):
+        """New databases migrate to version 1."""
         with state._conn() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 0
+        assert version == 1
 
     def test_migration_is_idempotent(self, state):
         """Running _migrate_schema() multiple times is safe."""
@@ -29,7 +29,7 @@ class TestMigrateSchema:
             state._migrate_schema(conn)
             state._migrate_schema(conn)
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 0
+        assert version == 1
 
     def test_base_tables_exist(self, state):
         """All base schema tables are created."""
@@ -49,6 +49,23 @@ class TestMigrateSchema:
             ).fetchall()
             tables = {row[0] for row in rows}
         assert expected_tables.issubset(tables)
+
+    def test_fragments_has_citation_intent_column(self, state):
+        """Migration v1 adds citation_intent to fragments."""
+        with state._conn() as conn:
+            cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(fragments)")
+            }
+        assert "citation_intent" in cols
+
+    def test_reference_gaps_has_citation_intent_column(self, state):
+        """Migration v1 adds citation_intent to reference_gaps."""
+        with state._conn() as conn:
+            cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(reference_gaps)")
+            }
+        assert "citation_intent" in cols
 
 
 class TestFragmentCitationIntent:
@@ -104,3 +121,93 @@ class TestFragmentCitationIntent:
         }
         f = Fragment(**data)
         assert f.citation_intent is None
+
+
+class TestSaveFragmentsWithIntent:
+    """Tests for save_fragments() persisting citation_intent."""
+
+    def test_save_fragment_with_intent(self, state):
+        """citation_intent is saved to DB."""
+        state.register_sources(["test_source"])
+        state.save_fragments("test_source", [
+            {
+                "text": "Method X achieves 95% accuracy",
+                "type": "result",
+                "chapter": 3,
+                "section": "3.1",
+                "relevance": 4,
+                "usage_hint": "Compare results",
+                "page": 5,
+                "citation_intent": "result_comparison",
+            }
+        ])
+        frags = state.get_fragments(source_id="test_source")
+        assert len(frags) == 1
+        assert frags[0]["citation_intent"] == "result_comparison"
+
+    def test_save_fragment_without_intent(self, state):
+        """Fragments without intent save NULL — backward compatible."""
+        state.register_sources(["test_source"])
+        state.save_fragments("test_source", [
+            {
+                "text": "Some old fragment",
+                "type": "key_idea",
+                "relevance": 3,
+            }
+        ])
+        frags = state.get_fragments(source_id="test_source")
+        assert len(frags) == 1
+        assert frags[0]["citation_intent"] is None
+
+    def test_save_multiple_intents(self, state):
+        """Multiple fragments with different intents."""
+        state.register_sources(["src1"])
+        state.save_fragments("src1", [
+            {"text": "Background info", "citation_intent": "background"},
+            {"text": "Method description", "citation_intent": "method"},
+            {"text": "Result comparison", "citation_intent": "result_comparison"},
+            {"text": "No intent given"},
+        ])
+        frags = state.get_fragments(source_id="src1")
+        intents = [f["citation_intent"] for f in frags]
+        assert "background" in intents
+        assert "method" in intents
+        assert "result_comparison" in intents
+        assert None in intents
+
+
+class TestSaveReferenceGapsWithIntent:
+    """Tests for save_reference_gaps() persisting citation_intent."""
+
+    def test_save_gap_with_intent(self, state):
+        """citation_intent is saved for reference gaps."""
+        state.register_sources(["src1"])
+        state.save_reference_gaps("src1", [
+            {
+                "authors": "Smith et al.",
+                "year": 2020,
+                "title": "Important Method Paper",
+                "why_relevant": "Core method reference",
+                "citation_intent": "method",
+                "dissertation_sections": ["2.3"],
+            }
+        ])
+        gaps = state.get_reference_gaps()
+        assert len(gaps) >= 1
+        # Find our gap
+        found = [g for g in gaps if "Smith" in g["ref_authors"]]
+        assert len(found) == 1
+
+    def test_save_gap_without_intent(self, state):
+        """Gaps without intent save NULL — backward compatible."""
+        state.register_sources(["src1"])
+        state.save_reference_gaps("src1", [
+            {
+                "authors": "Jones et al.",
+                "year": 2019,
+                "title": "Background Paper",
+                "why_relevant": "General context",
+            }
+        ])
+        gaps = state.get_reference_gaps()
+        assert len(gaps) >= 1

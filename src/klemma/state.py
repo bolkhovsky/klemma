@@ -157,13 +157,27 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        # Version 0: base schema (no migrations needed)
-        # Future migrations will be added here as:
-        # if version < 1: ...
-        # if version < 2: ...
-        if version < 0:
-            pass  # placeholder — base schema is version 0
-        conn.execute(f"PRAGMA user_version = {max(version, 0)}")
+        target = 1  # bump this when adding new migrations
+
+        if version < 1:
+            # Step 1.1: citation_intent for fragments and reference_gaps
+            existing_frag = {
+                row[1] for row in conn.execute("PRAGMA table_info(fragments)")
+            }
+            if "citation_intent" not in existing_frag:
+                conn.execute(
+                    "ALTER TABLE fragments ADD COLUMN citation_intent TEXT"
+                )
+            existing_gaps = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(reference_gaps)")
+            }
+            if "citation_intent" not in existing_gaps:
+                conn.execute(
+                    "ALTER TABLE reference_gaps ADD COLUMN citation_intent TEXT"
+                )
+
+        conn.execute(f"PRAGMA user_version = {target}")
 
     # ── Sources ──────────────────────────────────────────────────────────
 
@@ -510,8 +524,8 @@ class StateManager:
                 conn.execute(
                     """INSERT INTO fragments
                        (source_id, fragment_text, fragment_type, chapter, section,
-                        relevance_score, usage_hint, page_number)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        relevance_score, usage_hint, page_number, citation_intent)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         source_id,
                         f.get("text", ""),
@@ -521,6 +535,7 @@ class StateManager:
                         f.get("relevance", 3),
                         f.get("usage_hint", ""),
                         f.get("page"),
+                        f.get("citation_intent"),
                     ),
                 )
             conn.execute(
@@ -728,8 +743,8 @@ class StateManager:
                 conn.execute(
                     """INSERT INTO reference_gaps
                        (source_id, ref_authors, ref_year, ref_title,
-                        why_relevant, dissertation_sections)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
+                        why_relevant, dissertation_sections, citation_intent)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (
                         source_id,
                         g.get("ref_authors", g.get("authors", "")),
@@ -737,6 +752,7 @@ class StateManager:
                         g.get("ref_title", g.get("title", "")),
                         g.get("why_relevant", ""),
                         json.dumps(sections) if sections else None,
+                        g.get("citation_intent"),
                     ),
                 )
             return len(gaps)
