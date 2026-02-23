@@ -17,26 +17,26 @@ Klemma is a CLI tool for academic writing. It manages literature (via Zotero), e
 ## Project structure
 ```
 src/klemma/
-├── cli.py              — Click CLI entry point (2274 lines)
+├── cli.py              — Click CLI entry point (2268 lines)
 ├── config.py           — Pydantic config models + discover_project_root(), resolve_effective_config(), resolve_prompt() (635 lines)
 ├── context.py          — KlemmaContext dataclass (single object per CLI command) (41 lines)
 ├── setup.py            — `klemma init` logic — init_project() + init_system() (263 lines)
-├── state.py            — SQLite state manager facade (420 lines, delegates to repositories/)
+├── state.py            — SQLite state manager facade (488 lines, delegates to repositories/)
 ├── ai.py               — AIProvider protocol + ClaudeClient + create_ai() factory (249 lines)
 ├── ai_openai.py        — OpenAI-compatible backend (105 lines)
 ├── ai_litellm.py       — LiteLLM universal backend (70 lines)
 ├── embeddings.py       — EmbeddingProvider protocol + 3 backends + cosine_similarity (257 lines)
 ├── discovery.py        — Auto-discovery for klemma init (Obsidian vault, Zotero, BBT JSON) (260 lines)
-├── vault.py            — Obsidian adapter (CLI/file I/O, update_section) (249 lines)
+├── vault.py            — Obsidian adapter (CLI/file I/O, update_section) (263 lines)
 ├── library_provider.py — LibraryProvider protocol + LocalLibrary (BBT JSON) (86 lines)
 ├── repositories/       — Domain repositories (decomposed from state.py)
 │   ├── sources.py      — Source CRUD, status, sections, Zotero keys, vault sync (~400 lines)
-│   ├── fragments.py    — Fragment CRUD, intent coverage (~120 lines)
-│   ├── embeddings_store.py — Vector BLOB storage (~100 lines)
-│   ├── gaps.py         — Reference gaps, coverage, scoring (~280 lines)
-│   ├── citations.py    — Citation graph, co-citation, authors (~200 lines)
-│   ├── plans.py        — Daily plans, reading queue (~120 lines)
-│   └── prune.py        — Prune verdicts, protection (~120 lines)
+│   ├── fragments.py    — Fragment CRUD, intent coverage (~130 lines)
+│   ├── embeddings_store.py — Vector BLOB storage (~80 lines)
+│   ├── gaps.py         — Reference gaps, coverage, scoring (~330 lines)
+│   ├── citations.py    — Citation graph, co-citation, authors (~180 lines)
+│   ├── plans.py        — Daily plans, reading queue (~130 lines)
+│   └── prune.py        — Prune verdicts, protection (~110 lines)
 ├── evaluation/         — Benchmark framework (dataset, metrics, runners)
 │   ├── dataset.py     — Pydantic schema, load/export (~80 lines)
 │   ├── metrics.py     — intent_metrics, precision@K, recall@K, nDCG@K (~120 lines)
@@ -70,7 +70,7 @@ tags.example.yaml           — Template tag taxonomy
 └── klemma-status/SKILL.md  — Agent skill: coverage & gaps check
 ```
 
-## Key commands (14)
+## Key commands (16)
 - `klemma init [--type paper|thesis]` — create project in current directory (.klemma/ + KLEMMA.md)
 - `klemma outline [-p "directive"] [--fresh] [--scan-only]` — AI-generate project structure; incremental on repeat, `-p` for custom directive, `--fresh` for full regeneration
 - `klemma plan` — daily plan generation (library digest included)
@@ -203,12 +203,12 @@ klemma --help
 
 Every feature follows this sequence. Do not skip or reorder steps.
 
-1. **Spec** — read the feature description and acceptance criteria in `ROADMAP.md`
+1. **Spec** — read the epic issue and acceptance criteria on GitHub (`gh issue view <N>`)
 2. **Plan** — invoke the `sparc:architect` skill for detailed design; wait for approval before coding
 3. **Code** — implement the feature
 4. **Verify** — `ruff check src/ tests/` then `python -m pytest tests/ -q`; fix until both pass
 5. **Docs** — update all affected `CLAUDE.md` files, `README.md`, and user guide in `docs/`
-6. **Commit & PR** — atomic commit, then `gh pr create`. The PR body must include a **Release Note** mini-article (~300 words) with four sections:
+6. **Commit & PR** — atomic commit, then `gh pr create`. Link the PR to its epic by including `Part of #N` in the PR body. After creating the PR, tick off the completed task checkboxes in the epic issue body (`gh issue edit <N> --body "..."` with updated `- [x]` items). The PR body must also include a **Release Note** mini-article (~300 words) with four sections:
    ```
    ## Release Note
 
@@ -226,12 +226,13 @@ Every feature follows this sequence. Do not skip or reorder steps.
    ### Results
    Quantitative outcomes: test counts, LOC, lint status, measurable improvements.
    ```
-7. **Cross-check** — on the GitHub PR, run Codex CLI (`codex`) for independent review; iterate until all findings are resolved
-8. **Blog note** — write a short TG blog post draft (3-5 sentences, casual tone); do NOT commit this file
+7. **Paper draft** — export the Release Note into `~/research/klemma-paper/sections/` as a section draft. Russian academic style, `[@citekey]` references, matching existing sections format. File name: `section_N_<topic>.md` where N maps to the paper outline section. Add any missing BibTeX entries to `~/research/klemma-paper/references.bib`. Also create a results file in `~/research/klemma-paper/results/` with frontmatter `step`, `date`, `paper_sections` and sections: Baseline / Implementation / Results / Delta / Paper Section.
+8. **Cross-check** — on the GitHub PR, run Codex CLI (`codex`) for independent review; iterate until all findings are resolved
+9. **Blog note** — write a short TG blog post draft (3-5 sentences, casual tone); do NOT commit this file
 
 ## Maintaining CLAUDE.md documentation
 
-This documentation is a modular knowledge graph — 7 interconnected CLAUDE.md files loaded incrementally as the agent navigates directories. **Keep it up to date when changing code.**
+This documentation is a modular knowledge graph — 9 interconnected CLAUDE.md files loaded incrementally as the agent navigates directories. **Keep it up to date when changing code.**
 
 ### When to update
 - **Adding a module**: add entry to the parent directory's CLAUDE.md (module name, line count, purpose, key functions)
