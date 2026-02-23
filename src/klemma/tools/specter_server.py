@@ -1,9 +1,10 @@
 """SPECTER embedding MCP server for Klemma.
 
-Provides embedding tools over MCP protocol:
+Provides embedding and citation analysis tools over MCP protocol:
 - embed_paper: Embed a single paper by title + abstract
 - find_similar: Find similar papers using cosine similarity
 - batch_embed: Embed multiple papers in one call
+- get_citation_intents: Fetch citation intents from Semantic Scholar API
 
 Backends: Semantic Scholar API (default) or local sentence-transformers.
 
@@ -167,7 +168,164 @@ def create_specter_server(backend: str = "s2", **backend_kwargs):
             "failed": len(errors),
         }
 
+    @server.tool(
+        name="get_citation_intents",
+        description=(
+            "Fetch citation intents for a paper from Semantic Scholar API. "
+            "Returns how other papers cite the given paper, with intent labels "
+            "(Background, Methodology, Result) and citation contexts."
+        ),
+    )
+    def get_citation_intents(
+        paper_id: str,
+        limit: int = 100,
+    ) -> dict:
+        """Fetch citation intents from S2 API.
+
+        Args:
+            paper_id: S2 paper ID, DOI, or title query
+            limit: Maximum citations to fetch (default 100)
+
+        Returns:
+            Dict with 'citations' list and 'stats' (intent distribution).
+        """
+        return fetch_citation_intents(paper_id, limit=limit)
+
     return server
+
+
+# ---------------------------------------------------------------------------
+# S2 Citation Intents API
+# ---------------------------------------------------------------------------
+
+
+def fetch_citation_intents(paper_id: str, limit: int = 100) -> dict:
+    """Fetch citation intents from Semantic Scholar API.
+
+    Uses GET /paper/{paper_id}/citations?fields=intents,contexts,title
+
+    Args:
+        paper_id: S2 paper ID, DOI, or arXiv ID
+        limit: Max citations to return
+
+    Returns:
+        Dict with 'citations' and 'stats' keys.
+    """
+    import requests
+
+    url = f"https://api.semanticscholar.org/graph/v1/paper/{paper_id}/citations"
+    params = {
+        "fields": "intents,contexts,title",
+        "limit": min(limit, 1000),
+    }
+
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        return {"error": str(e), "citations": [], "stats": {}}
+
+    citations = []
+    intent_counts = {"Background": 0, "Methodology": 0, "Result": 0}
+
+    for item in data.get("data", []):
+        citing = item.get("citingPaper", {})
+        intents = item.get("intents", [])
+        contexts = item.get("contexts", [])
+
+        for intent in intents:
+            if intent in intent_counts:
+                intent_counts[intent] += 1
+
+        citations.append({
+            "title": citing.get("title", ""),
+            "paperId": citing.get("paperId", ""),
+            "intents": intents,
+            "contexts": contexts[:3],  # Limit context snippets
+        })
+
+    return {
+        "citations": citations,
+        "stats": intent_counts,
+        "total": len(citations),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Intent Comparison: LLM-predicted vs S2 ground truth
+# ---------------------------------------------------------------------------
+
+# Mapping from klemma intent labels to S2 intent labels
+_KLEMMA_TO_S2 = {
+    "background": "Background",
+    "method": "Methodology",
+    "result_comparison": "Result",
+}
+
+_S2_TO_KLEMMA = {v: k for k, v in _KLEMMA_TO_S2.items()}
+
+
+def compare_intents(
+    llm_intents: dict[str, str],
+    s2_intents: dict[str, list[str]],
+) -> dict:
+    """Compare LLM-predicted citation intents against S2 ground truth.
+
+    Args:
+        llm_intents: {citekey: "background"|"method"|"result_comparison"}
+            from klemma's LLM extraction
+        s2_intents: {citekey: ["Background", "Methodology", "Result"]}
+            from S2 API (a paper can have multiple intents)
+
+    Returns:
+        Dict with accuracy metrics:
+        - total: number of papers compared
+        - matches: correct predictions
+        - accuracy: matches / total
+        - confusion: {predicted: {actual: count}}
+        - details: per-paper comparison
+    """
+    total = 0
+    matches = 0
+    confusion: dict[str, dict[str, int]] = {}
+    details = []
+
+    for citekey, llm_intent in llm_intents.items():
+        s2_labels = s2_intents.get(citekey, [])
+        if not s2_labels:
+            continue
+
+        total += 1
+        s2_mapped = _KLEMMA_TO_S2.get(llm_intent, "")
+
+        # S2 returns a list — match if LLM prediction is among them
+        is_match = s2_mapped in s2_labels
+        if is_match:
+            matches += 1
+
+        # Confusion matrix
+        predicted = llm_intent
+        for s2_label in s2_labels:
+            actual = _S2_TO_KLEMMA.get(s2_label, s2_label)
+            confusion.setdefault(predicted, {})
+            confusion[predicted].setdefault(actual, 0)
+            confusion[predicted][actual] += 1
+
+        details.append({
+            "citekey": citekey,
+            "llm_intent": llm_intent,
+            "s2_intents": s2_labels,
+            "match": is_match,
+        })
+
+    return {
+        "total": total,
+        "matches": matches,
+        "accuracy": round(matches / total, 4) if total > 0 else 0.0,
+        "confusion": confusion,
+        "details": details,
+    }
 
 
 def main():
