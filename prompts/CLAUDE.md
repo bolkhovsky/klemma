@@ -12,6 +12,7 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 | `research.md` | `skills/researcher.py` | Research briefing (initial) |
 | `research_incremental.md` | `skills/researcher.py` | Research briefing (incremental) |
 | `librarian.md` | `skills/librarian.py` | Library analysis (3 modes) |
+| `librarian_prune.md` | `skills/librarian.py` | Prune recommendation generation |
 | `agent.md` | `skills/agent.py` | System prompt for interactive agent |
 | `outline.md` | `skills/outliner.py` | Project outline generation |
 | `outline_incremental.md` | `skills/outliner.py` | Incremental outline update |
@@ -32,6 +33,9 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 
 ### librarian.md
 `mode`, `dissertation_context`, `library_summary`, `quality_tiers`, `ref_gaps`, `sources_compact`, `focus_section`, `deadline`, `days_until_deadline`
+
+### librarian_prune.md
+`source_count`, `sources_compact`
 
 ### agent.md
 `dissertation_context`, `chapters`, `scientific_results`, `priority_terms`, `current_chapter`, `chapter_name`, `current_section`, `current_deadline`, `days_until_deadline`, `sources`, `coverage`, `gaps`, `min_sources`, `fragment_stats`, `today_plan`, `next_reading`, `vault_path`, `today`, `project_root`, `outline_content`, `report_index` (list of {name, size}), `project_file_list` (list of {name, size})
