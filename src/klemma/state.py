@@ -948,6 +948,89 @@ class StateManager:
                 results.append(r)
             return results
 
+    def rerank_gaps_semantic(
+        self,
+        gaps: list[dict],
+        embeddings=None,
+        query_section: Optional[str] = None,
+    ) -> list[dict]:
+        """Rerank reference gaps using embedding similarity to section centroid.
+
+        When embeddings are stored, computes centroid of sources assigned to
+        the relevant section, then boosts gaps whose citing sources are
+        semantically close to that centroid.
+
+        Formula: final_score = heuristic_score * (0.5 + 0.5 * sim_to_centroid)
+        No embeddings → returns gaps unchanged.
+        """
+        if not embeddings:
+            return gaps
+
+        from .embeddings import cosine_similarity
+
+        all_emb = self.get_all_embeddings(model=embeddings.model_name)
+        if not all_emb:
+            return gaps
+
+        # Compute section centroid from sources assigned to that section
+        centroid = None
+        if query_section:
+            section_sources = self.get_section_sources(query_section)
+            section_vecs = [
+                all_emb[sid] for sid in section_sources if sid in all_emb
+            ]
+            if section_vecs:
+                dim = len(section_vecs[0])
+                centroid = [
+                    sum(v[i] for v in section_vecs) / len(section_vecs)
+                    for i in range(dim)
+                ]
+
+        # If no section centroid, use global centroid of all embeddings
+        if not centroid and all_emb:
+            vecs = list(all_emb.values())
+            dim = len(vecs[0])
+            centroid = [
+                sum(v[i] for v in vecs) / len(vecs) for i in range(dim)
+            ]
+
+        if not centroid:
+            return gaps
+
+        # Rerank: boost by average similarity of citing sources to centroid
+        for gap in gaps:
+            source_ids = (gap.get("source_ids") or "").split(",")
+            sims = []
+            for sid in source_ids:
+                sid = sid.strip()
+                if sid in all_emb:
+                    sims.append(cosine_similarity(all_emb[sid], centroid))
+            if sims:
+                avg_sim = sum(sims) / len(sims)
+                gap["semantic_boost"] = round(avg_sim, 4)
+                gap["score"] = round(gap["score"] * (0.5 + 0.5 * avg_sim), 1)
+            else:
+                gap["semantic_boost"] = 0.0
+
+        gaps.sort(key=lambda g: g["score"], reverse=True)
+        return gaps
+
+    def get_section_sources(self, section: str) -> list[str]:
+        """Get source IDs assigned to a section (via source_sections or primary_section)."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT DISTINCT source_id FROM source_sections WHERE section LIKE ?",
+                (f"{section}%",),
+            )
+            ids = [row["source_id"] for row in cur.fetchall()]
+            if not ids:
+                cur = conn.execute(
+                    "SELECT id FROM sources WHERE primary_section LIKE ?",
+                    (f"{section}%",),
+                )
+                ids = [row["id"] for row in cur.fetchall()]
+            return ids
+
     def get_gap_summary(self) -> dict:
         """Lightweight summary for status line: open count + top gap."""
         with self._conn() as conn:

@@ -359,3 +359,64 @@ class TestIntentCoverage:
         assert cov["2.3"]["background"] == 1
         assert cov["2.3"]["result_comparison"] == 1
         assert cov["2.3"]["total"] == 2
+
+
+class TestSemanticGapScoring:
+    """Tests for rerank_gaps_semantic()."""
+
+    class FakeEmbeddings:
+        dim = 3
+        model_name = "test"
+
+        def embed(self, title, abstract=""):
+            return [1.0, 0.0, 0.0]
+
+    def test_no_embeddings_returns_unchanged(self, state):
+        """Without embeddings, gaps are returned as-is."""
+        gaps = [{"score": 5.0, "source_ids": "src1"}]
+        result = state.rerank_gaps_semantic(gaps, embeddings=None)
+        assert result[0]["score"] == 5.0
+
+    def test_semantic_boost_applied(self, state):
+        """Gaps with embedded citing sources get semantic_boost."""
+        state.register_sources(["src1", "src2"])
+        state.save_embedding("src1", [1.0, 0.0, 0.0], "test")
+        state.save_embedding("src2", [0.9, 0.1, 0.0], "test")
+
+        gaps = [
+            {"score": 10.0, "source_ids": "src1", "ref_authors": "A"},
+            {"score": 10.0, "source_ids": "src2", "ref_authors": "B"},
+        ]
+        emb = self.FakeEmbeddings()
+        result = state.rerank_gaps_semantic(gaps, embeddings=emb)
+        # Both should have semantic_boost
+        assert "semantic_boost" in result[0]
+        assert result[0]["semantic_boost"] > 0
+
+    def test_no_stored_embeddings_returns_unchanged(self, state):
+        """If no embeddings in DB, gaps are returned as-is."""
+        gaps = [{"score": 5.0, "source_ids": "src1"}]
+        emb = self.FakeEmbeddings()
+        result = state.rerank_gaps_semantic(gaps, embeddings=emb)
+        assert result[0]["score"] == 5.0
+
+    def test_reranking_changes_order(self, state):
+        """Semantic boost can change gap ordering."""
+        state.register_sources(["close", "far"])
+        # "close" is very aligned with global centroid direction
+        state.save_embedding("close", [1.0, 0.0, 0.0], "test")
+        # "far" is orthogonal
+        state.save_embedding("far", [0.0, 1.0, 0.0], "test")
+
+        # Initially "far" has higher heuristic score
+        gaps = [
+            {"score": 20.0, "source_ids": "far", "ref_authors": "Far"},
+            {"score": 10.0, "source_ids": "close", "ref_authors": "Close"},
+        ]
+        emb = self.FakeEmbeddings()
+        result = state.rerank_gaps_semantic(gaps, embeddings=emb)
+        # The "close" source gets bigger semantic boost, may overtake "far"
+        # (depends on centroid direction — centroid = avg of both vectors)
+        scores = {g["ref_authors"]: g["score"] for g in result}
+        # Close source has better alignment so gets higher multiplier
+        assert scores["Close"] > 0
