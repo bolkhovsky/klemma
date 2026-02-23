@@ -8,6 +8,67 @@ Klemma — CLI-инструмент для академического пись
 
 **Ключевое решение**: MCP восстанавливается минимально (~200 строк) — только MCPClient + ToolRegistry, без старого discovery pipeline. Писать заново, НЕ восстанавливать из git history (MCP SDK мог измениться).
 
+## Reprioritization (2026-02-23): GitHub Backlog Conversion
+
+Принято управлять execution roadmap через GitHub backlog в формате `Epic Issues Only` + `Epic-based milestones` (A-E), с фокусом на `paper-results-first` и 4-недельный горизонт.
+
+### Epic Order and Scope
+
+1. **Epic A**: Semantic search completion and measurable quality gains.
+2. **Epic B**: Fragment RAG integration for `klemma ask` with A/B evaluation.
+3. **Epic C**: Critical reliability debt (minimum slice) for benchmark validity/reproducibility.
+4. **Epic D**: Advanced features (stretch), strict order `5.2 -> 5.4 -> 5.3 -> 5.1`.
+5. **Epic E**: Deferred expansion queue (`6.1`, `6.4`, broader refactor phases).
+
+### GitHub Taxonomy (Required)
+
+- `Type`: `feature`, `task`, `spike`, `tech-debt`
+- `Priority`: `priority-high`, `priority-medium`, `priority-low`
+- `Status`: `ready-for-dev`, `in-progress`, `blocked`, `done`
+- `Track`: `track-paper-results`, `track-semantic-search`, `track-rag`, `track-reliability`, `track-advanced`, `track-deferred`
+
+### Milestones (Epic-Based)
+
+1. `Epic-A Semantic Search Completion`
+2. `Epic-B Fragment RAG`
+3. `Epic-C Critical Reliability Debt`
+4. `Epic-D Advanced Features (Stretch)`
+5. `Epic-E Deferred Expansion`
+
+### Project Workflow
+
+- Project board: `Klemma Product Backlog (Reprioritized)`
+- States: `Backlog` -> `Ready for Development` -> `In Progress` -> `Review` -> `Done`
+- Default placement:
+  - Epics A-C: `Ready for Development`
+  - Epics D-E: `Backlog`
+
+### Epic Dependency Gates
+
+- Epic B depends on Epic A baseline completion.
+- Epic C overlaps A/B, but must complete before paper-ready claims.
+- Epic D starts only after A-C quality gates are green.
+- Epic E requires A-D completion or explicit promotion decision.
+
+### Issue and PR Conventions
+
+- Epic issue template sections:
+  - `User Story`
+  - `Acceptance Criteria`
+  - `Additional Notes` (Dependencies, Results artifacts, Risks)
+- PR linkage:
+  - use `Fixes #<epic_issue_number>` only when epic completion is intended;
+  - include links to updated `klemma-paper/results/*` artifacts.
+- Do not close epic issues until all AC checkboxes are completed and validated.
+
+### ROADMAP Anchors for Epic Notes
+
+- Epic A: `Sprint 2: SPECTER Embeddings (Phase 2)`, `Sprint 3: Citation Graph (Phase 3)`, `Semantic Search Support Plan (Current)`
+- Epic B: `Sprint 6 / Step 6.2: Fragment RAG для klemma ask`
+- Epic C: `Refactoring Program Backlog` phases `6`, `7`, `8` (`AI backend contract`, `trust boundaries`, `observability`)
+- Epic D: `Sprint 5: Advanced Features (Phase 5) — STRETCH GOALS`
+- Epic E: `Sprint 6 / Steps 6.1 and 6.4` + deferred refactor phases
+
 ## Pre-requisites
 
 1. **Merge feature/outline-command в master** (5 коммитов: outline command + paper project support)
