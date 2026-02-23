@@ -1,9 +1,14 @@
 """Tests for MCP tool registry and SPECTER MCP server."""
 
+import importlib.util
+
 import pytest
 
 from klemma.tools.registry import ToolInfo, ToolRegistry
 from klemma.tools.specter_server import create_specter_server
+
+_MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None
+_skip_no_mcp = pytest.mark.skipif(not _MCP_AVAILABLE, reason="requires klemma[mcp]: pip install klemma[mcp]")
 
 
 class TestToolRegistry:
@@ -126,6 +131,7 @@ class MockEmbeddingProvider:
         return [0.1, 0.2, 0.3]
 
 
+@_skip_no_mcp
 class TestSpecterServerCreation:
     """Tests for SPECTER MCP server factory."""
 
