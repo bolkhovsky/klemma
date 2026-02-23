@@ -123,6 +123,7 @@ Analyze the readiness of section {{ target_section }} for writing and generate a
 
 ### Rules
 
+0. **ONLY library sources** — You MUST use ONLY citekeys that appear in the "Key Source Annotations" JSON above. Do NOT invent, guess, or shorten citekeys. Do NOT cite papers you know from training that are not in the provided list. If a relevant source is missing from the library, add it to `missing_coverage` — never cite it directly
 1. **Argument structure** — break the section into 3-6 logical blocks. Each block: purpose, description, source list
 2. **Citation plan** — for each source, specify the concrete fragment and placement in text. Types: evidence, method, comparison, definition, quote
 3. **Readiness assessment** — if there's a draft, count words and determine readiness percentage. If section not written — readiness_pct = 0

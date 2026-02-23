@@ -90,6 +90,7 @@ No critical gaps.
 
 Update the previous research briefing for section {{ target_section }}. Consider:
 
+0. **ONLY library sources** — Use ONLY citekeys from the "Key Source Annotations" JSON above. Do NOT invent or guess citekeys. Missing sources go in `missing_coverage`, not in `citation_plan` or `argument_blocks`
 1. **Author notes** — this is the primary input. If the author wrote something in "What's New", prioritize it
 2. **New fragments and sources** — integrate into argument structure and citation plan
 3. **Draft changes** — if the section text was updated, recalculate readiness_pct and current_word_count
