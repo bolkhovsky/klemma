@@ -247,3 +247,108 @@ class TestMigrationV2:
             }
         assert "embedding" in cols
         assert "embedding_model" in cols
+
+
+class TestHybridDiscovery:
+    """Tests for hybrid keyword+semantic discovery scoring."""
+
+    class FakeEntry:
+        def __init__(self, title="", abstract="", keywords=""):
+            self.title = title
+            self.abstract = abstract
+            self.keywords = keywords
+
+    class FakeEmbeddings:
+        dim = 3
+        model_name = "test"
+
+        def __init__(self, vec):
+            self._vec = vec
+
+        def embed(self, title, abstract=""):
+            return self._vec
+
+    def test_keyword_only_fallback(self, tmp_path):
+        """Without embeddings, keyword scoring works as before."""
+        from klemma.discovery import discover_relevant_sources
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "notes").mkdir()
+
+        entries = {
+            "Smith2020": self.FakeEntry(
+                title="Machine learning for embeddings",
+                abstract="We propose a method",
+            ),
+            "Jones2019": self.FakeEntry(
+                title="Unrelated paper about cooking",
+                abstract="Recipes and ingredients",
+            ),
+        }
+        results = discover_relevant_sources(
+            vault, "notes", entries, keywords=["machine", "learning"]
+        )
+        assert len(results) >= 1
+        assert results[0]["citekey"] == "Smith2020"
+
+    def test_hybrid_adds_semantic_matches(self, tmp_path, state):
+        """With embeddings, semantically close sources appear even without keyword match."""
+        from klemma.discovery import discover_relevant_sources
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "notes").mkdir()
+
+        entries = {
+            "Smith2020": self.FakeEntry(
+                title="Machine learning for NLP",
+                abstract="We propose a method",
+            ),
+            "Hidden2021": self.FakeEntry(
+                title="Some obscure title",
+                abstract="No keyword matches here",
+            ),
+        }
+
+        # Store embedding for Hidden2021 that's close to query
+        state.register_sources(["Smith2020", "Hidden2021"])
+        state.save_embedding("Hidden2021", [0.9, 0.1, 0.0], "test")
+        state.save_embedding("Smith2020", [0.1, 0.9, 0.0], "test")
+
+        # Query vector close to Hidden2021
+        emb = self.FakeEmbeddings([0.85, 0.15, 0.0])
+
+        results = discover_relevant_sources(
+            vault, "notes", entries, keywords=["machine"],
+            embeddings=emb, state=state, query_title="Machine learning"
+        )
+        citekeys = [r["citekey"] for r in results]
+        # Hidden2021 should appear via semantic similarity
+        assert "Hidden2021" in citekeys
+
+    def test_hybrid_score_has_semantic_sim(self, tmp_path, state):
+        """Hybrid results include semantic_sim field."""
+        from klemma.discovery import discover_relevant_sources
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "notes").mkdir()
+
+        entries = {
+            "A2020": self.FakeEntry(
+                title="Keyword match here",
+                abstract="Contains keyword",
+            ),
+        }
+        state.register_sources(["A2020"])
+        state.save_embedding("A2020", [1.0, 0.0, 0.0], "test")
+        emb = self.FakeEmbeddings([1.0, 0.0, 0.0])
+
+        results = discover_relevant_sources(
+            vault, "notes", entries, keywords=["keyword"],
+            embeddings=emb, state=state, query_title="Keyword search"
+        )
+        assert len(results) >= 1
+        assert "semantic_sim" in results[0]
+        assert results[0]["semantic_sim"] > 0.9
