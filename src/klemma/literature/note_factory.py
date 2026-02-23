@@ -459,10 +459,8 @@ def create_vault_note(
 
         # 6. Save reference gaps from annotation
         if annotation:
-            missing_refs = [
-                r for r in annotation.get("key_references", [])
-                if not r.get("in_library")
-            ]
+            key_refs = annotation.get("key_references", [])
+            missing_refs = [r for r in key_refs if not r.get("in_library")]
             if missing_refs:
                 state.save_reference_gaps(citekey, [
                     {
@@ -471,10 +469,16 @@ def create_vault_note(
                         "ref_title": r.get("title", ""),
                         "why_relevant": r.get("why_relevant", ""),
                         "dissertation_sections": r.get("dissertation_sections", []),
+                        "citation_intent": r.get("citation_intent"),
                     }
                     for r in missing_refs
                 ])
                 logger.info("Saved %d reference gaps for @%s", len(missing_refs), citekey)
+
+            # 7. Save ALL references (both in-library and external) as citation links
+            if key_refs:
+                state.save_citation_links(citekey, key_refs)
+                logger.info("Saved %d citation links for @%s", len(key_refs), citekey)
 
     logger.info("Created vault note: @%s.md → %s", citekey, path)
     return path

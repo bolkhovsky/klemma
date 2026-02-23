@@ -233,12 +233,12 @@ class TestEmbeddingStorage:
 
 
 class TestMigrationV2:
-    """Test schema migration to version 2."""
+    """Test schema migration includes version 2 changes."""
 
-    def test_schema_version_is_two(self, state):
+    def test_schema_version_at_least_two(self, state):
         with state._conn() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 2
+        assert version >= 2
 
     def test_sources_has_embedding_columns(self, state):
         with state._conn() as conn:
