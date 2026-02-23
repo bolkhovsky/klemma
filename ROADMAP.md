@@ -588,6 +588,43 @@ def _ensure_numpy():
 
 ---
 
+# Refactoring Program (Current State)
+
+## Phase 1: Scope + Safety Baseline (Now)
+
+**Цель**: зафиксировать поведение и ввести минимальные guardrails перед архитектурной декомпозицией.
+
+**Что делать**:
+1. Зафиксировать no-regression baseline по core workflows: `init`, `process`, `research`, `library`, `ask`.
+2. Добавить короткий checklist инвариантов CLI-output/flags для этих команд.
+3. Зафиксировать текущие модульные границы как ADR (временные, до декомпозиции).
+4. Сохранить исходные метрики качества: `pytest`, `ruff`, ключевые smoke-сценарии.
+
+**Критерии завершения**:
+- Baseline задокументирован.
+- No-regression checklist добавлен в roadmap/process notes.
+- Есть snapshot текущих quality-gates.
+
+## Phase 2: Security Hardening First (Now)
+
+**Цель**: закрыть критичные риски до крупного рефакторинга.
+
+**Что делать**:
+1. Path boundary enforcement в vault writes (`src/klemma/vault.py`):
+   - canonicalize paths через `resolve()`;
+   - запретить выход за пределы `vault_path`.
+2. Download safety limits в acquire flow (`src/klemma/skills/acquirer.py`):
+   - max size cap при stream download;
+   - stricter URL validation (scheme/host policy).
+3. Добавить тесты на path traversal и oversized downloads.
+
+**Критерии завершения**:
+- Уязвимости из security review закрыты.
+- Новые тесты проходят локально в CI-наборе.
+- Поведение существующих команд не регрессировало.
+
+---
+
 # Sprint 5: Advanced Features (Phase 5) — STRETCH GOALS
 
 **Ветка**: `modernize/phase-5-advanced`
@@ -982,3 +1019,49 @@ Sprint 6 (Phase 6): ~11 days (after Phase 4, can overlap Phase 5)
 ```
 
 **Total estimate**: ~41-49 days (including buffer for Sprints 5+6)
+
+---
+
+# Refactoring Program Backlog (Phases 3-10)
+
+## Phase 3: Architecture Seams
+- Ввести `services/` (оркестрация) и `repositories/` (данные).
+- Оставить `cli.py` как тонкий слой маршрутизации команд.
+- Закрыть доступ к приватным методам state из внешних модулей.
+
+## Phase 4: CLI Decomposition
+- Разбить `src/klemma/cli.py` по доменам команд: `init`, `process`, `research`, `library`, `ask`, `status`.
+- Вынести shared helpers в отдельный модуль common utilities.
+- Сохранить backward-compatible command signatures/flags.
+
+## Phase 5: State Layer Decomposition
+- Разбить `src/klemma/state.py` на специализированные repository-модули:
+  `sources`, `fragments`, `gaps`, `embeddings`, `plans`, `prune`.
+- Сохранить временный facade-слой `StateManager` для совместимости.
+- Удалить прямой SQL из feature-модулей за пределами repositories.
+
+## Phase 6: AI Backend Contract Normalization
+- Унифицировать timeout/retry semantics между Claude/OpenAI/LiteLLM.
+- Явно определить контракт `call` / `call_json` (ошибки, None-handling, partial failures).
+- Добавить contract tests для всех backend adapters.
+
+## Phase 7: Config + Prompt Trust Boundaries
+- Разделить trusted/untrusted режимы для prompt loading.
+- Добавить строгую валидацию path-конфигов (project/vault boundaries).
+- Ввести preflight validation (`klemma info --validate` или эквивалент).
+
+## Phase 8: Error Model + Observability
+- Стандартизировать исключения и user-facing error messages.
+- Ввести структурированное логирование (command, source_id, backend, duration).
+- Добавить базовые runtime metrics для долгих операций.
+
+## Phase 9: Migration + Cleanup
+- Поэтапно депрекейтнуть старые внутренние API.
+- Обновить docs/dev-guide по новой структуре модулей.
+- Удалить временные compatibility shims после переходного периода.
+
+## Phase 10: Exit Criteria + Release Gate
+- Подтвердить отсутствие регрессий в core workflows.
+- Проверить покрытие security fixes тестами.
+- Убедиться, что `cli.py` и `state.py` выполняют только coordinator/facade-роль.
+- Выпустить refactor milestone с changelog + migration notes.

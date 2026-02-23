@@ -1,5 +1,6 @@
 """Acquire papers: download PDF → generate citekey → register in klemma."""
 
+import ipaddress
 import json
 import logging
 import re
@@ -8,10 +9,13 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB hard limit
 
 
 @dataclass
@@ -39,14 +43,53 @@ class AcquireResult:
     status: str = ""  # ok, download_failed
 
 
-def download_pdf(url: str, timeout: int = 60) -> Optional[Path]:
+def _is_allowed_download_url(url: str) -> bool:
+    """Allow only safe external HTTP(S) URLs."""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+
+    host = (parsed.hostname or "").lower()
+    if not host or host == "localhost" or host.endswith(".local"):
+        return False
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+
+    blocked = (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+    )
+    return not blocked
+
+
+def download_pdf(
+    url: str,
+    timeout: int = 60,
+    max_bytes: int = MAX_DOWNLOAD_BYTES,
+) -> Optional[Path]:
     """Download PDF from URL to a temp file. Returns path or None."""
+    if not _is_allowed_download_url(url):
+        logger.warning("Blocked unsafe URL: %s", url)
+        return None
+
+    tmp = None
     try:
         resp = requests.get(url, timeout=timeout, stream=True, allow_redirects=True)
         resp.raise_for_status()
 
+        content_length = resp.headers.get("content-length")
+        if content_length and int(content_length) > max_bytes:
+            logger.warning(
+                "File too large (%s bytes > %d bytes limit)",
+                content_length, max_bytes,
+            )
+            return None
+
         content_type = resp.headers.get("content-type", "")
-        if "pdf" not in content_type and not url.endswith(".pdf"):
+        if "pdf" not in content_type.lower() and not url.lower().endswith(".pdf"):
             logger.warning("URL may not be a PDF (content-type: %s)", content_type)
 
         tmp = tempfile.NamedTemporaryFile(
@@ -54,8 +97,15 @@ def download_pdf(url: str, timeout: int = 60) -> Optional[Path]:
         )
         size = 0
         for chunk in resp.iter_content(chunk_size=8192):
+            if not chunk:
+                continue
             tmp.write(chunk)
             size += len(chunk)
+            if size > max_bytes:
+                logger.warning("Downloaded file exceeds max size limit (%d bytes)", max_bytes)
+                tmp.close()
+                Path(tmp.name).unlink(missing_ok=True)
+                return None
         tmp.close()
 
         if size < 10_000:
@@ -68,6 +118,12 @@ def download_pdf(url: str, timeout: int = 60) -> Optional[Path]:
 
     except Exception as e:
         logger.error("Download failed: %s", e)
+        if tmp is not None:
+            try:
+                tmp.close()
+                Path(tmp.name).unlink(missing_ok=True)
+            except Exception:
+                pass
         return None
 
 
