@@ -12,7 +12,7 @@
 
 </div>
 
-AI-ассистент для работы над диссертацией. Управляет библиотекой источников (Zotero), извлекает цитируемые фрагменты из PDF (AI — Claude, OpenAI, Ollama, LiteLLM), генерирует ежедневные планы, исследовательские брифинги, анализ библиотеки и отслеживает покрытие глав диссертации.
+AI-ассистент для академического письма. Управляет библиотекой источников (Zotero), извлекает цитируемые фрагменты из PDF (AI — Claude, OpenAI, Ollama, LiteLLM), классифицирует citation intent, генерирует ежедневные планы, исследовательские брифинги, анализ библиотеки, семантический поиск похожих источников и отслеживает покрытие глав. Поддерживает вложенные проекты (диссертация + статьи) с раздельными базами и наследованием ресурсов.
 
 ## Установка
 
@@ -28,233 +28,289 @@ pip install -e .
   - `pip install klemma[openai]` — OpenAI API / Ollama / vLLM / LM Studio
   - `pip install klemma[litellm]` — 100+ провайдеров через LiteLLM
 - Obsidian vault с заметками источников
+- Zotero с BetterBibTeX plugin (JSON auto-export)
+
+### Опциональные зависимости
+
+```bash
+pip install klemma[embeddings]         # семантический поиск (S2/OpenAI бэкенды)
+pip install klemma[local-embeddings]   # офлайн SPECTER2 (sentence-transformers)
+pip install klemma[mcp]                # MCP-серверы (расширяемость)
+pip install klemma[all-ai]             # все AI-бэкенды (openai + litellm)
+```
 
 ## Быстрый старт
 
 ```bash
-# 1. Сгенерировать план на день (включает дайджест библиотеки)
-klemma plan
+# 1. Инициализировать проект
+klemma init                                    # интерактивный мастер
+klemma init --type paper                       # проект-статья
 
 # 2. Посмотреть статистику, покрытие, пробелы
-klemma status              # компактный обзор
-klemma status --verbose    # полные таблицы
-klemma status --chapter 2  # фильтр по главе
+klemma status                                  # компактный обзор
+klemma status --verbose                        # полные таблицы + intent matrix
 
-# 3. Обработать источник (фрагменты + аннотация + vault note)
-klemma process anderssonSeasonalArcticSea2021   # один источник
-klemma process                                  # все pending
+# 3. Обработать источники (фрагменты + citation intent + vault note)
+klemma process                                 # все pending (параллельно)
+klemma process smithMachineLearning2020        # один источник
 
-# 4. Исследовательский брифинг по разделу
+# 4. Сгенерировать embeddings для семантического поиска
+klemma embed                                   # все sources с abstract
+klemma similar smithMachineLearning2020        # похожие источники
+klemma similar 2.3                             # похожие для раздела 2.3
+
+# 5. Исследовательский брифинг по разделу
 klemma research -s 1.3.2
 
-# 5. AI-анализ библиотеки
-klemma library             # здоровье библиотеки
-klemma library -s 2.3      # рекомендации для раздела
-klemma library --audit     # глубокий аудит качества
+# 6. AI-анализ библиотеки
+klemma library                                 # здоровье
+klemma library -s 2.3                          # рекомендации
+klemma library --audit                         # аудит + citation graph
 
-# 6. Задать вопрос агенту с полным контекстом диссертации
-klemma ask "Какие основные методы валидации прогнозов ледовой обстановки?"
+# 7. Задать вопрос агенту с контекстом проекта
+klemma ask "Какие методы валидации прогнозов ледовой обстановки?"
 
-# 7. Управление MCP-серверами (Zotero, arXiv, ...)
-klemma tools add zotero --command "uvx" --args "zotero-mcp" --env ZOTERO_LOCAL=true
-klemma tools list --probe     # подключиться и показать доступные инструменты
-
-# 8. Поиск статей через MCP (arXiv, Semantic Scholar)
-klemma tools add academia --command "python3" --args "-m academia_mcp --transport stdio"
-klemma search "AMSR2 sea ice forecast validation"
-
-# 9. Автоматический поиск новой литературы для раздела
-klemma discover -s 1.3.2              # запустить discovery pipeline
-klemma discover --status              # статус
-klemma discover --review              # просмотр найденного
+# 8. Структура проекта
+klemma outline                                 # AI-генерация outline
+klemma outline -p "Фокус на методологии"       # с директивой
 ```
 
-## Команды (9)
+## Команды (14)
+
+### `klemma init`
+Инициализация проекта в текущей директории. Создаёт `.klemma/` (config, tags, DB) и `KLEMMA.md` (контекст для AI). Интерактивный мастер обнаруживает Obsidian vault и Zotero автоматически.
+
+```bash
+klemma init                    # интерактивный мастер
+klemma init --type paper       # проект-статья (вместо диссертации)
+klemma init --no-input         # без вопросов (defaults)
+```
 
 ### `klemma plan`
-Генерирует ежедневный план через Claude: фокус дня, рекомендации по чтению, задача для ассистента, стратегические предложения. Включает дайджест библиотеки. Учитывает вчерашний план, покрытие глав, пробелы, дедлайны. План сохраняется в базу и дописывается в daily note Obsidian.
+Ежедневный план: фокус дня, рекомендации по чтению, задача для ассистента, стратегические предложения. Учитывает вчерашний план, покрытие глав, пробелы, дедлайны. План сохраняется в базу и daily note Obsidian.
 
 ### `klemma status`
-Единая команда для статистики, покрытия и пробелов. Показывает: количество обработанных/pending/failed источников, покрытие по главам, разделы с недостаточным покрытием, reference gaps (ссылки из библиографий источников, отсутствующие в нашей библиотеке).
+Единая команда для статистики, покрытия и пробелов. Показывает: обработанные/pending/failed источники, покрытие по главам, разделы с недостаточным покрытием, reference gaps с intent-weighted scoring.
 
 ```bash
-klemma status              # компактный обзор
-klemma status --verbose    # полные таблицы + детализация
-klemma status --chapter 2  # фильтр по конкретной главе
+klemma status                  # компактный обзор
+klemma status --verbose        # полные таблицы:
+                               #   intent coverage matrix (background/method/result)
+                               #   embedding stats
+                               #   citation graph stats
+klemma status --chapter 2      # фильтр по главе
 ```
 
-### `klemma process [<citekey>]`
-Полный пайплайн обработки источника: поиск PDF → извлечение текста (PyMuPDF) → AI-анализ → сохранение фрагментов в SQLite + vault-заметку.
-
-**С аргументом** — обрабатывает один указанный источник.
-**Без аргумента** — batch-режим: обрабатывает все pending источники.
+### `klemma process [<citekeys>...]`
+Полный пайплайн обработки: PDF → текст (PyMuPDF) → AI-анализ → SQLite + vault note.
 
 При обработке автоматически:
-- Создаёт vault-заметку `@citekey.md`, если она отсутствует (AI-аннотация: summary, методология, релевантность, key references)
-- Извлекает фрагменты для цитирования и маппит их на главы/разделы диссертации
-- Анализирует библиографию источника и записывает reference gaps (ссылки, отсутствующие в нашей библиотеке)
-- Авто-резолвит ранее найденные reference gaps, если соответствующие источники уже добавлены
+- Создаёт vault-заметку `@citekey.md` (AI-аннотация: summary, методология, key references)
+- Извлекает фрагменты с классификацией **citation intent** (background / method / result_comparison)
+- Записывает reference gaps (ссылки из библиографий, отсутствующие в библиотеке)
+- Строит citation graph (все ссылки в `citation_links`)
+- Авто-генерирует embedding (если настроен embeddings backend)
 
 ```bash
-klemma process anderssonSeasonalArcticSea2021   # один источник
-klemma process                                  # все pending
+klemma process                                 # batch: все pending (3 потока)
+klemma process smithML2020 jonesNLP2019        # конкретные источники
+klemma process --serial                        # последовательно (экономия API)
 ```
 
-### `klemma research -s <X.X>`
-Исследовательский брифинг: глубокий анализ готовности раздела к написанию. Автоматически извлекает фрагменты для всех источников раздела (если ещё не извлечены), собирает контекст (черновик, план сессий, фрагменты, аннотации, покрытие) и генерирует структуру аргументации с планом цитирования.
-
-При повторном запуске работает в инкрементальном режиме: читает заметки пользователя из `## ✏️ Что нового`, определяет дельту (новые источники и фрагменты) и обновляет брифинг. Заметки пользователя архивируются в `## 📋 История изменений` с таймстампом.
+### `klemma embed [<citekey>]`
+Генерация SPECTER/OpenAI embeddings для семантического поиска. Без аргумента — backfill для всех completed-источников с abstract.
 
 ```bash
-klemma research -s 1.3.2            # первый запуск: полный анализ
-klemma research -s 1.3.2            # повторный: инкрементальное обновление
-klemma research -s 1.3.2 --force    # переизвлечь все фрагменты
-klemma research -s 1.3.2 --enrich   # добавить свежие статьи через MCP (если настроен)
+klemma embed                                   # все без embeddings
+klemma embed smithMachineLearning2020          # один источник
+klemma embed --dry-run                         # сколько будет обработано
+klemma embed --backend local                   # override бэкенда
+```
+
+### `klemma similar <citekey|section>`
+Семантический поиск похожих источников по embedding cosine similarity.
+
+```bash
+klemma similar smithML2020                     # похожие на этот источник
+klemma similar 2.3                             # близкие к центроиду раздела 2.3
+klemma similar smithML2020 -k 20               # top-20 результатов
+```
+
+При поиске по разделу показывает источники из **других** разделов, семантически близкие к данному — помогает обнаружить скрытые связи.
+
+### `klemma research -s <X.X>`
+Исследовательский брифинг: глубокий анализ готовности раздела к написанию. Автоматически извлекает фрагменты, собирает контекст (черновик, фрагменты, покрытие) и генерирует структуру аргументации с планом цитирования.
+
+При повторном запуске — инкрементальный режим: читает заметки пользователя из `## ✏️ Что нового`, определяет дельту и обновляет брифинг.
+
+```bash
+klemma research -s 1.3.2                       # первый запуск: полный анализ
+klemma research -s 1.3.2                       # повторный: инкрементальное обновление
+klemma research -s 1.3.2 --force               # переизвлечь все фрагменты
+```
+
+### `klemma outline`
+AI-генерация структуры проекта на основе файлов в директории, базы данных и KLEMMA.md. Инкрементальное обновление при повторном запуске.
+
+```bash
+klemma outline                                 # AI-генерация
+klemma outline -p "Фокус на KG-подходах"       # с директивой
+klemma outline --fresh                         # полная перегенерация
+klemma outline --scan-only                     # только сканировать файлы
 ```
 
 ### `klemma library [-s <X.X>] [--audit]`
 AI-анализ библиотеки. Три режима:
 
-- **status** (по умолчанию) — общее здоровье библиотеки: покрытие по главам, оценка качества, критические проблемы
-- **recommend** (`-s 2.3`) — рекомендации по чтению для конкретного раздела: порядок чтения, оценка имеющихся источников
-- **audit** (`--audit`) — глубокий аудит качества: дублирование, устаревшие источники, пробелы в методологии
-
-Отчёт сохраняется в vault (`Library/Library_{mode}_{date}.md`).
+- **status** (по умолчанию) — здоровье: покрытие, качество, проблемы
+- **recommend** (`-s 2.3`) — рекомендации по чтению для раздела
+- **audit** (`--audit`) — глубокий аудит: дублирование, устаревшие источники, пробелы в методологии, **co-citation analysis**, **author network**, prune-рекомендации
 
 ```bash
-klemma library              # здоровье библиотеки
-klemma library -s 2.3       # рекомендации для раздела 2.3
-klemma library --audit      # глубокий аудит
+klemma library                                 # здоровье
+klemma library -s 2.3                          # рекомендации для раздела
+klemma library --audit                         # глубокий аудит
+
+klemma library prune                           # просмотр prune-рекомендаций
+klemma library prune -v drop                   # только "drop" вердикты
+klemma library prune --clear smithML2020       # очистить вердикт
 ```
 
 ### `klemma ask "query"`
-Универсальный исследовательский агент. Запускает Claude Code в интерактивном режиме с полным контекстом диссертации: структура, источники, покрытие, пробелы, статистика фрагментов, план дня, очередь чтения. Claude получает доступ к инструментам (веб-поиск, файлы, bash) и сохраняет ответ в vault (`Agent/Agent_<date>.md`).
+Интерактивный исследовательский агент с полным контекстом проекта: структура, источники, покрытие, пробелы, фрагменты, outline. Ответы сохраняются в `project_root/`.
 
 ```bash
-klemma ask "Какие основные методы валидации прогнозов ледовой обстановки?"
+klemma ask "Какие основные методы валидации прогнозов?"
 klemma ask -s 1.3.2 "Найди статьи об AMSR2"
 klemma ask -ch 2 "Сравни архитектуры IceNet и ConvLSTM"
 ```
 
-### `klemma tools {add,list,remove,call}`
-Управление MCP-серверами. Klemma использует протокол [MCP](https://modelcontextprotocol.io) для подключения внешних инструментов (Zotero, arXiv, Semantic Scholar и др.).
-
-- **add** — зарегистрировать MCP-сервер (пишет в `config.yaml → mcp.servers`)
-- **list** — показать зарегистрированные серверы; `--probe` подключается и показывает доступные tools
-- **remove** — удалить сервер из конфига
-- **call** — прямой вызов инструмента (debug/power user)
+### `klemma acquire <url>`
+Скачивание PDF и регистрация в базе. Для bulk-импорта — `--batch` с JSON-файлом.
 
 ```bash
-klemma tools add zotero --command "uvx" --args "zotero-mcp" --env ZOTERO_LOCAL=true
-klemma tools add academia --command "python3" --args "-m academia_mcp --transport stdio"
-klemma tools list --probe
-klemma tools call zotero zotero_search_items '{"query": "ice forecast"}'
-klemma tools remove academia
+klemma acquire https://arxiv.org/pdf/2101.12345.pdf
+klemma acquire <url> --title "Paper" --authors "Smith, J." --year 2023
+klemma acquire --batch papers.json             # массовый импорт
+klemma acquire <url> --no-process              # не извлекать фрагменты
 ```
 
-### `klemma search "query"`
-Поиск статей через MCP-серверы (arXiv и др.). Требует зарегистрированный `academia` сервер. Результаты выводятся в таблице; можно добавить найденные в библиотеку.
+### `klemma info`
+Текущий проект: корневая директория, цепочка проектов, конфигурация, путь к БД.
 
-```bash
-klemma search "AMSR2 sea ice forecast"
-klemma search "neural ice prediction" --limit 10
-```
+### `klemma tree`
+Дерево вложенных проектов от текущего корня.
 
-### `klemma discover -s <X.X>`
-Hybrid discovery pipeline: автоматический поиск новых статей для раздела. Работает в два этапа:
-1. **Phase 1** (детерминированный): MCP-поиск по open reference gaps и ключевым словам раздела
-2. **Phase 2** (Claude): оценка релевантности найденного (relevance 1-5, usage type, priority)
-
-Результаты сохраняются в таблицу `discoveries` в SQLite; просмотр через `--review`.
-
-```bash
-klemma discover -s 1.3.2                # запуск pipeline
-klemma discover -s 1.3.2 --background   # запуск в фоне
-klemma discover --status                # статус фоновых процессов
-klemma discover --review                # просмотр и принятие/отклонение найденного
-```
+### `klemma migrate [--dry-run]`
+Миграция из старого формата (`~/.klemma/`) в per-directory проект. Разделяет конфиг на system (AI) и project (всё остальное), копирует context.md → KLEMMA.md.
 
 ### Backward-compatible aliases
 
-Старые имена команд работают как скрытые алиасы: `morning`→`plan`, `extract`→`process`, `agent`→`ask`, `stats`/`coverage`/`gaps`→`status`, `prepopulate`→`import`.
+Старые имена работают как скрытые алиасы: `morning`→`plan`, `extract`→`process`, `agent`→`ask`, `stats`/`coverage`/`gaps`→`status`, `prepopulate`→`import`.
 
 ## Конфигурация
 
-Файл `config.yaml` в корне проекта:
+Двухуровневая: system (`~/.klemma/config.yaml`) + project (`.klemma/config.yaml`). Вложенные проекты наследуют `obsidian`, `zotero`, `ai`, `embeddings` от родителя.
+
+### Системный конфиг (`~/.klemma/config.yaml`)
 
 ```yaml
 ai:
-  backend: "claude"          # "claude" (default) | "openai" | "litellm"
-  model: "opus"              # имя модели для выбранного бэкенда
-  max_pdf_chars: 50000       # максимум символов из PDF
-  timeout: 180               # таймаут на вызов AI (сек)
+  backend: "claude"            # "claude" (default) | "openai" | "litellm"
+  model: "opus"                # имя модели
+  timeout: 180                 # таймаут AI-вызова (сек)
   # base_url: "http://localhost:11434/v1"  # для Ollama/vLLM/LM Studio
-  # api_key_env: "OPENAI_API_KEY"          # имя env-переменной для API-ключа
-  # json_mode: false                       # структурированный JSON вывод
+  # api_key_env: "OPENAI_API_KEY"          # env-переменная для API-ключа
+```
 
+### Проектный конфиг (`.klemma/config.yaml`)
+
+```yaml
 obsidian:
   vault_path: "/path/to/vault"
-  notes_folder: "2 - Refs"   # папка с заметками источников
+  notes_folder: "2 - Refs"     # папка с заметками @citekey.md
   tags_folder: "3 - Tags"
 
 zotero:
-  library_json: "/path/to/pubs-bibtex.json"   # BetterBibTeX auto-export (для PDF lookup)
-  backend: "local"                             # "local" (default) | "mcp"
+  library_json: "/path/to/bbt-export.json"   # BetterBibTeX JSON auto-export
 
-mcp:                                           # MCP-серверы (управляются через klemma tools)
-  servers:
-    zotero:
-      command: "uvx"
-      args: ["zotero-mcp"]
-      env:
-        ZOTERO_LOCAL: "true"
-    academia:
-      command: "python3"
-      args: ["-m", "academia_mcp", "--transport", "stdio"]
+embeddings:
+  backend: "s2"                # "s2" (бесплатный S2 API) | "local" | "openai" | ""
+  # model: "specter2"          # имя модели (зависит от бэкенда)
+  # throttle: 3.1              # секунды между запросами к S2 API
+  # api_key_env: "OPENAI_API_KEY"  # для OpenAI бэкенда
 
-state:
-  db_path: "./data/klemma.db" # путь к SQLite базе
-
-dissertation:
-  current_chapter: 2
-  current_section: "2.3.1"
+project:
+  type: "dissertation"         # "dissertation" | "paper" | "thesis"
+  title: "Название работы"
   chapters:
-    1: "Analysis of ice forecasting domain"
-    2: "Geoinformation validation model"
-    3: "Validation methodology"
-    4: "Algorithm & software implementation"
-  chapter_mapping:            # regex → глава/раздел
+    1: "Литературный обзор"
+    2: "Методология"
+    3: "Результаты"
+  chapter_mapping:             # regex → глава/раздел
     - pattern: "icenet|ice.?net"
       chapter: 2
       section: "2.3.1"
   min_sources_per_section: 3
+
+state:
+  db_path: "./data/klemma.db"
 ```
 
-`zotero.library_json` — путь к BetterBibTeX JSON-экспорту. Используется для надёжного нахождения PDF по citekey. PDF ищутся в 3 этапа: прямой путь из БД → BetterBibTeX lookup (citekey → attachment path) → нечёткий поиск по имени файла в Zotero storage.
+`zotero.library_json` — путь к BetterBibTeX JSON-экспорту. PDF ищутся в 3 этапа: прямой путь из БД → BetterBibTeX lookup (citekey → attachment path) → нечёткий поиск по имени файла в Zotero storage.
+
+### Embedding-бэкенды
+
+| Бэкенд | Размерность | Стоимость | Требования |
+|--------|------------|-----------|------------|
+| `s2` | 768 (SPECTER) | Бесплатно | Интернет, throttle 3.1с |
+| `local` | 768 (SPECTER2) | Бесплатно | `klemma[local-embeddings]`, GPU рекомендуется |
+| `openai` | 1536 | Платно | `klemma[openai]`, API key |
+
+## Вложенные проекты
+
+Klemma поддерживает Git/NPM-style вложенность. Каждый проект — отдельная БД, но vault и Zotero наследуются от родителя.
+
+```
+thesis_dir/
+├── KLEMMA.md           # контекст диссертации
+├── .klemma/            # БД диссертации
+├── paper_ice/
+│   ├── KLEMMA.md       # контекст статьи (AI видит оба)
+│   └── .klemma/        # БД статьи (наследует vault/zotero)
+└── paper_climate/
+    ├── KLEMMA.md
+    └── .klemma/
+```
+
+```bash
+cd thesis_dir/paper_ice/
+klemma status                  # БД статьи, vault диссертации
+klemma info                    # показать цепочку проектов
+klemma tree                    # дерево вложенности
+```
 
 ## Формат заметок Obsidian
 
-Klemma читает YAML-фронтматтер заметок `@citekey.md`:
+Klemma создаёт и читает заметки `@citekey.md` с YAML-фронтматтером:
 
 ```yaml
 ---
-citekey: "anderssonSeasonalArcticSea2021"
-title: "Seasonal Arctic sea ice forecasting..."
-author: "Tom R. Andersson..."
-year: 2021
+citekey: "smithMachineLearning2020"
+title: "Machine Learning for NLP..."
+author: "John Smith..."
+year: 2020
 quality: 5
 priority: "high"
-chapter: 2                                    # основная глава
-section: "2.3.1"                              # основной раздел
-sections: [1.4.3, 2.2.2, 2.3.1, 3.2.1]      # все релевантные разделы
-chapters: [1, 2, 3]                           # все релевантные главы
-relevance_nr1: 5
-relevance_nr2: 4
-tags: ["Sea-Ice", "Machine-Learning"]
+chapter: 2
+section: "2.3.1"
+sections: [1.4.3, 2.2.2, 2.3.1]
+chapters: [1, 2, 3]
+tags: ["NLP", "Machine-Learning"]
 ---
 ```
 
-`chapter`/`section` — основной раздел (primary). `sections`/`chapters` — все разделы, в которых источник полезен. `klemma process` создаёт vault-заметки автоматически при обработке; `klemma research` находит источники по всем секциям.
+`chapter`/`section` — primary. `sections`/`chapters` — все релевантные. `klemma process` создаёт заметки автоматически.
 
 ## Архитектура
 
@@ -262,31 +318,24 @@ tags: ["Sea-Ice", "Machine-Learning"]
 klemma (CLI)
 ├── AI Provider ─────── AI-анализ (pluggable backend)
 │   ├── ClaudeClient ── Claude Code CLI (claude -p) — default
-│   ├── OpenAIClient ── OpenAI / Ollama / vLLM / LM Studio (openai SDK)
-│   ├── LiteLLMClient ─ 100+ провайдеров (litellm SDK)
-│   ├── планирование (plan)
-│   ├── извлечение фрагментов (process)
-│   ├── research briefing
-│   ├── library analysis (status/recommend/audit)
-│   ├── interactive agent (ask)
-│   └── discovery assessment (discover phase 2)
-├── MCP Tool Layer ─── plug-and-play внешние серверы
-│   ├── ToolRegistry → MCPClient → stdio transport
-│   ├── zotero-mcp ── Zotero library (search, metadata, fulltext)
-│   └── academia-mcp ─ arXiv, Semantic Scholar, web search
-├── LibraryProvider ── абстракция библиотеки (swappable backend)
-│   ├── LocalLibrary ─ BBT JSON файл (default)
-│   └── MCPLibrary ─── zotero-mcp server
-├── Obsidian vault ─── заметки источников + research notes + daily notes + library reports
+│   ├── OpenAIClient ── OpenAI / Ollama / vLLM / LM Studio
+│   └── LiteLLMClient ─ 100+ провайдеров (litellm SDK)
+├── Embeddings ──────── семантический поиск (pluggable backend)
+│   ├── SemanticScholar ─ S2 API (768-dim SPECTER, бесплатно)
+│   ├── LocalSPECTER ──── sentence-transformers (офлайн)
+│   └── OpenAI ─────────── text-embedding-3-small (1536-dim)
+├── LibraryProvider ── BBT JSON → citekey/PDF/metadata
+├── Obsidian vault ─── @citekey.md + research notes + reports
 ├── BetterBibTeX JSON ─ citekey → PDF path mapping
-├── Zotero storage ─── PDF файлы (fallback)
+├── Zotero storage ─── PDF файлы
 ├── PyMuPDF ────────── извлечение текста из PDF
 └── SQLite
-    ├── sources ─────────── Zotero entries, metadata, processing status
-    ├── source_sections ─── junction: source × section (multi-section)
-    ├── fragments ───────── citation fragments → chapter/section mapping
-    ├── reference_gaps ──── missing refs from bibliographies (score, auto-resolve)
-    ├── discoveries ─────── found papers (hybrid pipeline: MCP search + Claude assessment)
-    ├── daily_plans ─────── generated plans
-    └── reading_queue ───── prioritized reading list
+    ├── sources ─────────── записи Zotero (+ embedding BLOB, embedding_model)
+    ├── source_sections ─── source × section (multi-section)
+    ├── fragments ───────── фрагменты для цитирования (+ citation_intent)
+    ├── reference_gaps ──── пробелы из библиографий (+ citation_intent, intent scoring)
+    ├── citation_links ──── citation graph (source → target, intent, in_library)
+    ├── daily_plans ─────── сгенерированные планы
+    ├── reading_queue ───── очередь чтения
+    └── prune_verdicts ──── результаты аудита (drop/maybe)
 ```

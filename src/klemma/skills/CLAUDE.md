@@ -6,20 +6,20 @@ Dissertation context and tags are loaded from `~/.klemma/` at CLI startup and pa
 
 ## Modules
 
-### planner.py (~215 lines)
+### planner.py (248 lines)
 Morning briefing generation. Gathers: deadline, streak, yesterday's plan, chapter plan, library digest, coverage stats, ref-gaps.
 - `generate_morning_plan(config, state, vault, ai, dissertation_context, klemma_home)` — full context → `prompts/morning.md` → Claude → `DailyPlan` → state + vault
 - `_get_current_deadline()` — calculate days remaining for current chapter (also used by librarian, agent)
 - `_read_chapter_plan()` — load session plan from vault
 - Intervention types: `NONE`, `REPLAN`, `BOOST`, `SKIP`
 
-### extractor.py (~205 lines)
-Fragment extraction from PDFs.
-- `extract_fragments(entry, pdf_text, config, state, ai, dissertation_context, available_tags, klemma_home)` — renders `prompts/extract.md` → Claude → `ExtractionResult`
-- `extract_from_citekey()` — full pipeline (find PDF → extract text → analyze)
+### extractor.py (215 lines)
+Fragment extraction from PDFs with citation intent classification.
+- `extract_fragments(entry, pdf_text, config, state, ai, dissertation_context, available_tags, klemma_home)` — renders `prompts/extract.md` → Claude → `ExtractionResult` (fragments + citation_intent + citation_links)
+- `extract_from_citekey()` — full pipeline (find PDF → extract text → analyze → save citation_links to graph)
 - `save_fragments_to_vault(citekey, fragments, vault, ..., dissertation_context, available_tags, klemma_home)` — appends to `@citekey.md`; auto-creates note if missing
 
-### researcher.py (~700 lines — largest skill)
+### researcher.py (771 lines — largest skill)
 Section research briefings. Two modes:
 - **Initial**: auto-extract fragments → collect context → `prompts/research.md` → `ResearchResult` → `project_root/Research_{section}.md`
 - **Incremental**: reads existing research note from project_root `## ✏️ Что нового` (user annotations), computes delta (new sources, fragment count), `prompts/research_incremental.md` → merged result. User notes archived to `## 📋 История изменений` with timestamp.
@@ -29,14 +29,16 @@ Section research briefings. Two modes:
 - `_save_report(section, content, project_root)` — writes report to project_root
 - `_load_section_sources()` — enrich sources with vault AI summaries
 
-### librarian.py (~260 lines)
-Library health analysis. Three modes: `status` (health), `recommend` (section-focused), `audit` (deep quality check).
+### librarian.py (522 lines)
+Library health analysis. Three modes: `status` (health), `recommend` (section-focused), `audit` (deep quality check + citation graph + prune).
 - `analyze_library(project_root=...)` — gathers context → `prompts/librarian.md` → `LibraryReport` → `project_root/Library_{mode}_{date}.md`
-- `_gather_library_context()` — summary, quality tiers, ref-gaps, sources compact list
-- `_format_sources_compact()` — compact list for prompt (citekey, author, year, title, q, ch, s, f)
-- Prune verdicts (audit mode): saved to DB with "drop" and "maybe" categories
+- `_gather_library_context()` — summary, quality tiers, ref-gaps, sources compact list, citation graph stats
+- `_format_sources_compact()` — compact list for prompt (citekey, author, year, title, q, ch, s, f, intent)
+- `_get_citation_graph_stats()` — co-citation analysis, author network, hub scores from `citation_links`
+- Prune mode: `prompts/librarian_prune.md` → AI generates drop/maybe verdicts → `state.save_prune_verdicts()`
+- `list_prune_verdicts()` / `clear_prune_verdict()` — CLI for browsing/clearing verdicts
 
-### agent.py (~155 lines)
+### agent.py (212 lines)
 Builds full project context for interactive Claude sessions.
 - `build_agent_context(project_root=...)` — gathers sources, coverage, gaps, fragments, plan, reading queue + scans project_root for reports/files → `prompts/agent.md` → system prompt
 - `_scan_project_reports(project_root)` — finds Outline/Research/Library/Agent reports + project files (.md, .tex, .bib, .pdf, .doc, .docx)
@@ -44,7 +46,7 @@ Builds full project context for interactive Claude sessions.
 - For non-Claude backends: `ai.call()` with full context → terminal output
 - Saves responses to `project_root/Agent_<date>.md`
 
-### outliner.py (~250 lines)
+### outliner.py (296 lines)
 Project outline generation from directory contents + database context. Two modes:
 - **Initial**: scan files → library context → `prompts/outline.md` → Claude → `OutlineResult` → `project_root/Outline_{name}.md`
 - **Incremental**: reads previous outline from project_root `## ✏️ Что нового` (user feedback), `prompts/outline_incremental.md` → updated outline. User notes archived to `## 📋 История изменений`.
@@ -54,7 +56,7 @@ Project outline generation from directory contents + database context. Two modes
 - `OutlineResult` dataclass: title, description, chapters, sections, scientific_results, outline_text, update_summary
 - CLI options: `-p/--prompt` (custom directive), `--fresh` (force full regeneration)
 
-### acquirer.py (258 lines)
+### acquirer.py (164 lines)
 Local-only paper acquisition pipeline: download → local storage → DB.
 - `acquire_paper()` — orchestrates full pipeline
 - `download_pdf()` — HTTP stream with validation (min 10KB, content-type check)
@@ -62,6 +64,12 @@ Local-only paper acquisition pipeline: download → local storage → DB.
 - `poll_bbt_citekey()` — polls BBT JSON export for new citekey (2s intervals, 30s timeout)
 - `load_batch()` — parse JSON batch file
 - Dataclasses: `PaperMetadata`, `AcquireResult`
+
+### work_context.py (93 lines)
+Dynamic work context builder — replaces hardcoded DISSERTATION_CONTEXT constant.
+- `build_work_context(project, language)` — generates context string from ProjectConfig fields (title, chapters, deadlines, priority terms); supports any project type (dissertation/paper/thesis)
+- `get_current_deadline(project, language)` — returns (deadline_str, days_remaining) for current focus chapter
+- Multi-language labels (ru/en) for chapter headings, deadlines, etc.
 
 ## Data flows
 

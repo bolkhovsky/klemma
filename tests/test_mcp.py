@@ -5,7 +5,7 @@ import importlib.util
 import pytest
 
 from klemma.tools.registry import ToolInfo, ToolRegistry
-from klemma.tools.specter_server import create_specter_server
+from klemma.tools.specter_server import compare_intents, create_specter_server
 
 _MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None
 _skip_no_mcp = pytest.mark.skipif(not _MCP_AVAILABLE, reason="requires klemma[mcp]: pip install klemma[mcp]")
@@ -140,14 +140,15 @@ class TestSpecterServerCreation:
         assert server is not None
         assert server.name == "klemma-specter"
 
-    def test_create_server_has_three_tools(self):
+    def test_create_server_has_four_tools(self):
         server = create_specter_server(backend="s2")
         tools = server._tool_manager.list_tools()
         tool_names = {t.name for t in tools}
         assert "embed_paper" in tool_names
         assert "find_similar" in tool_names
         assert "batch_embed" in tool_names
-        assert len(tool_names) == 3
+        assert "get_citation_intents" in tool_names
+        assert len(tool_names) == 4
 
 
 class TestEmbedPaperTool:
@@ -316,3 +317,88 @@ def _call_batch_embed(provider, papers):
         "embedded": len(results),
         "failed": len(errors),
     }
+
+
+# ---------------------------------------------------------------------------
+# Citation Intent Comparison Tests
+# ---------------------------------------------------------------------------
+
+
+class TestCompareIntents:
+    """Tests for LLM vs S2 citation intent comparison."""
+
+    def test_perfect_match(self):
+        llm = {"p1": "background", "p2": "method", "p3": "result_comparison"}
+        s2 = {
+            "p1": ["Background"],
+            "p2": ["Methodology"],
+            "p3": ["Result"],
+        }
+        result = compare_intents(llm, s2)
+        assert result["total"] == 3
+        assert result["matches"] == 3
+        assert result["accuracy"] == 1.0
+
+    def test_no_match(self):
+        llm = {"p1": "background", "p2": "method"}
+        s2 = {
+            "p1": ["Methodology"],
+            "p2": ["Result"],
+        }
+        result = compare_intents(llm, s2)
+        assert result["total"] == 2
+        assert result["matches"] == 0
+        assert result["accuracy"] == 0.0
+
+    def test_partial_match(self):
+        llm = {"p1": "background", "p2": "method", "p3": "background"}
+        s2 = {
+            "p1": ["Background"],
+            "p2": ["Result"],
+            "p3": ["Background", "Methodology"],
+        }
+        result = compare_intents(llm, s2)
+        assert result["total"] == 3
+        assert result["matches"] == 2  # p1 and p3 match
+        assert result["accuracy"] == pytest.approx(2 / 3, abs=0.01)
+
+    def test_multi_intent_s2(self):
+        """S2 can return multiple intents per citation — match if any."""
+        llm = {"p1": "method"}
+        s2 = {"p1": ["Background", "Methodology"]}
+        result = compare_intents(llm, s2)
+        assert result["matches"] == 1
+
+    def test_missing_s2_data(self):
+        """Papers not in S2 data are skipped."""
+        llm = {"p1": "background", "p2": "method"}
+        s2 = {"p1": ["Background"]}
+        result = compare_intents(llm, s2)
+        assert result["total"] == 1  # p2 skipped
+        assert result["matches"] == 1
+
+    def test_empty_inputs(self):
+        result = compare_intents({}, {})
+        assert result["total"] == 0
+        assert result["accuracy"] == 0.0
+
+    def test_confusion_matrix(self):
+        llm = {"p1": "background", "p2": "background"}
+        s2 = {
+            "p1": ["Background"],
+            "p2": ["Methodology"],
+        }
+        result = compare_intents(llm, s2)
+        assert "background" in result["confusion"]
+        assert result["confusion"]["background"]["background"] == 1
+        assert result["confusion"]["background"]["method"] == 1
+
+    def test_details_per_paper(self):
+        llm = {"p1": "method"}
+        s2 = {"p1": ["Methodology"]}
+        result = compare_intents(llm, s2)
+        assert len(result["details"]) == 1
+        detail = result["details"][0]
+        assert detail["citekey"] == "p1"
+        assert detail["llm_intent"] == "method"
+        assert detail["match"] is True

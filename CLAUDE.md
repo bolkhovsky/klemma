@@ -1,7 +1,7 @@
 # Klemma — AI Academic Assistant
 
 ## What is this
-Klemma is a CLI tool for academic writing. It manages literature (via Zotero), extracts citation fragments from PDFs (via Claude AI), generates research briefings, daily plans, and tracks coverage. Supports multiple concurrent projects (dissertation, papers, theses) with separate databases and bibliographies.
+Klemma is a CLI tool for academic writing. It manages literature (via Zotero), extracts citation fragments from PDFs (via Claude AI) with citation intent classification, generates research briefings, daily plans, semantic search via SPECTER embeddings, citation graph analysis, and tracks coverage. Supports multiple concurrent projects (dissertation, papers, theses) with separate databases and bibliographies.
 
 ## Architecture
 - **CLI mode**: `klemma <command>` — all commands are headless CLI
@@ -10,31 +10,39 @@ Klemma is a CLI tool for academic writing. It manages literature (via Zotero), e
 - **Report output**: All AI reports (outline, research, library) save to `project_root/` directly. Only `@citekey.md` bibliography notes go to vault `notes_folder`.
 - **Library abstraction**: LocalLibrary backend (BBT JSON)
 - **AI abstraction**: AIProvider protocol with ClaudeClient (CLI), OpenAIClient, LiteLLMClient backends + `create_ai()` factory
-- **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/library/project
+- **Embeddings**: EmbeddingProvider protocol with SemanticScholar (free S2 API), LocalSPECTER (sentence-transformers), OpenAI backends + `create_embeddings()` factory
+- **Context**: KlemmaContext dataclass created once per CLI command, holds config/state/vault/ai/embeddings/library/project
 - **Multi-project**: Git/NPM-style per-directory projects. `klemma init` in any dir creates `.klemma/` + `KLEMMA.md`. Nested projects inherit shared resources (vault, zotero) from parent. System config in `~/.klemma/`.
 
 ## Project structure
 ```
 src/klemma/
-├── cli.py              — Click CLI entry point
-├── config.py           — Pydantic config models (ProjectConfig, SystemConfig, KlemmaConfig) + discover_project_root(), resolve_effective_config(), resolve_prompt()
-├── context.py          — KlemmaContext dataclass (single object per CLI command, includes project_root/project_chain)
-├── setup.py            — `klemma init` logic — init_project() (per-dir .klemma/) + init_system() (~/.klemma/)
-├── state.py            — SQLite state manager
-├── ai.py               — AIProvider protocol + AIProviderBase + ClaudeClient + create_ai() factory
-├── ai_openai.py        — OpenAI-compatible backend (OpenAI, Ollama, vLLM, LM Studio)
-├── ai_litellm.py       — LiteLLM universal backend (100+ providers)
-├── vault.py            — Obsidian adapter (CLI/file I/O, update_section)
-├── library_provider.py — LibraryProvider protocol + LocalLibrary (BBT JSON)
+├── cli.py              — Click CLI entry point (2274 lines)
+├── config.py           — Pydantic config models + discover_project_root(), resolve_effective_config(), resolve_prompt() (635 lines)
+├── context.py          — KlemmaContext dataclass (single object per CLI command) (41 lines)
+├── setup.py            — `klemma init` logic — init_project() + init_system() (263 lines)
+├── state.py            — SQLite state manager (1599 lines)
+├── ai.py               — AIProvider protocol + ClaudeClient + create_ai() factory (249 lines)
+├── ai_openai.py        — OpenAI-compatible backend (105 lines)
+├── ai_litellm.py       — LiteLLM universal backend (70 lines)
+├── embeddings.py       — EmbeddingProvider protocol + 3 backends + cosine_similarity (257 lines)
+├── discovery.py        — Auto-discovery for klemma init (Obsidian vault, Zotero, BBT JSON) (260 lines)
+├── vault.py            — Obsidian adapter (CLI/file I/O, update_section) (249 lines)
+├── library_provider.py — LibraryProvider protocol + LocalLibrary (BBT JSON) (86 lines)
 ├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, acquirer, outliner, work_context)
-└── literature/         — PDF extraction, models, note_factory
+├── literature/         — PDF extraction, models, note_factory
+└── tools/              — MCP tool infrastructure (567 lines)
+    ├── client.py       — MCPClient for stdio transport (129 lines)
+    ├── registry.py     — ToolRegistry for multi-server routing (99 lines)
+    └── specter_server.py — SPECTER MCP server + citation intent comparison (339 lines)
 prompts/                    — Shipped Jinja2 prompt templates (overridable via ~/.klemma/prompts/)
 ├── morning.md              — daily plans
-├── extract.md              — fragment extraction
-├── annotate.md             — vault note AI annotation
+├── extract.md              — fragment extraction (scaffold prompting + citation intent)
+├── annotate.md             — vault note AI annotation (+ citation intent in key_references)
 ├── research.md             — research briefing (first run)
 ├── research_incremental.md — incremental research update
 ├── librarian.md            — library analysis (3 modes)
+├── librarian_prune.md      — prune recommendation generation
 ├── agent.md                — interactive agent system prompt
 ├── outline.md              — project outline generation
 └── outline_incremental.md  — incremental outline update
@@ -50,15 +58,18 @@ tags.example.yaml           — Template tag taxonomy
 └── klemma-status/SKILL.md  — Agent skill: coverage & gaps check
 ```
 
-## Key commands (12)
+## Key commands (14)
 - `klemma init [--type paper|thesis]` — create project in current directory (.klemma/ + KLEMMA.md)
 - `klemma outline [-p "directive"] [--fresh] [--scan-only]` — AI-generate project structure; incremental on repeat, `-p` for custom directive, `--fresh` for full regeneration
 - `klemma plan` — daily plan generation (library digest included)
-- `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose`, `--chapter N`)
-- `klemma process [<citekeys>...]` — extract fragments from PDF; no arg = batch all pending; parallel by default
+- `klemma status` — unified stats + coverage + gaps + ref-gaps (`--verbose` adds: intent coverage matrix, embedding stats, citation graph stats; `--chapter N` to filter)
+- `klemma process [<citekeys>...]` — extract fragments from PDF with citation intent classification; no arg = batch all pending; parallel by default; auto-embeds if embeddings configured
+- `klemma embed [<citekey>] [--dry-run] [--backend]` — generate SPECTER/OpenAI embeddings for semantic search; no arg = backfill all completed sources
+- `klemma similar <citekey|section> [-k N]` — find semantically similar sources by embedding cosine similarity; section mode shows cross-section recommendations
 - `klemma acquire <url> [--batch file.json]` — download PDF locally → register in DB
 - `klemma research -s 1.3.2` — research briefing for a section
-- `klemma library [-s 2.3] [--audit]` — AI library analysis (status / recommend / audit)
+- `klemma library [-s 2.3] [--audit]` — AI library analysis (status / recommend / audit); audit includes co-citation analysis, author network, prune recommendations
+- `klemma library prune [-c N] [-v drop|maybe] [--clear KEY]` — browse/clear prune recommendations from audit
 - `klemma ask "query"` — interactive research agent with full dissertation context
 - `klemma info` — show current project info (root, chain, config, DB)
 - `klemma tree` — show nested project tree from current root
@@ -100,13 +111,18 @@ Created by `klemma init` in any directory. Navigate to project dir and run comma
 - `ai.base_url` — endpoint URL for OpenAI-compatible servers (Ollama, vLLM, LM Studio)
 - `ai.api_key_env` — env var name for API key (e.g. `"OPENAI_API_KEY"`)
 - `ai.json_mode` — enable structured JSON output when backend supports it
+- `embeddings.backend` — `"s2"` (Semantic Scholar, free), `"local"` (sentence-transformers), `"openai"`, or `""` (disabled)
+- `embeddings.model` — model name (backend-specific, e.g. `"allenai/specter2"`)
+- `embeddings.throttle` — seconds between S2 API requests (default: 3.1)
+- `embeddings.api_key_env` — env var for API key (OpenAI backend)
 - Requires: AI backend (`claude` CLI by default, or `pip install klemma[openai]` / `klemma[litellm]`)
+- Optional: `pip install klemma[embeddings]` for semantic search, `pip install klemma[mcp]` for MCP tools
 
 **Project discovery:** `discover_project_root()` traverses up from cwd to find nearest `.klemma/` directory (like `git rev-parse --show-toplevel`).
 
 **Config merge order:** system (`~/.klemma/`) < parent project < child project < CLI `--config`.
 
-**Selective inheritance:** Only shared resources (`obsidian`, `zotero`, `ai`) are inherited from parent. Project-specific keys (`project`, `tags`, `state`, `processing`) are NOT inherited.
+**Selective inheritance:** Only shared resources (`obsidian`, `zotero`, `ai`, `embeddings`) are inherited from parent. Project-specific keys (`project`, `tags`, `state`, `processing`) are NOT inherited.
 
 **Prompt resolution:** `resolve_prompt(name, klemma_home, project_chain?)` checks project → parent project → system (`~/.klemma/prompts/`) → shipped prompts.
 
@@ -134,12 +150,15 @@ Navigate into `thesis_dir/paper_ice/` and run `klemma status` — it uses the pa
 Run `klemma migrate` in desired project directory. Splits `~/.klemma/config.yaml` into system (AI) and project (everything else), copies context.md → KLEMMA.md, tags.yaml, DB.
 
 ## SQLite tables
-- `sources` — Zotero entries with processing status and dissertation metadata
+Schema versioned via `PRAGMA user_version` (currently v3). Migrations in `state.py:_migrate_schema()`.
+- `sources` — Zotero entries with processing status, dissertation metadata, `embedding` BLOB (float32), `embedding_model` TEXT
 - `source_sections` — junction table: source_id × section (multi-section support)
-- `fragments` — extracted citation fragments mapped to chapters/sections
-- `reference_gaps` — missing references found in source bibliographies (status: open/resolved)
+- `fragments` — extracted citation fragments mapped to chapters/sections; `citation_intent` (background/method/result_comparison)
+- `reference_gaps` — missing references from bibliographies (status: open/resolved); `citation_intent`, intent-weighted scoring
+- `citation_links` — citation graph: source_id → target (title_hash for dedup, citation_intent, in_library flag)
 - `daily_plans` — generated daily plans
 - `reading_queue` — prioritized reading list
+- `prune_verdicts` — library audit recommendations (drop/maybe)
 
 ## Module documentation
 
@@ -155,11 +174,13 @@ Detailed documentation for each subsystem lives in its directory, loaded increme
 ## Development
 ```bash
 pip install -e ".[dev]"
-pip install -e ".[openai]"     # OpenAI / Ollama / vLLM / LM Studio backend
-pip install -e ".[litellm]"    # LiteLLM universal backend (100+ providers)
-pip install -e ".[all-ai]"     # all AI backends
-klemma init                    # scaffold ~/.klemma/ with config templates
-# edit ~/.klemma/config.yaml, context.md, tags.yaml for your project
+pip install -e ".[openai]"           # OpenAI / Ollama / vLLM / LM Studio backend
+pip install -e ".[litellm]"          # LiteLLM universal backend (100+ providers)
+pip install -e ".[embeddings]"       # semantic search (S2/OpenAI backends)
+pip install -e ".[local-embeddings]" # offline SPECTER2 (sentence-transformers)
+pip install -e ".[mcp]"              # MCP server support
+pip install -e ".[all-ai]"           # all AI backends
+klemma init                          # scaffold ~/.klemma/ with config templates
 klemma --help
 ```
 
