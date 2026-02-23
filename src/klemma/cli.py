@@ -1265,6 +1265,38 @@ def status(ctx, verbose, chapter):
             for model, cnt in emb_stats["models"].items():
                 console.print(f"  [dim]{model}: {cnt}[/dim]")
 
+    # --- Verbose: citation graph stats ---
+    if verbose:
+        graph = state.get_citation_graph_stats()
+        if graph["total_links"] > 0:
+            console.print()
+            console.print(
+                f"[bold]Citation Graph[/bold]: {graph['total_links']} links, "
+                f"{graph['unique_targets']} unique targets "
+                f"({graph['in_library']} in library, {graph['external']} external)"
+            )
+            console.print(
+                f"  [dim]{graph['source_count']} citing sources, "
+                f"avg {graph['avg_refs_per_source']} refs/source[/dim]"
+            )
+            if graph["most_cited_external"]:
+                console.print()
+                console.print("[bold]Most Cited External[/bold] [dim](bridging nodes)[/dim]")
+                for ref in graph["most_cited_external"][:5]:
+                    authors = (ref["target_authors"] or "")[:25]
+                    year = ref["target_year"] or ""
+                    console.print(
+                        f"  [yellow]x{ref['cite_count']}[/yellow]  "
+                        f"{authors} ({year}) [dim]{(ref['target_title'] or '')[:40]}[/dim]"
+                    )
+            if graph["most_connected_internal"]:
+                console.print()
+                console.print("[bold]Most Connected Internal[/bold]")
+                for ref in graph["most_connected_internal"][:5]:
+                    console.print(
+                        f"  [green]x{ref['cite_count']}[/green]  @{ref['target_citekey']}"
+                    )
+
 
 # Backward-compatible aliases
 @main.command(hidden=True)
