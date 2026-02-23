@@ -982,6 +982,131 @@ def embed(ctx, citekey, dry_run, backend):
 
 
 @main.command()
+@click.argument("citekey_or_section")
+@click.option("-k", "--top-k", default=10, help="Number of results (default: 10)")
+@click.pass_context
+def similar(ctx, citekey_or_section, top_k):
+    """Find semantically similar sources.
+
+    CITEKEY: find sources similar to a specific paper.
+    SECTION (e.g. 2.3): find sources close to that section's centroid
+    (useful for discovering cross-section recommendations).
+
+    Requires embeddings to be stored (run `klemma embed` first).
+    """
+    from .embeddings import cosine_similarity
+
+    kctx = _get_context(ctx)
+    state = kctx.state
+    emb = kctx.embeddings
+
+    if not emb:
+        # Still try to use stored embeddings for comparison
+        all_emb = state.get_all_embeddings()
+        if not all_emb:
+            console.print(
+                "[red]No embeddings found. Run `klemma embed` first.[/red]"
+            )
+            return
+        model_name = None
+    else:
+        model_name = emb.model_name
+        all_emb = state.get_all_embeddings(model=model_name)
+        if not all_emb:
+            console.print(
+                "[red]No embeddings found. Run `klemma embed` first.[/red]"
+            )
+            return
+
+    # Determine if input is a citekey or section
+    arg = citekey_or_section
+    is_section = bool(arg[0].isdigit() and "." in arg)
+
+    if is_section:
+        # Section centroid mode
+        section_sources = state.get_section_sources(arg)
+        section_vecs = [all_emb[sid] for sid in section_sources if sid in all_emb]
+        if not section_vecs:
+            console.print(f"[red]No embedded sources for section {arg}[/red]")
+            return
+        dim = len(section_vecs[0])
+        query_vec = [
+            sum(v[i] for v in section_vecs) / len(section_vecs)
+            for i in range(dim)
+        ]
+        console.print(
+            f"[bold]Sources similar to section {arg}[/bold] "
+            f"[dim](centroid of {len(section_vecs)} sources)[/dim]\n"
+        )
+        # Exclude sources already in this section
+        exclude = set(section_sources)
+    else:
+        # Citekey mode
+        result = state.get_embedding(arg)
+        if not result:
+            # Try to embed on the fly
+            if emb and kctx.library:
+                entry = kctx.library.entries.get(arg)
+                if entry and entry.abstract:
+                    vec = emb.embed(entry.title or arg, entry.abstract)
+                    if vec:
+                        state.save_embedding(arg, vec, emb.model_name)
+                        query_vec = vec
+                        console.print(f"[dim]Embedded @{arg} on the fly[/dim]\n")
+                    else:
+                        console.print(f"[red]Could not embed @{arg}[/red]")
+                        return
+                else:
+                    console.print(f"[red]No embedding for @{arg} and no abstract to embed[/red]")
+                    return
+            else:
+                console.print(f"[red]No embedding for @{arg}. Run `klemma embed {arg}` first.[/red]")
+                return
+        else:
+            query_vec = result[0]
+        console.print(f"[bold]Sources similar to @{arg}[/bold]\n")
+        exclude = {arg}
+
+    # Compute similarities
+    sims = []
+    for sid, vec in all_emb.items():
+        if sid in exclude:
+            continue
+        sim = cosine_similarity(query_vec, vec)
+        sims.append((sid, sim))
+    sims.sort(key=lambda x: x[1], reverse=True)
+
+    # Display
+    entries = kctx.library.entries if kctx.library else {}
+    table = Table(show_edge=False, pad_edge=False)
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Source", style="cyan")
+    table.add_column("Similarity", justify="right", width=8)
+    table.add_column("Section", width=8)
+
+    for i, (sid, sim) in enumerate(sims[:top_k], 1):
+        entry = entries.get(sid)
+        title = f"@{sid}"
+        if entry:
+            author_short = (entry.authors_str or "")[:25]
+            year = entry.year or ""
+            title = f"{author_short} ({year})"
+        source = state.get_source(sid)
+        sec = source.get("primary_section", "") if source else ""
+        style = "green" if sim > 0.8 else "yellow" if sim > 0.5 else "dim"
+        table.add_row(str(i), title, f"[{style}]{sim:.3f}[/{style}]", sec)
+
+    console.print(table)
+
+    if is_section:
+        # Show cross-section discoveries
+        cross = [(sid, sim) for sid, sim in sims[:top_k]
+                 if not any(sid in state.get_section_sources(arg))]
+        if cross:
+            console.print(f"\n[dim]{len(cross)} sources from other sections[/dim]")
+
+
+@main.command()
 @click.option("--verbose", "-v", is_flag=True, help="Show full detailed tables")
 @click.option("--chapter", "-ch", type=int, help="Filter by chapter")
 @click.pass_context
