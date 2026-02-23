@@ -12,12 +12,26 @@ class VaultAdapter:
     """Abstracts Obsidian vault operations. Uses CLI when available, file I/O otherwise."""
 
     def __init__(self, vault_path: str, use_cli: Optional[bool] = None):
-        self.vault_path = Path(vault_path)
+        self.vault_path = Path(vault_path).expanduser().resolve()
         self.use_cli = use_cli if use_cli is not None else self._detect_cli()
 
     @staticmethod
     def _detect_cli() -> bool:
         return shutil.which("obsidian") is not None
+
+    def _ensure_within_vault(self, path: Path) -> Path:
+        """Validate that a resolved path stays inside the vault root."""
+        root = self.vault_path
+        resolved = path.resolve()
+        if resolved != root and root not in resolved.parents:
+            raise ValueError(f"Path escapes vault root: {path}")
+        return resolved
+
+    def _resolve_folder(self, folder: Optional[str] = None) -> Path:
+        """Resolve a folder path inside the vault root."""
+        if not folder:
+            return self.vault_path
+        return self._ensure_within_vault(self.vault_path / folder)
 
     def search(self, query: str, limit: int = 20) -> list[dict]:
         """Search vault for notes matching query."""
@@ -90,9 +104,9 @@ class VaultAdapter:
                 pass
 
         # File I/O (always write to ensure file exists)
-        target_dir = self.vault_path / folder if folder else self.vault_path
+        target_dir = self._resolve_folder(folder)
         target_dir.mkdir(parents=True, exist_ok=True)
-        path = target_dir / f"{name}.md"
+        path = self._ensure_within_vault(target_dir / f"{name}.md")
         path.write_text(content, encoding="utf-8")
         return path
 
@@ -146,8 +160,8 @@ class VaultAdapter:
 
     def append_to_note(self, name: str, content: str, folder: Optional[str] = None) -> Optional[Path]:
         """Append content to an existing note."""
-        target_dir = self.vault_path / folder if folder else self.vault_path
-        path = target_dir / f"{name}.md"
+        target_dir = self._resolve_folder(folder)
+        path = self._ensure_within_vault(target_dir / f"{name}.md")
         if not path.exists():
             return None
         existing = path.read_text(encoding="utf-8")
@@ -190,7 +204,7 @@ class VaultAdapter:
 
     def list_notes(self, folder: str) -> list[str]:
         """List note names in a folder."""
-        target_dir = self.vault_path / folder
+        target_dir = self._resolve_folder(folder)
         if not target_dir.exists():
             return []
         return [p.stem for p in sorted(target_dir.glob("*.md"))]
@@ -226,11 +240,11 @@ class VaultAdapter:
         """Find daily notes directory."""
         # Common patterns
         for candidate in ["Daily", "0 - Atlas/Daily", "Journal", "daily"]:
-            d = self.vault_path / candidate
+            d = self._resolve_folder(candidate)
             if d.exists():
                 return d
         # Fallback: create in root
-        d = self.vault_path / "Daily"
+        d = self._resolve_folder("Daily")
         d.mkdir(exist_ok=True)
         return d
 

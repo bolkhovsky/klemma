@@ -75,6 +75,17 @@ klemma outline                                 # AI-генерация outline
 klemma outline -p "Фокус на методологии"       # с директивой
 ```
 
+## GitHub PR Auto-Checking (Codex)
+
+Репозиторий уже проверяется стандартным CI (`ruff` + `pytest`) на PR.
+Чтобы добавить автоматические Codex-fix PR при падении CI:
+
+1. Добавьте секрет репозитория: `OPENAI_API_KEY`.
+2. Убедитесь, что в GitHub Actions включены permissions на запись для PR/contents.
+3. Используйте workflow: `.github/workflows/codex-auto-fix.yml`.
+
+Логика: при падении workflow `CI` Codex пытается сделать минимальный фикс, повторно запускает `ruff` и `pytest`, и открывает PR с исправлением.
+
 ## Команды (14)
 
 ### `klemma init`

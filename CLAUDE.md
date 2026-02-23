@@ -184,6 +184,26 @@ klemma init                          # scaffold ~/.klemma/ with config templates
 klemma --help
 ```
 
+## Feature development workflow
+
+Every feature follows this sequence. Do not skip or reorder steps.
+
+1. **Spec** — read the feature description and acceptance criteria in `ROADMAP.md`
+2. **Plan** — invoke the `sparc:architect` skill for detailed design; wait for approval before coding
+3. **Code** — implement the feature
+4. **Verify** — `ruff check src/ tests/` then `python -m pytest tests/ -q`; fix until both pass
+5. **Docs** — update all affected `CLAUDE.md` files, `README.md`, and user guide in `docs/`
+6. **Commit & PR** — atomic commit, then `gh pr create` with body format:
+   ```
+   ## Release Note
+   <1-2 sentence human-readable description of what changed and why>
+
+   ## Changes
+   - <bulleted list of code changes and bugfixes>
+   ```
+7. **Cross-check** — on the GitHub PR, run Codex CLI (`codex`) for independent review; iterate until all findings are resolved
+8. **Blog note** — write a short TG blog post draft (3-5 sentences, casual tone); do NOT commit this file
+
 ## Maintaining CLAUDE.md documentation
 
 This documentation is a modular knowledge graph — 7 interconnected CLAUDE.md files loaded incrementally as the agent navigates directories. **Keep it up to date when changing code.**
