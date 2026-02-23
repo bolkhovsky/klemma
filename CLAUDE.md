@@ -208,7 +208,7 @@ Every feature follows this sequence. Do not skip or reorder steps.
 3. **Code** — implement the feature
 4. **Verify** — `ruff check src/ tests/` then `python -m pytest tests/ -q`; fix until both pass
 5. **Docs** — update all affected `CLAUDE.md` files, `README.md`, and user guide in `docs/`
-6. **Commit & PR** — atomic commit, then `gh pr create`. The PR body must include a **Release Note** mini-article (~300 words) with four sections:
+6. **Commit & PR** — atomic commit, then `gh pr create`. Link the PR to its epic by including `Part of #N` in the PR body. After creating the PR, tick off the completed task checkboxes in the epic issue body (`gh issue edit <N> --body "..."` with updated `- [x]` items). The PR body must also include a **Release Note** mini-article (~300 words) with four sections:
    ```
    ## Release Note
 
