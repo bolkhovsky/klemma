@@ -532,6 +532,41 @@ def _ensure_numpy():
 
 ---
 
+# Semantic Search Support Plan (Current)
+
+## Status (already in codebase)
+
+1. Embedding foundation implemented:
+   - `EmbeddingProvider` abstraction (`s2` / `local` / `openai`)
+   - embedding storage in `sources.embedding` + `sources.embedding_model`
+   - CLI commands `klemma embed` and `klemma similar`
+2. Dimension/model safety included in design: no cross-model similarity mixing.
+
+## Active execution plan
+
+1. Coverage + reliability first:
+   - run embedding backfill on completed sources;
+   - track embedding coverage in status output;
+   - keep strict model-consistency checks.
+2. Search quality upgrades:
+   - hybrid ranking (keyword + cosine similarity);
+   - section-centroid similarity for section-level discovery;
+   - semantic reranking of reference gaps.
+3. Graph + semantics integration:
+   - combine embedding similarity with citation graph signals (co-citation/centrality).
+4. Evaluation and tuning:
+   - benchmark set for semantic retrieval;
+   - report Precision@K / Recall@K and compare against keyword baseline;
+   - calibrate scoring weights from measured outcomes.
+
+## Expected deliverables
+
+1. Better cross-section discovery via `klemma similar`.
+2. Higher-quality recommendation ordering in `researcher` / `library`.
+3. Quantified semantic-search gains documented in `klemma-paper/results/`.
+
+---
+
 # Sprint 4: Minimal MCP (Phase 4) ✅ DONE
 
 **Ветка**: `modernize/phase-4-mcp` (после Sprint 2)
