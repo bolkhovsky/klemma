@@ -4,13 +4,13 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 
 ## Modules
 
-### cli.py (2274 lines)
-Click CLI entry point. Defines 14 commands + hidden aliases.
+### cli.py (2268 lines)
+Click CLI entry point. Defines 16 commands + hidden aliases.
 - `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
-- Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `outline`, `ask`, `info`, `tree`, `migrate`
+- Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`
 
 ### context.py (41 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.
@@ -38,7 +38,7 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `Embed
 - `init_klemma_home()` — legacy alias for `init_system()`
 - Interactive mode: auto-discovers Obsidian vaults, Zotero exports via `discovery.py`
 
-### state.py (420 lines)
+### state.py (488 lines)
 SQLite state manager — **facade** over 7 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v3), auto-migrates via `_migrate_schema()`. All 58 public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, etc. See [Repositories](repositories/CLAUDE.md).
 
 Tables:
@@ -68,7 +68,7 @@ Works with: OpenAI, Ollama, vLLM, LM Studio (via `base_url`).
 ### ai_litellm.py (70 lines)
 `LiteLLMClient` — thin wrapper around `litellm.completion()`. Model format: `provider/model`.
 
-### vault.py (249 lines)
+### vault.py (263 lines)
 `VaultAdapter` — Obsidian vault file I/O.
 - `read_note()` / `write_note()` — file read/write
 - `update_section()` — replace content between markdown heading markers
@@ -96,7 +96,7 @@ Auto-discovery for `klemma init` interactive wizard.
 - `discover_bbt_json()` — locate BBT auto-export JSON files
 - Used by `setup.py` for interactive project initialization
 
-### tools/ (577 lines)
+### tools/ (567 lines)
 MCP tool infrastructure for embedding and citation analysis.
 - `client.py` (129) — `MCPClient` for stdio transport connection to MCP servers
 - `registry.py` (99) — `ToolRegistry` for multi-server tool routing + `ToolInfo` dataclass
@@ -119,4 +119,4 @@ Frontmatter `sections: [1.1, 1.4.1, 3.2.2]` → `source_sections` table → `get
 ## Maintaining this file
 Update when: adding/removing/renaming root-level modules in `src/klemma/`, changing key class/function signatures, adding SQLite tables to `state.py`, modifying `KlemmaContext` fields, or adding new CLI commands to `cli.py`. Line counts should be refreshed after significant changes.
 
-See: [AI Skills](skills/CLAUDE.md) | [Literature](literature/CLAUDE.md) | [TUI](tui/CLAUDE.md) | [Prompts](../../prompts/CLAUDE.md) | [Tests](../../tests/CLAUDE.md) | [Root](../../CLAUDE.md)
+See: [Repositories](repositories/CLAUDE.md) | [Evaluation](evaluation/CLAUDE.md) | [AI Skills](skills/CLAUDE.md) | [Literature](literature/CLAUDE.md) | [TUI](tui/CLAUDE.md) | [Prompts](../../prompts/CLAUDE.md) | [Tests](../../tests/CLAUDE.md) | [Root](../../CLAUDE.md)
