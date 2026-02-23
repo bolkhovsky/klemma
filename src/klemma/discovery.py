@@ -109,6 +109,9 @@ def discover_relevant_sources(
     library_entries: dict,
     keywords: list[str],
     description: str = "",
+    embeddings=None,
+    state=None,
+    query_title: str = "",
 ) -> list[dict]:
     """Find sources matching keywords by scanning vault notes and BBT entries.
 
@@ -118,12 +121,18 @@ def discover_relevant_sources(
     - Keyword in BBT entry abstract → +1
     - Keyword in BBT entry keywords field → +2
 
+    When embeddings and state are provided, uses hybrid scoring:
+    combined = 0.4 × (kw_score / max_kw) + 0.6 × cosine_similarity
+
     Args:
         vault_path: Path to Obsidian vault
         notes_folder: Subfolder with @citekey.md notes
         library_entries: {citekey: ZoteroEntry} from BBT JSON
         keywords: User-provided keywords for matching
         description: Optional research description (words used as extra keywords)
+        embeddings: Optional EmbeddingProvider for semantic scoring
+        state: Optional StateManager for retrieving stored embeddings
+        query_title: Optional title/query for embedding (used for semantic search)
 
     Returns:
         Sorted list of {citekey, title, score} with score > 0.
@@ -182,6 +191,39 @@ def discover_relevant_sources(
                 "title": getattr(entry, "title", "") or citekey,
                 "score": score,
             })
+
+    # Hybrid scoring: combine keyword + semantic when embeddings available
+    if embeddings and state and (query_title or description):
+        from .embeddings import cosine_similarity
+
+        query_text = query_title or description
+        query_vec = embeddings.embed(query_text, description or "")
+        if query_vec:
+            all_emb = state.get_all_embeddings(model=embeddings.model_name)
+            max_kw = max((r["score"] for r in results), default=1) or 1
+
+            # Add semantically close sources that keyword search missed
+            for citekey, stored_vec in all_emb.items():
+                sim = cosine_similarity(query_vec, stored_vec)
+                if sim > 0.3 and not any(r["citekey"] == citekey for r in results):
+                    entry = library_entries.get(citekey)
+                    results.append({
+                        "citekey": citekey,
+                        "title": getattr(entry, "title", "") or citekey if entry else citekey,
+                        "score": 0,
+                    })
+
+            # Recompute hybrid scores
+            for r in results:
+                kw_norm = r["score"] / max_kw
+                stored_vec = all_emb.get(r["citekey"])
+                if stored_vec:
+                    sim = cosine_similarity(query_vec, stored_vec)
+                    r["score"] = round(0.4 * kw_norm + 0.6 * sim, 4)
+                    r["semantic_sim"] = round(sim, 4)
+                else:
+                    # No embedding — use keyword score only (normalized)
+                    r["score"] = round(kw_norm, 4)
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return results

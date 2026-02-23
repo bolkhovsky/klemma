@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _SHIPPED_PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
 # Config keys inherited from parent project (shared resources)
-_INHERITED_KEYS = {"obsidian", "zotero", "ai"}
+_INHERITED_KEYS = {"obsidian", "zotero", "ai", "embeddings"}
 
 
 # --- System home ---
@@ -132,6 +132,14 @@ class AIConfig(BaseModel):
         if self.api_key_env:
             return os.environ.get(self.api_key_env)
         return None
+
+
+class EmbeddingsConfig(BaseModel):
+    backend: str = ""  # "s2" | "local" | "openai" | "" (disabled)
+    model: str = ""  # model id (backend-specific)
+    api_key_env: str = ""  # env var for API key
+    base_url: Optional[str] = None  # custom endpoint (OpenAI only)
+    throttle: float = 3.1  # seconds between S2 API requests
 
 
 class StateConfig(BaseModel):
@@ -290,6 +298,7 @@ class KlemmaConfig(BaseModel):
     zotero: ZoteroConfig = Field(default_factory=ZoteroConfig)
     obsidian: ObsidianConfig = Field(default_factory=ObsidianConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
+    embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
     state: StateConfig = Field(default_factory=StateConfig)
     dissertation: DissertationConfig = Field(default_factory=DissertationConfig)
     planning: PlanningConfig = Field(default_factory=PlanningConfig)

@@ -148,6 +148,64 @@ class StateManager:
     def _init_db(self):
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            self._migrate_schema(conn)
+
+    def _migrate_schema(self, conn):
+        """Idempotent schema migrations using PRAGMA user_version.
+
+        Each version bump adds new columns/tables without breaking existing data.
+        Runs on every DB open — fast (single PRAGMA check) and safe.
+        """
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        target = 3  # bump this when adding new migrations
+
+        if version < 1:
+            # Step 1.1: citation_intent for fragments and reference_gaps
+            existing_frag = {
+                row[1] for row in conn.execute("PRAGMA table_info(fragments)")
+            }
+            if "citation_intent" not in existing_frag:
+                conn.execute(
+                    "ALTER TABLE fragments ADD COLUMN citation_intent TEXT"
+                )
+            existing_gaps = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(reference_gaps)")
+            }
+            if "citation_intent" not in existing_gaps:
+                conn.execute(
+                    "ALTER TABLE reference_gaps ADD COLUMN citation_intent TEXT"
+                )
+
+        if version < 2:
+            # Step 2.2: embedding storage for sources
+            existing_src = {
+                row[1] for row in conn.execute("PRAGMA table_info(sources)")
+            }
+            if "embedding" not in existing_src:
+                conn.execute(
+                    "ALTER TABLE sources ADD COLUMN embedding BLOB"
+                )
+            if "embedding_model" not in existing_src:
+                conn.execute(
+                    "ALTER TABLE sources ADD COLUMN embedding_model TEXT"
+                )
+
+        if version < 3:
+            # Step 3.1: citation_links table for citation graph
+            conn.execute("""CREATE TABLE IF NOT EXISTS citation_links (
+                source_id TEXT NOT NULL,
+                target_citekey TEXT,
+                target_title_hash TEXT NOT NULL,
+                target_title TEXT NOT NULL,
+                target_authors TEXT,
+                target_year INTEGER,
+                citation_intent TEXT,
+                in_library BOOLEAN DEFAULT 0,
+                UNIQUE(source_id, target_title_hash)
+            )""")
+
+        conn.execute(f"PRAGMA user_version = {target}")
 
     # ── Sources ──────────────────────────────────────────────────────────
 
@@ -485,6 +543,85 @@ class StateManager:
                     (item_key, citekey),
                 )
 
+    # ── Embeddings ─────────────────────────────────────────────────────
+
+    def save_embedding(
+        self, source_id: str, embedding: list[float], model: str
+    ):
+        """Store embedding vector as BLOB with model name."""
+        import struct
+
+        blob = struct.pack(f"{len(embedding)}f", *embedding)
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE sources SET embedding=?, embedding_model=? WHERE id=?",
+                (blob, model, source_id),
+            )
+
+    def get_embedding(self, source_id: str) -> Optional[tuple[list[float], str]]:
+        """Retrieve embedding vector and model name for a source.
+
+        Returns (vector, model_name) or None if no embedding stored.
+        """
+        import struct
+
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT embedding, embedding_model FROM sources WHERE id=?",
+                (source_id,),
+            ).fetchone()
+            if not row or not row["embedding"]:
+                return None
+            blob = row["embedding"]
+            n = len(blob) // 4  # float32 = 4 bytes
+            vec = list(struct.unpack(f"{n}f", blob))
+            return (vec, row["embedding_model"] or "")
+
+    def get_all_embeddings(
+        self, model: Optional[str] = None
+    ) -> dict[str, list[float]]:
+        """Get all source embeddings, optionally filtered by model.
+
+        Returns {source_id: vector}.
+        """
+        import struct
+
+        with self._conn() as conn:
+            if model:
+                cur = conn.execute(
+                    "SELECT id, embedding FROM sources "
+                    "WHERE embedding IS NOT NULL AND embedding_model=?",
+                    (model,),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT id, embedding FROM sources WHERE embedding IS NOT NULL"
+                )
+            result = {}
+            for row in cur.fetchall():
+                blob = row["embedding"]
+                n = len(blob) // 4
+                result[row["id"]] = list(struct.unpack(f"{n}f", blob))
+            return result
+
+    def get_embedding_stats(self) -> dict:
+        """Get embedding coverage stats."""
+        with self._conn() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) as cnt FROM sources WHERE status='completed'"
+            ).fetchone()["cnt"]
+            embedded = conn.execute(
+                "SELECT COUNT(*) as cnt FROM sources WHERE embedding IS NOT NULL"
+            ).fetchone()["cnt"]
+            models = {}
+            cur = conn.execute(
+                "SELECT embedding_model, COUNT(*) as cnt FROM sources "
+                "WHERE embedding IS NOT NULL GROUP BY embedding_model"
+            )
+            for row in cur.fetchall():
+                models[row["embedding_model"] or "unknown"] = row["cnt"]
+            return {"total": total, "embedded": embedded, "models": models}
+
     # ── Fragments ────────────────────────────────────────────────────────
 
     def save_fragments(self, source_id: str, fragments: list[dict]) -> int:
@@ -494,8 +631,8 @@ class StateManager:
                 conn.execute(
                     """INSERT INTO fragments
                        (source_id, fragment_text, fragment_type, chapter, section,
-                        relevance_score, usage_hint, page_number)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        relevance_score, usage_hint, page_number, citation_intent)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         source_id,
                         f.get("text", ""),
@@ -505,6 +642,7 @@ class StateManager:
                         f.get("relevance", 3),
                         f.get("usage_hint", ""),
                         f.get("page"),
+                        f.get("citation_intent"),
                     ),
                 )
             conn.execute(
@@ -577,6 +715,36 @@ class StateManager:
             for row in cur.fetchall():
                 stats["by_section"][row["section"]] = row["cnt"]
             return stats
+
+    def get_intent_coverage(self) -> dict[str, dict[str, int]]:
+        """Get fragment counts by section × citation_intent.
+
+        Returns {section: {background: N, method: N, result_comparison: N, total: N}}.
+        Only includes sections that have at least one fragment with a non-NULL intent.
+        """
+        with self._conn() as conn:
+            cur = conn.execute(
+                """SELECT section, citation_intent, COUNT(*) as cnt
+                   FROM fragments
+                   WHERE section IS NOT NULL AND citation_intent IS NOT NULL
+                   GROUP BY section, citation_intent
+                   ORDER BY section"""
+            )
+            result: dict[str, dict[str, int]] = {}
+            for row in cur.fetchall():
+                sec = row["section"]
+                if sec not in result:
+                    result[sec] = {
+                        "background": 0,
+                        "method": 0,
+                        "result_comparison": 0,
+                        "total": 0,
+                    }
+                intent = row["citation_intent"]
+                if intent in result[sec]:
+                    result[sec][intent] = row["cnt"]
+                    result[sec]["total"] += row["cnt"]
+            return result
 
     # ── Daily Plans ──────────────────────────────────────────────────────
 
@@ -712,8 +880,8 @@ class StateManager:
                 conn.execute(
                     """INSERT INTO reference_gaps
                        (source_id, ref_authors, ref_year, ref_title,
-                        why_relevant, dissertation_sections)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
+                        why_relevant, dissertation_sections, citation_intent)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (
                         source_id,
                         g.get("ref_authors", g.get("authors", "")),
@@ -721,6 +889,7 @@ class StateManager:
                         g.get("ref_title", g.get("title", "")),
                         g.get("why_relevant", ""),
                         json.dumps(sections) if sections else None,
+                        g.get("citation_intent"),
                     ),
                 )
             return len(gaps)
@@ -733,8 +902,12 @@ class StateManager:
         """Get open reference gaps aggregated by (authors, year, title).
 
         Returns list of dicts with: ref_authors, ref_year, ref_title,
-        why_relevant, dissertation_sections, count, avg_quality, score,
-        source_ids.
+        why_relevant, dissertation_sections, count, avg_quality,
+        intent_weight, score, source_ids.
+
+        Scoring formula: count * avg_quality * section_weight * intent_weight
+        where intent_weight = AVG(method=3.0, result_comparison=2.0, else=1.0)
+        NULL intents → weight 1.0 (backward compatible).
         """
         with self._conn() as conn:
             query = """
@@ -746,6 +919,11 @@ class StateManager:
                     GROUP_CONCAT(DISTINCT rg.dissertation_sections) as dissertation_sections,
                     COUNT(DISTINCT rg.source_id) as count,
                     AVG(COALESCE(s.quality_score, 3)) as avg_quality,
+                    AVG(CASE
+                        WHEN rg.citation_intent = 'method' THEN 3.0
+                        WHEN rg.citation_intent = 'result_comparison' THEN 2.0
+                        ELSE 1.0
+                    END) as intent_weight,
                     GROUP_CONCAT(DISTINCT rg.source_id) as source_ids
                 FROM reference_gaps rg
                 JOIN sources s ON rg.source_id = s.id
@@ -758,7 +936,14 @@ class StateManager:
 
             query += """
                 GROUP BY rg.ref_authors, rg.ref_year, rg.ref_title
-                ORDER BY COUNT(DISTINCT rg.source_id) * AVG(COALESCE(s.quality_score, 3)) DESC
+                ORDER BY COUNT(DISTINCT rg.source_id)
+                       * AVG(COALESCE(s.quality_score, 3))
+                       * AVG(CASE
+                           WHEN rg.citation_intent = 'method' THEN 3.0
+                           WHEN rg.citation_intent = 'result_comparison' THEN 2.0
+                           ELSE 1.0
+                         END)
+                       DESC
                 LIMIT ?
             """
             params.append(limit)
@@ -769,12 +954,96 @@ class StateManager:
                 r = dict(row)
                 count = r["count"]
                 avg_q = r["avg_quality"] or 3
+                intent_w = r.get("intent_weight") or 1.0
                 # section_weight: 2.0 if relevant to NR1/NR2 sections (2.x)
                 sections_str = r.get("dissertation_sections") or ""
                 section_weight = 2.0 if '"2.' in sections_str else 1.0
-                r["score"] = round(count * avg_q * section_weight, 1)
+                r["score"] = round(count * avg_q * section_weight * intent_w, 1)
                 results.append(r)
             return results
+
+    def rerank_gaps_semantic(
+        self,
+        gaps: list[dict],
+        embeddings=None,
+        query_section: Optional[str] = None,
+    ) -> list[dict]:
+        """Rerank reference gaps using embedding similarity to section centroid.
+
+        When embeddings are stored, computes centroid of sources assigned to
+        the relevant section, then boosts gaps whose citing sources are
+        semantically close to that centroid.
+
+        Formula: final_score = heuristic_score * (0.5 + 0.5 * sim_to_centroid)
+        No embeddings → returns gaps unchanged.
+        """
+        if not embeddings:
+            return gaps
+
+        from .embeddings import cosine_similarity
+
+        all_emb = self.get_all_embeddings(model=embeddings.model_name)
+        if not all_emb:
+            return gaps
+
+        # Compute section centroid from sources assigned to that section
+        centroid = None
+        if query_section:
+            section_sources = self.get_section_sources(query_section)
+            section_vecs = [
+                all_emb[sid] for sid in section_sources if sid in all_emb
+            ]
+            if section_vecs:
+                dim = len(section_vecs[0])
+                centroid = [
+                    sum(v[i] for v in section_vecs) / len(section_vecs)
+                    for i in range(dim)
+                ]
+
+        # If no section centroid, use global centroid of all embeddings
+        if not centroid and all_emb:
+            vecs = list(all_emb.values())
+            dim = len(vecs[0])
+            centroid = [
+                sum(v[i] for v in vecs) / len(vecs) for i in range(dim)
+            ]
+
+        if not centroid:
+            return gaps
+
+        # Rerank: boost by average similarity of citing sources to centroid
+        for gap in gaps:
+            source_ids = (gap.get("source_ids") or "").split(",")
+            sims = []
+            for sid in source_ids:
+                sid = sid.strip()
+                if sid in all_emb:
+                    sims.append(cosine_similarity(all_emb[sid], centroid))
+            if sims:
+                avg_sim = sum(sims) / len(sims)
+                gap["semantic_boost"] = round(avg_sim, 4)
+                gap["score"] = round(gap["score"] * (0.5 + 0.5 * avg_sim), 1)
+            else:
+                gap["semantic_boost"] = 0.0
+
+        gaps.sort(key=lambda g: g["score"], reverse=True)
+        return gaps
+
+    def get_section_sources(self, section: str) -> list[str]:
+        """Get source IDs assigned to a section (via source_sections or primary_section)."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT DISTINCT source_id FROM source_sections WHERE section LIKE ?",
+                (f"{section}%",),
+            )
+            ids = [row["source_id"] for row in cur.fetchall()]
+            if not ids:
+                cur = conn.execute(
+                    "SELECT id FROM sources WHERE primary_section LIKE ?",
+                    (f"{section}%",),
+                )
+                ids = [row["id"] for row in cur.fetchall()]
+            return ids
 
     def get_gap_summary(self) -> dict:
         """Lightweight summary for status line: open count + top gap."""
@@ -861,6 +1130,146 @@ class StateManager:
                     )
                     resolved += 1
         return resolved
+
+    # ── Citation Links ─────────────────────────────────────────────────
+
+    def save_citation_links(self, source_id: str, references: list[dict]):
+        """Save citation links from annotation key_references.
+
+        Each reference dict should have: authors, year, title, citation_intent,
+        in_library, citekey (optional).
+        Uses MD5 of normalized title for UNIQUE constraint.
+        """
+        import hashlib
+
+        with self._conn() as conn:
+            for ref in references:
+                title = ref.get("title", "")
+                if not title:
+                    continue
+                title_hash = hashlib.md5(
+                    title.lower().strip().encode()
+                ).hexdigest()
+                conn.execute(
+                    """INSERT OR REPLACE INTO citation_links
+                       (source_id, target_citekey, target_title_hash,
+                        target_title, target_authors, target_year,
+                        citation_intent, in_library)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        source_id,
+                        ref.get("citekey"),
+                        title_hash,
+                        title,
+                        ref.get("authors", ""),
+                        ref.get("year"),
+                        ref.get("citation_intent"),
+                        1 if ref.get("in_library") else 0,
+                    ),
+                )
+
+    def get_citation_links(
+        self, source_id: Optional[str] = None
+    ) -> list[dict]:
+        """Get citation links, optionally filtered by source."""
+        with self._conn() as conn:
+            if source_id:
+                cur = conn.execute(
+                    "SELECT * FROM citation_links WHERE source_id=?",
+                    (source_id,),
+                )
+            else:
+                cur = conn.execute("SELECT * FROM citation_links")
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_citation_graph_stats(self) -> dict:
+        """Compute citation graph statistics."""
+        with self._conn() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) as cnt FROM citation_links"
+            ).fetchone()["cnt"]
+            unique_targets = conn.execute(
+                "SELECT COUNT(DISTINCT target_title_hash) as cnt FROM citation_links"
+            ).fetchone()["cnt"]
+            in_library = conn.execute(
+                "SELECT COUNT(*) as cnt FROM citation_links WHERE in_library=1"
+            ).fetchone()["cnt"]
+            external = total - in_library
+
+            # Average refs per source
+            source_count = conn.execute(
+                "SELECT COUNT(DISTINCT source_id) as cnt FROM citation_links"
+            ).fetchone()["cnt"]
+            avg_refs = round(total / source_count, 1) if source_count else 0
+
+            # Most cited external works
+            cur = conn.execute(
+                """SELECT target_title, target_authors, target_year,
+                          COUNT(DISTINCT source_id) as cite_count
+                   FROM citation_links
+                   WHERE in_library=0
+                   GROUP BY target_title_hash
+                   ORDER BY cite_count DESC
+                   LIMIT 10"""
+            )
+            most_cited_external = [dict(row) for row in cur.fetchall()]
+
+            # Most connected internal works
+            cur = conn.execute(
+                """SELECT target_citekey, COUNT(DISTINCT source_id) as cite_count
+                   FROM citation_links
+                   WHERE in_library=1 AND target_citekey IS NOT NULL
+                   GROUP BY target_citekey
+                   ORDER BY cite_count DESC
+                   LIMIT 10"""
+            )
+            most_connected = [dict(row) for row in cur.fetchall()]
+
+            return {
+                "total_links": total,
+                "unique_targets": unique_targets,
+                "in_library": in_library,
+                "external": external,
+                "source_count": source_count,
+                "avg_refs_per_source": avg_refs,
+                "most_cited_external": most_cited_external,
+                "most_connected_internal": most_connected,
+            }
+
+    def get_co_cited(self, citekey: str) -> list[dict]:
+        """Find works frequently co-cited with the given citekey.
+
+        Returns works that appear in the same source's references as citekey.
+        """
+        with self._conn() as conn:
+            # Find which sources cite this citekey
+            cur = conn.execute(
+                """SELECT DISTINCT source_id FROM citation_links
+                   WHERE target_citekey=? OR target_title_hash IN (
+                       SELECT target_title_hash FROM citation_links
+                       WHERE target_citekey=?
+                   )""",
+                (citekey, citekey),
+            )
+            citing_sources = [row["source_id"] for row in cur.fetchall()]
+
+            if not citing_sources:
+                return []
+
+            placeholders = ",".join("?" * len(citing_sources))
+            cur = conn.execute(
+                f"""SELECT target_title, target_authors, target_year,
+                           target_citekey, in_library,
+                           COUNT(DISTINCT source_id) as co_cite_count
+                    FROM citation_links
+                    WHERE source_id IN ({placeholders})
+                      AND (target_citekey IS NULL OR target_citekey != ?)
+                    GROUP BY target_title_hash
+                    ORDER BY co_cite_count DESC
+                    LIMIT 20""",
+                (*citing_sources, citekey),
+            )
+            return [dict(row) for row in cur.fetchall()]
 
     # --- Library analysis methods ---
 

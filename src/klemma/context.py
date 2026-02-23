@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from .ai import AIProvider
     from .config import KlemmaConfig, ProjectConfig
+    from .embeddings import EmbeddingProvider
     from .library_provider import LibraryProvider
     from .state import StateManager
     from .vault import VaultAdapter
@@ -26,6 +27,7 @@ class KlemmaContext:
     state: StateManager
     vault: VaultAdapter
     ai: Optional[AIProvider] = None
+    embeddings: Optional[EmbeddingProvider] = None
     library: Optional[LibraryProvider] = None
     project: Optional[ProjectConfig] = None
     project_name: str = "default"

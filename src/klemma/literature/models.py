@@ -1,7 +1,7 @@
 """Pydantic models for sources, annotations, and fragments."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -114,6 +114,9 @@ class Fragment(BaseModel):
     relevance: int = Field(3, ge=1, le=5)
     usage_hint: str = ""
     page: Optional[int] = None
+    citation_intent: Optional[
+        Literal["background", "method", "result_comparison"]
+    ] = None
 
 
 class ExtractionResult(BaseModel):
