@@ -24,6 +24,7 @@ master ← feature/outline-command (merge first)
        ← modernize/phase-3-graph (Phase 3, after Sprint 1 merge, before Sprint 2 done)
        ← modernize/phase-4-mcp (Phase 4, after Sprint 2)
        ← modernize/phase-5-advanced (Phase 5, after all)
+       ← modernize/phase-6-sota (Phase 6, after Phase 4, can overlap Phase 5)
 ```
 
 Каждая фаза — отдельный PR. Внутри фазы — атомарные коммиты по шагам.
@@ -82,7 +83,7 @@ def _ensure_numpy():
 
 ---
 
-# Sprint 1: Citation Intent (Phase 0 + Phase 1)
+# Sprint 1: Citation Intent (Phase 0 + Phase 1) ✅ DONE
 
 **Ветка**: `modernize/phase-0-intents`
 **Цель**: Обогатить модель фрагментов citation intent, ввести intent-weighted scoring
@@ -269,7 +270,7 @@ def _ensure_numpy():
 
 ---
 
-# Sprint 2: SPECTER Embeddings (Phase 2)
+# Sprint 2: SPECTER Embeddings (Phase 2) ✅ DONE
 
 **Ветка**: `modernize/phase-2-embeddings` (после merge Sprint 1)
 **Цель**: Семантический поиск и scoring на базе document embeddings
@@ -437,7 +438,7 @@ def _ensure_numpy():
 
 ---
 
-# Sprint 3: Citation Graph (Phase 3)
+# Sprint 3: Citation Graph (Phase 3) ✅ DONE
 
 **Ветка**: `modernize/phase-3-graph` (после merge Sprint 1, может стартовать до окончания Sprint 2)
 **Цель**: Структурный анализ библиографического пространства
@@ -531,7 +532,7 @@ def _ensure_numpy():
 
 ---
 
-# Sprint 4: Minimal MCP (Phase 4)
+# Sprint 4: Minimal MCP (Phase 4) ✅ DONE
 
 **Ветка**: `modernize/phase-4-mcp` (после Sprint 2)
 **Цель**: Минимальная MCP-инфраструктура для extensibility демонстрации
@@ -602,6 +603,20 @@ def _ensure_numpy():
 **Что делать**:
 - При оценке кандидата передавать контрастные примеры: уже в библиотеке + отклонённые
 - Вопрос к LLM: "Добавляет ли кандидат УНИКАЛЬНУЮ ценность?"
+- SciFact-инспирированный structured verdict: `{support | extend | contrast}` — вместо бинарного "добавить/нет", LLM даёт обоснование через категорию вклада (Wadden 2020)
+
+**Тестирование**:
+- Unit: mock LLM → verify verdict parsing (support/extend/contrast)
+- Integration: `klemma library --audit` с контрастными примерами
+- `python -m pytest tests/ -q` && `ruff check src/ tests/`
+
+**Документация**: обновить `src/klemma/skills/CLAUDE.md` (librarian/researcher verdict pattern), `prompts/CLAUDE.md` (обновлённые промпты)
+
+**Measurement**: verdict distribution → `klemma-paper/results/phase5_scifact_verdict.md`
+
+**Для статьи**: §4.4 + §5.3 — SciFact-inspired evaluation pattern
+
+**Git checkpoint**: `git commit -m "modernize: step 5.2 — contrastive eval with SciFact verdict"`
 
 ## Step 5.4: Semantic Gap Disambiguation
 
@@ -610,6 +625,15 @@ def _ensure_numpy():
 **Что делать**:
 - При >1 кандидате: SPECTER cosine → выбрать ближайшего
 - При 0 кандидатов + embeddings: fuzzy semantic match (threshold 0.85)
+
+**Тестирование**:
+- Unit: mock embeddings → verify disambiguation logic (>1 candidate, 0 candidates)
+- Unit: threshold 0.85 → edge cases
+- `python -m pytest tests/ -q` && `ruff check src/ tests/`
+
+**Документация**: обновить `src/klemma/CLAUDE.md` (state.py resolve_gaps changes)
+
+**Git checkpoint**: `git commit -m "modernize: step 5.4 — semantic gap disambiguation"`
 
 ## Step 5.1: `klemma visualize`
 
@@ -620,12 +644,171 @@ def _ensure_numpy():
 - Citation graph: DOT export
 - Экспорт: HTML (plotly), PNG (matplotlib)
 
+**Тестирование**:
+- Unit: visualization data preparation с mock embeddings
+- Integration: `klemma visualize` → verify HTML/PNG output
+- `python -m pytest tests/ -q` && `ruff check src/ tests/`
+
+**Документация**: обновить `src/klemma/CLAUDE.md` (новый visualization.py), `CLAUDE.md` root (новая команда `klemma visualize`), `tests/CLAUDE.md`
+
+**Для статьи**: Рис. 5 — embedding space visualization
+
+**Git checkpoint**: `git commit -m "modernize: step 5.1 — embedding/graph visualization"`
+
 ## Step 5.3: Citation Worthiness (`klemma check-draft`)
 
-**Файлы**: новый `src/klemma/skills/draft_checker.py`
+**Файлы**: новый `src/klemma/skills/draft_checker.py`, новый `prompts/check_draft.md`
 
 **Что делать**:
-- Читает черновик раздела → LLM находит утверждения без ссылок → рекомендует источники по embedding similarity
+- Dual mode: (a) citation worthiness — находит утверждения без ссылок, (b) claim verification — верифицирует утверждения по fragments
+- In-context learning: few-shot примеры из fragment DB (Dong 2024 — ICL survey)
+- Рекомендует источники по embedding similarity
+- Источники: Wadden 2020 (SciFact claim verification), Dong 2024 (ICL patterns)
+
+**Тестирование**:
+- Unit: mock LLM → verify worthiness detection + claim verification
+- Unit: ICL example selection from fragment DB
+- Integration: `klemma check-draft <section>` → human review
+- `python -m pytest tests/ -q` && `ruff check src/ tests/`
+
+**Документация**: обновить `src/klemma/skills/CLAUDE.md` (новый draft_checker.py), `prompts/CLAUDE.md` (новый check_draft.md + переменные), `CLAUDE.md` root (команда `klemma check-draft`), `tests/CLAUDE.md`
+
+**Measurement**: worthiness precision + claim verification accuracy → `klemma-paper/results/phase5_claim_verification.md`
+
+**Для статьи**: §4.4 — citation worthiness + claim verification dual approach
+
+**Git checkpoint**: `git commit -m "modernize: step 5.3 — citation worthiness + claim verification"`
+
+---
+
+## Sprint 5 финализация
+
+**Документация**: final pass — обновить все CLAUDE.md line counts, sync `tests/CLAUDE.md`
+**Git**: `ruff check src/ tests/` → `python -m pytest tests/ -q` → PR `modernize/phase-5-advanced` → merge
+**Results**: записать в `klemma-paper/results/` (phase5_*.md файлы)
+
+---
+
+# Sprint 6: SOTA Integration (Phase 6)
+
+**Ветка**: `modernize/phase-6-sota`
+**Цель**: Интеграция SOTA методов из литературного анализа (16 источников, 2026-02-23)
+**НР**: НР1 + НР3 + §5 статьи
+**Зависимости**: Phase 2 (embeddings) + Phase 4 (MCP)
+
+**Источники**: Wang 2024 (MinerU), Lala 2023 (PaperQA), Singh 2023 (SciRepEval), Kinney 2025 (S2), Cachola 2020 (TLDR)
+
+## Step 6.1: MinerU PDF Backend (pluggable extractor)
+
+**Файлы**: `src/klemma/literature/pdf.py`, `src/klemma/config.py`
+
+**Что делать**:
+- Pluggable PDF extractor: PyMuPDF (fast, default) vs MinerU (quality, layout-aware)
+- Config: `processing.pdf_backend: "pymupdf" | "mineru"`
+- `_ensure_mineru()` lazy import pattern (как numpy)
+- Источник: Wang 2024 (MinerU — open-source PDF extraction with layout understanding)
+- НР1: quality improvement in extraction pipeline
+
+**Тестирование**:
+- Unit: mock MinerU → verify extraction interface compliance
+- Unit: fallback to PyMuPDF when MinerU unavailable
+- Integration: compare output PyMuPDF vs MinerU на 5 PDFs (A/B quality)
+- `python -m pytest tests/ -q` && `ruff check src/ tests/`
+
+**Документация**: обновить `src/klemma/literature/CLAUDE.md` (pdf.py pluggable backend), `src/klemma/CLAUDE.md` (config.py new key `processing.pdf_backend`), `CLAUDE.md` root (new dependency `[mineru]`), `tests/CLAUDE.md`
+
+**Measurement**: extraction quality comparison (fragment count, structure preservation) → `klemma-paper/results/phase6_mineru_comparison.md`
+
+**Для статьи**: §3.3 — pluggable PDF pipeline, quality vs speed tradeoff
+
+**Git checkpoint**: `git commit -m "modernize: step 6.1 — MinerU pluggable PDF backend"`
+
+## Step 6.2: Fragment RAG для `klemma ask`
+
+**Файлы**: `src/klemma/state.py`, `src/klemma/skills/agent.py`
+
+**Что делать**:
+- Embed fragments (reuse EmbeddingProvider from Phase 2), store embedding BLOB in `fragments` table
+- `_migrate_schema()` version 4: `ALTER TABLE fragments ADD COLUMN embedding BLOB` + `embedding_model TEXT`
+- Semantic retrieval top-K fragments для agent context (вместо dump всех)
+- PaperQA pattern: focused context → better answers at lower cost
+- Источник: Lala 2023 (PaperQA — retrieval-augmented generative agent)
+- НР1 + scalability: context quality improves as library grows
+
+**Тестирование**:
+- Unit: fragment embedding save/retrieve roundtrip
+- Unit: top-K retrieval ranking (cosine similarity)
+- Unit: agent context building with RAG vs without (size comparison)
+- Integration: `klemma ask` with RAG → human review answer quality
+- `python -m pytest tests/ -q` && `ruff check src/ tests/`
+
+**Документация**: обновить `src/klemma/CLAUDE.md` (state.py new methods + schema v4, agent.py RAG mode), `src/klemma/skills/CLAUDE.md` (agent.py description), `tests/CLAUDE.md`
+
+**Measurement**: context size reduction + response quality comparison → `klemma-paper/results/phase6_fragment_rag.md`
+
+**Для статьи**: §4.4 — RAG-based discovery, context focusing strategy
+
+**Git checkpoint**: `git commit -m "modernize: step 6.2 — fragment RAG for klemma ask"`
+
+## Step 6.3: Evaluation Framework (`klemma benchmark`)
+
+**Файлы**: новый `src/klemma/evaluation/` модуль, `src/klemma/cli.py`
+
+**Что делать**:
+- Annotated test set: 50 fragments (intent ground truth) + 20 gaps (relevance ground truth)
+- Метрики: intent accuracy, gap precision@10, embedding recall vs heuristic scoring
+- SciRepEval-инспирированный multi-format evaluation (Singh 2023)
+- Новая CLI команда: `klemma benchmark [--dataset path] [--metrics all|intent|gaps|embeddings]`
+- JSON output для reproducibility
+- **КРИТИЧЕСКИЙ для §5 статьи** — без evaluation framework нет доказательной базы
+
+**Тестирование**:
+- Unit: metric calculation functions (accuracy, precision@K, recall)
+- Unit: test set loading/validation
+- Unit: benchmark result serialization
+- Integration: `klemma benchmark` full run on annotated test set
+- `python -m pytest tests/ -q` && `ruff check src/ tests/`
+
+**Документация**: создать `src/klemma/evaluation/CLAUDE.md` (new subsystem), обновить `CLAUDE.md` root (команда `klemma benchmark`, Module documentation link), `src/klemma/CLAUDE.md` (cli.py new command), `tests/CLAUDE.md`
+
+**Measurement**: baseline metrics on real data → `klemma-paper/results/phase6_evaluation_benchmark.md`
+
+**Для статьи**: §5 — evaluation methodology, reproducible benchmark results
+
+**Git checkpoint**: `git commit -m "modernize: step 6.3 — evaluation framework (klemma benchmark)"`
+
+## Step 6.4: S2 Recommendations + TLDR
+
+**Файлы**: `src/klemma/tools/specter_server.py`
+
+**Что делать**:
+- MCP tools: `recommend_papers(paper_id)` → S2 Recommendations API
+- MCP tools: `get_tldr(paper_id)` → TLDR extreme summarization
+- S2 Recommendation API: related papers based on citation graph (Kinney 2025)
+- TLDR: 1-sentence summaries для быстрого скрининга (Cachola 2020)
+- НР3: MCP extensibility демонстрация (6 tools total)
+
+**Тестирование**:
+- Unit: mock S2 API → verify recommend_papers output
+- Unit: mock S2 API → verify get_tldr output
+- Integration: MCP server with 6 tools (4 existing + 2 new)
+- `python -m pytest tests/ -q` && `ruff check src/ tests/`
+
+**Документация**: обновить `src/klemma/CLAUDE.md` (tools/ section — 6 tools total), `tests/CLAUDE.md` (test_mcp.py updates)
+
+**Measurement**: recommendation relevance (human eval 10 papers) → `klemma-paper/results/phase6_s2_recommendations.md`
+
+**Для статьи**: §3.5 — MCP tool ecosystem growth, S2 API integration depth
+
+**Git checkpoint**: `git commit -m "modernize: step 6.4 — S2 recommendations + TLDR"`
+
+---
+
+## Sprint 6 финализация
+
+**Документация**: final pass — обновить все CLAUDE.md line counts, sync `tests/CLAUDE.md`, обновить ROADMAP.md
+**Git**: `ruff check src/ tests/` → `python -m pytest tests/ -q` → PR `modernize/phase-6-sota` → merge
+**Results**: consolidated summary → `klemma-paper/results/summary.md`
 
 ---
 
@@ -652,6 +835,12 @@ klemma-paper/results/
 ├── phase3_graph_analysis.md
 ├── phase3_author_network.md
 ├── phase4_intent_accuracy.md
+├── phase5_scifact_verdict.md
+├── phase5_claim_verification.md
+├── phase6_mineru_comparison.md
+├── phase6_fragment_rag.md
+├── phase6_evaluation_benchmark.md
+├── phase6_s2_recommendations.md
 └── summary.md               — consolidated results table
 ```
 
@@ -689,7 +878,11 @@ paper_sections: ["§4.1", "§5.2"]
 | 3.1-3.3 | §4.2 + §5.2 | Citation graph stats, co-citation analysis |
 | 4.0-4.2 | §3.5 (MCP) + §5.3 | MCP architecture, intent validation |
 | 5.1 | Рис. 5 (new figure) | Embedding space visualization |
-| 5.3 | §4.4 | Citation worthiness examples |
+| 5.2-5.3 | §4.4 + §5.3 | SciFact-inspired verdict, claim verification, ICL |
+| 6.1 | §3.3 (PDF pipeline) | Pluggable extractor A/B comparison (PyMuPDF vs MinerU) |
+| 6.2 | §4.4 (discovery) | Fragment RAG vs full context — quality + cost comparison |
+| 6.3 | §5 (evaluation) | Multi-format benchmark, baseline metrics, reproducibility |
+| 6.4 | §3.5 (MCP) | S2 Recommendations + TLDR integration, tool ecosystem growth |
 
 ---
 
@@ -697,7 +890,7 @@ paper_sections: ["§4.1", "§5.2"]
 
 ## Git Checkpoint After EVERY Step
 
-После КАЖДОГО шага (0.0, 0.1, 0.2, ... 5.3) — обязательный git checkpoint:
+После КАЖДОГО шага (0.0, 0.1, 0.2, ... 6.4) — обязательный git checkpoint:
 ```bash
 git add -A
 git commit -m "modernize: step X.Y — <description>"
@@ -711,8 +904,9 @@ git push origin <branch>
 2. `python -m pytest tests/ -q` — all tests pass
 3. `klemma status` — works with new features on real project
 4. Results file committed to klemma-paper/results/
-5. Commit + push sprint branch
-6. PR review
+5. Update all CLAUDE.md files (line counts, new modules, new commands, new tests)
+6. Commit + push sprint branch
+7. PR review
 
 ## End-to-End Validation (after all sprints)
 
@@ -725,15 +919,17 @@ git push origin <branch>
 
 ## Key Metrics to Track Across All Sprints
 
-| Metric | Baseline | After Phase 0+1 | After Phase 2 | After Phase 3 |
-|--------|----------|-----------------|---------------|---------------|
-| Fragment fields | 7 | 8 (+intent) | 8 | 8 |
-| Gap scoring formula | count×quality×section | +intent_weight | +semantic | +graph |
-| Discovery method | keyword only | +intent-aware | +hybrid embedding | +co-citation |
-| DB tables | 7 | 7 | 7 | 8 (+citation_links) |
-| DB schema version | 0 | 1 | 2 | 3 |
-| Test files | 4 | 5 (+intent) | 6 (+embeddings) | 7 (+graph) |
-| LOC | 8,387 | TBD | TBD | TBD |
+| Metric | Baseline | After Phase 0+1 | After Phase 2 | After Phase 3 | After Phase 4 | After Phase 5 | After Phase 6 |
+|--------|----------|-----------------|---------------|---------------|---------------|---------------|---------------|
+| Fragment fields | 7 | 8 (+intent) | 8 | 8 | 8 | 8 | 8 (+frag embedding) |
+| Gap scoring formula | count×quality×section | +intent_weight | +semantic | +graph | +S2 validation | +contrastive+worthiness | +RAG ranking |
+| Discovery method | keyword only | +intent-aware | +hybrid embedding | +co-citation | +MCP tools | +visualization+check-draft | +RAG+S2 recs |
+| DB tables | 7 | 7 | 7 | 8 (+citation_links) | 8 | 8 | 8 |
+| DB schema version | 0 | 1 | 2 | 3 | 3 | 3 | 4 (+frag embedding) |
+| Test files | 4 | 5 (+intent) | 6 (+embeddings) | 7 (+graph) | 8 (+mcp) | 9+ | 11+ |
+| CLI commands | 12 | 12 | 14 (+embed, similar) | 14 | 14 | 16 (+visualize, check-draft) | 17 (+benchmark) |
+| MCP tools | 0 | 0 | 0 | 0 | 4 | 4 | 6 (+recommend, tldr) |
+| LOC | 8,387 | TBD | TBD | TBD | TBD | TBD | TBD |
 
 ---
 
@@ -748,6 +944,10 @@ git push origin <branch>
 | Dimension mismatch between embedding backends | MEDIUM | Store embedding_model in DB, reject cross-model cosine |
 | Sprint 2+3 merge conflicts in note_factory.py | LOW | Sprint 3 starts after Sprint 1 merge, coordinates with Sprint 2 on note_factory |
 | MCP SDK API changes since removal | LOW | Write fresh, not restore; mcp as optional dep |
+| MinerU dependency size (heavy ML model) | MEDIUM | Optional extra `[mineru]`, lazy import, fallback to PyMuPDF |
+| Evaluation dataset creation effort | MEDIUM | Start with 50 fragments MVP, grow iteratively; focus on intent + gaps |
+| Fragment RAG context window limits | LOW | Top-K with configurable K, fallback to summary mode |
+| S2 API authentication changes | LOW | Monitor S2 API status, graceful degradation if unavailable |
 
 ---
 
@@ -774,7 +974,11 @@ Sprint 4 (Phase 4): ~5 days (after Sprint 2)
 
 Sprint 5 (Phase 5): ~7-10 days (stretch goals, after all)
   5.2 → 5.4 → 5.1 → 5.3
-  PR → merge
+  Documentation update + PR → merge
+
+Sprint 6 (Phase 6): ~11 days (after Phase 4, can overlap Phase 5)
+  6.1 → 6.2 → 6.3 → 6.4
+  Documentation update + PR → merge
 ```
 
-**Total estimate**: ~30-38 days (including buffer for Sprint 5)
+**Total estimate**: ~41-49 days (including buffer for Sprints 5+6)
