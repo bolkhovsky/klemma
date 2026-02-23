@@ -752,7 +752,7 @@ def process(ctx, citekeys, serial):
                 futures = {
                     pool.submit(_process_single, ck, cfg, state, vault, ai, pdf_extractor, kctx.library, quiet=True,
                                dissertation_context=kctx.dissertation_context, available_tags=kctx.available_tags,
-                               klemma_home=kctx.klemma_home): ck
+                               klemma_home=kctx.klemma_home, embeddings=kctx.embeddings): ck
                     for ck in keys
                 }
                 for future in as_completed(futures):
@@ -781,7 +781,8 @@ def process(ctx, citekeys, serial):
                                          dissertation_context=kctx.dissertation_context,
                                          available_tags=kctx.available_tags,
                                          klemma_home=kctx.klemma_home,
-                                         project_type=kctx.project.type if kctx.project else "dissertation")
+                                         project_type=kctx.project.type if kctx.project else "dissertation",
+                                         embeddings=kctx.embeddings)
             if n_frags > 0:
                 processed += 1
         if len(keys) > 1:
@@ -790,7 +791,7 @@ def process(ctx, citekeys, serial):
 
 def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quiet=False,
                     dissertation_context="", available_tags=None, klemma_home=None,
-                    project_type="dissertation"):
+                    project_type="dissertation", embeddings=None):
     """Process a single source: find PDF, extract fragments, save to vault.
 
     Returns (fragment_count, status_message). When quiet=True, suppresses console output
@@ -864,7 +865,120 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
         else:
             console.print(" [dim](DB only)[/dim]")
 
+    # Auto-embed if provider available and entry has abstract
+    if embeddings and entry.abstract:
+        try:
+            vec = embeddings.embed(entry.title or citekey, entry.abstract)
+            if vec:
+                state.save_embedding(citekey, vec, embeddings.model_name)
+                if not quiet:
+                    console.print(f"  [dim]embedded ({embeddings.model_name})[/dim]")
+        except Exception as e:
+            if not quiet:
+                console.print(f"  [dim]embed failed: {e}[/dim]")
+
     return (len(result.fragments), "ok")
+
+
+@main.command()
+@click.argument("citekey", required=False)
+@click.option("--dry-run", is_flag=True, help="Show how many would be embedded without calling API")
+@click.option("--backend", type=click.Choice(["s2", "local", "openai"]), help="Override embedding backend")
+@click.pass_context
+def embed(ctx, citekey, dry_run, backend):
+    """Backfill embeddings for sources with abstracts.
+
+    Without CITEKEY: embed all sources missing embeddings.
+    With CITEKEY: embed a specific source.
+    Use --dry-run to preview without API calls.
+    """
+    kctx = _get_context(ctx)
+    state = kctx.state
+
+    # Determine embedding provider
+    if backend:
+        from .embeddings import create_embeddings as _create_emb
+        emb = _create_emb({"backend": backend})
+    else:
+        emb = kctx.embeddings
+
+    if not emb and not dry_run:
+        console.print(
+            "[red]No embedding backend configured.[/red]\n"
+            "Set embeddings.backend in config.yaml (s2, local, openai) "
+            "or use --backend flag."
+        )
+        return
+
+    # Get candidates: sources with abstract but no embedding
+    if citekey:
+        source = state.get_source(citekey)
+        if not source:
+            console.print(f"[red]Source {citekey} not found[/red]")
+            return
+        candidates = [citekey]
+    else:
+        # Find completed sources without embeddings
+        with state._conn() as conn:
+            cur = conn.execute(
+                "SELECT id FROM sources WHERE status='completed' AND embedding IS NULL"
+            )
+            candidates = [row["id"] for row in cur.fetchall()]
+
+    if not candidates:
+        console.print("[green]All sources already have embeddings.[/green]")
+        return
+
+    # For dry-run, check which have abstracts via library
+    if kctx.library:
+        entries = kctx.library.entries
+        with_abstract = [c for c in candidates if entries.get(c) and entries[c].abstract]
+        without_abstract = len(candidates) - len(with_abstract)
+    else:
+        with_abstract = candidates
+        without_abstract = 0
+
+    if dry_run:
+        console.print(f"[blue]Would embed {len(with_abstract)} sources[/blue]")
+        if without_abstract:
+            console.print(f"[dim]{without_abstract} sources have no abstract (will be skipped)[/dim]")
+        return
+
+    # Embed
+    embedded = 0
+    skipped = 0
+    failed = 0
+    entries = kctx.library.entries if kctx.library else {}
+
+    from rich.progress import Progress
+    with Progress(console=console) as progress:
+        task = progress.add_task("Embedding...", total=len(candidates))
+        for ck in candidates:
+            entry = entries.get(ck)
+            title = entry.title if entry else ck
+            abstract = entry.abstract if entry else ""
+            if not abstract:
+                skipped += 1
+                progress.advance(task)
+                continue
+            try:
+                vec = emb.embed(title, abstract)
+                if vec:
+                    state.save_embedding(ck, vec, emb.model_name)
+                    embedded += 1
+                else:
+                    skipped += 1
+            except Exception as e:
+                console.print(f"  [red]{ck}: {e}[/red]")
+                failed += 1
+            progress.advance(task)
+
+    console.print(f"\n[green]Embedded: {embedded}[/green]", end="")
+    if skipped:
+        console.print(f" | [yellow]Skipped: {skipped}[/yellow]", end="")
+    if failed:
+        console.print(f" | [red]Failed: {failed}[/red]", end="")
+    console.print()
 
 
 @main.command()
@@ -1012,6 +1126,19 @@ def status(ctx, verbose, chapter):
                     str(d["total"]),
                 )
             console.print(it)
+
+    # --- Verbose: embedding stats ---
+    if verbose:
+        emb_stats = state.get_embedding_stats()
+        if emb_stats["embedded"] > 0 or emb_stats["total"] > 0:
+            console.print()
+            pct = (emb_stats["embedded"] / emb_stats["total"] * 100) if emb_stats["total"] else 0
+            console.print(
+                f"[bold]Embeddings[/bold]: {emb_stats['embedded']}/{emb_stats['total']} "
+                f"sources ({pct:.0f}%)"
+            )
+            for model, cnt in emb_stats["models"].items():
+                console.print(f"  [dim]{model}: {cnt}[/dim]")
 
 
 # Backward-compatible aliases
