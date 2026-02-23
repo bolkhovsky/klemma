@@ -1024,10 +1024,12 @@ Sprint 6 (Phase 6): ~11 days (after Phase 4, can overlap Phase 5)
 
 # Refactoring Program Backlog (Phases 3-10)
 
-## Phase 3: Architecture Seams
-- Ввести `services/` (оркестрация) и `repositories/` (данные).
-- Оставить `cli.py` как тонкий слой маршрутизации команд.
-- Закрыть доступ к приватным методам state из внешних модулей.
+## Phase 3: Architecture Seams ✅ DONE
+- ✅ `repositories/` введён: 7 доменных модулей (sources, fragments, embeddings_store, gaps, citations, plans, prune).
+- ✅ `StateManager` — facade с делегацией, backward-compatible API.
+- ✅ Доступ к приватным методам (`_conn()`, `_set_sections_inline`) закрыт: 0 нарушений в `src/`.
+- ⏳ `services/` (оркестрация) — отложен на Phase 4.
+- ⏳ `cli.py` как тонкий слой — отложен на Phase 4.
 
 ## Phase 4: CLI Decomposition
 - Разбить `src/klemma/cli.py` по доменам команд: `init`, `process`, `research`, `library`, `ask`, `status`.

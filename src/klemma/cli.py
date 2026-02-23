@@ -152,9 +152,7 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
     auto_register = not project or project.type != "paper"
 
     # Load existing DB source IDs (needed for paper filtering + new entry detection)
-    with state._conn() as conn:
-        cur = conn.execute("SELECT id FROM sources")
-        existing = {row["id"] for row in cur.fetchall()}
+    existing = state.get_existing_source_ids()
 
     new_entries = []
     renames = []
@@ -919,11 +917,7 @@ def embed(ctx, citekey, dry_run, backend):
         candidates = [citekey]
     else:
         # Find completed sources without embeddings
-        with state._conn() as conn:
-            cur = conn.execute(
-                "SELECT id FROM sources WHERE status='completed' AND embedding IS NULL"
-            )
-            candidates = [row["id"] for row in cur.fetchall()]
+        candidates = state.get_sources_without_embeddings()
 
     if not candidates:
         console.print("[green]All sources already have embeddings.[/green]")

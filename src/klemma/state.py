@@ -1,12 +1,20 @@
-"""Unified SQLite state manager."""
+"""Unified SQLite state manager — facade over domain repositories."""
 
-import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Optional
+
+from .repositories import (
+    CitationsRepository,
+    EmbeddingsStoreRepository,
+    FragmentRepository,
+    GapsRepository,
+    PlansRepository,
+    PruneRepository,
+    SourceRepository,
+)
 
 
 class ProcessingStatus(Enum):
@@ -126,12 +134,28 @@ PRUNE_DROP_SUBQUERY = (
 
 
 class StateManager:
-    """Unified SQLite state for sources, fragments, plans, reading queue."""
+    """Facade over domain repositories — backward-compatible public API.
+
+    Repositories are exposed as attributes for direct access:
+        state.sources, state.fragments, state.embeddings_store,
+        state.gaps, state.citations, state.plans, state.prune
+
+    All original public methods still work via delegation.
+    """
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+
+        # Compose domain repositories
+        self.sources = SourceRepository(self._conn)
+        self.fragments = FragmentRepository(self._conn)
+        self.embeddings_store = EmbeddingsStoreRepository(self._conn)
+        self.gaps = GapsRepository(self._conn)
+        self.citations = CitationsRepository(self._conn)
+        self.plans = PlansRepository(self._conn)
+        self.prune = PruneRepository(self._conn)
 
     @contextmanager
     def _conn(self):
@@ -160,7 +184,6 @@ class StateManager:
         target = 3  # bump this when adding new migrations
 
         if version < 1:
-            # Step 1.1: citation_intent for fragments and reference_gaps
             existing_frag = {
                 row[1] for row in conn.execute("PRAGMA table_info(fragments)")
             }
@@ -178,7 +201,6 @@ class StateManager:
                 )
 
         if version < 2:
-            # Step 2.2: embedding storage for sources
             existing_src = {
                 row[1] for row in conn.execute("PRAGMA table_info(sources)")
             }
@@ -192,7 +214,6 @@ class StateManager:
                 )
 
         if version < 3:
-            # Step 3.1: citation_links table for citation graph
             conn.execute("""CREATE TABLE IF NOT EXISTS citation_links (
                 source_id TEXT NOT NULL,
                 target_citekey TEXT,
@@ -207,1132 +228,218 @@ class StateManager:
 
         conn.execute(f"PRAGMA user_version = {target}")
 
-    # ── Sources ──────────────────────────────────────────────────────────
+    # ── Source delegation ─────────────────────────────────────────────────
 
     def register_sources(self, source_ids: list[str]):
-        with self._conn() as conn:
-            conn.executemany(
-                "INSERT OR IGNORE INTO sources (id) VALUES (?)",
-                [(sid,) for sid in source_ids],
-            )
+        return self.sources.register_sources(source_ids)
 
     def set_pdf_path(self, source_id: str, path: str):
-        """Set the direct PDF path for a source."""
-        with self._conn() as conn:
-            conn.execute("UPDATE sources SET pdf_path = ? WHERE id = ?", (path, source_id))
+        return self.sources.set_pdf_path(source_id, path)
 
     def get_pending_sources(self, limit: int = 0) -> list[str]:
-        with self._conn() as conn:
-            if limit > 0:
-                today = date.today().isoformat()
-                cur = conn.execute(
-                    "SELECT count FROM daily_batches WHERE date = ?", (today,)
-                )
-                row = cur.fetchone()
-                already = row["count"] if row else 0
-                remaining = max(0, limit - already)
-                if remaining == 0:
-                    return []
-                cur = conn.execute(
-                    "SELECT id FROM sources WHERE status = ? ORDER BY id LIMIT ?",
-                    (ProcessingStatus.PENDING.value, remaining),
-                )
-            else:
-                cur = conn.execute(
-                    "SELECT id FROM sources WHERE status = ? ORDER BY id",
-                    (ProcessingStatus.PENDING.value,),
-                )
-            return [row["id"] for row in cur.fetchall()]
+        return self.sources.get_pending_sources(limit)
 
     def mark_processing(self, source_id: str):
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE sources SET status = ? WHERE id = ?",
-                (ProcessingStatus.PROCESSING.value, source_id),
-            )
+        return self.sources.mark_processing(source_id)
 
-    def mark_completed(
-        self,
-        source_id: str,
-        note_path: str,
-        quality_score: int = 0,
-        primary_chapter: Optional[int] = None,
-        primary_section: Optional[str] = None,
-        relevance_nr1: int = 0,
-        relevance_nr2: int = 0,
-        citation_priority: str = "medium",
-    ):
-        now = datetime.now().isoformat()
-        today = date.today().isoformat()
-        with self._conn() as conn:
-            conn.execute(
-                """UPDATE sources
-                   SET status=?, processed_at=?, note_path=?, quality_score=?,
-                       primary_chapter=?, primary_section=?,
-                       relevance_nr1=?, relevance_nr2=?, citation_priority=?
-                   WHERE id=?""",
-                (
-                    ProcessingStatus.COMPLETED.value, now, note_path, quality_score,
-                    primary_chapter, primary_section,
-                    relevance_nr1, relevance_nr2, citation_priority,
-                    source_id,
-                ),
-            )
-            conn.execute(
-                """INSERT INTO daily_batches (date, count) VALUES (?, 1)
-                   ON CONFLICT(date) DO UPDATE SET count = count + 1""",
-                (today,),
-            )
+    def mark_completed(self, source_id: str, note_path: str, quality_score: int = 0,
+                       primary_chapter: Optional[int] = None, primary_section: Optional[str] = None,
+                       relevance_nr1: int = 0, relevance_nr2: int = 0, citation_priority: str = "medium"):
+        return self.sources.mark_completed(source_id, note_path, quality_score,
+                                           primary_chapter, primary_section,
+                                           relevance_nr1, relevance_nr2, citation_priority)
 
-    def update_source_metadata(
-        self,
-        source_id: str,
-        quality_score: int = 0,
-        primary_chapter: Optional[int] = None,
-        primary_section: Optional[str] = None,
-        relevance_nr1: int = 0,
-        relevance_nr2: int = 0,
-        citation_priority: str = "medium",
-        note_path: Optional[str] = None,
-        status: str = "completed",
-    ):
-        """Set metadata on an existing source (e.g. from vault import)."""
-        now = datetime.now().isoformat()
-        with self._conn() as conn:
-            conn.execute(
-                """UPDATE sources
-                   SET status=?, processed_at=?, quality_score=?,
-                       primary_chapter=?, primary_section=?,
-                       relevance_nr1=?, relevance_nr2=?, citation_priority=?,
-                       note_path=COALESCE(?, note_path)
-                   WHERE id=?""",
-                (
-                    status, now, quality_score,
-                    primary_chapter, primary_section,
-                    relevance_nr1, relevance_nr2, citation_priority,
-                    note_path,
-                    source_id,
-                ),
-            )
+    def update_source_metadata(self, source_id: str, quality_score: int = 0,
+                               primary_chapter: Optional[int] = None, primary_section: Optional[str] = None,
+                               relevance_nr1: int = 0, relevance_nr2: int = 0,
+                               citation_priority: str = "medium", note_path: Optional[str] = None,
+                               status: str = "completed"):
+        return self.sources.update_source_metadata(source_id, quality_score,
+                                                   primary_chapter, primary_section,
+                                                   relevance_nr1, relevance_nr2,
+                                                   citation_priority, note_path, status)
 
     def mark_failed(self, source_id: str, error: str):
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE sources SET status=?, error_message=? WHERE id=?",
-                (ProcessingStatus.FAILED.value, error, source_id),
-            )
+        return self.sources.mark_failed(source_id, error)
 
     def mark_skipped(self, source_id: str, reason: str):
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE sources SET status=?, error_message=? WHERE id=?",
-                (ProcessingStatus.SKIPPED.value, reason, source_id),
-            )
+        return self.sources.mark_skipped(source_id, reason)
 
     def get_source(self, source_id: str) -> Optional[dict]:
-        with self._conn() as conn:
-            cur = conn.execute("SELECT * FROM sources WHERE id=?", (source_id,))
-            row = cur.fetchone()
-            return dict(row) if row else None
+        return self.sources.get_source(source_id)
+
+    def get_existing_source_ids(self) -> set[str]:
+        return self.sources.get_existing_source_ids()
+
+    def get_sources_without_embeddings(self) -> list[str]:
+        return self.sources.get_sources_without_embeddings()
 
     def get_stats(self) -> dict[str, int]:
-        with self._conn() as conn:
-            stats = {}
-            for s in ProcessingStatus:
-                cur = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM sources WHERE status=?", (s.value,)
-                )
-                stats[s.value] = cur.fetchone()["cnt"]
-            stats["total"] = sum(stats.values())
-            today = date.today().isoformat()
-            cur = conn.execute(
-                "SELECT count FROM daily_batches WHERE date=?", (today,)
-            )
-            row = cur.fetchone()
-            stats["today"] = row["count"] if row else 0
-            return stats
+        return self.sources.get_stats()
 
-    def set_source_sections(
-        self, source_id: str, sections: list[str], chapters: list[int]
-    ) -> None:
-        """Записать все секции/главы для источника (из frontmatter sections/chapters)."""
-        with self._conn() as conn:
-            conn.execute(
-                "DELETE FROM source_sections WHERE source_id=?", (source_id,)
-            )
-            for sec in sections:
-                # Определить главу из номера секции
-                ch = int(sec.split(".")[0]) if "." in sec else None
-                # Или взять из списка chapters если глава без точки
-                if ch is None:
-                    continue
-                conn.execute(
-                    "INSERT OR IGNORE INTO source_sections (source_id, chapter, section) VALUES (?, ?, ?)",
-                    (source_id, ch, sec),
-                )
-            # Добавить главы без конкретных секций (если chapters шире чем sections)
-            existing_chapters = {int(s.split(".")[0]) for s in sections if "." in s}
-            for ch in chapters:
-                if ch not in existing_chapters:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO source_sections (source_id, chapter, section) VALUES (?, ?, ?)",
-                        (source_id, ch, str(ch)),
-                    )
+    def set_source_sections(self, source_id: str, sections: list[str], chapters: list[int]) -> None:
+        return self.sources.set_source_sections(source_id, sections, chapters)
 
     def get_all_sources(self) -> list[dict]:
-        """Get all completed sources with metadata."""
-        with self._conn() as conn:
-            cur = conn.execute(
-                """SELECT id, note_path, quality_score, primary_chapter,
-                          primary_section, relevance_nr1, relevance_nr2,
-                          citation_priority, fragment_count
-                   FROM sources WHERE status=?
-                   ORDER BY primary_chapter, citation_priority DESC, quality_score DESC""",
-                (ProcessingStatus.COMPLETED.value,),
-            )
-            return [dict(row) for row in cur.fetchall()]
+        return self.sources.get_all_sources()
 
     def get_by_chapter(self, chapter: int) -> list[dict]:
-        with self._conn() as conn:
-            cur = conn.execute(
-                f"""SELECT DISTINCT s.id, s.note_path, s.quality_score, s.primary_section,
-                          s.relevance_nr1, s.relevance_nr2, s.citation_priority,
-                          s.fragment_count
-                   FROM sources s
-                   LEFT JOIN source_sections ss ON s.id = ss.source_id
-                   WHERE s.status=? AND (s.primary_chapter=? OR ss.chapter=?)
-                     AND s.id NOT IN ({PRUNE_DROP_SUBQUERY})
-                   ORDER BY s.citation_priority DESC, s.quality_score DESC""",
-                (ProcessingStatus.COMPLETED.value, chapter, chapter),
-            )
-            return [dict(row) for row in cur.fetchall()]
+        return self.sources.get_by_chapter(chapter)
 
     def get_by_section(self, section: str) -> list[dict]:
-        with self._conn() as conn:
-            cur = conn.execute(
-                f"""SELECT DISTINCT s.id, s.note_path, s.quality_score, s.primary_chapter,
-                          s.relevance_nr1, s.relevance_nr2, s.citation_priority,
-                          s.fragment_count
-                   FROM sources s
-                   LEFT JOIN source_sections ss ON s.id = ss.source_id
-                   WHERE s.status=? AND (s.primary_section LIKE ? OR ss.section LIKE ?)
-                     AND s.id NOT IN ({PRUNE_DROP_SUBQUERY})
-                   ORDER BY s.citation_priority DESC, s.quality_score DESC""",
-                (ProcessingStatus.COMPLETED.value, f"{section}%", f"{section}%"),
-            )
-            return [dict(row) for row in cur.fetchall()]
-
-    def get_coverage_stats(self) -> dict:
-        with self._conn() as conn:
-            stats: dict = {"chapters": {}, "sections": {}, "nr1": {}, "nr2": {}}
-            cur = conn.execute(
-                """SELECT primary_chapter, COUNT(*) as cnt FROM sources
-                   WHERE status=? AND primary_chapter IS NOT NULL
-                   GROUP BY primary_chapter""",
-                (ProcessingStatus.COMPLETED.value,),
-            )
-            for row in cur.fetchall():
-                stats["chapters"][row["primary_chapter"]] = row["cnt"]
-
-            cur = conn.execute(
-                """SELECT primary_section, COUNT(*) as cnt FROM sources
-                   WHERE status=? AND primary_section IS NOT NULL
-                   GROUP BY primary_section""",
-                (ProcessingStatus.COMPLETED.value,),
-            )
-            for row in cur.fetchall():
-                stats["sections"][row["primary_section"]] = row["cnt"]
-
-            for level in range(1, 6):
-                cur = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM sources WHERE status=? AND relevance_nr1>=?",
-                    (ProcessingStatus.COMPLETED.value, level),
-                )
-                stats["nr1"][f">={level}"] = cur.fetchone()["cnt"]
-                cur = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM sources WHERE status=? AND relevance_nr2>=?",
-                    (ProcessingStatus.COMPLETED.value, level),
-                )
-                stats["nr2"][f">={level}"] = cur.fetchone()["cnt"]
-            return stats
-
-    def get_gaps(self, min_sources: int = 3) -> list[dict]:
-        with self._conn() as conn:
-            cur = conn.execute(
-                """SELECT primary_section, COUNT(*) as cnt FROM sources
-                   WHERE status=? AND primary_section IS NOT NULL
-                   GROUP BY primary_section HAVING cnt < ?
-                   ORDER BY cnt ASC""",
-                (ProcessingStatus.COMPLETED.value, min_sources),
-            )
-            return [
-                {"section": row["primary_section"], "count": row["cnt"]}
-                for row in cur.fetchall()
-            ]
-
-    def reset_non_completed(self) -> dict[str, int]:
-        with self._conn() as conn:
-            counts = {}
-            for s in [ProcessingStatus.FAILED, ProcessingStatus.SKIPPED, ProcessingStatus.PROCESSING]:
-                cur = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM sources WHERE status=?", (s.value,)
-                )
-                counts[s.value] = cur.fetchone()["cnt"]
-            conn.execute(
-                "UPDATE sources SET status=?, error_message=NULL WHERE status IN (?,?,?)",
-                (
-                    ProcessingStatus.PENDING.value,
-                    ProcessingStatus.FAILED.value,
-                    ProcessingStatus.SKIPPED.value,
-                    ProcessingStatus.PROCESSING.value,
-                ),
-            )
-            return counts
-
-    # ── Zotero Key / Rename ────────────────────────────────────────────────
+        return self.sources.get_by_section(section)
 
     def get_zotero_key_map(self) -> dict[str, str]:
-        """Return {zotero_key: citekey} for all sources with a populated zotero_key."""
-        with self._conn() as conn:
-            cur = conn.execute(
-                "SELECT id, zotero_key FROM sources WHERE zotero_key IS NOT NULL AND zotero_key != ''"
-            )
-            return {row["zotero_key"]: row["id"] for row in cur.fetchall()}
+        return self.sources.get_zotero_key_map()
 
     def rename_source(self, old_id: str, new_id: str, zotero_key: str = ""):
-        """Cascade-rename source across all tables."""
-        with self._conn() as conn:
-            # Temporarily disable FK checks for atomic rename
-            conn.execute("PRAGMA foreign_keys=OFF")
-            conn.execute(
-                "UPDATE sources SET id=?, zotero_key=? WHERE id=?",
-                (new_id, zotero_key, old_id),
-            )
-            for table, col in [
-                ("fragments", "source_id"),
-                ("source_sections", "source_id"),
-                ("reference_gaps", "source_id"),
-                ("reading_queue", "source_id"),
-                ("prune_verdicts", "source_id"),
-            ]:
-                conn.execute(
-                    f"UPDATE {table} SET {col}=? WHERE {col}=?",
-                    (new_id, old_id),
-                )
-            conn.execute("PRAGMA foreign_keys=ON")
+        return self.sources.rename_source(old_id, new_id, zotero_key)
 
     def delete_source(self, source_id: str):
-        """Delete an orphan source and all its FK-dependent rows."""
-        with self._conn() as conn:
-            for table, col in [
-                ("fragments", "source_id"),
-                ("source_sections", "source_id"),
-                ("reference_gaps", "source_id"),
-                ("reading_queue", "source_id"),
-                ("prune_verdicts", "source_id"),
-            ]:
-                conn.execute(f"DELETE FROM {table} WHERE {col}=?", (source_id,))
-            conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
+        return self.sources.delete_source(source_id)
 
     def populate_zotero_keys(self, mapping: dict[str, str]):
-        """Backfill zotero_key from {citekey: itemKey}. Only updates NULL rows."""
-        with self._conn() as conn:
-            for citekey, item_key in mapping.items():
-                conn.execute(
-                    "UPDATE sources SET zotero_key=? WHERE id=? AND (zotero_key IS NULL OR zotero_key='')",
-                    (item_key, citekey),
-                )
+        return self.sources.populate_zotero_keys(mapping)
 
-    # ── Embeddings ─────────────────────────────────────────────────────
+    def sync_source_sections(self, vault_data: list[dict], new_entries: list[tuple[str, dict]]) -> dict:
+        return self.sources.sync_source_sections(vault_data, new_entries)
 
-    def save_embedding(
-        self, source_id: str, embedding: list[float], model: str
-    ):
-        """Store embedding vector as BLOB with model name."""
-        import struct
-
-        blob = struct.pack(f"{len(embedding)}f", *embedding)
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE sources SET embedding=?, embedding_model=? WHERE id=?",
-                (blob, model, source_id),
-            )
-
-    def get_embedding(self, source_id: str) -> Optional[tuple[list[float], str]]:
-        """Retrieve embedding vector and model name for a source.
-
-        Returns (vector, model_name) or None if no embedding stored.
-        """
-        import struct
-
-        with self._conn() as conn:
-            row = conn.execute(
-                "SELECT embedding, embedding_model FROM sources WHERE id=?",
-                (source_id,),
-            ).fetchone()
-            if not row or not row["embedding"]:
-                return None
-            blob = row["embedding"]
-            n = len(blob) // 4  # float32 = 4 bytes
-            vec = list(struct.unpack(f"{n}f", blob))
-            return (vec, row["embedding_model"] or "")
-
-    def get_all_embeddings(
-        self, model: Optional[str] = None
-    ) -> dict[str, list[float]]:
-        """Get all source embeddings, optionally filtered by model.
-
-        Returns {source_id: vector}.
-        """
-        import struct
-
-        with self._conn() as conn:
-            if model:
-                cur = conn.execute(
-                    "SELECT id, embedding FROM sources "
-                    "WHERE embedding IS NOT NULL AND embedding_model=?",
-                    (model,),
-                )
-            else:
-                cur = conn.execute(
-                    "SELECT id, embedding FROM sources WHERE embedding IS NOT NULL"
-                )
-            result = {}
-            for row in cur.fetchall():
-                blob = row["embedding"]
-                n = len(blob) // 4
-                result[row["id"]] = list(struct.unpack(f"{n}f", blob))
-            return result
-
-    def get_embedding_stats(self) -> dict:
-        """Get embedding coverage stats."""
-        with self._conn() as conn:
-            total = conn.execute(
-                "SELECT COUNT(*) as cnt FROM sources WHERE status='completed'"
-            ).fetchone()["cnt"]
-            embedded = conn.execute(
-                "SELECT COUNT(*) as cnt FROM sources WHERE embedding IS NOT NULL"
-            ).fetchone()["cnt"]
-            models = {}
-            cur = conn.execute(
-                "SELECT embedding_model, COUNT(*) as cnt FROM sources "
-                "WHERE embedding IS NOT NULL GROUP BY embedding_model"
-            )
-            for row in cur.fetchall():
-                models[row["embedding_model"] or "unknown"] = row["cnt"]
-            return {"total": total, "embedded": embedded, "models": models}
-
-    # ── Fragments ────────────────────────────────────────────────────────
+    # ── Fragment delegation ───────────────────────────────────────────────
 
     def save_fragments(self, source_id: str, fragments: list[dict]) -> int:
-        """Save extracted fragments and update source fragment count."""
-        with self._conn() as conn:
-            for f in fragments:
-                conn.execute(
-                    """INSERT INTO fragments
-                       (source_id, fragment_text, fragment_type, chapter, section,
-                        relevance_score, usage_hint, page_number, citation_intent)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        source_id,
-                        f.get("text", ""),
-                        f.get("type", "key_idea"),
-                        f.get("chapter"),
-                        f.get("section"),
-                        f.get("relevance", 3),
-                        f.get("usage_hint", ""),
-                        f.get("page"),
-                        f.get("citation_intent"),
-                    ),
-                )
-            conn.execute(
-                "UPDATE sources SET fragment_count=? WHERE id=?",
-                (len(fragments), source_id),
-            )
-            return len(fragments)
+        return self.fragments.save_fragments(source_id, fragments)
 
-    def get_fragments(
-        self,
-        source_id: Optional[str] = None,
-        chapter: Optional[int] = None,
-        section: Optional[str] = None,
-        fragment_type: Optional[str] = None,
-        limit: int = 50,
-    ) -> list[dict]:
-        """Query fragments with optional filters."""
-        conditions = []
-        params: list = []
-        if source_id:
-            conditions.append("source_id=?")
-            params.append(source_id)
-        if chapter:
-            conditions.append("chapter=?")
-            params.append(chapter)
-        if section:
-            conditions.append("section LIKE ?")
-            params.append(f"{section}%")
-        if fragment_type:
-            conditions.append("fragment_type=?")
-            params.append(fragment_type)
-
-        where = " AND ".join(conditions) if conditions else "1=1"
-        params.append(limit)
-
-        with self._conn() as conn:
-            cur = conn.execute(
-                f"""SELECT f.*, s.id as citekey
-                    FROM fragments f
-                    JOIN sources s ON f.source_id = s.id
-                    WHERE {where}
-                    ORDER BY f.relevance_score DESC, f.extracted_at DESC
-                    LIMIT ?""",
-                params,
-            )
-            return [dict(row) for row in cur.fetchall()]
+    def get_fragments(self, source_id: Optional[str] = None, chapter: Optional[int] = None,
+                      section: Optional[str] = None, fragment_type: Optional[str] = None,
+                      limit: int = 50) -> list[dict]:
+        return self.fragments.get_fragments(source_id, chapter, section, fragment_type, limit)
 
     def get_fragment_stats(self) -> dict:
-        """Get fragment counts by type, chapter, section."""
-        with self._conn() as conn:
-            stats: dict = {"total": 0, "by_type": {}, "by_chapter": {}, "by_section": {}}
-            cur = conn.execute("SELECT COUNT(*) as cnt FROM fragments")
-            stats["total"] = cur.fetchone()["cnt"]
-
-            cur = conn.execute(
-                "SELECT fragment_type, COUNT(*) as cnt FROM fragments GROUP BY fragment_type"
-            )
-            for row in cur.fetchall():
-                stats["by_type"][row["fragment_type"] or "unknown"] = row["cnt"]
-
-            cur = conn.execute(
-                "SELECT chapter, COUNT(*) as cnt FROM fragments WHERE chapter IS NOT NULL GROUP BY chapter"
-            )
-            for row in cur.fetchall():
-                stats["by_chapter"][row["chapter"]] = row["cnt"]
-
-            cur = conn.execute(
-                "SELECT section, COUNT(*) as cnt FROM fragments WHERE section IS NOT NULL GROUP BY section"
-            )
-            for row in cur.fetchall():
-                stats["by_section"][row["section"]] = row["cnt"]
-            return stats
+        return self.fragments.get_fragment_stats()
 
     def get_intent_coverage(self) -> dict[str, dict[str, int]]:
-        """Get fragment counts by section × citation_intent.
+        return self.fragments.get_intent_coverage()
 
-        Returns {section: {background: N, method: N, result_comparison: N, total: N}}.
-        Only includes sections that have at least one fragment with a non-NULL intent.
-        """
-        with self._conn() as conn:
-            cur = conn.execute(
-                """SELECT section, citation_intent, COUNT(*) as cnt
-                   FROM fragments
-                   WHERE section IS NOT NULL AND citation_intent IS NOT NULL
-                   GROUP BY section, citation_intent
-                   ORDER BY section"""
-            )
-            result: dict[str, dict[str, int]] = {}
-            for row in cur.fetchall():
-                sec = row["section"]
-                if sec not in result:
-                    result[sec] = {
-                        "background": 0,
-                        "method": 0,
-                        "result_comparison": 0,
-                        "total": 0,
-                    }
-                intent = row["citation_intent"]
-                if intent in result[sec]:
-                    result[sec][intent] = row["cnt"]
-                    result[sec]["total"] += row["cnt"]
-            return result
+    # ── Embedding delegation ──────────────────────────────────────────────
 
-    # ── Daily Plans ──────────────────────────────────────────────────────
+    def save_embedding(self, source_id: str, embedding: list[float], model: str):
+        return self.embeddings_store.save_embedding(source_id, embedding, model)
 
-    def save_plan(
-        self,
-        dissertation_task: str,
-        assistant_task: str,
-        reading_target: str = "",
-        reading_snippet: str = "",
-        plan_json: str = "",
-        progress_summary: str = "",
-    ):
-        today = date.today().isoformat()
-        with self._conn() as conn:
-            conn.execute(
-                """INSERT INTO daily_plans
-                   (date, dissertation_task, assistant_task, reading_target,
-                    reading_snippet, plan_json, progress_summary)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(date) DO UPDATE SET
-                   dissertation_task=?, assistant_task=?, reading_target=?,
-                   reading_snippet=?, plan_json=?, progress_summary=?""",
-                (
-                    today, dissertation_task, assistant_task, reading_target,
-                    reading_snippet, plan_json, progress_summary,
-                    dissertation_task, assistant_task, reading_target,
-                    reading_snippet, plan_json, progress_summary,
-                ),
-            )
+    def get_embedding(self, source_id: str) -> Optional[tuple[list[float], str]]:
+        return self.embeddings_store.get_embedding(source_id)
 
-    def get_writing_streak(self) -> dict:
-        """Calculate writing streak and days without progress from daily_plans.
+    def get_all_embeddings(self, model: Optional[str] = None) -> dict[str, list[float]]:
+        return self.embeddings_store.get_all_embeddings(model)
 
-        A day counts as 'progress' if a plan was generated for it.
-        Returns {"days_without_progress": int, "streak": int, "last_progress_date": str|None}.
-        """
-        from datetime import timedelta
+    def get_embedding_stats(self) -> dict:
+        return self.embeddings_store.get_embedding_stats()
 
-        with self._conn() as conn:
-            cur = conn.execute(
-                "SELECT date FROM daily_plans ORDER BY date DESC LIMIT 30"
-            )
-            plan_dates = {row["date"] for row in cur.fetchall()}
-
-        if not plan_dates:
-            return {"days_without_progress": 0, "streak": 0, "last_progress_date": None}
-
-        today = date.today()
-        days_without = 0
-        streak = 0
-        last_progress = None
-
-        # Count from yesterday backward (today's plan hasn't been generated yet)
-        for i in range(1, 31):
-            check = (today - timedelta(days=i)).isoformat()
-            if check in plan_dates:
-                last_progress = last_progress or check
-                streak += 1
-            else:
-                if last_progress is None:
-                    days_without += 1
-                else:
-                    break
-
-        return {
-            "days_without_progress": days_without,
-            "streak": streak,
-            "last_progress_date": last_progress,
-        }
-
-    def get_plan(self, plan_date: Optional[str] = None) -> Optional[dict]:
-        d = plan_date or date.today().isoformat()
-        with self._conn() as conn:
-            cur = conn.execute("SELECT * FROM daily_plans WHERE date=?", (d,))
-            row = cur.fetchone()
-            return dict(row) if row else None
-
-    def get_yesterday_plan(self) -> Optional[dict]:
-        from datetime import timedelta
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
-        return self.get_plan(yesterday)
-
-    # ── Reading Queue ────────────────────────────────────────────────────
-
-    def add_to_reading_queue(self, source_id: str, priority: int = 50, total_length: int = 0):
-        with self._conn() as conn:
-            conn.execute(
-                """INSERT OR IGNORE INTO reading_queue (source_id, priority, total_length)
-                   VALUES (?, ?, ?)""",
-                (source_id, priority, total_length),
-            )
-
-    def get_next_reading(self) -> Optional[dict]:
-        with self._conn() as conn:
-            cur = conn.execute(
-                f"""SELECT rq.*, s.id as citekey
-                   FROM reading_queue rq
-                   JOIN sources s ON rq.source_id = s.id
-                   WHERE rq.status = 'queued'
-                     AND s.id NOT IN ({PRUNE_DROP_SUBQUERY})
-                   ORDER BY rq.priority DESC
-                   LIMIT 1"""
-            )
-            row = cur.fetchone()
-            return dict(row) if row else None
-
-    def update_reading_position(self, source_id: str, position: int):
-        with self._conn() as conn:
-            conn.execute(
-                """UPDATE reading_queue SET current_position=?, status='reading',
-                   started_at=COALESCE(started_at, datetime('now'))
-                   WHERE source_id=?""",
-                (position, source_id),
-            )
-
-    def complete_reading(self, source_id: str):
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE reading_queue SET status='completed', completed_at=datetime('now') WHERE source_id=?",
-                (source_id,),
-            )
-
-    # ── Reference Gaps ────────────────────────────────────────────────────
+    # ── Gaps delegation ───────────────────────────────────────────────────
 
     def save_reference_gaps(self, source_id: str, gaps: list[dict]) -> int:
-        """Save reference gaps for a source (idempotent: replaces old gaps)."""
-        with self._conn() as conn:
-            conn.execute(
-                "DELETE FROM reference_gaps WHERE source_id=?", (source_id,)
-            )
-            for g in gaps:
-                sections = g.get("dissertation_sections", [])
-                conn.execute(
-                    """INSERT INTO reference_gaps
-                       (source_id, ref_authors, ref_year, ref_title,
-                        why_relevant, dissertation_sections, citation_intent)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        source_id,
-                        g.get("ref_authors", g.get("authors", "")),
-                        g.get("ref_year", g.get("year")),
-                        g.get("ref_title", g.get("title", "")),
-                        g.get("why_relevant", ""),
-                        json.dumps(sections) if sections else None,
-                        g.get("citation_intent"),
-                    ),
-                )
-            return len(gaps)
+        return self.gaps.save_reference_gaps(source_id, gaps)
 
-    def get_reference_gaps(
-        self,
-        section: Optional[str] = None,
-        limit: int = 50,
-    ) -> list[dict]:
-        """Get open reference gaps aggregated by (authors, year, title).
+    def get_reference_gaps(self, section: Optional[str] = None, limit: int = 50) -> list[dict]:
+        return self.gaps.get_reference_gaps(section, limit)
 
-        Returns list of dicts with: ref_authors, ref_year, ref_title,
-        why_relevant, dissertation_sections, count, avg_quality,
-        intent_weight, score, source_ids.
-
-        Scoring formula: count * avg_quality * section_weight * intent_weight
-        where intent_weight = AVG(method=3.0, result_comparison=2.0, else=1.0)
-        NULL intents → weight 1.0 (backward compatible).
-        """
-        with self._conn() as conn:
-            query = """
-                SELECT
-                    rg.ref_authors,
-                    rg.ref_year,
-                    rg.ref_title,
-                    GROUP_CONCAT(DISTINCT rg.why_relevant) as why_relevant,
-                    GROUP_CONCAT(DISTINCT rg.dissertation_sections) as dissertation_sections,
-                    COUNT(DISTINCT rg.source_id) as count,
-                    AVG(COALESCE(s.quality_score, 3)) as avg_quality,
-                    AVG(CASE
-                        WHEN rg.citation_intent = 'method' THEN 3.0
-                        WHEN rg.citation_intent = 'result_comparison' THEN 2.0
-                        ELSE 1.0
-                    END) as intent_weight,
-                    GROUP_CONCAT(DISTINCT rg.source_id) as source_ids
-                FROM reference_gaps rg
-                JOIN sources s ON rg.source_id = s.id
-                WHERE rg.status = 'open'
-            """
-            params: list = []
-            if section:
-                query += " AND rg.dissertation_sections LIKE ?"
-                params.append(f'%"{section}%')
-
-            query += """
-                GROUP BY rg.ref_authors, rg.ref_year, rg.ref_title
-                ORDER BY COUNT(DISTINCT rg.source_id)
-                       * AVG(COALESCE(s.quality_score, 3))
-                       * AVG(CASE
-                           WHEN rg.citation_intent = 'method' THEN 3.0
-                           WHEN rg.citation_intent = 'result_comparison' THEN 2.0
-                           ELSE 1.0
-                         END)
-                       DESC
-                LIMIT ?
-            """
-            params.append(limit)
-
-            cur = conn.execute(query, params)
-            results = []
-            for row in cur.fetchall():
-                r = dict(row)
-                count = r["count"]
-                avg_q = r["avg_quality"] or 3
-                intent_w = r.get("intent_weight") or 1.0
-                # section_weight: 2.0 if relevant to NR1/NR2 sections (2.x)
-                sections_str = r.get("dissertation_sections") or ""
-                section_weight = 2.0 if '"2.' in sections_str else 1.0
-                r["score"] = round(count * avg_q * section_weight * intent_w, 1)
-                results.append(r)
-            return results
-
-    def rerank_gaps_semantic(
-        self,
-        gaps: list[dict],
-        embeddings=None,
-        query_section: Optional[str] = None,
-    ) -> list[dict]:
-        """Rerank reference gaps using embedding similarity to section centroid.
-
-        When embeddings are stored, computes centroid of sources assigned to
-        the relevant section, then boosts gaps whose citing sources are
-        semantically close to that centroid.
-
-        Formula: final_score = heuristic_score * (0.5 + 0.5 * sim_to_centroid)
-        No embeddings → returns gaps unchanged.
-        """
-        if not embeddings:
-            return gaps
-
-        from .embeddings import cosine_similarity
-
-        all_emb = self.get_all_embeddings(model=embeddings.model_name)
-        if not all_emb:
-            return gaps
-
-        # Compute section centroid from sources assigned to that section
-        centroid = None
-        if query_section:
-            section_sources = self.get_section_sources(query_section)
-            section_vecs = [
-                all_emb[sid] for sid in section_sources if sid in all_emb
-            ]
-            if section_vecs:
-                dim = len(section_vecs[0])
-                centroid = [
-                    sum(v[i] for v in section_vecs) / len(section_vecs)
-                    for i in range(dim)
-                ]
-
-        # If no section centroid, use global centroid of all embeddings
-        if not centroid and all_emb:
-            vecs = list(all_emb.values())
-            dim = len(vecs[0])
-            centroid = [
-                sum(v[i] for v in vecs) / len(vecs) for i in range(dim)
-            ]
-
-        if not centroid:
-            return gaps
-
-        # Rerank: boost by average similarity of citing sources to centroid
-        for gap in gaps:
-            source_ids = (gap.get("source_ids") or "").split(",")
-            sims = []
-            for sid in source_ids:
-                sid = sid.strip()
-                if sid in all_emb:
-                    sims.append(cosine_similarity(all_emb[sid], centroid))
-            if sims:
-                avg_sim = sum(sims) / len(sims)
-                gap["semantic_boost"] = round(avg_sim, 4)
-                gap["score"] = round(gap["score"] * (0.5 + 0.5 * avg_sim), 1)
-            else:
-                gap["semantic_boost"] = 0.0
-
-        gaps.sort(key=lambda g: g["score"], reverse=True)
-        return gaps
+    def rerank_gaps_semantic(self, gaps: list[dict], embeddings=None,
+                             query_section: Optional[str] = None) -> list[dict]:
+        return self.gaps.rerank_gaps_semantic(
+            gaps, embeddings, query_section,
+            get_all_embeddings=self.embeddings_store.get_all_embeddings,
+            get_section_sources=self.gaps.get_section_sources,
+        )
 
     def get_section_sources(self, section: str) -> list[str]:
-        """Get source IDs assigned to a section (via source_sections or primary_section)."""
-        with self._conn() as conn:
-            cur = conn.execute(
-                "SELECT DISTINCT source_id FROM source_sections WHERE section LIKE ?",
-                (f"{section}%",),
-            )
-            ids = [row["source_id"] for row in cur.fetchall()]
-            if not ids:
-                cur = conn.execute(
-                    "SELECT id FROM sources WHERE primary_section LIKE ?",
-                    (f"{section}%",),
-                )
-                ids = [row["id"] for row in cur.fetchall()]
-            return ids
+        return self.gaps.get_section_sources(section)
 
     def get_gap_summary(self) -> dict:
-        """Lightweight summary for status line: open count + top gap."""
-        with self._conn() as conn:
-            cur = conn.execute(
-                "SELECT COUNT(DISTINCT ref_authors || ref_year || ref_title) as cnt "
-                "FROM reference_gaps WHERE status='open'"
-            )
-            open_count = cur.fetchone()["cnt"]
-
-            top_ref = None
-            top_count = 0
-            if open_count > 0:
-                cur = conn.execute(
-                    """SELECT ref_authors, ref_year,
-                              COUNT(DISTINCT source_id) as cnt
-                       FROM reference_gaps WHERE status='open'
-                       GROUP BY ref_authors, ref_year, ref_title
-                       ORDER BY cnt DESC LIMIT 1"""
-                )
-                row = cur.fetchone()
-                if row:
-                    year_str = str(row["ref_year"]) if row["ref_year"] else ""
-                    top_ref = f"{row['ref_authors']} {year_str}".strip()
-                    top_count = row["cnt"]
-
-            return {
-                "open_count": open_count,
-                "top_ref": top_ref,
-                "top_count": top_count,
-            }
+        return self.gaps.get_gap_summary()
 
     def resolve_gaps(self, entry_lookup: dict) -> int:
-        """Auto-resolve open gaps that match entries in library.
+        return self.gaps.resolve_gaps(entry_lookup)
 
-        Matches by (author surname, year) or title prefix.
-        Returns count of resolved gaps.
-        """
-        # Build lookup index: "surname year" -> citekey
-        lib_index: dict[str, str] = {}
-        for citekey, entry in entry_lookup.items():
-            if entry.author:
-                # Last word of family = actual surname (handles "А. В. Юлин")
-                family = entry.author[0].family.lower().strip()
-                surname = family.split()[-1] if family else ""
-            else:
-                surname = ""
-            year = str(entry.year) if entry.year else ""
-            if surname and year:
-                lib_index[f"{surname} {year}"] = citekey
-            if entry.title:
-                lib_index[entry.title.lower()[:50]] = citekey
+    def get_coverage_stats(self) -> dict:
+        return self.gaps.get_coverage_stats()
 
-        resolved = 0
-        with self._conn() as conn:
-            cur = conn.execute(
-                "SELECT id, ref_authors, ref_year, ref_title "
-                "FROM reference_gaps WHERE status='open'"
-            )
-            for row in cur.fetchall():
-                authors = (row["ref_authors"] or "").lower()
-                year = str(row["ref_year"]) if row["ref_year"] else ""
-                # Extract surname: first word >2 chars (skip initials "А.", "J.")
-                words = authors.replace("et al.", "").replace("и др.", "").split()
-                surname = ""
-                for w in words:
-                    clean = w.strip(".,")
-                    if len(clean) > 2:
-                        surname = clean
-                        break
-                key = f"{surname} {year}"
+    def get_gaps(self, min_sources: int = 3) -> list[dict]:
+        return self.gaps.get_gaps(min_sources)
 
-                matched_citekey = lib_index.get(key)
-                if not matched_citekey and row["ref_title"]:
-                    matched_citekey = lib_index.get(row["ref_title"].lower()[:50])
+    def reset_non_completed(self) -> dict[str, int]:
+        return self.gaps.reset_non_completed()
 
-                if matched_citekey:
-                    conn.execute(
-                        """UPDATE reference_gaps
-                           SET status='resolved', resolved_citekey=?,
-                               resolved_at=datetime('now')
-                           WHERE id=?""",
-                        (matched_citekey, row["id"]),
-                    )
-                    resolved += 1
-        return resolved
-
-    # ── Citation Links ─────────────────────────────────────────────────
+    # ── Citation delegation ───────────────────────────────────────────────
 
     def save_citation_links(self, source_id: str, references: list[dict]):
-        """Save citation links from annotation key_references.
+        return self.citations.save_citation_links(source_id, references)
 
-        Each reference dict should have: authors, year, title, citation_intent,
-        in_library, citekey (optional).
-        Uses MD5 of normalized title for UNIQUE constraint.
-        """
-        import hashlib
-
-        with self._conn() as conn:
-            for ref in references:
-                title = ref.get("title", "")
-                if not title:
-                    continue
-                title_hash = hashlib.md5(
-                    title.lower().strip().encode()
-                ).hexdigest()
-                conn.execute(
-                    """INSERT OR REPLACE INTO citation_links
-                       (source_id, target_citekey, target_title_hash,
-                        target_title, target_authors, target_year,
-                        citation_intent, in_library)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        source_id,
-                        ref.get("citekey"),
-                        title_hash,
-                        title,
-                        ref.get("authors", ""),
-                        ref.get("year"),
-                        ref.get("citation_intent"),
-                        1 if ref.get("in_library") else 0,
-                    ),
-                )
-
-    def get_citation_links(
-        self, source_id: Optional[str] = None
-    ) -> list[dict]:
-        """Get citation links, optionally filtered by source."""
-        with self._conn() as conn:
-            if source_id:
-                cur = conn.execute(
-                    "SELECT * FROM citation_links WHERE source_id=?",
-                    (source_id,),
-                )
-            else:
-                cur = conn.execute("SELECT * FROM citation_links")
-            return [dict(row) for row in cur.fetchall()]
+    def get_citation_links(self, source_id: Optional[str] = None) -> list[dict]:
+        return self.citations.get_citation_links(source_id)
 
     def get_citation_graph_stats(self) -> dict:
-        """Compute citation graph statistics."""
-        with self._conn() as conn:
-            total = conn.execute(
-                "SELECT COUNT(*) as cnt FROM citation_links"
-            ).fetchone()["cnt"]
-            unique_targets = conn.execute(
-                "SELECT COUNT(DISTINCT target_title_hash) as cnt FROM citation_links"
-            ).fetchone()["cnt"]
-            in_library = conn.execute(
-                "SELECT COUNT(*) as cnt FROM citation_links WHERE in_library=1"
-            ).fetchone()["cnt"]
-            external = total - in_library
-
-            # Average refs per source
-            source_count = conn.execute(
-                "SELECT COUNT(DISTINCT source_id) as cnt FROM citation_links"
-            ).fetchone()["cnt"]
-            avg_refs = round(total / source_count, 1) if source_count else 0
-
-            # Most cited external works
-            cur = conn.execute(
-                """SELECT target_title, target_authors, target_year,
-                          COUNT(DISTINCT source_id) as cite_count
-                   FROM citation_links
-                   WHERE in_library=0
-                   GROUP BY target_title_hash
-                   ORDER BY cite_count DESC
-                   LIMIT 10"""
-            )
-            most_cited_external = [dict(row) for row in cur.fetchall()]
-
-            # Most connected internal works
-            cur = conn.execute(
-                """SELECT target_citekey, COUNT(DISTINCT source_id) as cite_count
-                   FROM citation_links
-                   WHERE in_library=1 AND target_citekey IS NOT NULL
-                   GROUP BY target_citekey
-                   ORDER BY cite_count DESC
-                   LIMIT 10"""
-            )
-            most_connected = [dict(row) for row in cur.fetchall()]
-
-            return {
-                "total_links": total,
-                "unique_targets": unique_targets,
-                "in_library": in_library,
-                "external": external,
-                "source_count": source_count,
-                "avg_refs_per_source": avg_refs,
-                "most_cited_external": most_cited_external,
-                "most_connected_internal": most_connected,
-            }
+        return self.citations.get_citation_graph_stats()
 
     def get_co_cited(self, citekey: str) -> list[dict]:
-        """Find works frequently co-cited with the given citekey.
-
-        Returns works that appear in the same source's references as citekey.
-        """
-        with self._conn() as conn:
-            # Find which sources cite this citekey
-            cur = conn.execute(
-                """SELECT DISTINCT source_id FROM citation_links
-                   WHERE target_citekey=? OR target_title_hash IN (
-                       SELECT target_title_hash FROM citation_links
-                       WHERE target_citekey=?
-                   )""",
-                (citekey, citekey),
-            )
-            citing_sources = [row["source_id"] for row in cur.fetchall()]
-
-            if not citing_sources:
-                return []
-
-            placeholders = ",".join("?" * len(citing_sources))
-            cur = conn.execute(
-                f"""SELECT target_title, target_authors, target_year,
-                           target_citekey, in_library,
-                           COUNT(DISTINCT source_id) as co_cite_count
-                    FROM citation_links
-                    WHERE source_id IN ({placeholders})
-                      AND (target_citekey IS NULL OR target_citekey != ?)
-                    GROUP BY target_title_hash
-                    ORDER BY co_cite_count DESC
-                    LIMIT 20""",
-                (*citing_sources, citekey),
-            )
-            return [dict(row) for row in cur.fetchall()]
+        return self.citations.get_co_cited(citekey)
 
     def get_key_author_groups(self, min_papers: int = 2) -> list[dict]:
-        """Find author groups with multiple papers in the library.
+        return self.citations.get_key_author_groups(min_papers)
 
-        Extracts first author surname from citation_links target_authors,
-        groups by surname, returns those with min_papers or more.
-        """
-        with self._conn() as conn:
-            # Get all unique target authors from citation links
-            cur = conn.execute(
-                """SELECT target_authors, target_title, target_year, target_citekey, in_library
-                   FROM citation_links
-                   WHERE target_authors IS NOT NULL AND target_authors != ''"""
-            )
+    # ── Plans delegation ──────────────────────────────────────────────────
 
-            # Group by first-author surname
-            groups: dict[str, list[dict]] = {}
-            for row in cur.fetchall():
-                authors = row["target_authors"]
-                # Extract first surname (before "et al." or comma)
-                surname = ""
-                for word in authors.replace("et al.", "").replace(",", " ").split():
-                    clean = word.strip(".").strip()
-                    if len(clean) > 2 and clean[0].isupper():
-                        surname = clean
-                        break
-                if not surname:
-                    continue
-                if surname not in groups:
-                    groups[surname] = []
-                groups[surname].append({
-                    "title": row["target_title"],
-                    "year": row["target_year"],
-                    "citekey": row["target_citekey"],
-                    "in_library": bool(row["in_library"]),
-                    "full_authors": authors,
-                })
+    def save_plan(self, dissertation_task: str, assistant_task: str, reading_target: str = "",
+                  reading_snippet: str = "", plan_json: str = "", progress_summary: str = ""):
+        return self.plans.save_plan(dissertation_task, assistant_task, reading_target,
+                                    reading_snippet, plan_json, progress_summary)
 
-            # Filter by min_papers and sort by count
-            result = []
-            for surname, papers in groups.items():
-                unique_titles = {p["title"] for p in papers}
-                if len(unique_titles) >= min_papers:
-                    result.append({
-                        "surname": surname,
-                        "paper_count": len(unique_titles),
-                        "in_library_count": sum(1 for p in papers if p["in_library"]),
-                        "papers": papers[:10],  # cap at 10
-                    })
-            result.sort(key=lambda x: x["paper_count"], reverse=True)
-            return result
+    def get_writing_streak(self) -> dict:
+        return self.plans.get_writing_streak()
 
-    # --- Library analysis methods ---
+    def get_plan(self, plan_date: Optional[str] = None) -> Optional[dict]:
+        return self.plans.get_plan(plan_date)
+
+    def get_yesterday_plan(self) -> Optional[dict]:
+        return self.plans.get_yesterday_plan()
+
+    def add_to_reading_queue(self, source_id: str, priority: int = 50, total_length: int = 0):
+        return self.plans.add_to_reading_queue(source_id, priority, total_length)
+
+    def get_next_reading(self) -> Optional[dict]:
+        return self.plans.get_next_reading()
+
+    def update_reading_position(self, source_id: str, position: int):
+        return self.plans.update_reading_position(source_id, position)
+
+    def complete_reading(self, source_id: str):
+        return self.plans.complete_reading(source_id)
+
+    # ── Prune delegation ──────────────────────────────────────────────────
+
+    def save_prune_verdicts(self, drop: list[dict], maybe: list[dict]):
+        return self.prune.save_prune_verdicts(drop, maybe)
+
+    def get_prune_drop_ids(self, max_age_days: int = PRUNE_EXPIRY_DAYS) -> set[str]:
+        return self.prune.get_prune_drop_ids(max_age_days)
+
+    def get_prune_summary(self) -> dict:
+        return self.prune.get_prune_summary()
+
+    def get_prune_verdicts(self, chapter: Optional[int] = None, verdict: Optional[str] = None) -> list[dict]:
+        return self.prune.get_prune_verdicts(chapter, verdict)
+
+    def clear_prune_verdict(self, source_id: str):
+        return self.prune.clear_prune_verdict(source_id)
+
+    # ── Aggregation (cross-repo) ──────────────────────────────────────────
 
     def get_library_summary(self) -> dict:
         """Comprehensive library summary for AI analysis context."""
         with self._conn() as conn:
-            stats = self.get_stats()
-            frag_stats = self.get_fragment_stats()
-            cov = self.get_coverage_stats()
-            gap_summary = self.get_gap_summary()
+            stats = self.sources.get_stats()
+            frag_stats = self.fragments.get_fragment_stats()
+            cov = self.gaps.get_coverage_stats()
+            gap_summary = self.gaps.get_gap_summary()
 
-            # Quality distribution
             cur = conn.execute(
                 "SELECT quality_score, COUNT(*) as cnt FROM sources "
                 "WHERE status='completed' AND quality_score IS NOT NULL "
@@ -1340,7 +447,6 @@ class StateManager:
             )
             by_quality = {row["quality_score"]: row["cnt"] for row in cur.fetchall()}
 
-            # Average quality
             cur = conn.execute(
                 "SELECT AVG(quality_score) as avg_q, AVG(fragment_count) as avg_f "
                 "FROM sources WHERE status='completed' AND quality_score > 0"
@@ -1349,8 +455,6 @@ class StateManager:
             avg_quality = round(row["avg_q"], 1) if row["avg_q"] else 0
             avg_fragments = round(row["avg_f"], 1) if row["avg_f"] else 0
 
-            # Sections with zero sources
-            _all_sections = set(cov["sections"].keys()) if cov["sections"] else set()  # noqa: F841
             zero_sections = [s for s, c in cov["sections"].items() if c == 0] if cov["sections"] else []
 
             return {
@@ -1368,7 +472,7 @@ class StateManager:
             }
 
     def get_sources_by_quality(self) -> dict[int, list[dict]]:
-        """Completed sources grouped by quality tier (5 → 1)."""
+        """Completed sources grouped by quality tier (5 -> 1)."""
         with self._conn() as conn:
             cur = conn.execute(
                 """SELECT id, quality_score, primary_chapter, primary_section,
@@ -1382,218 +486,3 @@ class StateManager:
                 q = row["quality_score"] or 0
                 result.setdefault(q, []).append(dict(row))
             return result
-
-    @staticmethod
-    def _set_sections_inline(conn, source_id: str, sections: list[str], chapters: list[int]):
-        """Write source_sections using an existing connection (avoids nested lock)."""
-        conn.execute("DELETE FROM source_sections WHERE source_id=?", (source_id,))
-        for sec in sections:
-            ch = int(sec.split(".")[0]) if "." in sec else None
-            if ch is None:
-                continue
-            conn.execute(
-                "INSERT OR IGNORE INTO source_sections (source_id, chapter, section) VALUES (?, ?, ?)",
-                (source_id, ch, sec),
-            )
-        existing_chapters = {int(s.split(".")[0]) for s in sections if "." in s}
-        for ch in chapters:
-            if ch not in existing_chapters:
-                conn.execute(
-                    "INSERT OR IGNORE INTO source_sections (source_id, chapter, section) VALUES (?, ?, ?)",
-                    (source_id, ch, str(ch)),
-                )
-
-    def sync_source_sections(
-        self,
-        vault_data: list[dict],
-        new_entries: list[tuple[str, dict]],
-    ) -> dict:
-        """Sync section assignments from vault frontmatter and register new Zotero entries.
-
-        vault_data: [{citekey, primary_section, primary_chapter, sections, chapters,
-                      quality, priority, nr1, nr2, note_path}]
-        new_entries: [(citekey, {chapter, section, chapters, sections})]
-
-        Returns {"vault_updated": int, "new_registered": int, "unchanged": int}.
-        """
-        vault_updated = 0
-        unchanged = 0
-        new_registered = 0
-
-        with self._conn() as conn:
-            for vd in vault_data:
-                citekey = vd["citekey"]
-
-                cur = conn.execute(
-                    """SELECT primary_section, primary_chapter, quality_score,
-                              relevance_nr1, relevance_nr2, citation_priority
-                       FROM sources WHERE id=?""",
-                    (citekey,),
-                )
-                row = cur.fetchone()
-                if not row:
-                    # Source in vault but not DB — register it
-                    conn.execute("INSERT OR IGNORE INTO sources (id) VALUES (?)", (citekey,))
-
-                # Current DB sections
-                cur = conn.execute(
-                    "SELECT section FROM source_sections WHERE source_id=?",
-                    (citekey,),
-                )
-                db_sections = {r["section"] for r in cur.fetchall()}
-                vault_sections = set(vd.get("sections", []))
-
-                vault_primary = vd.get("primary_section")
-                needs_update = (
-                    row is None
-                    or vault_primary != (row["primary_section"] or None)
-                    or vault_sections != db_sections
-                    or (vd.get("quality", 0) or 0) != (row["quality_score"] or 0)
-                    or (vd.get("nr1", 0) or 0) != (row["relevance_nr1"] or 0)
-                    or (vd.get("nr2", 0) or 0) != (row["relevance_nr2"] or 0)
-                )
-
-                if needs_update:
-                    conn.execute(
-                        """UPDATE sources SET
-                            primary_section=?, primary_chapter=?,
-                            quality_score=?, relevance_nr1=?, relevance_nr2=?,
-                            citation_priority=?, note_path=COALESCE(?, note_path),
-                            status=CASE WHEN status='pending' THEN 'completed' ELSE status END
-                        WHERE id=?""",
-                        (
-                            vault_primary, vd.get("primary_chapter"),
-                            vd.get("quality", 0), vd.get("nr1", 0), vd.get("nr2", 0),
-                            vd.get("priority", "medium"), vd.get("note_path"),
-                            citekey,
-                        ),
-                    )
-                    self._set_sections_inline(conn, citekey, list(vault_sections), vd.get("chapters", []))
-                    # Auto-restore: if user edited vault note, clear prune verdict
-                    conn.execute("DELETE FROM prune_verdicts WHERE source_id=?", (citekey,))
-                    vault_updated += 1
-                else:
-                    unchanged += 1
-
-            # Register new Zotero entries not in DB
-            for citekey, classification in new_entries:
-                cur = conn.execute("SELECT id FROM sources WHERE id=?", (citekey,))
-                if cur.fetchone():
-                    continue
-                conn.execute(
-                    """INSERT INTO sources (id, status, primary_chapter, primary_section)
-                       VALUES (?, 'pending', ?, ?)""",
-                    (citekey, classification.get("chapter"), classification.get("section")),
-                )
-                sections = classification.get("sections", [])
-                chapters = classification.get("chapters", [])
-                if sections:
-                    self._set_sections_inline(conn, citekey, sections, chapters)
-                new_registered += 1
-
-        return {
-            "vault_updated": vault_updated,
-            "new_registered": new_registered,
-            "unchanged": unchanged,
-        }
-
-    # ── Prune Verdicts ──────────────────────────────────────────────────
-
-    def save_prune_verdicts(self, drop: list[dict], maybe: list[dict]):
-        """Replace all prune verdicts with fresh results. Hard-protect valuable sources."""
-        with self._conn() as conn:
-            conn.execute("DELETE FROM prune_verdicts")
-            for item in drop:
-                ck = item.get("citekey", "").lstrip("@")
-                if not ck or self._is_protected(conn, ck):
-                    continue
-                conn.execute(
-                    "INSERT OR REPLACE INTO prune_verdicts (source_id, verdict, reason) VALUES (?, 'drop', ?)",
-                    (ck, item.get("reason", "")),
-                )
-            for item in maybe:
-                ck = item.get("citekey", "").lstrip("@")
-                if not ck or self._is_protected(conn, ck):
-                    continue
-                conn.execute(
-                    "INSERT OR REPLACE INTO prune_verdicts (source_id, verdict, reason) VALUES (?, 'maybe', ?)",
-                    (ck, item.get("reason", "")),
-                )
-
-    @staticmethod
-    def _is_protected(conn, source_id: str) -> bool:
-        """Check if source is too valuable to prune."""
-        cur = conn.execute(
-            "SELECT quality_score, relevance_nr1, relevance_nr2, citation_priority FROM sources WHERE id=?",
-            (source_id,),
-        )
-        row = cur.fetchone()
-        if not row:
-            return True  # unknown source = don't prune
-        return (
-            (row["quality_score"] or 0) >= 4
-            or (row["relevance_nr1"] or 0) >= 4
-            or (row["relevance_nr2"] or 0) >= 4
-            or row["citation_priority"] == "high"
-        )
-
-    def get_prune_drop_ids(self, max_age_days: int = PRUNE_EXPIRY_DAYS) -> set[str]:
-        """Return citekeys with verdict='drop' within expiry window."""
-        with self._conn() as conn:
-            cur = conn.execute(
-                "SELECT source_id FROM prune_verdicts WHERE verdict='drop' AND updated_at > datetime('now', ?)",
-                (f"-{max_age_days} days",),
-            )
-            return {row["source_id"] for row in cur.fetchall()}
-
-    def get_prune_summary(self) -> dict:
-        """Return prune verdict counts for status display."""
-        with self._conn() as conn:
-            cur = conn.execute(
-                "SELECT verdict, COUNT(*) as cnt FROM prune_verdicts "
-                "WHERE updated_at > datetime('now', ?) GROUP BY verdict",
-                (f"-{PRUNE_EXPIRY_DAYS} days",),
-            )
-            result = {"drop": 0, "maybe": 0}
-            for row in cur.fetchall():
-                result[row["verdict"]] = row["cnt"]
-            result["total"] = result["drop"] + result["maybe"]
-            return result
-
-    def get_prune_verdicts(self, chapter: Optional[int] = None, verdict: Optional[str] = None) -> list[dict]:
-        """Get prune verdicts with source metadata, optionally filtered by chapter/verdict."""
-        with self._conn() as conn:
-            conditions = [f"pv.updated_at > datetime('now', '-{PRUNE_EXPIRY_DAYS} days')"]
-            params: list = []
-
-            if verdict:
-                conditions.append("pv.verdict = ?")
-                params.append(verdict)
-
-            if chapter is not None:
-                ch = str(chapter)
-                conditions.append(
-                    "EXISTS (SELECT 1 FROM source_sections ss2 "
-                    "WHERE ss2.source_id = pv.source_id AND (ss2.section = ? OR ss2.section LIKE ?))"
-                )
-                params.extend([ch, f"{ch}.%"])
-
-            where = " AND ".join(conditions)
-            cur = conn.execute(
-                f"""SELECT pv.source_id, pv.verdict, pv.reason,
-                           s.quality_score, s.fragment_count,
-                           GROUP_CONCAT(DISTINCT ss.section) as sections
-                    FROM prune_verdicts pv
-                    LEFT JOIN sources s ON s.id = pv.source_id
-                    LEFT JOIN source_sections ss ON ss.source_id = pv.source_id
-                    WHERE {where}
-                    GROUP BY pv.source_id
-                    ORDER BY pv.verdict, s.quality_score ASC NULLS LAST""",
-                params,
-            )
-            return [dict(row) for row in cur.fetchall()]
-
-    def clear_prune_verdict(self, source_id: str):
-        """Remove prune verdict for a source (e.g. when user edits its vault note)."""
-        with self._conn() as conn:
-            conn.execute("DELETE FROM prune_verdicts WHERE source_id=?", (source_id,))
