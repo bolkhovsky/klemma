@@ -189,8 +189,7 @@ def acquire_paper_local(
             state.set_pdf_path(citekey, permanent_path)
         if meta.sections:
             chapters = list({int(s.split(".")[0]) for s in meta.sections if "." in s})
-            with state._conn() as conn:
-                state._set_sections_inline(conn, citekey, meta.sections, chapters)
+            state.set_source_sections(citekey, meta.sections, chapters)
 
     pdf_path.unlink(missing_ok=True)
     return AcquireResult(

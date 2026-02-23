@@ -21,7 +21,7 @@ src/klemma/
 ├── config.py           — Pydantic config models + discover_project_root(), resolve_effective_config(), resolve_prompt() (635 lines)
 ├── context.py          — KlemmaContext dataclass (single object per CLI command) (41 lines)
 ├── setup.py            — `klemma init` logic — init_project() + init_system() (263 lines)
-├── state.py            — SQLite state manager (1599 lines)
+├── state.py            — SQLite state manager facade (420 lines, delegates to repositories/)
 ├── ai.py               — AIProvider protocol + ClaudeClient + create_ai() factory (249 lines)
 ├── ai_openai.py        — OpenAI-compatible backend (105 lines)
 ├── ai_litellm.py       — LiteLLM universal backend (70 lines)
@@ -29,6 +29,14 @@ src/klemma/
 ├── discovery.py        — Auto-discovery for klemma init (Obsidian vault, Zotero, BBT JSON) (260 lines)
 ├── vault.py            — Obsidian adapter (CLI/file I/O, update_section) (249 lines)
 ├── library_provider.py — LibraryProvider protocol + LocalLibrary (BBT JSON) (86 lines)
+├── repositories/       — Domain repositories (decomposed from state.py)
+│   ├── sources.py      — Source CRUD, status, sections, Zotero keys, vault sync (~400 lines)
+│   ├── fragments.py    — Fragment CRUD, intent coverage (~120 lines)
+│   ├── embeddings_store.py — Vector BLOB storage (~100 lines)
+│   ├── gaps.py         — Reference gaps, coverage, scoring (~280 lines)
+│   ├── citations.py    — Citation graph, co-citation, authors (~200 lines)
+│   ├── plans.py        — Daily plans, reading queue (~120 lines)
+│   └── prune.py        — Prune verdicts, protection (~120 lines)
 ├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, acquirer, outliner, work_context)
 ├── literature/         — PDF extraction, models, note_factory
 └── tools/              — MCP tool infrastructure (567 lines)
@@ -165,6 +173,7 @@ Schema versioned via `PRAGMA user_version` (currently v3). Migrations in `state.
 Detailed documentation for each subsystem lives in its directory, loaded incrementally as the agent navigates:
 
 - [Core infrastructure](src/klemma/CLAUDE.md) — config, state, AI providers, vault, library, CLI, context
+- [Repositories](src/klemma/repositories/CLAUDE.md) — domain repositories decomposed from StateManager
 - [AI Skills](src/klemma/skills/CLAUDE.md) — planner, extractor, researcher, librarian, agent, acquirer, outliner
 - [Literature](src/klemma/literature/CLAUDE.md) — PDF extraction, models, vault note factory
 - [TUI](src/klemma/tui/CLAUDE.md) — Textual dashboard and screens

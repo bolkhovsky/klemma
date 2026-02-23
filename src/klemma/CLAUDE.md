@@ -38,8 +38,8 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `Embed
 - `init_klemma_home()` — legacy alias for `init_system()`
 - Interactive mode: auto-discovers Obsidian vaults, Zotero exports via `discovery.py`
 
-### state.py (1599 lines)
-SQLite state manager. Schema versioned via `PRAGMA user_version` (currently v3), auto-migrates via `_migrate_schema()`.
+### state.py (420 lines)
+SQLite state manager — **facade** over 7 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v3), auto-migrates via `_migrate_schema()`. All 58 public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, etc. See [Repositories](repositories/CLAUDE.md).
 
 Tables:
 - `sources` — Zotero entries (citekey, title, status, chapter, quality, pdf_path, `embedding` BLOB float32, `embedding_model` TEXT)

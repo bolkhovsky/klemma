@@ -1,6 +1,6 @@
 # Tests
 
-## Current test suite (207 tests)
+## Current test suite (226 tests)
 - `test_ai.py` (111 lines) — `extract_json()`, `AIProviderBase`, `create_ai()` factory, `ClaudeClient` detection
 - `test_ai_openai.py` (117 lines) — `OpenAIClient` with mocked openai SDK
 - `test_project_discovery.py` (645 lines) — 42 tests for Git-style project discovery, config merging, context aggregation, prompt resolution, tags inheritance, setup, and deep merge
@@ -9,6 +9,8 @@
 - `test_mcp.py` (404 lines) — `ToolRegistry` CRUD + routing, `ToolInfo`, SPECTER MCP server creation (4 tools), embed/similar/batch tool logic via helpers, `compare_intents()` (LLM vs S2 accuracy, confusion matrix)
 - `test_intent_scoring.py` (422 lines) — intent-weighted reference gap scoring, intent coverage matrix, fragment citation intent classification
 - `test_interactive_init.py` (347 lines) — interactive `klemma init` wizard, auto-discovery, config generation
+- `test_repositories.py` (~130 lines) — repository composition, facade delegation, per-repo CRUD roundtrips, new public methods (`get_existing_source_ids`, `get_sources_without_embeddings`)
+- `test_security_hardening.py` — path traversal and download safety tests
 
 ## Patterns
 - pytest + `unittest.mock` (`patch`, `MagicMock`)
