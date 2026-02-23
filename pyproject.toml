@@ -28,6 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.23",
     "pytest-cov>=4.0",
     "ruff>=0.8",
 ]
@@ -35,6 +36,7 @@ openai = ["openai>=1.0"]
 litellm = ["litellm>=1.40"]
 embeddings = ["numpy>=1.24"]
 local-embeddings = ["numpy>=1.24", "sentence-transformers>=2.2"]
+mcp = ["mcp>=1.0"]
 all-ai = ["openai>=1.0", "litellm>=1.40"]
 
 [project.scripts]
@@ -63,3 +65,5 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

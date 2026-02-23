@@ -138,6 +138,35 @@ def _load_section_sources(
     return enriched
 
 
+def _validate_citekeys(data: dict, valid_citekeys: set[str]) -> dict:
+    """Strip hallucinated citekeys from AI response and log warnings."""
+    hallucinated: list[str] = []
+
+    clean_citations = []
+    for item in data.get("citation_plan", []):
+        ck = item.get("citekey", "")
+        if ck in valid_citekeys:
+            clean_citations.append(item)
+        else:
+            hallucinated.append(ck)
+    data["citation_plan"] = clean_citations
+
+    for block in data.get("argument_blocks", []):
+        original = block.get("citations", [])
+        valid = [ck for ck in original if ck in valid_citekeys]
+        removed = set(original) - set(valid)
+        hallucinated.extend(removed)
+        block["citations"] = valid
+
+    if hallucinated:
+        logger.warning(
+            "Removed %d hallucinated citekeys (not in library): %s",
+            len(hallucinated),
+            sorted(set(hallucinated)),
+        )
+    return data
+
+
 def _format_research(section: str, data: dict) -> str:
     """Форматировать JSON-ответ Claude в русский markdown для vault."""
     lines = [
@@ -624,6 +653,7 @@ def research_section(
         system = (
             f"You are a research analyst for a {project_type}. "
             "This is a REPEAT analysis — update the previous briefing, do not rewrite from scratch. "
+            "CRITICAL: Use ONLY citekeys from the source_summaries JSON. "
             "Output only valid JSON."
         )
 
@@ -669,6 +699,7 @@ def research_section(
         system = (
             f"You are a research analyst for a {project_type}. "
             "Analyze section readiness and suggest an argumentation structure. "
+            "CRITICAL: Use ONLY citekeys from the source_summaries JSON. "
             "Output only valid JSON."
         )
 
@@ -685,7 +716,11 @@ def research_section(
             section_status="Ошибка генерации — проверь подключение к Claude",
         )
 
-    # 10. Построить результат
+    # 10. Валидировать citekeys — удалить галлюцинации
+    valid_citekeys = {src["id"] for src in source_summaries}
+    data = _validate_citekeys(data, valid_citekeys)
+
+    # 11. Построить результат
     data["available_sources"] = len(source_summaries)
     data["available_fragments"] = len(section_fragments)
 
