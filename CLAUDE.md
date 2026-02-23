@@ -37,6 +37,10 @@ src/klemma/
 │   ├── citations.py    — Citation graph, co-citation, authors (~200 lines)
 │   ├── plans.py        — Daily plans, reading queue (~120 lines)
 │   └── prune.py        — Prune verdicts, protection (~120 lines)
+├── evaluation/         — Benchmark framework (dataset, metrics, runners)
+│   ├── dataset.py     — Pydantic schema, load/export (~80 lines)
+│   ├── metrics.py     — intent_metrics, precision@K, recall@K, nDCG@K (~120 lines)
+│   └── runners.py     — Intent, gap, embedding benchmark runners (~150 lines)
 ├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, acquirer, outliner, work_context)
 ├── literature/         — PDF extraction, models, note_factory
 └── tools/              — MCP tool infrastructure (567 lines)
@@ -81,6 +85,7 @@ tags.example.yaml           — Template tag taxonomy
 - `klemma ask "query"` — interactive research agent with full dissertation context
 - `klemma info` — show current project info (root, chain, config, DB)
 - `klemma tree` — show nested project tree from current root
+- `klemma benchmark [-d dataset.json] [--metrics all|intent|gaps|embeddings] [--export path] [--json-output]` — evaluation framework: run benchmarks against annotated ground truth; `--export` to generate dataset template from DB
 - `klemma migrate [--dry-run]` — migrate from old ~/.klemma/ to per-directory project
 - Global options: `--config/-c <path>`
 
@@ -174,6 +179,7 @@ Detailed documentation for each subsystem lives in its directory, loaded increme
 
 - [Core infrastructure](src/klemma/CLAUDE.md) — config, state, AI providers, vault, library, CLI, context
 - [Repositories](src/klemma/repositories/CLAUDE.md) — domain repositories decomposed from StateManager
+- [Evaluation](src/klemma/evaluation/CLAUDE.md) — benchmark framework (intent, gap, embedding metrics)
 - [AI Skills](src/klemma/skills/CLAUDE.md) — planner, extractor, researcher, librarian, agent, acquirer, outliner
 - [Literature](src/klemma/literature/CLAUDE.md) — PDF extraction, models, vault note factory
 - [TUI](src/klemma/tui/CLAUDE.md) — Textual dashboard and screens

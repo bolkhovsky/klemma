@@ -4,13 +4,13 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 
 ## Modules
 
-### cli.py (2274 lines)
-Click CLI entry point. Defines 14 commands + hidden aliases.
+### cli.py (~2380 lines)
+Click CLI entry point. Defines 15 commands + hidden aliases.
 - `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
-- Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `outline`, `ask`, `info`, `tree`, `migrate`
+- Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`
 
 ### context.py (41 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.
@@ -119,4 +119,4 @@ Frontmatter `sections: [1.1, 1.4.1, 3.2.2]` → `source_sections` table → `get
 ## Maintaining this file
 Update when: adding/removing/renaming root-level modules in `src/klemma/`, changing key class/function signatures, adding SQLite tables to `state.py`, modifying `KlemmaContext` fields, or adding new CLI commands to `cli.py`. Line counts should be refreshed after significant changes.
 
-See: [AI Skills](skills/CLAUDE.md) | [Literature](literature/CLAUDE.md) | [TUI](tui/CLAUDE.md) | [Prompts](../../prompts/CLAUDE.md) | [Tests](../../tests/CLAUDE.md) | [Root](../../CLAUDE.md)
+See: [AI Skills](skills/CLAUDE.md) | [Literature](literature/CLAUDE.md) | [Evaluation](evaluation/CLAUDE.md) | [TUI](tui/CLAUDE.md) | [Prompts](../../prompts/CLAUDE.md) | [Tests](../../tests/CLAUDE.md) | [Root](../../CLAUDE.md)

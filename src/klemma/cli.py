@@ -2116,6 +2116,122 @@ def _print_project_tree(root: Path, indent: int = 0, current: Path | None = None
         pass
 
 
+# --- Benchmark: evaluation framework ---
+
+@main.command()
+@click.option("--dataset", "-d", type=click.Path(exists=True),
+              help="Path to annotated benchmark dataset JSON")
+@click.option("--metrics", "-m",
+              type=click.Choice(["all", "intent", "gaps", "embeddings"]),
+              default="all", help="Which benchmarks to run (default: all)")
+@click.option("--export", "export_path", type=click.Path(),
+              help="Export current DB data as dataset template for annotation")
+@click.option("--json-output", is_flag=True,
+              help="Output results as JSON for reproducibility")
+@click.pass_context
+def benchmark(ctx, dataset, metrics, export_path, json_output):
+    """Run evaluation benchmarks against annotated ground truth.
+
+    Multi-format evaluation (Singh et al. 2023 — SciRepEval):
+    intent classification, gap ranking, and embedding retrieval
+    evaluated separately with domain-appropriate metrics.
+
+    Use --export to generate a dataset template from current DB,
+    then manually review/correct labels to create ground truth.
+    """
+    import json
+
+    from .evaluation import load_dataset, run_all
+    from .evaluation.dataset import export_dataset
+
+    kctx = _get_context(ctx)
+
+    if export_path:
+        count = export_dataset(kctx.state, Path(export_path))
+        console.print(
+            f"[green]Exported {count} items to {export_path}[/green]"
+        )
+        console.print(
+            "Review and correct ground_truth labels, then run: "
+            f"klemma benchmark -d {export_path}"
+        )
+        return
+
+    if not dataset:
+        console.print(
+            "[yellow]No dataset specified. Use --dataset/-d to provide "
+            "annotated ground truth, or --export to generate a template.[/yellow]"
+        )
+        return
+
+    ds = load_dataset(Path(dataset))
+    console.print(
+        f"Dataset: {len(ds.fragments)} fragments, "
+        f"{len(ds.gaps)} gaps, {len(ds.similar_pairs)} similarity pairs"
+    )
+
+    results = run_all(kctx.state, ds, metrics)
+
+    if json_output:
+        click.echo(json.dumps(results, indent=2))
+        return
+
+    # Rich table output
+    if "intent" in results:
+        ir = results["intent"]
+        m = ir.get("metrics", {})
+        console.print(Panel(
+            f"Matched: {ir['matched']}/{ir['total']} "
+            f"(skipped: {ir.get('skipped', 0)})\n"
+            f"[bold]Macro-F1: {m.get('macro_f1', 0):.4f}[/bold]  "
+            f"Accuracy: {m.get('accuracy', 0):.4f}",
+            title="Intent Classification",
+        ))
+        if m.get("per_class"):
+            t = Table(title="Per-class metrics")
+            t.add_column("Intent")
+            t.add_column("Precision", justify="right")
+            t.add_column("Recall", justify="right")
+            t.add_column("F1", justify="right")
+            t.add_column("Support", justify="right")
+            for cls, vals in m["per_class"].items():
+                t.add_row(
+                    cls,
+                    f"{vals['precision']:.4f}",
+                    f"{vals['recall']:.4f}",
+                    f"{vals['f1']:.4f}",
+                    str(vals["support"]),
+                )
+            console.print(t)
+
+    if "gaps" in results:
+        gr = results["gaps"]
+        gm = gr.get("metrics", {})
+        console.print(Panel(
+            f"Ground truth: {gr['total']} gaps, "
+            f"DB gaps: {gr.get('db_gaps_count', 0)}\n"
+            f"Precision@5: {gm.get('precision_at_5', 0):.4f}  "
+            f"Precision@10: {gm.get('precision_at_10', 0):.4f}  "
+            f"[bold]nDCG@10: {gm.get('ndcg_at_10', 0):.4f}[/bold]",
+            title="Gap Ranking",
+        ))
+
+    if "embeddings" in results:
+        er = results["embeddings"]
+        em = er.get("metrics", {})
+        if er.get("error"):
+            console.print(f"[yellow]Embeddings: {er['error']}[/yellow]")
+        else:
+            console.print(Panel(
+                f"Queries: {er.get('evaluated', 0)}/{er['total_queries']} "
+                f"(skipped: {er.get('skipped', 0)})\n"
+                f"Recall@5: {em.get('avg_recall_at_5', 0):.4f}  "
+                f"[bold]Recall@10: {em.get('avg_recall_at_10', 0):.4f}[/bold]  "
+                f"Precision@5: {em.get('avg_precision_at_5', 0):.4f}",
+                title="Embedding Retrieval",
+            ))
+
+
 # --- Migrate: convert old ~/.klemma/ to per-directory project ---
 
 @main.command()

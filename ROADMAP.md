@@ -822,17 +822,18 @@ def _ensure_numpy():
 
 **Git checkpoint**: `git commit -m "modernize: step 6.2 — fragment RAG for klemma ask"`
 
-## Step 6.3: Evaluation Framework (`klemma benchmark`)
+## Step 6.3: Evaluation Framework (`klemma benchmark`) ✅ DONE
 
 **Файлы**: новый `src/klemma/evaluation/` модуль, `src/klemma/cli.py`
 
-**Что делать**:
-- Annotated test set: 50 fragments (intent ground truth) + 20 gaps (relevance ground truth)
-- Метрики: intent accuracy, gap precision@10, embedding recall vs heuristic scoring
-- SciRepEval-инспирированный multi-format evaluation (Singh 2023)
-- Новая CLI команда: `klemma benchmark [--dataset path] [--metrics all|intent|gaps|embeddings]`
-- JSON output для reproducibility
-- **КРИТИЧЕСКИЙ для §5 статьи** — без evaluation framework нет доказательной базы
+**Что сделано**:
+- `src/klemma/evaluation/` — 4 модуля (dataset, metrics, runners, __init__)
+- Метрики: macro-F1 (primary, per Cohan 2019 + Subramanian 2021), precision@K, recall@K, nDCG@K
+- SciRepEval-инспирированный multi-format evaluation (Singh 2023): intent, gaps, embeddings отдельно
+- CLI: `klemma benchmark [-d dataset.json] [--metrics all|intent|gaps|embeddings] [--export path] [--json-output]`
+- JSON output для reproducibility (per Kastrin 2025)
+- Dataset export from DB for annotation bootstrapping (per Wadden 2020 SciFact protocol)
+- 37 новых тестов (263 total), 0 lint errors
 
 **Тестирование**:
 - Unit: metric calculation functions (accuracy, precision@K, recall)
