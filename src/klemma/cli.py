@@ -101,6 +101,69 @@ def _init_ai(cfg):
     return create_ai(cfg.ai)
 
 
+BBTIndex = tuple[dict[str, str], dict[tuple[str, str], tuple[str, str]]]
+
+
+def build_bbt_index(entry_lookup: dict) -> BBTIndex:
+    """Build lookup indexes from BBT entries for orphan resolution.
+
+    Returns (by_item_key, by_author_year):
+      - by_item_key: {item_key: citekey}
+      - by_author_year: {(author_lower, year): (citekey, item_key)}
+    """
+    import re
+
+    by_item_key: dict[str, str] = {}
+    by_author_year: dict[tuple[str, str], tuple[str, str]] = {}
+    for ck, entry in entry_lookup.items():
+        if entry.item_key:
+            by_item_key[entry.item_key] = ck
+        am = re.match(r"([a-z.]+?)(?=[A-Z\d])", ck)
+        ym = re.search(r"(\d{4})", ck)
+        if am and ym:
+            author = am.group(1).replace(".", "").lower()
+            by_author_year[(author, ym.group(1))] = (ck, entry.item_key or "")
+    return by_item_key, by_author_year
+
+
+def resolve_orphan(old_ck: str, bbt_index: BBTIndex) -> tuple[str, str] | None:
+    """Try to match an orphan DB source to a BBT entry.
+
+    Handles three citekey formats:
+    1. Bare Zotero key (e.g. "5S6AH9KP") — matched via item_key lookup
+    2. Acquire-format (e.g. "Lo2020_S2ORC_Title") — Author+year extraction
+    3. BBT-format (e.g. "loTitle2020a") — lowercase author prefix extraction
+
+    Returns (new_citekey, item_key) or None.
+    """
+    import re
+
+    by_item_key, by_author_year = bbt_index
+
+    # Strategy 1: bare Zotero key (8-char alphanumeric)
+    if re.fullmatch(r"[A-Z0-9]{8}", old_ck):
+        new_ck = by_item_key.get(old_ck)
+        if new_ck:
+            return (new_ck, old_ck)
+
+    # Strategy 2: acquire-format "Author2020_Title_Slug"
+    acq = re.match(r"([A-Z][a-z]+)(\d{4})", old_ck)
+    if acq:
+        match = by_author_year.get((acq.group(1).lower(), acq.group(2)))
+        if match:
+            return match
+
+    # Strategy 3: BBT-format "authorTitle2022a"
+    clean = re.sub(r"^[a-z]\.[a-z]\.", "", old_ck)
+    am = re.match(r"([a-z.]+?)(?=[A-Z\d])", clean)
+    ym = re.search(r"(\d{4})", old_ck)
+    if am and ym:
+        match = by_author_year.get((am.group(1).replace(".", "").lower(), ym.group(1)))
+        if match:
+            return match
+    return None
+
+
 def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
     """Sync section assignments from vault frontmatter + discover new Zotero entries.
 
@@ -181,28 +244,13 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
         bbt_citekeys = set(entry_lookup.keys())
         orphans = existing - bbt_citekeys
         if orphans:
-            import re
-            bbt_by_author_year: dict[tuple[str, str], tuple[str, str]] = {}
-            for ck, entry in entry_lookup.items():
-                am = re.match(r"([a-z.]+?)(?=[A-Z\d])", ck)
-                ym = re.search(r"(\d{4})", ck)
-                if am and ym:
-                    author = am.group(1).replace(".", "").lower()
-                    bbt_by_author_year[(author, ym.group(1))] = (ck, entry.item_key or "")
-
-            for old_ck in orphans:
-                clean = re.sub(r"^[a-z]\.[a-z]\.", "", old_ck)
-                am = re.match(r"([a-z.]+?)(?=[A-Z\d])", clean)
-                ym = re.search(r"(\d{4})", old_ck)
-                if not (am and ym):
+            bbt_index = build_bbt_index(entry_lookup)
+            for old_ck in list(orphans):
+                result = resolve_orphan(old_ck, bbt_index)
+                if not result:
                     continue
-                author = am.group(1).replace(".", "").lower()
-                match = bbt_by_author_year.get((author, ym.group(1)))
-                if not match:
-                    continue
-                new_ck, item_key = match
+                new_ck, item_key = result
                 if new_ck in existing:
-                    # New key already exists with data — delete orphan duplicate
                     state.delete_source(old_ck)
                     existing.discard(old_ck)
                     renames.append((old_ck, new_ck))
