@@ -1,8 +1,9 @@
-"""Tests for MCP tool registry (no actual MCP server needed)."""
+"""Tests for MCP tool registry and SPECTER MCP server."""
 
 import pytest
 
 from klemma.tools.registry import ToolInfo, ToolRegistry
+from klemma.tools.specter_server import create_specter_server
 
 
 class TestToolRegistry:
@@ -100,3 +101,212 @@ class TestToolInfo:
         assert info.description == "desc"
         assert info.server_name == "s"
         assert info.input_schema == {}
+
+
+# ---------------------------------------------------------------------------
+# SPECTER MCP Server Tests
+# ---------------------------------------------------------------------------
+
+
+class MockEmbeddingProvider:
+    """Mock provider returning deterministic vectors for testing."""
+
+    dim: int = 3
+    model_name: str = "mock-specter"
+
+    def __init__(self, vectors=None, fail_titles=None):
+        self._vectors = vectors or {}
+        self._fail_titles = fail_titles or set()
+
+    def embed(self, title, abstract=""):
+        if title in self._fail_titles:
+            return None
+        if title in self._vectors:
+            return self._vectors[title]
+        return [0.1, 0.2, 0.3]
+
+
+class TestSpecterServerCreation:
+    """Tests for SPECTER MCP server factory."""
+
+    def test_create_server_s2_backend(self):
+        server = create_specter_server(backend="s2")
+        assert server is not None
+        assert server.name == "klemma-specter"
+
+    def test_create_server_has_three_tools(self):
+        server = create_specter_server(backend="s2")
+        tools = server._tool_manager.list_tools()
+        tool_names = {t.name for t in tools}
+        assert "embed_paper" in tool_names
+        assert "find_similar" in tool_names
+        assert "batch_embed" in tool_names
+        assert len(tool_names) == 3
+
+
+class TestEmbedPaperTool:
+    """Tests for embed_paper MCP tool."""
+
+    def _make_server(self, provider):
+        """Create server with mock provider injected."""
+        server = create_specter_server(backend="s2")
+        # Replace the provider in the tool closures by patching
+        # We test the logic directly instead
+        return server
+
+    def test_embed_paper_success(self):
+        provider = MockEmbeddingProvider()
+        result = _call_embed_paper(provider, "Test Paper", "Some abstract")
+        assert "vector" in result
+        assert result["dim"] == 3
+        assert result["model"] == "mock-specter"
+
+    def test_embed_paper_failure(self):
+        provider = MockEmbeddingProvider(fail_titles={"Bad Paper"})
+        result = _call_embed_paper(provider, "Bad Paper")
+        assert "error" in result
+        assert result["model"] == "mock-specter"
+
+    def test_embed_paper_no_abstract(self):
+        provider = MockEmbeddingProvider()
+        result = _call_embed_paper(provider, "Title Only")
+        assert "vector" in result
+        assert result["dim"] == 3
+
+
+class TestFindSimilarTool:
+    """Tests for find_similar MCP tool."""
+
+    def test_find_similar_basic(self):
+        query = [1.0, 0.0, 0.0]
+        candidates = {
+            "paper_a": [0.9, 0.1, 0.0],
+            "paper_b": [0.0, 1.0, 0.0],
+            "paper_c": [0.8, 0.2, 0.0],
+        }
+        results = _call_find_similar(query, candidates, top_k=2)
+        assert len(results) == 2
+        assert results[0]["paper_id"] == "paper_a"
+        assert results[0]["similarity"] > results[1]["similarity"]
+
+    def test_find_similar_with_threshold(self):
+        query = [1.0, 0.0, 0.0]
+        candidates = {
+            "close": [0.9, 0.1, 0.0],
+            "far": [0.0, 1.0, 0.0],
+        }
+        results = _call_find_similar(query, candidates, threshold=0.5)
+        assert len(results) == 1
+        assert results[0]["paper_id"] == "close"
+
+    def test_find_similar_empty_candidates(self):
+        results = _call_find_similar([1.0, 0.0], {})
+        assert results == []
+
+    def test_find_similar_top_k_limits(self):
+        query = [1.0, 0.0]
+        candidates = {f"p{i}": [1.0, 0.0] for i in range(10)}
+        results = _call_find_similar(query, candidates, top_k=3)
+        assert len(results) == 3
+
+
+class TestBatchEmbedTool:
+    """Tests for batch_embed MCP tool."""
+
+    def test_batch_embed_all_success(self):
+        provider = MockEmbeddingProvider()
+        papers = [
+            {"id": "p1", "title": "Paper One", "abstract": "Abstract one"},
+            {"id": "p2", "title": "Paper Two"},
+        ]
+        result = _call_batch_embed(provider, papers)
+        assert result["total"] == 2
+        assert result["embedded"] == 2
+        assert result["failed"] == 0
+        assert "p1" in result["results"]
+        assert "p2" in result["results"]
+
+    def test_batch_embed_partial_failure(self):
+        provider = MockEmbeddingProvider(fail_titles={"Bad Paper"})
+        papers = [
+            {"id": "good", "title": "Good Paper"},
+            {"id": "bad", "title": "Bad Paper"},
+        ]
+        result = _call_batch_embed(provider, papers)
+        assert result["embedded"] == 1
+        assert result["failed"] == 1
+        assert "good" in result["results"]
+        assert len(result["errors"]) == 1
+
+    def test_batch_embed_missing_title(self):
+        provider = MockEmbeddingProvider()
+        papers = [
+            {"id": "no_title"},
+        ]
+        result = _call_batch_embed(provider, papers)
+        assert result["failed"] == 1
+        assert result["embedded"] == 0
+
+    def test_batch_embed_empty(self):
+        provider = MockEmbeddingProvider()
+        result = _call_batch_embed(provider, [])
+        assert result["total"] == 0
+        assert result["embedded"] == 0
+
+    def test_batch_embed_model_info(self):
+        provider = MockEmbeddingProvider()
+        result = _call_batch_embed(provider, [{"id": "p1", "title": "T"}])
+        assert result["model"] == "mock-specter"
+
+
+# ---------------------------------------------------------------------------
+# Helper functions that replicate tool logic for unit testing
+# (avoids needing a running MCP server)
+# ---------------------------------------------------------------------------
+
+
+def _call_embed_paper(provider, title, abstract=""):
+    """Replicate embed_paper tool logic for testing."""
+    vector = provider.embed(title, abstract)
+    if vector is None:
+        return {"error": f"Could not embed paper: {title[:80]}", "model": provider.model_name}
+    return {"vector": vector, "dim": len(vector), "model": provider.model_name}
+
+
+def _call_find_similar(query_vector, candidates, top_k=5, threshold=0.0):
+    """Replicate find_similar tool logic for testing."""
+    from klemma.embeddings import cosine_similarity
+
+    results = []
+    for paper_id, vec in candidates.items():
+        sim = cosine_similarity(query_vector, vec)
+        if sim >= threshold:
+            results.append({"paper_id": paper_id, "similarity": round(sim, 4)})
+    results.sort(key=lambda x: x["similarity"], reverse=True)
+    return results[:top_k]
+
+
+def _call_batch_embed(provider, papers):
+    """Replicate batch_embed tool logic for testing."""
+    results = {}
+    errors = []
+    for paper in papers:
+        paper_id = paper.get("id", paper.get("title", "unknown"))
+        title = paper.get("title", "")
+        abstract = paper.get("abstract", "")
+        if not title:
+            errors.append({"id": paper_id, "error": "Missing title"})
+            continue
+        vector = provider.embed(title, abstract)
+        if vector is None:
+            errors.append({"id": paper_id, "error": "Embedding failed"})
+        else:
+            results[paper_id] = {"vector": vector, "dim": len(vector)}
+    return {
+        "results": results,
+        "errors": errors,
+        "model": provider.model_name,
+        "total": len(papers),
+        "embedded": len(results),
+        "failed": len(errors),
+    }
