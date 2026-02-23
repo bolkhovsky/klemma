@@ -203,7 +203,7 @@ klemma --help
 
 Every feature follows this sequence. Do not skip or reorder steps.
 
-1. **Spec** — read the feature description and acceptance criteria in `ROADMAP.md`
+1. **Spec** — read the epic issue and acceptance criteria on GitHub (`gh issue view <N>`)
 2. **Plan** — invoke the `sparc:architect` skill for detailed design; wait for approval before coding
 3. **Code** — implement the feature
 4. **Verify** — `ruff check src/ tests/` then `python -m pytest tests/ -q`; fix until both pass
@@ -226,7 +226,7 @@ Every feature follows this sequence. Do not skip or reorder steps.
    ### Results
    Quantitative outcomes: test counts, LOC, lint status, measurable improvements.
    ```
-7. **Paper draft** — export the Release Note into `~/research/klemma-paper/sections/` as a section draft. Russian academic style, `[@citekey]` references, matching existing sections format. File name: `section_N_<topic>.md` where N maps to the paper outline section. Add any missing BibTeX entries to `~/research/klemma-paper/references.bib`.
+7. **Paper draft** — export the Release Note into `~/research/klemma-paper/sections/` as a section draft. Russian academic style, `[@citekey]` references, matching existing sections format. File name: `section_N_<topic>.md` where N maps to the paper outline section. Add any missing BibTeX entries to `~/research/klemma-paper/references.bib`. Also create a results file in `~/research/klemma-paper/results/` with frontmatter `step`, `date`, `paper_sections` and sections: Baseline / Implementation / Results / Delta / Paper Section.
 8. **Cross-check** — on the GitHub PR, run Codex CLI (`codex`) for independent review; iterate until all findings are resolved
 9. **Blog note** — write a short TG blog post draft (3-5 sentences, casual tone); do NOT commit this file
 
