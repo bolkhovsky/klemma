@@ -186,3 +186,60 @@ class TestCoCitation:
         """Citekey not in graph returns empty list."""
         result = state.get_co_cited("nonexistent")
         assert result == []
+
+
+class TestAuthorNetwork:
+    """Tests for get_key_author_groups()."""
+
+    def test_empty_graph(self, state):
+        assert state.get_key_author_groups() == []
+
+    def test_single_paper_author_excluded(self, state):
+        """Authors with only 1 paper should not appear (min_papers=2)."""
+        state.register_sources(["src1"])
+        state.save_citation_links("src1", [
+            {"authors": "Smith et al.", "year": 2020, "title": "Only Paper"},
+        ])
+        result = state.get_key_author_groups(min_papers=2)
+        assert len(result) == 0
+
+    def test_multi_paper_author(self, state):
+        """Author with 2+ unique papers should appear."""
+        state.register_sources(["src1", "src2"])
+        state.save_citation_links("src1", [
+            {"authors": "Smith et al.", "year": 2020, "title": "Paper One"},
+        ])
+        state.save_citation_links("src2", [
+            {"authors": "Smith et al.", "year": 2021, "title": "Paper Two"},
+        ])
+        result = state.get_key_author_groups(min_papers=2)
+        assert len(result) == 1
+        assert result[0]["surname"] == "Smith"
+        assert result[0]["paper_count"] == 2
+
+    def test_in_library_count(self, state):
+        """Track how many of an author's papers are in our library."""
+        state.register_sources(["src1"])
+        state.save_citation_links("src1", [
+            {"authors": "Jones et al.", "year": 2019, "title": "Paper A", "in_library": True, "citekey": "Jones2019"},
+            {"authors": "Jones et al.", "year": 2020, "title": "Paper B", "in_library": False},
+            {"authors": "Jones et al.", "year": 2021, "title": "Paper C", "in_library": True, "citekey": "Jones2021"},
+        ])
+        result = state.get_key_author_groups(min_papers=2)
+        assert len(result) == 1
+        assert result[0]["in_library_count"] == 2
+
+    def test_sorted_by_count(self, state):
+        """Groups sorted by paper count descending."""
+        state.register_sources(["src1"])
+        state.save_citation_links("src1", [
+            {"authors": "Alpha et al.", "year": 2020, "title": "A1"},
+            {"authors": "Alpha et al.", "year": 2021, "title": "A2"},
+            {"authors": "Beta et al.", "year": 2019, "title": "B1"},
+            {"authors": "Beta et al.", "year": 2020, "title": "B2"},
+            {"authors": "Beta et al.", "year": 2021, "title": "B3"},
+        ])
+        result = state.get_key_author_groups(min_papers=2)
+        assert len(result) == 2
+        assert result[0]["surname"] == "Beta"
+        assert result[0]["paper_count"] == 3

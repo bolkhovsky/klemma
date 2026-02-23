@@ -1271,6 +1271,57 @@ class StateManager:
             )
             return [dict(row) for row in cur.fetchall()]
 
+    def get_key_author_groups(self, min_papers: int = 2) -> list[dict]:
+        """Find author groups with multiple papers in the library.
+
+        Extracts first author surname from citation_links target_authors,
+        groups by surname, returns those with min_papers or more.
+        """
+        with self._conn() as conn:
+            # Get all unique target authors from citation links
+            cur = conn.execute(
+                """SELECT target_authors, target_title, target_year, target_citekey, in_library
+                   FROM citation_links
+                   WHERE target_authors IS NOT NULL AND target_authors != ''"""
+            )
+
+            # Group by first-author surname
+            groups: dict[str, list[dict]] = {}
+            for row in cur.fetchall():
+                authors = row["target_authors"]
+                # Extract first surname (before "et al." or comma)
+                surname = ""
+                for word in authors.replace("et al.", "").replace(",", " ").split():
+                    clean = word.strip(".").strip()
+                    if len(clean) > 2 and clean[0].isupper():
+                        surname = clean
+                        break
+                if not surname:
+                    continue
+                if surname not in groups:
+                    groups[surname] = []
+                groups[surname].append({
+                    "title": row["target_title"],
+                    "year": row["target_year"],
+                    "citekey": row["target_citekey"],
+                    "in_library": bool(row["in_library"]),
+                    "full_authors": authors,
+                })
+
+            # Filter by min_papers and sort by count
+            result = []
+            for surname, papers in groups.items():
+                unique_titles = {p["title"] for p in papers}
+                if len(unique_titles) >= min_papers:
+                    result.append({
+                        "surname": surname,
+                        "paper_count": len(unique_titles),
+                        "in_library_count": sum(1 for p in papers if p["in_library"]),
+                        "papers": papers[:10],  # cap at 10
+                    })
+            result.sort(key=lambda x: x["paper_count"], reverse=True)
+            return result
+
     # --- Library analysis methods ---
 
     def get_library_summary(self) -> dict:

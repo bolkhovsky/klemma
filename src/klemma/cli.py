@@ -1800,6 +1800,23 @@ def library(ctx, section, audit):
             style = {"high": "red", "medium": "yellow", "low": "dim"}.get(severity, "white")
             console.print(f"  [{style}]{severity.upper()}[/{style}] [{finding.get('type', '')}] {finding.get('details', '')}")
 
+    # Author network (audit mode)
+    if audit:
+        author_groups = state.get_key_author_groups(min_papers=2)
+        if author_groups:
+            console.print("\n[bold]Key Author Groups[/bold] [dim](2+ papers in citation graph)[/dim]")
+            at = Table(show_edge=False, pad_edge=False)
+            at.add_column("Author", style="cyan", max_width=20)
+            at.add_column("Papers", justify="right", width=7)
+            at.add_column("In Library", justify="right", width=10)
+            for group in author_groups[:10]:
+                at.add_row(
+                    group["surname"],
+                    str(group["paper_count"]),
+                    str(group["in_library_count"]),
+                )
+            console.print(at)
+
     # Prune recommendations (auto-triggered when >100 sources)
     if report.prune:
         prune = report.prune
