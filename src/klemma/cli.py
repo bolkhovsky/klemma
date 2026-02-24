@@ -312,7 +312,8 @@ def main(ctx, config):
     ctx.obj["config_path"] = config
 
     # Banner
-    console.print(get_banner(cwd=str(Path.cwd())))
+    if ctx.invoked_subcommand in (None, "init"):
+        console.print(get_banner(cwd=str(Path.cwd())))
 
     # Check for project (skip for init/info/tree/migrate)
     skip_check = {"init", "info", "tree", "migrate"}
