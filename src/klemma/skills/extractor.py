@@ -65,6 +65,7 @@ def extract_fragments(
                 relevance=max(1, min(5, f_data.get("relevance", 3))),
                 usage_hint=f_data.get("usage_hint", ""),
                 page=f_data.get("page"),
+                citation_intent=f_data.get("citation_intent"),
             )
             if fragment.text:
                 fragments.append(fragment)
@@ -85,6 +86,7 @@ def extract_fragments(
             "relevance": f.relevance,
             "usage_hint": f.usage_hint,
             "page": f.page,
+            "citation_intent": f.citation_intent,
         }
         for f in fragments
     ]

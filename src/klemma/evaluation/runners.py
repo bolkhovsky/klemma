@@ -1,0 +1,182 @@
+"""Benchmark runners — orchestrate DB queries and metric computation.
+
+Each runner implements one evaluation format following SciRepEval design
+(Singh et al. 2023): intent = classification, gaps = ranking, embeddings = retrieval.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from klemma.embeddings import cosine_similarity
+
+from .dataset import BenchmarkDataset
+from .metrics import intent_metrics, ndcg_at_k, precision_at_k, recall_at_k
+
+if TYPE_CHECKING:
+    from klemma.state import StateManager
+
+
+def run_intent_benchmark(
+    state: StateManager, dataset: BenchmarkDataset
+) -> dict:
+    """Compare DB fragment intents vs ground truth labels.
+
+    Matches fragments by (source_id, text substring).
+    Primary metric: macro_f1 (Cohan et al. 2019; Subramanian et al. 2021).
+    """
+    if not dataset.fragments:
+        return {"total": 0, "matched": 0, "skipped": 0, "metrics": {}}
+
+    predictions = []
+    ground_truth = []
+    skipped = 0
+
+    for sample in dataset.fragments:
+        db_frags = state.get_fragments(source_id=sample.source_id, limit=500)
+        matched_intent = None
+        for frag in db_frags:
+            if sample.fragment_text[:80] in frag.get("fragment_text", ""):
+                matched_intent = frag.get("citation_intent")
+                break
+
+        if matched_intent:
+            predictions.append(matched_intent)
+            ground_truth.append(sample.ground_truth)
+        else:
+            skipped += 1
+
+    metrics = intent_metrics(predictions, ground_truth)
+
+    return {
+        "total": len(dataset.fragments),
+        "matched": len(predictions),
+        "skipped": skipped,
+        "metrics": metrics,
+    }
+
+
+def run_gap_benchmark(
+    state: StateManager, dataset: BenchmarkDataset
+) -> dict:
+    """Evaluate gap scoring precision against ground truth relevance.
+
+    Gets current gap ranking from DB, matches against annotated relevance.
+    Metrics: precision@5, precision@10, nDCG@10 (Bhagavatula et al. 2018;
+    Cohan et al. 2020).
+    """
+    if not dataset.gaps:
+        return {"total": 0, "metrics": {}}
+
+    # Build relevance map from ground truth: title -> relevance score
+    relevance_map: dict[str, int] = {}
+    relevant_titles: set[str] = set()
+    for sample in dataset.gaps:
+        title_key = sample.ref_title.lower().strip()
+        relevance_map[title_key] = sample.ground_truth_relevance
+        if sample.ground_truth_relevance >= 3:
+            relevant_titles.add(title_key)
+
+    # Get DB ranking
+    db_gaps = state.get_reference_gaps(limit=100)
+    ranked_titles = [
+        (g.get("ref_title", "") or "").lower().strip() for g in db_gaps
+    ]
+
+    return {
+        "total": len(dataset.gaps),
+        "db_gaps_count": len(db_gaps),
+        "metrics": {
+            "precision_at_5": precision_at_k(ranked_titles, relevant_titles, 5),
+            "precision_at_10": precision_at_k(ranked_titles, relevant_titles, 10),
+            "ndcg_at_10": ndcg_at_k(ranked_titles, relevance_map, 10),
+        },
+    }
+
+
+def run_embedding_benchmark(
+    state: StateManager, dataset: BenchmarkDataset
+) -> dict:
+    """Evaluate embedding retrieval quality.
+
+    For each query_source, computes cosine similarity against all stored
+    embeddings and checks if ground truth relevant sources appear in top-K.
+    Metrics: recall@5, recall@10, precision@5 (Singh et al. 2023;
+    Cohan et al. 2020).
+    """
+    if not dataset.similar_pairs:
+        return {"total_queries": 0, "metrics": {}}
+
+    all_embeddings = state.get_all_embeddings()
+    if not all_embeddings:
+        return {
+            "total_queries": len(dataset.similar_pairs),
+            "metrics": {},
+            "error": "no embeddings in database",
+        }
+
+    recall_5_scores = []
+    recall_10_scores = []
+    precision_5_scores = []
+    skipped = 0
+
+    for pair in dataset.similar_pairs:
+        query_vec = all_embeddings.get(pair.query_source)
+        if not query_vec:
+            skipped += 1
+            continue
+
+        similarities = []
+        for citekey, vec in all_embeddings.items():
+            if citekey == pair.query_source:
+                continue
+            sim = cosine_similarity(query_vec, vec)
+            similarities.append((citekey, sim))
+
+        similarities.sort(key=lambda x: x[1], reverse=True)
+        ranked = [citekey for citekey, _ in similarities]
+        relevant = set(pair.relevant)
+
+        recall_5_scores.append(recall_at_k(ranked, relevant, 5))
+        recall_10_scores.append(recall_at_k(ranked, relevant, 10))
+        precision_5_scores.append(precision_at_k(ranked, relevant, 5))
+
+    evaluated = len(recall_5_scores)
+
+    def avg(scores: list[float]) -> float:
+        return round(sum(scores) / len(scores), 4) if scores else 0.0
+
+    return {
+        "total_queries": len(dataset.similar_pairs),
+        "evaluated": evaluated,
+        "skipped": skipped,
+        "metrics": {
+            "avg_recall_at_5": avg(recall_5_scores),
+            "avg_recall_at_10": avg(recall_10_scores),
+            "avg_precision_at_5": avg(precision_5_scores),
+        },
+    }
+
+
+def run_all(
+    state: StateManager,
+    dataset: BenchmarkDataset,
+    metrics_filter: str = "all",
+) -> dict:
+    """Run selected benchmarks and return combined results.
+
+    Multi-format evaluation: each sub-benchmark evaluated independently,
+    following SciRepEval methodology (Singh et al. 2023).
+    """
+    results: dict = {}
+
+    if metrics_filter in ("all", "intent") and dataset.fragments:
+        results["intent"] = run_intent_benchmark(state, dataset)
+
+    if metrics_filter in ("all", "gaps") and dataset.gaps:
+        results["gaps"] = run_gap_benchmark(state, dataset)
+
+    if metrics_filter in ("all", "embeddings") and dataset.similar_pairs:
+        results["embeddings"] = run_embedding_benchmark(state, dataset)
+
+    return results

@@ -239,6 +239,12 @@ class StateManager:
     def get_pending_sources(self, limit: int = 0) -> list[str]:
         return self.sources.get_pending_sources(limit)
 
+    def get_completed_sources(self) -> list[str]:
+        return self.sources.get_completed_sources()
+
+    def delete_fragments(self, source_id: str) -> int:
+        return self.fragments.delete_fragments(source_id)
+
     def mark_processing(self, source_id: str):
         return self.sources.mark_processing(source_id)
 

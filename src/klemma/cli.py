@@ -360,7 +360,8 @@ def main(ctx, config):
     ctx.obj["config_path"] = config
 
     # Banner
-    console.print(get_banner(cwd=str(Path.cwd())))
+    if ctx.invoked_subcommand in (None, "init"):
+        console.print(get_banner(cwd=str(Path.cwd())))
 
     # Check for project (skip for init/info/tree/migrate)
     skip_check = {"init", "info", "tree", "migrate"}
@@ -750,12 +751,15 @@ def plan(ctx):
 @main.command()
 @click.argument("citekeys", nargs=-1)
 @click.option("--serial", is_flag=True, help="Disable parallel processing")
+@click.option("--force", is_flag=True,
+              help="Reprocess completed sources, replacing existing fragments")
 @click.pass_context
-def process(ctx, citekeys, serial):
+def process(ctx, citekeys, serial, force):
     """Process source(s): extract fragments, annotate, create vault note.
 
     With CITEKEY(s): process specified sources (parallel when >1).
     Without arguments: process all pending sources.
+    With --force: reprocess all completed sources, replacing their fragments.
     """
     kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
@@ -771,9 +775,15 @@ def process(ctx, citekeys, serial):
         if resolved:
             console.print(f"[green]Auto-resolved {resolved} reference gap(s)[/green]")
 
-    # Build citekey list: explicit or all pending
+    # Build citekey list: explicit, force-completed, or all pending
     if citekeys:
         keys = list(citekeys)
+    elif force:
+        keys = state.get_completed_sources()
+        if not keys:
+            console.print("[green]No completed sources to reprocess.[/green]")
+            return
+        console.print(f"[blue]Reprocessing {len(keys)} completed sources (replacing fragments)[/blue]")
     else:
         proc_stats = state.get_stats()
         if proc_stats.get("pending", 0) == 0:
@@ -798,7 +808,7 @@ def process(ctx, citekeys, serial):
                 futures = {
                     pool.submit(_process_single, ck, cfg, state, vault, ai, pdf_extractor, kctx.library, quiet=True,
                                dissertation_context=kctx.dissertation_context, available_tags=kctx.available_tags,
-                               klemma_home=kctx.klemma_home, embeddings=kctx.embeddings): ck
+                               klemma_home=kctx.klemma_home, embeddings=kctx.embeddings, force=force): ck
                     for ck in keys
                 }
                 for future in as_completed(futures):
@@ -828,7 +838,7 @@ def process(ctx, citekeys, serial):
                                          available_tags=kctx.available_tags,
                                          klemma_home=kctx.klemma_home,
                                          project_type=kctx.project.type if kctx.project else "dissertation",
-                                         embeddings=kctx.embeddings)
+                                         embeddings=kctx.embeddings, force=force)
             if n_frags > 0:
                 processed += 1
         if len(keys) > 1:
@@ -837,11 +847,12 @@ def process(ctx, citekeys, serial):
 
 def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quiet=False,
                     dissertation_context="", available_tags=None, klemma_home=None,
-                    project_type="dissertation", embeddings=None):
+                    project_type="dissertation", embeddings=None, force=False):
     """Process a single source: find PDF, extract fragments, save to vault.
 
     Returns (fragment_count, status_message). When quiet=True, suppresses console output
-    (used for parallel execution).
+    (used for parallel execution). When force=True, existing fragments are deleted before
+    extraction so the source is fully reprocessed.
     """
     from .skills.extractor import extract_fragments, save_fragments_to_vault
 
@@ -878,6 +889,10 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
         if not quiet:
             console.print("  [red]PDF extraction failed or text too short[/red]")
         return (0, "text too short")
+
+    # If reprocessing, clear old fragments before extracting fresh ones
+    if force:
+        state.delete_fragments(citekey)
 
     # Extract fragments
     result = extract_fragments(
@@ -2162,6 +2177,122 @@ def _print_project_tree(root: Path, indent: int = 0, current: Path | None = None
                 _print_project_tree(child, indent + 1, current)
     except PermissionError:
         pass
+
+
+# --- Benchmark: evaluation framework ---
+
+@main.command()
+@click.option("--dataset", "-d", type=click.Path(exists=True),
+              help="Path to annotated benchmark dataset JSON")
+@click.option("--metrics", "-m",
+              type=click.Choice(["all", "intent", "gaps", "embeddings"]),
+              default="all", help="Which benchmarks to run (default: all)")
+@click.option("--export", "export_path", type=click.Path(),
+              help="Export current DB data as dataset template for annotation")
+@click.option("--json-output", is_flag=True,
+              help="Output results as JSON for reproducibility")
+@click.pass_context
+def benchmark(ctx, dataset, metrics, export_path, json_output):
+    """Run evaluation benchmarks against annotated ground truth.
+
+    Multi-format evaluation (Singh et al. 2023 — SciRepEval):
+    intent classification, gap ranking, and embedding retrieval
+    evaluated separately with domain-appropriate metrics.
+
+    Use --export to generate a dataset template from current DB,
+    then manually review/correct labels to create ground truth.
+    """
+    import json
+
+    from .evaluation import load_dataset, run_all
+    from .evaluation.dataset import export_dataset
+
+    kctx = _get_context(ctx)
+
+    if export_path:
+        count = export_dataset(kctx.state, Path(export_path))
+        console.print(
+            f"[green]Exported {count} items to {export_path}[/green]"
+        )
+        console.print(
+            "Review and correct ground_truth labels, then run: "
+            f"klemma benchmark -d {export_path}"
+        )
+        return
+
+    if not dataset:
+        console.print(
+            "[yellow]No dataset specified. Use --dataset/-d to provide "
+            "annotated ground truth, or --export to generate a template.[/yellow]"
+        )
+        return
+
+    ds = load_dataset(Path(dataset))
+    console.print(
+        f"Dataset: {len(ds.fragments)} fragments, "
+        f"{len(ds.gaps)} gaps, {len(ds.similar_pairs)} similarity pairs"
+    )
+
+    results = run_all(kctx.state, ds, metrics)
+
+    if json_output:
+        click.echo(json.dumps(results, indent=2))
+        return
+
+    # Rich table output
+    if "intent" in results:
+        ir = results["intent"]
+        m = ir.get("metrics", {})
+        console.print(Panel(
+            f"Matched: {ir['matched']}/{ir['total']} "
+            f"(skipped: {ir.get('skipped', 0)})\n"
+            f"[bold]Macro-F1: {m.get('macro_f1', 0):.4f}[/bold]  "
+            f"Accuracy: {m.get('accuracy', 0):.4f}",
+            title="Intent Classification",
+        ))
+        if m.get("per_class"):
+            t = Table(title="Per-class metrics")
+            t.add_column("Intent")
+            t.add_column("Precision", justify="right")
+            t.add_column("Recall", justify="right")
+            t.add_column("F1", justify="right")
+            t.add_column("Support", justify="right")
+            for cls, vals in m["per_class"].items():
+                t.add_row(
+                    cls,
+                    f"{vals['precision']:.4f}",
+                    f"{vals['recall']:.4f}",
+                    f"{vals['f1']:.4f}",
+                    str(vals["support"]),
+                )
+            console.print(t)
+
+    if "gaps" in results:
+        gr = results["gaps"]
+        gm = gr.get("metrics", {})
+        console.print(Panel(
+            f"Ground truth: {gr['total']} gaps, "
+            f"DB gaps: {gr.get('db_gaps_count', 0)}\n"
+            f"Precision@5: {gm.get('precision_at_5', 0):.4f}  "
+            f"Precision@10: {gm.get('precision_at_10', 0):.4f}  "
+            f"[bold]nDCG@10: {gm.get('ndcg_at_10', 0):.4f}[/bold]",
+            title="Gap Ranking",
+        ))
+
+    if "embeddings" in results:
+        er = results["embeddings"]
+        em = er.get("metrics", {})
+        if er.get("error"):
+            console.print(f"[yellow]Embeddings: {er['error']}[/yellow]")
+        else:
+            console.print(Panel(
+                f"Queries: {er.get('evaluated', 0)}/{er['total_queries']} "
+                f"(skipped: {er.get('skipped', 0)})\n"
+                f"Recall@5: {em.get('avg_recall_at_5', 0):.4f}  "
+                f"[bold]Recall@10: {em.get('avg_recall_at_10', 0):.4f}[/bold]  "
+                f"Precision@5: {em.get('avg_precision_at_5', 0):.4f}",
+                title="Embedding Retrieval",
+            ))
 
 
 # --- Migrate: convert old ~/.klemma/ to per-directory project ---

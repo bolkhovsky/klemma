@@ -99,6 +99,12 @@ class FragmentRepository(BaseRepository):
                 stats["by_section"][row["section"]] = row["cnt"]
             return stats
 
+    def delete_fragments(self, source_id: str) -> int:
+        """Delete all fragments for a source. Returns number of deleted rows."""
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM fragments WHERE source_id=?", (source_id,))
+            return cur.rowcount
+
     def get_intent_coverage(self) -> dict[str, dict[str, int]]:
         """Get fragment counts by section x citation_intent.
 

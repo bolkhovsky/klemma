@@ -154,6 +154,15 @@ class SourceRepository(BaseRepository):
         with self._conn() as conn:
             return {row["id"] for row in conn.execute("SELECT id FROM sources")}
 
+    def get_completed_sources(self) -> list[str]:
+        """Return citekeys of all completed sources."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT id FROM sources WHERE status=? ORDER BY id",
+                (ProcessingStatus.COMPLETED,),
+            )
+            return [row["id"] for row in cur.fetchall()]
+
     def get_sources_without_embeddings(self) -> list[str]:
         """Return citekeys of completed sources missing embeddings."""
         with self._conn() as conn:
