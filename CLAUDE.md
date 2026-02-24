@@ -199,6 +199,15 @@ klemma init                          # scaffold ~/.klemma/ with config templates
 klemma --help
 ```
 
+## Feature exploration
+
+When asked to "walk me through", "explain", "check", or "review" a feature — always start by fetching the relevant GitHub issues and PRs before reading any code:
+1. `gh issue list --search "<feature name>"` to find the issue(s)
+2. `gh pr list --search "<feature name>"` to find related PRs
+3. `gh issue view <N>` / `gh pr view <N>` for full context, acceptance criteria, and discussion
+
+Only after reviewing GH context should you explore code or files.
+
 ## Feature development workflow
 
 Every feature follows this sequence. Do not skip or reorder steps.
