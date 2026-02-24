@@ -399,6 +399,160 @@ python -m klemma.tools.specter_server --local   # локальный SPECTER2
 
 Предоставляет MCP tools: `embed_paper`, `find_similar`, `batch_embed`, `get_citation_intents`.
 
+### 5.5 Бенчмарк и ручная разметка (`klemma benchmark`)
+
+Команда `klemma benchmark` позволяет измерить точность трёх ключевых функций klemma:
+- **Intent classifier** — правильно ли AI определяет тип цитирования (background / method / result_comparison)
+- **Gap scoring** — насколько хорошо ранжируются недостающие источники по важности
+- **Embedding retrieval** — насколько семантически похожие источники оказываются в топе поиска
+
+Чтобы провести бенчмарк, нужен **аннотированный датасет** — JSON-файл, в котором вы (эксперт) сами проставили правильные ответы. Klemma сравнивает свои предсказания с вашими и считает метрики.
+
+#### Полный рабочий процесс
+
+**Шаг 1. Обработать выбранные источники (если нет `citation_intent` в БД)**
+
+```bash
+klemma process cohanSPECTERDocumentlevelRepresentation2020 \
+               valenzuelaIdentifyingMeaningfulCitations \
+               cohanStructuralScaffoldsCitation2019 \
+               --serial
+```
+
+Флаг `--serial` показывает прогресс по каждому источнику. Для уже обработанных источников используйте `--force`, чтобы переизвлечь фрагменты с обновлённым промптом:
+
+```bash
+klemma process --force --serial cohanSPECTERDocumentlevelRepresentation2020
+```
+
+**Шаг 2. Экспортировать шаблон датасета**
+
+```bash
+klemma benchmark --export dataset.json
+```
+
+Команда создаёт `dataset.json`, заполняя его фрагментами из БД, у которых уже есть `citation_intent`. В поле `ground_truth` пока стоит значение, которое проставил AI. Это **черновик, а не финальный датасет** — его нужно проверить вручную.
+
+**Шаг 3. Аннотировать датасет вручную** ← *это и есть «разметка»*
+
+Подробно описано ниже.
+
+**Шаг 4. Запустить бенчмарк**
+
+```bash
+klemma benchmark -d dataset.json --metrics intent
+klemma benchmark -d dataset.json --metrics all
+klemma benchmark -d dataset.json --metrics all --json-output
+```
+
+---
+
+#### Что такое ручная разметка `ground_truth`
+
+После экспорта `dataset.json` выглядит примерно так:
+
+```json
+{
+  "version": "1.0",
+  "fragments": [
+    {
+      "source_id": "cohanSPECTERDocumentlevelRepresentation2020",
+      "fragment_text": "We compute SPECTER embeddings for each source using title and abstract, storing the 768-dimensional vector for cosine similarity retrieval.",
+      "ground_truth": "method"
+    },
+    {
+      "source_id": "kastrinRecentAdvancesFuture2025",
+      "fragment_text": "Kastrin et al. provide a comprehensive survey of LBD systems, noting that citation-aware retrieval remains an open challenge.",
+      "ground_truth": "method"
+    }
+  ],
+  "gaps": [ ... ]
+}
+```
+
+Поле `ground_truth` заполнено AI-предсказанием. Проблема: если использовать его как эталон без проверки, бенчмарк будет сравнивать AI с самим собой — и всегда получит 100%. Это ничего не измеряет.
+
+**Ваша задача:** открыть файл в текстовом редакторе, прочитать каждый фрагмент и решить, правильно ли AI определил тип цитирования. Если нет — исправить `ground_truth`.
+
+---
+
+#### Три типа цитирования — как их различать
+
+| Тип | Когда используется | Сигнальные фразы |
+|---|---|---|
+| `background` | Источник цитируется, чтобы ввести контекст, определить понятие или сослаться на обзор предметной области | «Ранее показано, что…», «X — широко используемый подход…», «Опираясь на работу…», «Согласно…» |
+| `method` | Конкретная техника, модель или алгоритм из источника **применяется** в вашей работе напрямую | «Мы используем X для…», «Следуя подходу…», «Адаптируя метод из…», «Реализовано на основе…» |
+| `result_comparison` | Числовые результаты или конкретные выводы из источника **сравниваются** с вашими | «X достигает 87%…», «В отличие от Y, который…», «Превосходя Z на…» |
+
+**Правило большого пальца:** задайте себе вопрос — *зачем в тексте диссертации стоит эта ссылка?*
+- Чтобы объяснить читателю, о чём идёт речь → `background`
+- Потому что именно этот метод используется → `method`
+- Потому что с этой работой сравниваются результаты → `result_comparison`
+
+---
+
+#### Примеры разметки
+
+**Пример 1 — AI угадал правильно, оставляем:**
+
+```
+Фрагмент: "We compute SPECTER embeddings for each source using title and abstract,
+           storing the 768-dimensional vector for cosine similarity retrieval."
+AI сказал: "method"
+Ваше решение: SPECTER здесь применяется напрямую как техника → оставляем "method" ✓
+```
+
+**Пример 2 — AI ошибся, исправляем:**
+
+```
+Фрагмент: "Kastrin et al. provide a comprehensive survey of LBD systems,
+           noting that citation-aware retrieval remains an open challenge."
+AI сказал: "method"
+Ваше решение: это обзорная ссылка, никакой техники из неё не применяется →
+              меняем на "background"
+```
+
+**Пример 3 — фрагмент неоднозначный, удаляем:**
+
+```
+Фрагмент: "Citation intent classification was introduced by Valenzuela et al."
+Проблема: неясно — это просто историческая справка (background) или
+          их метод используется (method)?
+Ваше решение: удалить запись из "fragments" → лучше меньше чистых примеров,
+              чем шум в датасете
+```
+
+---
+
+#### Как бенчмарк считает метрики
+
+После сохранения аннотированного файла `klemma benchmark -d dataset.json --metrics intent`:
+
+1. Для каждого фрагмента в `fragments` ищет в БД совпадение по `source_id` и первым 80 символам текста
+2. Читает `citation_intent`, который AI записал в БД при обработке
+3. Сравнивает с вашим `ground_truth`
+4. Считает **macro-F1** — основную метрику (равный вес каждому классу, не зависит от дисбаланса классов)
+5. Дополнительно: точность (accuracy), precision/recall/F1 по каждому классу, матрица ошибок
+
+Пример вывода:
+
+```
+Intent Benchmark
+  Total annotated:   45
+  Matched in DB:     43
+  Skipped:            2
+
+  macro_f1:    0.74
+  accuracy:    0.79
+
+  Per-class:
+    background:        P=0.85  R=0.91  F1=0.88
+    method:            P=0.70  R=0.68  F1=0.69
+    result_comparison: P=0.58  R=0.50  F1=0.54
+```
+
+Низкий F1 для `result_comparison` — типичная картина: таких цитирований мало, и они сложнее всего для классификации. Именно поэтому используется macro-F1 (а не accuracy) — accuracy 79% может скрывать полный провал на редких классах.
+
 ---
 
 ## 6. Рекомендуемый ежедневный workflow
