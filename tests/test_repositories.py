@@ -133,3 +133,53 @@ class TestRepositoryComposition:
         gaps = [{"score": 10.0, "source_ids": "a,b"}]
         result = state.rerank_gaps_semantic(gaps, embeddings=None)
         assert result == gaps
+
+    def test_delete_fragments_removes_all(self, state):
+        """delete_fragments clears all fragments for a source."""
+        state.sources.register_sources(["del-src"])
+        state.fragments.save_fragments("del-src", [
+            {"text": "Frag 1", "type": "key_idea", "section": "1.1", "relevance": 3},
+            {"text": "Frag 2", "type": "method", "section": "1.2", "relevance": 4},
+        ])
+        assert state.fragments.get_fragment_stats()["total"] == 2
+        state.fragments.delete_fragments("del-src")
+        assert state.fragments.get_fragment_stats()["total"] == 0
+
+    def test_delete_fragments_returns_count(self, state):
+        """delete_fragments returns number of deleted rows."""
+        state.sources.register_sources(["cnt-src"])
+        state.fragments.save_fragments("cnt-src", [
+            {"text": "F1", "type": "key_idea", "section": "2.1", "relevance": 3},
+            {"text": "F2", "type": "key_idea", "section": "2.2", "relevance": 3},
+            {"text": "F3", "type": "key_idea", "section": "2.3", "relevance": 3},
+        ])
+        deleted = state.fragments.delete_fragments("cnt-src")
+        assert deleted == 3
+
+    def test_get_completed_sources(self, state):
+        """get_completed_sources returns only completed sources."""
+        state.sources.register_sources(["done-1", "done-2", "pending-1"])
+        state.sources.mark_completed("done-1", "/notes/done-1.md")
+        state.sources.mark_completed("done-2", "/notes/done-2.md")
+        completed = state.sources.get_completed_sources()
+        assert "done-1" in completed
+        assert "done-2" in completed
+        assert "pending-1" not in completed
+
+    def test_get_completed_sources_facade(self, state):
+        """Facade delegates get_completed_sources to source repo."""
+        state.register_sources(["c1", "c2", "p1"])
+        state.mark_completed("c1", "/notes/c1.md")
+        state.mark_completed("c2", "/notes/c2.md")
+        completed = state.get_completed_sources()
+        assert set(completed) == {"c1", "c2"}
+
+    def test_delete_fragments_facade(self, state):
+        """Facade delegates delete_fragments to fragment repo."""
+        state.register_sources(["facade-del"])
+        state.fragments.save_fragments("facade-del", [
+            {"text": "Test", "type": "key_idea", "section": "1.1", "relevance": 3},
+        ])
+        deleted = state.delete_fragments("facade-del")
+        assert deleted == 1
+        assert state.fragments.get_fragment_stats()["total"] == 0

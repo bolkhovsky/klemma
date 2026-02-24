@@ -702,12 +702,15 @@ def plan(ctx):
 @main.command()
 @click.argument("citekeys", nargs=-1)
 @click.option("--serial", is_flag=True, help="Disable parallel processing")
+@click.option("--force", is_flag=True,
+              help="Reprocess completed sources, replacing existing fragments")
 @click.pass_context
-def process(ctx, citekeys, serial):
+def process(ctx, citekeys, serial, force):
     """Process source(s): extract fragments, annotate, create vault note.
 
     With CITEKEY(s): process specified sources (parallel when >1).
     Without arguments: process all pending sources.
+    With --force: reprocess all completed sources, replacing their fragments.
     """
     kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
@@ -723,9 +726,15 @@ def process(ctx, citekeys, serial):
         if resolved:
             console.print(f"[green]Auto-resolved {resolved} reference gap(s)[/green]")
 
-    # Build citekey list: explicit or all pending
+    # Build citekey list: explicit, force-completed, or all pending
     if citekeys:
         keys = list(citekeys)
+    elif force:
+        keys = state.get_completed_sources()
+        if not keys:
+            console.print("[green]No completed sources to reprocess.[/green]")
+            return
+        console.print(f"[blue]Reprocessing {len(keys)} completed sources (replacing fragments)[/blue]")
     else:
         proc_stats = state.get_stats()
         if proc_stats.get("pending", 0) == 0:
@@ -750,7 +759,7 @@ def process(ctx, citekeys, serial):
                 futures = {
                     pool.submit(_process_single, ck, cfg, state, vault, ai, pdf_extractor, kctx.library, quiet=True,
                                dissertation_context=kctx.dissertation_context, available_tags=kctx.available_tags,
-                               klemma_home=kctx.klemma_home, embeddings=kctx.embeddings): ck
+                               klemma_home=kctx.klemma_home, embeddings=kctx.embeddings, force=force): ck
                     for ck in keys
                 }
                 for future in as_completed(futures):
@@ -780,7 +789,7 @@ def process(ctx, citekeys, serial):
                                          available_tags=kctx.available_tags,
                                          klemma_home=kctx.klemma_home,
                                          project_type=kctx.project.type if kctx.project else "dissertation",
-                                         embeddings=kctx.embeddings)
+                                         embeddings=kctx.embeddings, force=force)
             if n_frags > 0:
                 processed += 1
         if len(keys) > 1:
@@ -789,11 +798,12 @@ def process(ctx, citekeys, serial):
 
 def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quiet=False,
                     dissertation_context="", available_tags=None, klemma_home=None,
-                    project_type="dissertation", embeddings=None):
+                    project_type="dissertation", embeddings=None, force=False):
     """Process a single source: find PDF, extract fragments, save to vault.
 
     Returns (fragment_count, status_message). When quiet=True, suppresses console output
-    (used for parallel execution).
+    (used for parallel execution). When force=True, existing fragments are deleted before
+    extraction so the source is fully reprocessed.
     """
     from .skills.extractor import extract_fragments, save_fragments_to_vault
 
@@ -830,6 +840,10 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
         if not quiet:
             console.print("  [red]PDF extraction failed or text too short[/red]")
         return (0, "text too short")
+
+    # If reprocessing, clear old fragments before extracting fresh ones
+    if force:
+        state.delete_fragments(citekey)
 
     # Extract fragments
     result = extract_fragments(
