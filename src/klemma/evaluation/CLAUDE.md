@@ -20,12 +20,12 @@ Pure metric functions — no DB, no IO.
 - `recall_at_k(ranked_ids, relevant_ids, k)` — fraction of relevant items in top-K
 - `ndcg_at_k(ranked_ids, relevance_map, k)` — normalized DCG for graded relevance (1-5)
 
-### runners.py (~150 lines)
+### runners.py (~190 lines)
 Benchmark runners — orchestrate DB queries + metric computation.
 - `run_intent_benchmark(state, dataset)` — compare DB fragment intents vs ground truth
-- `run_gap_benchmark(state, dataset)` — evaluate gap scoring precision@K and nDCG@K
+- `run_gap_benchmark(state, dataset, reranked_gaps?)` — evaluate gap scoring precision@K and nDCG@K; when `reranked_gaps` is provided, skips DB fetch and uses the pre-ranked list (enables hybrid semantic evaluation)
 - `run_embedding_benchmark(state, dataset)` — evaluate embedding retrieval recall@K
-- `run_all(state, dataset, metrics_filter)` — dispatch to selected runners
+- `run_all(state, dataset, metrics_filter, reranked_gaps?)` — dispatch to selected runners; threads `reranked_gaps` to `run_gap_benchmark`
 
 ## Design rationale
 
@@ -51,12 +51,20 @@ Metric and methodology choices grounded in klemma-paper library:
 User creates annotated dataset (JSON)
   or: klemma benchmark --export template.json → review/correct labels
         ↓
-klemma benchmark -d dataset.json [--metrics intent|gaps|embeddings|all]
+klemma benchmark -d dataset.json [--metrics intent|gaps|embeddings|all] [--semantic]
         ↓
-runners.py: query DB → compute metrics → return results dict
+--semantic: state.rerank_gaps_semantic(all_gaps, embeddings) → reranked_gaps
+        ↓
+runners.py: query DB (or use reranked_gaps) → compute metrics → return results dict
         ↓
 cli.py: Rich table output (default) or JSON (--json-output)
 ```
+
+### Semantic reranking in status/library
+
+`_print_ref_gaps_table(state, limit, embeddings?)` — when embeddings provided, calls
+`state.rerank_gaps_semantic()` before display and shows `(semantically reranked)` in title.
+Triggered automatically when embeddings are configured in `status --verbose` and `library`.
 
 ## Maintaining this file
 Update when: adding new metric functions, changing runner logic, adding new benchmark types, or modifying dataset schema.

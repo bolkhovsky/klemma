@@ -265,14 +265,21 @@ def _print_status_line(state: StateManager, project_name: str = "default"):
         pass  # Don't crash on status line failure
 
 
-def _print_ref_gaps_table(state: StateManager, limit: int = 20):
-    """Print reference gaps as a Rich table."""
+def _print_ref_gaps_table(state: StateManager, limit: int = 20, embeddings=None):
+    """Print reference gaps as a Rich table.
+
+    When embeddings is provided, applies semantic reranking via
+    rerank_gaps_semantic() before display.
+    """
     ref_gaps = state.get_reference_gaps(limit=limit)
     if not ref_gaps:
         return
+    if embeddings:
+        ref_gaps = state.rerank_gaps_semantic(ref_gaps, embeddings=embeddings)
     gap_summary = state.get_gap_summary()
+    title_suffix = " [dim](semantically reranked)[/dim]" if embeddings else ""
     ref_table = Table(
-        title=f"Reference Gaps — {gap_summary['open_count']} open (missing from library)",
+        title=f"Reference Gaps — {gap_summary['open_count']} open (missing from library){title_suffix}",
         show_edge=False, pad_edge=False,
     )
     ref_table.add_column("#", justify="right", style="dim", width=3)
@@ -1213,7 +1220,7 @@ def status(ctx, verbose, chapter):
 
     # --- Reference gaps ---
     if verbose:
-        _print_ref_gaps_table(state, limit=20)
+        _print_ref_gaps_table(state, limit=20, embeddings=kctx.embeddings)
     else:
         ref_gaps = state.get_reference_gaps(limit=5)
         if ref_gaps:
@@ -1862,7 +1869,7 @@ def library(ctx, section, audit):
             console.print(_prune_table(maybe, "Maybe", "yellow"))
 
     # Reference gaps table
-    _print_ref_gaps_table(state)
+    _print_ref_gaps_table(state, embeddings=kctx.embeddings)
 
     console.print("\n[dim]Full report saved to vault.[/dim]")
 
@@ -2143,8 +2150,10 @@ def _print_project_tree(root: Path, indent: int = 0, current: Path | None = None
               help="Export current DB data as dataset template for annotation")
 @click.option("--json-output", is_flag=True,
               help="Output results as JSON for reproducibility")
+@click.option("--semantic", is_flag=True,
+              help="Apply semantic reranking to gap benchmark (hybrid keyword × semantic mode)")
 @click.pass_context
-def benchmark(ctx, dataset, metrics, export_path, json_output):
+def benchmark(ctx, dataset, metrics, export_path, json_output, semantic):
     """Run evaluation benchmarks against annotated ground truth.
 
     Multi-format evaluation (Singh et al. 2023 — SciRepEval):
@@ -2153,6 +2162,9 @@ def benchmark(ctx, dataset, metrics, export_path, json_output):
 
     Use --export to generate a dataset template from current DB,
     then manually review/correct labels to create ground truth.
+
+    Use --semantic to measure hybrid gap ranking (keyword score × semantic
+    similarity), requires embeddings to be configured.
     """
     import json
 
@@ -2185,7 +2197,14 @@ def benchmark(ctx, dataset, metrics, export_path, json_output):
         f"{len(ds.gaps)} gaps, {len(ds.similar_pairs)} similarity pairs"
     )
 
-    results = run_all(kctx.state, ds, metrics)
+    reranked_gaps = None
+    if semantic and kctx.embeddings:
+        all_gaps = kctx.state.get_reference_gaps(limit=100)
+        reranked_gaps = kctx.state.rerank_gaps_semantic(all_gaps, kctx.embeddings)
+    elif semantic:
+        console.print("[yellow]--semantic requires embeddings to be configured[/yellow]")
+
+    results = run_all(kctx.state, ds, metrics, reranked_gaps=reranked_gaps)
 
     if json_output:
         click.echo(json.dumps(results, indent=2))
@@ -2222,13 +2241,14 @@ def benchmark(ctx, dataset, metrics, export_path, json_output):
     if "gaps" in results:
         gr = results["gaps"]
         gm = gr.get("metrics", {})
+        gap_title = "Gap Ranking [dim](hybrid: keyword × semantic)[/dim]" if semantic else "Gap Ranking"
         console.print(Panel(
             f"Ground truth: {gr['total']} gaps, "
             f"DB gaps: {gr.get('db_gaps_count', 0)}\n"
             f"Precision@5: {gm.get('precision_at_5', 0):.4f}  "
             f"Precision@10: {gm.get('precision_at_10', 0):.4f}  "
             f"[bold]nDCG@10: {gm.get('ndcg_at_10', 0):.4f}[/bold]",
-            title="Gap Ranking",
+            title=gap_title,
         ))
 
     if "embeddings" in results:

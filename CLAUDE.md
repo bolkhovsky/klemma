@@ -85,7 +85,7 @@ tags.example.yaml           — Template tag taxonomy
 - `klemma ask "query"` — interactive research agent with full dissertation context
 - `klemma info` — show current project info (root, chain, config, DB)
 - `klemma tree` — show nested project tree from current root
-- `klemma benchmark [-d dataset.json] [--metrics all|intent|gaps|embeddings] [--export path] [--json-output]` — evaluation framework: run benchmarks against annotated ground truth; `--export` to generate dataset template from DB
+- `klemma benchmark [-d dataset.json] [--metrics all|intent|gaps|embeddings] [--export path] [--json-output] [--semantic]` — evaluation framework: run benchmarks against annotated ground truth; `--export` to generate dataset template from DB; `--semantic` applies hybrid keyword × semantic reranking to gap benchmark (requires embeddings configured)
 - `klemma migrate [--dry-run]` — migrate from old ~/.klemma/ to per-directory project
 - Global options: `--config/-c <path>`
 

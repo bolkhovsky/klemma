@@ -304,6 +304,35 @@ class TestRunGapBenchmark:
         result = run_gap_benchmark(state, BenchmarkDataset())
         assert result["total"] == 0
 
+    def test_reranked_gaps_skips_db(self, state):
+        """When reranked_gaps is provided, DB is not fetched — the given list is used.
+
+        Proof: reranked list contains only an unrelated paper (not in ground truth),
+        so precision falls to 0. If DB were consulted instead, it would return
+        the relevant paper and precision would be 1.0.
+        """
+        state.register_sources(["s1"])
+        state.save_reference_gaps("s1", [
+            {"ref_authors": "A", "ref_year": 2020, "ref_title": "Relevant Paper",
+             "why_relevant": "r", "citation_intent": "method"},
+        ])
+        ds = BenchmarkDataset(gaps=[
+            GapSample(ref_title="Relevant Paper", section="2.1",
+                      ground_truth_relevance=5),
+        ])
+
+        # Without reranking: DB has the relevant paper → P@5 = 1.0
+        result_default = run_gap_benchmark(state, ds)
+        assert result_default["metrics"]["precision_at_5"] == 1.0
+
+        # With reranked list containing only an unrelated paper — DB is skipped,
+        # so the relevant paper is absent → P@5 = 0.0
+        reranked = [{"ref_title": "Completely Unrelated Paper", "score": 20.0}]
+        result_reranked = run_gap_benchmark(state, ds, reranked_gaps=reranked)
+        assert result_reranked["metrics"]["precision_at_5"] == 0.0
+        # db_gaps_count reflects the reranked list length, not the DB count
+        assert result_reranked["db_gaps_count"] == 1
+
 
 class TestRunEmbeddingBenchmark:
     def test_computes_recall(self, state):
