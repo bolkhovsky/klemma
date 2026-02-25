@@ -37,10 +37,11 @@ src/klemma/
 │   ├── citations.py    — Citation graph, co-citation, authors (~180 lines)
 │   ├── plans.py        — Daily plans, reading queue (~130 lines)
 │   └── prune.py        — Prune verdicts, protection (~110 lines)
-├── evaluation/         — Benchmark framework (dataset, metrics, runners)
-│   ├── dataset.py     — Pydantic schema, load/export (~80 lines)
-│   ├── metrics.py     — intent_metrics, precision@K, recall@K, nDCG@K (~120 lines)
-│   └── runners.py     — Intent, gap, embedding benchmark runners (~150 lines)
+├── evaluation/         — Benchmark framework (dataset, metrics, runners, reconstruction)
+│   ├── dataset.py     — Pydantic schema, load/export, reconstruction models (~130 lines)
+│   ├── metrics.py     — intent_metrics, precision@K, recall@K, nDCG@K, reconstruction_metrics (~210 lines)
+│   ├── runners.py     — Intent, gap, embedding, reconstruction benchmark runners (~200 lines)
+│   └── reconstruction.py — Citation reconstruction benchmark: analyst, baseline, AI-driven (~200 lines)
 ├── skills/             — AI skills (planner, extractor, researcher, librarian, agent, acquirer, outliner, work_context)
 ├── literature/         — PDF extraction, models, note_factory
 └── tools/              — MCP tool infrastructure (567 lines)
@@ -57,7 +58,9 @@ prompts/                    — Shipped Jinja2 prompt templates (overridable via
 ├── librarian_prune.md      — prune recommendation generation
 ├── agent.md                — interactive agent system prompt
 ├── outline.md              — project outline generation
-└── outline_incremental.md  — incremental outline update
+├── outline_incremental.md  — incremental outline update
+├── analyst.md              — extract ground truth citation map from paper PDF
+└── reconstruct.md          — AI citation recommendation (blind to paper text)
 config.project.example.yaml — Template for per-project .klemma/config.yaml
 config.system.example.yaml  — Template for ~/.klemma/config.yaml (system defaults)
 config.example.yaml         — Legacy template config (kept for migration)
@@ -85,7 +88,7 @@ tags.example.yaml           — Template tag taxonomy
 - `klemma ask "query"` — interactive research agent with full dissertation context
 - `klemma info` — show current project info (root, chain, config, DB)
 - `klemma tree` — show nested project tree from current root
-- `klemma benchmark [-d dataset.json] [--metrics all|intent|gaps|embeddings] [--export path] [--json-output] [--semantic]` — evaluation framework: run benchmarks against annotated ground truth; `--export` to generate dataset template from DB; `--semantic` applies hybrid keyword × semantic reranking to gap benchmark (requires embeddings configured)
+- `klemma benchmark [-d dataset.json] [--metrics all|intent|gaps|embeddings|reconstruct] [--export path] [--json-output] [--semantic] [--analyst <citekey>] [--reconstruct]` — evaluation framework: run benchmarks against annotated ground truth; `--export` to generate dataset template from DB; `--semantic` applies hybrid keyword × semantic reranking to gap benchmark (requires embeddings configured); `--analyst` extracts ground truth citation map from a paper's PDF; `--reconstruct` runs citation reconstruction benchmark
 - `klemma migrate [--dry-run]` — migrate from old ~/.klemma/ to per-directory project
 - Global options: `--config/-c <path>`
 

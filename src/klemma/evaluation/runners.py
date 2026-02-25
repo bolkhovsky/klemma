@@ -169,6 +169,8 @@ def run_all(
     dataset: BenchmarkDataset,
     metrics_filter: str = "all",
     reranked_gaps: list[dict] | None = None,
+    ai: object | None = None,
+    klemma_home: object | None = None,
 ) -> dict:
     """Run selected benchmarks and return combined results.
 
@@ -178,6 +180,8 @@ def run_all(
     Args:
         reranked_gaps: Pre-ranked gap list for hybrid semantic evaluation.
             Passed through to run_gap_benchmark() when provided.
+        ai: AIProvider instance (needed for reconstruction benchmark).
+        klemma_home: Path to resolve prompt templates.
     """
     results: dict = {}
 
@@ -189,5 +193,11 @@ def run_all(
 
     if metrics_filter in ("all", "embeddings") and dataset.similar_pairs:
         results["embeddings"] = run_embedding_benchmark(state, dataset)
+
+    if metrics_filter in ("all", "reconstruct") and dataset.reconstruction:
+        from .reconstruction import run_reconstruction_benchmark
+        results["reconstruction"] = run_reconstruction_benchmark(
+            state, dataset.reconstruction, ai=ai, klemma_home=klemma_home,
+        )
 
     return results
