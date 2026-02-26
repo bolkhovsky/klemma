@@ -2724,6 +2724,31 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
     # Determine effective metrics filter
     effective_metrics = "reconstruct" if reconstruct else metrics
 
+    # Build ablation params for -d mode (same logic as --auto)
+    from .evaluation.pipeline import AblationParams, compute_prompt_hash
+
+    ablation = None
+    if any(v is not None for v in [ablation_temperature, ablation_max_recs,
+                                    ablation_fragments, ablation_variant]):
+        kwargs = {}
+        if ablation_temperature is not None:
+            kwargs["temperature"] = ablation_temperature
+        if ablation_max_recs is not None:
+            kwargs["max_recs_per_section"] = ablation_max_recs
+        if ablation_fragments is not None:
+            kwargs["fragments_per_source"] = ablation_fragments
+        if ablation_variant == "fewshot":
+            ablation = AblationParams.with_fewshot(**kwargs)
+        else:
+            ablation = AblationParams(**kwargs)
+
+    if ablation:
+        params = ablation.to_snapshot()
+        non_default = {k: v for k, v in params.items()
+                       if v is not None and k != "prompt_variant"}
+        if non_default or params.get("prompt_variant") != "default":
+            console.print(f"[dim]Ablation: {params}[/dim]")
+
     # Initialize AI if reconstruction benchmark is requested
     ai = None
     if (effective_metrics in ("all", "reconstruct")) and ds.reconstruction:
@@ -2735,6 +2760,7 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
     results = run_all(
         kctx.state, ds, effective_metrics,
         reranked_gaps=reranked_gaps, ai=ai, klemma_home=kctx.klemma_home,
+        ablation=ablation,
     )
 
     duration = time.monotonic() - t_start
@@ -2754,10 +2780,9 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
     if ds.reconstruction and ds.reconstruction.ground_truth:
         paper_citekey = ds.reconstruction.ground_truth.paper_citekey
 
-    from .evaluation.pipeline import compute_prompt_hash
-
     summary = build_results_summary(results)
     prompt_hash = compute_prompt_hash("reconstruct.md", kctx.klemma_home)
+    effective_ablation = ablation or AblationParams()
     run_id = kctx.state.save_benchmark_run(
         dataset_path=dataset,
         dataset_hash=ds_hash,
@@ -2772,6 +2797,8 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
         klemma_version=__version__,
         config_snapshot={
             "ai": {"backend": kctx.config.ai.backend, "model": kctx.config.ai.model},
+            "frozen_gt": True,
+            "ablation": effective_ablation.to_snapshot(),
             "prompt_hash": prompt_hash,
         },
     )

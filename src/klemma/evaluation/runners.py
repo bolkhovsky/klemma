@@ -206,6 +206,7 @@ def run_all(
     reranked_gaps: list[dict] | None = None,
     ai: object | None = None,
     klemma_home: object | None = None,
+    ablation: object | None = None,
 ) -> dict:
     """Run selected benchmarks and return combined results.
 
@@ -217,6 +218,7 @@ def run_all(
             Passed through to run_gap_benchmark() when provided.
         ai: AIProvider instance (needed for reconstruction benchmark).
         klemma_home: Path to resolve prompt templates.
+        ablation: AblationParams for reconstruction benchmark overrides.
     """
     results: dict = {}
 
@@ -233,6 +235,7 @@ def run_all(
         from .reconstruction import run_reconstruction_benchmark
         results["reconstruction"] = run_reconstruction_benchmark(
             state, dataset.reconstruction, ai=ai, klemma_home=klemma_home,
+            ablation=ablation,
         )
 
     return results
