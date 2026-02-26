@@ -313,14 +313,21 @@ def _print_status_line(state: StateManager, project_name: str = "default"):
         pass  # Don't crash on status line failure
 
 
-def _print_ref_gaps_table(state: StateManager, limit: int = 20):
-    """Print reference gaps as a Rich table."""
+def _print_ref_gaps_table(state: StateManager, limit: int = 20, embeddings=None):
+    """Print reference gaps as a Rich table.
+
+    When embeddings is provided, applies semantic reranking via
+    rerank_gaps_semantic() before display.
+    """
     ref_gaps = state.get_reference_gaps(limit=limit)
     if not ref_gaps:
         return
+    if embeddings:
+        ref_gaps = state.rerank_gaps_semantic(ref_gaps, embeddings=embeddings)
     gap_summary = state.get_gap_summary()
+    title_suffix = " [dim](semantically reranked)[/dim]" if embeddings else ""
     ref_table = Table(
-        title=f"Reference Gaps — {gap_summary['open_count']} open (missing from library)",
+        title=f"Reference Gaps — {gap_summary['open_count']} open (missing from library){title_suffix}",
         show_edge=False, pad_edge=False,
     )
     ref_table.add_column("#", justify="right", style="dim", width=3)
@@ -1261,7 +1268,7 @@ def status(ctx, verbose, chapter):
 
     # --- Reference gaps ---
     if verbose:
-        _print_ref_gaps_table(state, limit=20)
+        _print_ref_gaps_table(state, limit=20, embeddings=kctx.embeddings)
     else:
         ref_gaps = state.get_reference_gaps(limit=5)
         if ref_gaps:
@@ -1910,7 +1917,7 @@ def library(ctx, section, audit):
             console.print(_prune_table(maybe, "Maybe", "yellow"))
 
     # Reference gaps table
-    _print_ref_gaps_table(state)
+    _print_ref_gaps_table(state, embeddings=kctx.embeddings)
 
     console.print("\n[dim]Full report saved to vault.[/dim]")
 
@@ -2181,26 +2188,191 @@ def _print_project_tree(root: Path, indent: int = 0, current: Path | None = None
 
 # --- Benchmark: evaluation framework ---
 
+
+def _run_analyst_mode(kctx, citekey: str, json_output: bool):
+    """Run analyst prompt to extract ground truth from a paper's PDF."""
+    import json
+
+    from .evaluation.reconstruction import run_analyst
+    from .literature.pdf import PDFExtractor
+
+    # Find PDF for the citekey
+    source = kctx.state.get_source(citekey)
+    if not source:
+        console.print(f"[red]Source {citekey} not found in DB[/red]")
+        return
+
+    pdf_path = None
+    if source.get("pdf_path"):
+        pdf_path = Path(source["pdf_path"])
+    elif kctx.config.zotero.library_json:
+        lookup = PDFExtractor.load_pdf_lookup(Path(kctx.config.zotero.library_json))
+        if citekey in lookup:
+            pdf_path = Path(lookup[citekey])
+
+    if not pdf_path or not pdf_path.exists():
+        console.print(f"[red]PDF not found for {citekey}[/red]")
+        return
+
+    # Extract text
+    extractor = PDFExtractor(max_chars=kctx.config.ai.max_pdf_chars)
+    pdf_text = extractor.extract(pdf_path)
+    if not pdf_text:
+        console.print("[red]Failed to extract text from PDF[/red]")
+        return
+
+    # Build library entries string
+    all_sources = kctx.state.get_all_sources()
+    library_lines = []
+    for s in all_sources:
+        if s.get("id") != citekey:
+            library_lines.append(f"- {s.get('id', '')}: {s.get('title', '')}")
+    library_entries = "\n".join(library_lines)
+
+    # Initialize AI
+    try:
+        ai = _init_ai(kctx.config)
+    except Exception as e:
+        console.print(f"[red]Failed to initialize AI: {e}[/red]")
+        return
+
+    console.print(f"Analyzing {citekey} ({len(pdf_text)} chars)...")
+    gt = run_analyst(
+        ai, pdf_text, library_entries,
+        paper_citekey=citekey,
+        paper_title=source.get("title", ""),
+        klemma_home=kctx.klemma_home,
+    )
+
+    if not gt:
+        console.print("[red]Analyst prompt failed[/red]")
+        return
+
+    # Build samples (in-library only)
+    from .evaluation.dataset import ReconstructionDataset, ReconstructionSample
+    samples = []
+    for section in gt.sections:
+        for cit in section.citations:
+            if cit.in_library and cit.citekey:
+                samples.append(ReconstructionSample(
+                    section_id=section.section_id,
+                    citekey=cit.citekey,
+                    intent=cit.intent,
+                ))
+
+    dataset = ReconstructionDataset(ground_truth=gt, samples=samples)
+
+    if json_output:
+        click.echo(json.dumps(dataset.model_dump(), indent=2))
+    else:
+        console.print(
+            f"[green]Ground truth extracted:[/green] "
+            f"{len(gt.sections)} sections, "
+            f"{gt.bibliography_size} references, "
+            f"{len(samples)} in-library samples"
+        )
+        console.print("Save as JSON and add to your benchmark dataset under 'reconstruction' key.")
+        click.echo(json.dumps(dataset.model_dump(), indent=2))
+
+
+def _print_reconstruction_results(recon: dict):
+    """Print reconstruction benchmark results as Rich panels."""
+    # Ground truth summary
+    gt = recon.get("ground_truth", {})
+    console.print(Panel(
+        f"Paper: {gt.get('paper', 'N/A')}\n"
+        f"Sections: {gt.get('sections', 0)}, "
+        f"Bibliography: {gt.get('bibliography_size', 0)}, "
+        f"In-library samples: {gt.get('samples', 0)}",
+        title="Reconstruction: Ground Truth",
+    ))
+
+    # Baseline results
+    bl = recon.get("baseline", {})
+    if bl:
+        console.print(Panel(
+            f"Predictions: {bl.get('predictions_count', 0)}\n"
+            f"Macro-P: {bl.get('macro_precision', 0):.4f}  "
+            f"Macro-R: {bl.get('macro_recall', 0):.4f}  "
+            f"[bold]F1: {bl.get('f1', 0):.4f}[/bold]\n"
+            f"Intent accuracy: {bl.get('intent_accuracy', 0):.4f}  "
+            f"nDCG avg: {bl.get('ndcg_avg', 0):.4f}",
+            title="Reconstruction: Baseline (DB only)",
+        ))
+
+    # AI reconstruction results
+    rc = recon.get("reconstruction", {})
+    if rc:
+        if rc.get("error"):
+            console.print(f"[yellow]Reconstruction: {rc['error']}[/yellow]")
+        else:
+            console.print(Panel(
+                f"Predictions: {rc.get('predictions_count', 0)}\n"
+                f"Macro-P: {rc.get('macro_precision', 0):.4f}  "
+                f"Macro-R: {rc.get('macro_recall', 0):.4f}  "
+                f"[bold]F1: {rc.get('f1', 0):.4f}[/bold]\n"
+                f"Intent accuracy: {rc.get('intent_accuracy', 0):.4f}  "
+                f"nDCG avg: {rc.get('ndcg_avg', 0):.4f}",
+                title="Reconstruction: AI-driven",
+            ))
+
+    # Per-section table (from baseline or reconstruction, whichever has data)
+    source = rc if rc and not rc.get("error") else bl
+    per_section = source.get("per_section", {}) if source else {}
+    if per_section:
+        t = Table(title="Per-section metrics")
+        t.add_column("Section")
+        t.add_column("GT", justify="right")
+        t.add_column("Pred", justify="right")
+        t.add_column("Hits", justify="right")
+        t.add_column("Precision", justify="right")
+        t.add_column("Recall", justify="right")
+        t.add_column("nDCG", justify="right")
+        for sec_id, vals in sorted(per_section.items()):
+            t.add_row(
+                sec_id,
+                str(vals.get("gt_count", 0)),
+                str(vals.get("pred_count", 0)),
+                str(vals.get("hits", 0)),
+                f"{vals.get('precision', 0):.4f}",
+                f"{vals.get('recall', 0):.4f}",
+                f"{vals.get('ndcg', 0):.4f}",
+            )
+        console.print(t)
+
 @main.command()
 @click.option("--dataset", "-d", type=click.Path(exists=True),
               help="Path to annotated benchmark dataset JSON")
 @click.option("--metrics", "-m",
-              type=click.Choice(["all", "intent", "gaps", "embeddings"]),
+              type=click.Choice(["all", "intent", "gaps", "embeddings", "reconstruct"]),
               default="all", help="Which benchmarks to run (default: all)")
 @click.option("--export", "export_path", type=click.Path(),
               help="Export current DB data as dataset template for annotation")
 @click.option("--json-output", is_flag=True,
               help="Output results as JSON for reproducibility")
+@click.option("--semantic", is_flag=True,
+              help="Apply semantic reranking to gap benchmark (hybrid keyword × semantic mode)")
+@click.option("--analyst", "analyst_citekey", type=str, default=None,
+              help="Run analyst prompt on a paper PDF to extract ground truth citation map")
+@click.option("--reconstruct", "reconstruct", is_flag=True,
+              help="Run citation reconstruction benchmark (requires reconstruction field in dataset)")
 @click.pass_context
-def benchmark(ctx, dataset, metrics, export_path, json_output):
+def benchmark(ctx, dataset, metrics, export_path, json_output, semantic, analyst_citekey, reconstruct):
     """Run evaluation benchmarks against annotated ground truth.
 
     Multi-format evaluation (Singh et al. 2023 — SciRepEval):
-    intent classification, gap ranking, and embedding retrieval
-    evaluated separately with domain-appropriate metrics.
+    intent classification, gap ranking, embedding retrieval,
+    and citation reconstruction evaluated separately.
 
     Use --export to generate a dataset template from current DB,
     then manually review/correct labels to create ground truth.
+
+    Use --semantic to measure hybrid gap ranking (keyword score × semantic
+    similarity), requires embeddings to be configured.
+
+    Use --analyst <citekey> to extract ground truth from a paper's PDF.
+
+    Use --reconstruct to run citation reconstruction benchmark.
     """
     import json
 
@@ -2208,6 +2380,11 @@ def benchmark(ctx, dataset, metrics, export_path, json_output):
     from .evaluation.dataset import export_dataset
 
     kctx = _get_context(ctx)
+
+    # --- Analyst mode: extract ground truth from a paper ---
+    if analyst_citekey:
+        _run_analyst_mode(kctx, analyst_citekey, json_output)
+        return
 
     if export_path:
         count = export_dataset(kctx.state, Path(export_path))
@@ -2228,12 +2405,35 @@ def benchmark(ctx, dataset, metrics, export_path, json_output):
         return
 
     ds = load_dataset(Path(dataset))
+    recon_info = f", reconstruction: {len(ds.reconstruction.samples)} samples" if ds.reconstruction else ""
     console.print(
         f"Dataset: {len(ds.fragments)} fragments, "
         f"{len(ds.gaps)} gaps, {len(ds.similar_pairs)} similarity pairs"
+        f"{recon_info}"
     )
 
-    results = run_all(kctx.state, ds, metrics)
+    reranked_gaps = None
+    if semantic and kctx.embeddings:
+        all_gaps = kctx.state.get_reference_gaps(limit=100)
+        reranked_gaps = kctx.state.rerank_gaps_semantic(all_gaps, kctx.embeddings)
+    elif semantic:
+        console.print("[yellow]--semantic requires embeddings to be configured[/yellow]")
+
+    # Determine effective metrics filter
+    effective_metrics = "reconstruct" if reconstruct else metrics
+
+    # Initialize AI if reconstruction benchmark is requested
+    ai = None
+    if (effective_metrics in ("all", "reconstruct")) and ds.reconstruction:
+        try:
+            ai = _init_ai(kctx.config)
+        except Exception:
+            console.print("[dim]AI not available — reconstruction will run baseline only[/dim]")
+
+    results = run_all(
+        kctx.state, ds, effective_metrics,
+        reranked_gaps=reranked_gaps, ai=ai, klemma_home=kctx.klemma_home,
+    )
 
     if json_output:
         click.echo(json.dumps(results, indent=2))
@@ -2270,13 +2470,14 @@ def benchmark(ctx, dataset, metrics, export_path, json_output):
     if "gaps" in results:
         gr = results["gaps"]
         gm = gr.get("metrics", {})
+        gap_title = "Gap Ranking [dim](hybrid: keyword × semantic)[/dim]" if semantic else "Gap Ranking"
         console.print(Panel(
             f"Ground truth: {gr['total']} gaps, "
             f"DB gaps: {gr.get('db_gaps_count', 0)}\n"
             f"Precision@5: {gm.get('precision_at_5', 0):.4f}  "
             f"Precision@10: {gm.get('precision_at_10', 0):.4f}  "
             f"[bold]nDCG@10: {gm.get('ndcg_at_10', 0):.4f}[/bold]",
-            title="Gap Ranking",
+            title=gap_title,
         ))
 
     if "embeddings" in results:
@@ -2293,6 +2494,9 @@ def benchmark(ctx, dataset, metrics, export_path, json_output):
                 f"Precision@5: {em.get('avg_precision_at_5', 0):.4f}",
                 title="Embedding Retrieval",
             ))
+
+    if "reconstruction" in results:
+        _print_reconstruction_results(results["reconstruction"])
 
 
 # --- Migrate: convert old ~/.klemma/ to per-directory project ---

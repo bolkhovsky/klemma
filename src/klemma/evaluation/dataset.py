@@ -39,6 +39,51 @@ class SimilarityPair(BaseModel):
     relevant: list[str]
 
 
+class SectionCitation(BaseModel):
+    """A citation within a paper section, with optional library match."""
+
+    citekey: str | None = None
+    title: str
+    intent: Literal["background", "method", "result_comparison"]
+    in_library: bool = False
+
+
+class PaperSection(BaseModel):
+    """A section of a paper with its citations."""
+
+    section_id: str
+    title: str
+    description: str = ""
+    citations: list[SectionCitation] = []
+
+
+class ReconstructionGroundTruth(BaseModel):
+    """Ground truth: paper's actual citation map (sections → cited works)."""
+
+    paper_citekey: str
+    paper_title: str
+    abstract: str = ""
+    keywords: list[str] = []
+    sections: list[PaperSection] = []
+    bibliography_size: int = 0
+
+
+class ReconstructionSample(BaseModel):
+    """Flattened (section, citekey, intent) triple for evaluation."""
+
+    section_id: str
+    citekey: str
+    intent: Literal["background", "method", "result_comparison"]
+
+
+class ReconstructionDataset(BaseModel):
+    """Dataset for citation reconstruction benchmark."""
+
+    version: str = "1.0"
+    ground_truth: ReconstructionGroundTruth
+    samples: list[ReconstructionSample] = []
+
+
 class BenchmarkDataset(BaseModel):
     """Annotated test set for multi-format evaluation.
 
@@ -50,6 +95,7 @@ class BenchmarkDataset(BaseModel):
     fragments: list[IntentSample] = []
     gaps: list[GapSample] = []
     similar_pairs: list[SimilarityPair] = []
+    reconstruction: ReconstructionDataset | None = None
 
 
 def load_dataset(path: Path) -> BenchmarkDataset:

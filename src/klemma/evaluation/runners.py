@@ -57,13 +57,19 @@ def run_intent_benchmark(
 
 
 def run_gap_benchmark(
-    state: StateManager, dataset: BenchmarkDataset
+    state: StateManager,
+    dataset: BenchmarkDataset,
+    reranked_gaps: list[dict] | None = None,
 ) -> dict:
     """Evaluate gap scoring precision against ground truth relevance.
 
     Gets current gap ranking from DB, matches against annotated relevance.
     Metrics: precision@5, precision@10, nDCG@10 (Bhagavatula et al. 2018;
     Cohan et al. 2020).
+
+    Args:
+        reranked_gaps: Pre-ranked gap list (e.g. from rerank_gaps_semantic).
+            When provided, skips DB fetch and uses this list directly.
     """
     if not dataset.gaps:
         return {"total": 0, "metrics": {}}
@@ -77,8 +83,8 @@ def run_gap_benchmark(
         if sample.ground_truth_relevance >= 3:
             relevant_titles.add(title_key)
 
-    # Get DB ranking
-    db_gaps = state.get_reference_gaps(limit=100)
+    # Use provided reranked list or fall back to DB ranking
+    db_gaps = reranked_gaps if reranked_gaps is not None else state.get_reference_gaps(limit=100)
     ranked_titles = [
         (g.get("ref_title", "") or "").lower().strip() for g in db_gaps
     ]
@@ -162,11 +168,20 @@ def run_all(
     state: StateManager,
     dataset: BenchmarkDataset,
     metrics_filter: str = "all",
+    reranked_gaps: list[dict] | None = None,
+    ai: object | None = None,
+    klemma_home: object | None = None,
 ) -> dict:
     """Run selected benchmarks and return combined results.
 
     Multi-format evaluation: each sub-benchmark evaluated independently,
     following SciRepEval methodology (Singh et al. 2023).
+
+    Args:
+        reranked_gaps: Pre-ranked gap list for hybrid semantic evaluation.
+            Passed through to run_gap_benchmark() when provided.
+        ai: AIProvider instance (needed for reconstruction benchmark).
+        klemma_home: Path to resolve prompt templates.
     """
     results: dict = {}
 
@@ -174,9 +189,15 @@ def run_all(
         results["intent"] = run_intent_benchmark(state, dataset)
 
     if metrics_filter in ("all", "gaps") and dataset.gaps:
-        results["gaps"] = run_gap_benchmark(state, dataset)
+        results["gaps"] = run_gap_benchmark(state, dataset, reranked_gaps=reranked_gaps)
 
     if metrics_filter in ("all", "embeddings") and dataset.similar_pairs:
         results["embeddings"] = run_embedding_benchmark(state, dataset)
+
+    if metrics_filter in ("all", "reconstruct") and dataset.reconstruction:
+        from .reconstruction import run_reconstruction_benchmark
+        results["reconstruction"] = run_reconstruction_benchmark(
+            state, dataset.reconstruction, ai=ai, klemma_home=klemma_home,
+        )
 
     return results
