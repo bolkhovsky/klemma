@@ -45,6 +45,7 @@ pip install klemma[all-ai]             # все AI-бэкенды (openai + lite
 # 1. Инициализировать проект
 klemma init                                    # интерактивный мастер
 klemma init --type paper                       # проект-статья
+klemma init --outline                           # сгенерировать outline после init (нужен AI)
 
 # 2. Посмотреть статистику, покрытие, пробелы
 klemma status                                  # компактный обзор
@@ -95,6 +96,7 @@ klemma outline -p "Фокус на методологии"       # с дирек
 klemma init                    # интерактивный мастер
 klemma init --type paper       # проект-статья (вместо диссертации)
 klemma init --no-input         # без вопросов (defaults)
+klemma init --outline          # сгенерировать outline после init (нужен AI)
 ```
 
 ### `klemma plan`

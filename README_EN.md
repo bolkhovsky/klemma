@@ -36,6 +36,7 @@ Requirements:
 ```bash
 # 1. Set up your config
 klemma init                          # creates ~/.klemma/ with templates
+klemma init --outline                 # generate outline after init (requires AI)
 # Edit ~/.klemma/config.yaml         — Zotero/Obsidian paths, AI backend
 # Edit ~/.klemma/context.md          — your dissertation topic and structure
 # Edit ~/.klemma/tags.yaml           — your domain tag taxonomy
@@ -63,7 +64,7 @@ klemma library --audit               # deep quality audit
 
 | Command | Description |
 |---------|-------------|
-| `klemma init` | Scaffold `~/.klemma/` with config templates |
+| `klemma init` | Scaffold `~/.klemma/` with config templates (use `--outline` to generate outline) |
 | `klemma plan` | Generate daily focus and briefing |
 | `klemma status` | Coverage stats, gaps, reference gaps |
 | `klemma process [citekeys...]` | Extract citation fragments from PDFs |
