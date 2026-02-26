@@ -406,8 +406,9 @@ def main(ctx, config):
 @click.option("--global-only", is_flag=True, help="Only create/update ~/.klemma/ system config")
 @click.option("--no-input", is_flag=True, help="Skip interactive prompts, use defaults")
 @click.option("--force", is_flag=True, help="Re-run wizard even if project exists (prefills from current config)")
+@click.option("--outline", is_flag=True, help="Generate outline after init (requires AI)")
 @click.pass_context
-def init(ctx, project_type, global_only, no_input, force):
+def init(ctx, project_type, global_only, no_input, force, outline):
     """Initialize a new klemma project in current directory.
 
     Creates .klemma/ and KLEMMA.md in the current directory.
@@ -481,6 +482,43 @@ def init(ctx, project_type, global_only, no_input, force):
         and values.zotero_library_json
     ):
         _discover_paper_sources(project_dir, values)
+
+    if outline:
+        try:
+            kctx = _init_components(ctx.obj["config_path"])
+        except Exception as e:
+            console.print(f"[yellow]Skipping outline: {e}[/yellow]")
+        else:
+            from .config import scan_project_files
+            from .skills.outliner import generate_outline as gen_outline
+            from .skills.outliner import save_outline
+
+            project_files = scan_project_files(kctx.project_root)
+            if not project_files:
+                console.print("[yellow]No files found in project directory; skipping outline.[/yellow]")
+            else:
+                try:
+                    ai = _init_ai(kctx.config)
+                except Exception as e:
+                    console.print("[yellow]Skipping outline: AI backend not configured.[/yellow]")
+                    console.print(f"[dim]{e}[/dim]")
+                else:
+                    with console.status("Generating outline...", spinner="dots"):
+                        result, _mode = gen_outline(
+                            kctx.config,
+                            kctx.state,
+                            ai,
+                            kctx.project_root,
+                            project_name=kctx.project_root.name,
+                            project=kctx.project,
+                            dissertation_context=kctx.dissertation_context,
+                            klemma_home=kctx.klemma_home,
+                        )
+                    if not result.title:
+                        console.print("[red]Failed to generate outline.[/red]")
+                    else:
+                        saved_path = save_outline(result, kctx.project_root.name, kctx.project_root)
+                        console.print(f"[dim]Outline saved: {saved_path}[/dim]")
 
     console.print()
     console.print("Run [bold]klemma status[/bold] to verify.")

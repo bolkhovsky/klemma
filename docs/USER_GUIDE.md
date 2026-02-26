@@ -50,6 +50,7 @@ pip install -e ".[local-embeddings]"     # + офлайн SPECTER2
 ```bash
 cd ~/research/my-thesis/
 klemma init
+klemma init --outline        # сгенерировать outline после init (нужен AI)
 ```
 
 Мастер задаст вопросы:
@@ -362,6 +363,7 @@ klemma init                         # диссертация
 
 cd paper_ice/
 klemma init --type paper            # статья (наследует vault/zotero)
+klemma init --outline               # сгенерировать outline после init (нужен AI)
 ```
 
 Статья использует свою БД, но vault и Zotero диссертации. AI видит контекст обоих проектов.
