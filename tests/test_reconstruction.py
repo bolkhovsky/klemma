@@ -297,7 +297,8 @@ def _make_dataset(samples=None):
 
 
 class TestComputeBaseline:
-    def test_matches_db_fragments(self, state):
+    def test_full_coverage(self, state):
+        """All GT citekeys have fragments -> source_coverage = 1.0."""
         state.register_sources(["sourceA", "sourceB"])
         state.save_fragments("sourceA", [
             {"text": "Background info", "type": "key_idea",
@@ -311,46 +312,51 @@ class TestComputeBaseline:
         dataset = _make_dataset()
         result = compute_baseline(state, dataset)
         assert result["method"] == "baseline"
-        assert result["macro_recall"] == 1.0
-        assert result["macro_precision"] == 1.0
-        assert result["f1"] == 1.0
+        assert result["source_coverage"] == 1.0
+        assert result["sources_covered"] == 2
+        assert result["sources_total"] == 2
 
-    def test_no_matching_fragments(self, state):
+    def test_no_fragments(self, state):
+        """No fragments -> source_coverage = 0.0."""
         state.register_sources(["sourceA", "sourceB"])
-        # No fragments saved
 
         dataset = _make_dataset()
         result = compute_baseline(state, dataset)
-        assert result["predictions_count"] == 0
-        assert result["macro_recall"] == 0.0
+        assert result["source_coverage"] == 0.0
+        assert result["sources_covered"] == 0
+        assert result["intent_coverage"] == 0.0
 
-    def test_partial_match(self, state):
+    def test_partial_coverage(self, state):
+        """One of two citekeys has fragments -> source_coverage = 0.5."""
         state.register_sources(["sourceA", "sourceB"])
         state.save_fragments("sourceA", [
             {"text": "Background info", "type": "key_idea",
              "section": "1", "relevance": 3, "citation_intent": "background"},
         ])
-        # sourceB has no fragments
 
         dataset = _make_dataset()
         result = compute_baseline(state, dataset)
-        assert result["predictions_count"] == 1
-        assert result["macro_recall"] > 0
-        assert result["macro_recall"] < 1.0
+        assert result["source_coverage"] == 0.5
+        assert result["sources_covered"] == 1
+        assert result["sources_total"] == 2
 
-    def test_deduplicates_predictions(self, state):
-        state.register_sources(["sourceA"])
+    def test_intent_coverage(self, state):
+        """Fragment intent matches/mismatches GT intent."""
+        state.register_sources(["sourceA", "sourceB"])
         state.save_fragments("sourceA", [
-            {"text": "Frag 1", "type": "key_idea",
+            {"text": "Background info", "type": "key_idea",
              "section": "1", "relevance": 3, "citation_intent": "background"},
-            {"text": "Frag 2", "type": "key_idea",
-             "section": "1", "relevance": 4, "citation_intent": "background"},
         ])
-        dataset = _make_dataset(samples=[
-            ReconstructionSample(section_id="1", citekey="sourceA", intent="background"),
+        state.save_fragments("sourceB", [
+            {"text": "Method detail", "type": "methodology",
+             "section": "2", "relevance": 4, "citation_intent": "background"},
         ])
+
+        # GT: sourceA=background (match), sourceB=method (mismatch — DB has background)
+        dataset = _make_dataset()
         result = compute_baseline(state, dataset)
-        assert result["predictions_count"] == 1  # deduplicated
+        assert result["source_coverage"] == 1.0
+        assert result["intent_coverage"] == 0.5  # 1 of 2 intents match
 
 
 class TestRunReconstruction:

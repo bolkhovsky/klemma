@@ -1,6 +1,7 @@
 """Domain repositories — decomposed from StateManager."""
 
 from .base import BaseRepository
+from .benchmarks import BenchmarkRepository
 from .citations import CitationsRepository
 from .embeddings_store import EmbeddingsStoreRepository
 from .fragments import FragmentRepository
@@ -11,6 +12,7 @@ from .sources import SourceRepository
 
 __all__ = [
     "BaseRepository",
+    "BenchmarkRepository",
     "CitationsRepository",
     "EmbeddingsStoreRepository",
     "FragmentRepository",

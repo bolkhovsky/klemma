@@ -164,6 +164,41 @@ def run_embedding_benchmark(
     }
 
 
+def build_results_summary(results: dict) -> dict:
+    """Flatten headline metrics from a run_all() result dict.
+
+    Returns a flat dict like {"reconstruction.f1": 0.624, "intent.macro_f1": 0.85, ...}
+    suitable for quick comparison and storage in benchmark_runs.results_summary.
+    """
+    summary: dict[str, float] = {}
+    if "intent" in results:
+        m = results["intent"].get("metrics", {})
+        for key in ("macro_f1", "accuracy"):
+            if key in m:
+                summary[f"intent.{key}"] = m[key]
+    if "gaps" in results:
+        m = results["gaps"].get("metrics", {})
+        for key in ("precision_at_5", "precision_at_10", "ndcg_at_10"):
+            if key in m:
+                summary[f"gaps.{key}"] = m[key]
+    if "embeddings" in results:
+        m = results["embeddings"].get("metrics", {})
+        for key in ("avg_recall_at_5", "avg_recall_at_10", "avg_precision_at_5"):
+            if key in m:
+                summary[f"embeddings.{key}"] = m[key]
+    if "reconstruction" in results:
+        recon = results["reconstruction"]
+        bl = recon.get("baseline", {})
+        for key in ("source_coverage", "intent_coverage"):
+            if key in bl:
+                summary[f"reconstruction.baseline.{key}"] = bl[key]
+        rc = recon.get("reconstruction", {})
+        for key in ("f1", "macro_precision", "macro_recall", "intent_accuracy", "ndcg_avg"):
+            if key in rc:
+                summary[f"reconstruction.{key}"] = rc[key]
+    return summary
+
+
 def run_all(
     state: StateManager,
     dataset: BenchmarkDataset,

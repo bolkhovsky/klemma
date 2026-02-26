@@ -26,12 +26,13 @@ Pure metric functions — no DB, no IO.
 - `ndcg_at_k(ranked_ids, relevance_map, k)` — normalized DCG for graded relevance (1-5)
 - `reconstruction_metrics(predictions, ground_truth)` — macro P/R, F1, intent accuracy, nDCG per section for citation reconstruction
 
-### runners.py (~200 lines)
+### runners.py (~238 lines)
 Benchmark runners — orchestrate DB queries + metric computation.
 - `run_intent_benchmark(state, dataset)` — compare DB fragment intents vs ground truth
 - `run_gap_benchmark(state, dataset, reranked_gaps?)` — evaluate gap scoring precision@K and nDCG@K; when `reranked_gaps` is provided, skips DB fetch and uses the pre-ranked list (enables hybrid semantic evaluation)
 - `run_embedding_benchmark(state, dataset)` — evaluate embedding retrieval recall@K
 - `run_all(state, dataset, metrics_filter, reranked_gaps?, ai?, klemma_home?)` — dispatch to selected runners; includes reconstruction when `metrics_filter` is `"all"` or `"reconstruct"`
+- `build_results_summary(results)` — flatten headline metrics from results dict into flat `{"reconstruction.f1": 0.624, ...}` dict for persistence
 
 ### reconstruction.py (~200 lines)
 Citation reconstruction benchmark — end-to-end recommendation quality.
@@ -39,6 +40,32 @@ Citation reconstruction benchmark — end-to-end recommendation quality.
 - `compute_baseline(state, dataset)` — evaluate DB-only fragment assignments against ground truth
 - `run_reconstruction(ai, state, dataset, klemma_home)` — AI-driven citation recommendation against ground truth
 - `run_reconstruction_benchmark(state, dataset, ai?, klemma_home?)` — full benchmark: ground truth stats + baseline + optional AI reconstruction
+
+### candidates.py (~97 lines)
+Benchmark candidate discovery from citation graph.
+- `CandidateScore` — Pydantic model with scoring fields (in_library_citations, intent_diversity, has_pdf, score)
+- `discover_candidates(state, limit, benchmarked_citekeys?)` — SQL query joining sources + citation_links, scored by in-lib × 3 + intent × 2 + pdf - 5 × benchmarked
+- `format_candidate_hint(candidates, limit)` — Rich markup one-liner for DEV mode status bar
+
+### resolvers.py (~190 lines)
+Paper PDF resolvers: arXiv, CrossRef → Unpaywall. Free, no-auth APIs.
+- `ResolvedPaper` — dataclass: title, authors, year, doi, pdf_url, source
+- `resolve_arxiv(title, authors?, year?)` — arXiv API (XML), 3s rate limit
+- `resolve_crossref_doi(title, authors?, year?)` — CrossRef API (JSON)
+- `resolve_unpaywall(doi)` — Unpaywall open-access PDF lookup
+- `resolve_pdf_url(title, authors?, year?)` — tries arXiv → CrossRef+Unpaywall chain
+- `_titles_match(query, candidate)` — fuzzy word-overlap comparison (>0.6 threshold)
+
+### prepare.py (~134 lines)
+Auto-fetch missing referenced PDFs before benchmarking.
+- `ReferenceStatus` / `PrepareResult` — Pydantic models
+- `prepare_benchmark(state, citekey, storage_path, dry_run?)` — query citation_links, resolve PDFs, optionally acquire via `acquire_paper_local`
+
+### pipeline.py (~210 lines)
+Full autonomous benchmark pipeline composing all evaluation steps.
+- `AutoBenchmarkResult` — Pydantic model: paper_citekey, prepare_result, results, run_id, comparison
+- `run_analyst_from_source(state, ai, citekey, config, klemma_home?)` — shared helper: find PDF → extract text → run analyst → build ReconstructionDataset
+- `run_auto_benchmark(state, ai, config, ...)` — full pipeline: select candidate → prepare → analyst → benchmark → persist → compare with previous run
 
 ## Design rationale
 
@@ -93,6 +120,30 @@ klemma benchmark -d dataset.json --reconstruct
 `_print_ref_gaps_table(state, limit, embeddings?)` — when embeddings provided, calls
 `state.rerank_gaps_semantic()` before display and shows `(semantically reranked)` in title.
 Triggered automatically when embeddings are configured in `status --verbose` and `library`.
+
+### Autonomous pipeline flow
+
+```
+klemma benchmark --auto [--paper <citekey>] [--skip-prepare]
+  1. Select: explicit --paper or discover_candidates()[0]
+  2. Prepare: resolve missing refs (arXiv/CrossRef/Unpaywall) → acquire PDFs
+  3. Analyst: run_analyst_from_source() → ReconstructionDataset
+  4. Benchmark: run_reconstruction_benchmark()
+  5. Persist: save_benchmark_run() with git commit + config snapshot
+  6. Compare: delta with previous run for same paper
+
+klemma benchmark --candidates [-k N]
+  → discover_candidates(state) → ranked table by citation coverage score
+
+klemma benchmark --prepare <citekey>
+  → dry-run: show missing refs with resolver sources → confirm → fetch
+
+klemma benchmark --history
+  → Rich table of persisted runs (run_id, timestamp, paper, key metrics, duration)
+
+klemma benchmark --compare <id1> <id2>
+  → side-by-side delta table for shared summary metrics
+```
 
 ## Maintaining this file
 Update when: adding new metric functions, changing runner logic, adding new benchmark types, or modifying dataset schema.

@@ -851,6 +851,14 @@ def process(ctx, citekeys, serial, force):
         if len(keys) > 1:
             console.print(f"\n[green]Done: {processed}/{len(keys)} processed.[/green]")
 
+    # DEV mode: show benchmark candidate hints
+    if kctx.config.instance.dev_mode:
+        from .evaluation.candidates import discover_candidates, format_candidate_hint
+        candidates = discover_candidates(kctx.state, limit=3)
+        hint = format_candidate_hint(candidates)
+        if hint:
+            console.print(hint)
+
 
 def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quiet=False,
                     dissertation_context="", available_tags=None, klemma_home=None,
@@ -2067,6 +2075,13 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
 
     console.print(f"\n[green]Done: {ok}/{len(papers)} acquired.[/green]")
 
+    # DEV mode: show benchmark candidate hints
+    if kctx.config.instance.dev_mode:
+        from .evaluation.candidates import discover_candidates, format_candidate_hint
+        candidates = discover_candidates(kctx.state, limit=3)
+        hint = format_candidate_hint(candidates)
+        if hint:
+            console.print(hint)
 
 
 
@@ -2189,45 +2204,124 @@ def _print_project_tree(root: Path, indent: int = 0, current: Path | None = None
 # --- Benchmark: evaluation framework ---
 
 
-def _run_analyst_mode(kctx, citekey: str, json_output: bool):
-    """Run analyst prompt to extract ground truth from a paper's PDF."""
-    import json
+def _run_auto_mode(kctx, paper_citekey, skip_prepare):
+    """Run full autonomous benchmark pipeline."""
+    from .evaluation.pipeline import run_auto_benchmark
 
-    from .evaluation.reconstruction import run_analyst
-    from .literature.pdf import PDFExtractor
+    try:
+        ai = _init_ai(kctx.config)
+    except Exception as e:
+        console.print(f"[red]Failed to initialize AI: {e}[/red]")
+        return
 
-    # Find PDF for the citekey
+    target = paper_citekey or "[auto-select]"
+    console.print(f"[bold]Auto benchmark: {target}[/bold]")
+
+    with console.status("Running autonomous benchmark pipeline...", spinner="arc"):
+        result = run_auto_benchmark(
+            kctx.state, ai, kctx.config,
+            klemma_home=kctx.klemma_home,
+            paper_citekey=paper_citekey,
+            skip_prepare=skip_prepare,
+            storage_path=kctx.config.zotero.storage_path,
+        )
+
+    if result.results.get("error"):
+        console.print(f"[red]Pipeline failed: {result.results['error']}[/red]")
+        return
+
+    console.print(f"[green]Paper: {result.paper_citekey}[/green]")
+
+    if result.prepare_result:
+        pr = result.prepare_result
+        console.print(
+            f"[dim]Prepared: {pr.fetched} fetched, "
+            f"{pr.in_library} in library, "
+            f"{pr.unfetchable} unavailable[/dim]"
+        )
+
+    if "reconstruction" in result.results:
+        _print_reconstruction_results(result.results["reconstruction"])
+
+    console.print(f"\n[dim]Run {result.run_id} saved[/dim]")
+
+    if result.comparison:
+        console.print(f"[dim]Compared with previous: {result.previous_run_id}[/dim]")
+        _print_benchmark_compare(kctx.state, result.previous_run_id, result.run_id)
+
+
+def _run_prepare_mode(kctx, citekey: str):
+    """Resolve and fetch missing referenced papers for benchmarking."""
+    from .evaluation.prepare import prepare_benchmark
+
     source = kctx.state.get_source(citekey)
     if not source:
         console.print(f"[red]Source {citekey} not found in DB[/red]")
         return
 
-    pdf_path = None
-    if source.get("pdf_path"):
-        pdf_path = Path(source["pdf_path"])
-    elif kctx.config.zotero.library_json:
-        lookup = PDFExtractor.load_pdf_lookup(Path(kctx.config.zotero.library_json))
-        if citekey in lookup:
-            pdf_path = Path(lookup[citekey])
+    # Always dry-run first
+    console.print(f"Scanning references for {citekey}...")
+    result = prepare_benchmark(
+        kctx.state, citekey,
+        storage_path=kctx.config.zotero.storage_path,
+        dry_run=True,
+    )
 
-    if not pdf_path or not pdf_path.exists():
-        console.print(f"[red]PDF not found for {citekey}[/red]")
+    if not result.references:
+        console.print("[yellow]No citation links found for this paper[/yellow]")
         return
 
-    # Extract text
-    extractor = PDFExtractor(max_chars=kctx.config.ai.max_pdf_chars)
-    pdf_text = extractor.extract(pdf_path)
-    if not pdf_text:
-        console.print("[red]Failed to extract text from PDF[/red]")
+    # Display reference table
+    t = Table(title=f"References for {citekey}")
+    t.add_column("Title", max_width=50)
+    t.add_column("Status")
+    t.add_column("Source")
+    t.add_column("PDF")
+    for ref in result.references:
+        source_str = ref.resolved.source if ref.resolved else ""
+        pdf_str = "[green]yes[/green]" if ref.resolved and ref.resolved.pdf_url else "[red]no[/red]"
+        status_color = {
+            "in_library": "green", "resolved": "blue",
+            "no_pdf": "yellow", "failed": "red",
+        }.get(ref.status, "dim")
+        t.add_row(
+            ref.title[:50],
+            f"[{status_color}]{ref.status}[/{status_color}]",
+            source_str,
+            pdf_str if ref.status != "in_library" else "[dim]-[/dim]",
+        )
+    console.print(t)
+    console.print(
+        f"Total: {result.total_references}, In library: {result.in_library}, "
+        f"Resolvable: {len([r for r in result.references if r.status == 'resolved'])}, "
+        f"No PDF: {result.unfetchable}"
+    )
+
+    fetchable = [r for r in result.references if r.status == "resolved"]
+    if not fetchable:
+        console.print("[dim]No new papers to fetch.[/dim]")
         return
 
-    # Build library entries string
-    all_sources = kctx.state.get_all_sources()
-    library_lines = []
-    for s in all_sources:
-        if s.get("id") != citekey:
-            library_lines.append(f"- {s.get('id', '')}: {s.get('title', '')}")
-    library_entries = "\n".join(library_lines)
+    if not click.confirm(f"Download {len(fetchable)} papers?"):
+        return
+
+    # Actual fetch
+    result = prepare_benchmark(
+        kctx.state, citekey,
+        storage_path=kctx.config.zotero.storage_path,
+        dry_run=False,
+    )
+    console.print(
+        f"[green]Fetched {result.fetched} papers[/green]"
+        f"[yellow] ({result.unfetchable} unavailable)[/yellow]"
+    )
+
+
+def _run_analyst_mode(kctx, citekey: str, json_output: bool):
+    """Run analyst prompt to extract ground truth from a paper's PDF."""
+    import json
+
+    from .evaluation.pipeline import run_analyst_from_source
 
     # Initialize AI
     try:
@@ -2236,32 +2330,16 @@ def _run_analyst_mode(kctx, citekey: str, json_output: bool):
         console.print(f"[red]Failed to initialize AI: {e}[/red]")
         return
 
-    console.print(f"Analyzing {citekey} ({len(pdf_text)} chars)...")
-    gt = run_analyst(
-        ai, pdf_text, library_entries,
-        paper_citekey=citekey,
-        paper_title=source.get("title", ""),
-        klemma_home=kctx.klemma_home,
+    console.print(f"Analyzing {citekey}...")
+    dataset = run_analyst_from_source(
+        kctx.state, ai, citekey, kctx.config, kctx.klemma_home,
     )
 
-    if not gt:
-        console.print("[red]Analyst prompt failed[/red]")
+    if not dataset:
+        console.print("[red]Analyst prompt failed (check logs)[/red]")
         return
 
-    # Build samples (in-library only)
-    from .evaluation.dataset import ReconstructionDataset, ReconstructionSample
-    samples = []
-    for section in gt.sections:
-        for cit in section.citations:
-            if cit.in_library and cit.citekey:
-                samples.append(ReconstructionSample(
-                    section_id=section.section_id,
-                    citekey=cit.citekey,
-                    intent=cit.intent,
-                ))
-
-    dataset = ReconstructionDataset(ground_truth=gt, samples=samples)
-
+    gt = dataset.ground_truth
     if json_output:
         click.echo(json.dumps(dataset.model_dump(), indent=2))
     else:
@@ -2269,7 +2347,7 @@ def _run_analyst_mode(kctx, citekey: str, json_output: bool):
             f"[green]Ground truth extracted:[/green] "
             f"{len(gt.sections)} sections, "
             f"{gt.bibliography_size} references, "
-            f"{len(samples)} in-library samples"
+            f"{len(dataset.samples)} in-library samples"
         )
         console.print("Save as JSON and add to your benchmark dataset under 'reconstruction' key.")
         click.echo(json.dumps(dataset.model_dump(), indent=2))
@@ -2287,17 +2365,14 @@ def _print_reconstruction_results(recon: dict):
         title="Reconstruction: Ground Truth",
     ))
 
-    # Baseline results
+    # Baseline results (source-coverage)
     bl = recon.get("baseline", {})
     if bl:
         console.print(Panel(
-            f"Predictions: {bl.get('predictions_count', 0)}\n"
-            f"Macro-P: {bl.get('macro_precision', 0):.4f}  "
-            f"Macro-R: {bl.get('macro_recall', 0):.4f}  "
-            f"[bold]F1: {bl.get('f1', 0):.4f}[/bold]\n"
-            f"Intent accuracy: {bl.get('intent_accuracy', 0):.4f}  "
-            f"nDCG avg: {bl.get('ndcg_avg', 0):.4f}",
-            title="Reconstruction: Baseline (DB only)",
+            f"Source coverage: {bl.get('sources_covered', 0)}/{bl.get('sources_total', 0)} "
+            f"({bl.get('source_coverage', 0):.1%})\n"
+            f"Intent coverage: {bl.get('intent_coverage', 0):.1%}",
+            title="Reconstruction: Baseline (library coverage)",
         ))
 
     # AI reconstruction results
@@ -2316,8 +2391,8 @@ def _print_reconstruction_results(recon: dict):
                 title="Reconstruction: AI-driven",
             ))
 
-    # Per-section table (from baseline or reconstruction, whichever has data)
-    source = rc if rc and not rc.get("error") else bl
+    # Per-section table (from reconstruction only — baseline is section-agnostic)
+    source = rc if rc and not rc.get("error") else None
     per_section = source.get("per_section", {}) if source else {}
     if per_section:
         t = Table(title="Per-section metrics")
@@ -2340,6 +2415,65 @@ def _print_reconstruction_results(recon: dict):
             )
         console.print(t)
 
+def _print_benchmark_history(state):
+    """Print benchmark run history as Rich table."""
+    runs = state.get_benchmark_runs(limit=20)
+    if not runs:
+        console.print("[yellow]No benchmark runs found.[/yellow]")
+        return
+    t = Table(title="Benchmark History")
+    t.add_column("Run ID")
+    t.add_column("Timestamp")
+    t.add_column("Paper")
+    t.add_column("Metrics")
+    t.add_column("F1", justify="right")
+    t.add_column("Duration", justify="right")
+    t.add_column("Commit")
+    for r in runs:
+        summary = r.get("results_summary", {})
+        f1 = summary.get("reconstruction.f1", summary.get("intent.macro_f1", ""))
+        f1_str = f"{f1:.4f}" if isinstance(f1, float) else str(f1)
+        dur = r.get("duration_seconds", 0)
+        dur_str = f"{dur:.1f}s" if dur else ""
+        t.add_row(
+            r.get("run_id", "")[:8],
+            (r.get("timestamp", "") or "")[:19],
+            r.get("paper_citekey", "") or "-",
+            r.get("metrics_filter", ""),
+            f1_str,
+            dur_str,
+            r.get("git_commit", "") or "",
+        )
+    console.print(t)
+
+
+def _print_benchmark_compare(state, id_a: str, id_b: str):
+    """Print side-by-side comparison of two benchmark runs."""
+    result = state.compare_benchmark_runs(id_a, id_b)
+    if result.get("error"):
+        console.print(f"[red]{result['error']}[/red]")
+        return
+    t = Table(title=f"Compare {id_a[:8]} vs {id_b[:8]}")
+    t.add_column("Metric")
+    t.add_column(f"{id_a[:8]}", justify="right")
+    t.add_column(f"{id_b[:8]}", justify="right")
+    t.add_column("Delta", justify="right")
+    for key, vals in result.get("deltas", {}).items():
+        va = vals.get("a")
+        vb = vals.get("b")
+        delta = vals.get("delta")
+        va_str = f"{va:.4f}" if isinstance(va, float) else str(va or "")
+        vb_str = f"{vb:.4f}" if isinstance(vb, float) else str(vb or "")
+        if delta is not None and isinstance(delta, float):
+            arrow = "[green]+[/green]" if delta > 0 else "[red]" if delta < 0 else ""
+            arrow_end = "[/red]" if delta < 0 else ""
+            delta_str = f"{arrow}{delta:+.4f}{arrow_end}"
+        else:
+            delta_str = ""
+        t.add_row(key, va_str, vb_str, delta_str)
+    console.print(t)
+
+
 @main.command()
 @click.option("--dataset", "-d", type=click.Path(exists=True),
               help="Path to annotated benchmark dataset JSON")
@@ -2356,8 +2490,29 @@ def _print_reconstruction_results(recon: dict):
               help="Run analyst prompt on a paper PDF to extract ground truth citation map")
 @click.option("--reconstruct", "reconstruct", is_flag=True,
               help="Run citation reconstruction benchmark (requires reconstruction field in dataset)")
+@click.option("--history", is_flag=True,
+              help="Show past benchmark run history")
+@click.option("--compare", nargs=2, type=str, default=None,
+              help="Compare two runs: --compare <id1> <id2>")
+@click.option("--export-history", "export_history_path", type=click.Path(),
+              help="Export benchmark run history as JSON for archival")
+@click.option("--candidates", is_flag=True,
+              help="Show benchmark candidate papers ranked by citation graph coverage")
+@click.option("-k", "candidates_limit", type=int, default=10,
+              help="Number of candidates to show (default: 10)")
+@click.option("--prepare", "prepare_citekey", type=str, default=None,
+              help="Fetch missing referenced papers for a citekey (dry-run first)")
+@click.option("--auto", "auto_mode", is_flag=True,
+              help="Run full autonomous pipeline: select → prepare → analyst → benchmark → persist")
+@click.option("--paper", "auto_paper", type=str, default=None,
+              help="Citekey for --auto mode (default: top candidate)")
+@click.option("--skip-prepare", is_flag=True,
+              help="Skip reference preparation in --auto mode")
 @click.pass_context
-def benchmark(ctx, dataset, metrics, export_path, json_output, semantic, analyst_citekey, reconstruct):
+def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
+              analyst_citekey, reconstruct, history, compare, export_history_path,
+              candidates, candidates_limit, prepare_citekey,
+              auto_mode, auto_paper, skip_prepare):
     """Run evaluation benchmarks against annotated ground truth.
 
     Multi-format evaluation (Singh et al. 2023 — SciRepEval):
@@ -2373,13 +2528,79 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic, analyst
     Use --analyst <citekey> to extract ground truth from a paper's PDF.
 
     Use --reconstruct to run citation reconstruction benchmark.
+
+    Use --history to show past benchmark run history.
+
+    Use --compare <id1> <id2> to compare two runs side-by-side.
+
+    Use --export-history <path> to export run history as JSON for archival.
     """
     import json
+    import subprocess
+    import time
 
-    from .evaluation import load_dataset, run_all
+    from . import __version__
+    from .evaluation import build_results_summary, load_dataset, run_all
     from .evaluation.dataset import export_dataset
+    from .repositories.benchmarks import compute_dataset_hash
 
     kctx = _get_context(ctx)
+
+    # --- History mode ---
+    if history:
+        _print_benchmark_history(kctx.state)
+        return
+
+    # --- Compare mode ---
+    if compare:
+        _print_benchmark_compare(kctx.state, compare[0], compare[1])
+        return
+
+    # --- Export history ---
+    if export_history_path:
+        runs = kctx.state.get_benchmark_runs(limit=1000)
+        with open(export_history_path, "w") as f:
+            json.dump(runs, f, indent=2, default=str)
+        console.print(f"[green]Exported {len(runs)} runs to {export_history_path}[/green]")
+        return
+
+    # --- Candidates mode ---
+    if candidates:
+        from .evaluation.candidates import discover_candidates
+        cands = discover_candidates(kctx.state, limit=candidates_limit)
+        if not cands:
+            console.print("[yellow]No benchmark candidates found (need sources with ≥3 in-library citations)[/yellow]")
+            return
+        t = Table(title="Benchmark Candidates")
+        t.add_column("Citekey")
+        t.add_column("In-lib", justify="right")
+        t.add_column("Total", justify="right")
+        t.add_column("Intents", justify="right")
+        t.add_column("PDF")
+        t.add_column("Benchmarked")
+        t.add_column("Score", justify="right")
+        for c in cands:
+            t.add_row(
+                c.citekey,
+                str(c.in_library_citations),
+                str(c.total_citations),
+                str(c.intent_diversity),
+                "[green]yes[/green]" if c.has_pdf else "[red]no[/red]",
+                "[dim]yes[/dim]" if c.already_benchmarked else "no",
+                f"{c.score:.0f}",
+            )
+        console.print(t)
+        return
+
+    # --- Prepare mode: fetch missing referenced papers ---
+    if prepare_citekey:
+        _run_prepare_mode(kctx, prepare_citekey)
+        return
+
+    # --- Auto mode: full autonomous pipeline ---
+    if auto_mode:
+        _run_auto_mode(kctx, auto_paper, skip_prepare)
+        return
 
     # --- Analyst mode: extract ground truth from a paper ---
     if analyst_citekey:
@@ -2404,6 +2625,7 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic, analyst
         )
         return
 
+    t_start = time.monotonic()
     ds = load_dataset(Path(dataset))
     recon_info = f", reconstruction: {len(ds.reconstruction.samples)} samples" if ds.reconstruction else ""
     console.print(
@@ -2434,6 +2656,42 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic, analyst
         kctx.state, ds, effective_metrics,
         reranked_gaps=reranked_gaps, ai=ai, klemma_home=kctx.klemma_home,
     )
+
+    duration = time.monotonic() - t_start
+
+    # --- Persist run ---
+    ds_hash = compute_dataset_hash(dataset)
+    git_commit = ""
+    try:
+        git_commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL, timeout=5,
+        ).decode().strip()
+    except Exception:
+        pass
+
+    paper_citekey = ""
+    if ds.reconstruction and ds.reconstruction.ground_truth:
+        paper_citekey = ds.reconstruction.ground_truth.paper_citekey
+
+    summary = build_results_summary(results)
+    run_id = kctx.state.save_benchmark_run(
+        dataset_path=dataset,
+        dataset_hash=ds_hash,
+        metrics_filter=effective_metrics,
+        ai_backend=kctx.config.ai.backend,
+        ai_model=kctx.config.ai.model,
+        results=results,
+        results_summary=summary,
+        paper_citekey=paper_citekey,
+        duration_seconds=round(duration, 2),
+        git_commit=git_commit,
+        klemma_version=__version__,
+        config_snapshot={
+            "ai": {"backend": kctx.config.ai.backend, "model": kctx.config.ai.model},
+        },
+    )
+    console.print(f"[dim]Run {run_id} saved ({duration:.1f}s)[/dim]")
 
     if json_output:
         click.echo(json.dumps(results, indent=2))

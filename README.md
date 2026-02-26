@@ -86,7 +86,7 @@ klemma outline -p "Фокус на методологии"       # с дирек
 
 Логика: при падении workflow `CI` Codex пытается сделать минимальный фикс, повторно запускает `ruff` и `pytest`, и открывает PR с исправлением.
 
-## Команды (14)
+## Команды (16)
 
 ### `klemma init`
 Инициализация проекта в текущей директории. Создаёт `.klemma/` (config, tags, DB) и `KLEMMA.md` (контекст для AI). Интерактивный мастер обнаруживает Obsidian vault и Zotero автоматически.
@@ -212,6 +212,22 @@ klemma acquire <url> --no-process              # не извлекать фра�
 ### `klemma tree`
 Дерево вложенных проектов от текущего корня.
 
+### `klemma benchmark`
+Фреймворк оценки качества: intent classification, gap ranking, embedding retrieval, citation reconstruction. Поддерживает историю запусков, сравнение и автоматический пайплайн.
+
+```bash
+klemma benchmark --export dataset.json          # шаблон датасета из БД
+klemma benchmark -d dataset.json --metrics all  # все метрики
+klemma benchmark -d dataset.json --semantic     # гибридный keyword × semantic
+klemma benchmark --analyst smithML2020          # извлечь ground truth из PDF
+klemma benchmark -d dataset.json --reconstruct  # citation reconstruction
+klemma benchmark --candidates                   # кандидаты для бенчмарка
+klemma benchmark --prepare smithML2020          # подготовить недостающие ссылки
+klemma benchmark --auto                         # полный автономный пайплайн
+klemma benchmark --history                      # история запусков
+klemma benchmark --compare id1 id2              # сравнить два запуска
+```
+
 ### `klemma migrate [--dry-run]`
 Миграция из старого формата (`~/.klemma/`) в per-directory проект. Разделяет конфиг на system (AI) и project (всё остальное), копирует context.md → KLEMMA.md.
 
@@ -230,6 +246,8 @@ ai:
   backend: "claude"            # "claude" (default) | "openai" | "litellm"
   model: "opus"                # имя модели
   timeout: 180                 # таймаут AI-вызова (сек)
+  language: "ru"               # язык AI-ответов ("en", "ru", "de", ...)
+  # json_mode: true            # structured JSON output (если бэкенд поддерживает)
   # base_url: "http://localhost:11434/v1"  # для Ollama/vLLM/LM Studio
   # api_key_env: "OPENAI_API_KEY"          # env-переменная для API-ключа
 ```
@@ -322,6 +340,8 @@ tags: ["NLP", "Machine-Learning"]
 ```
 
 `chapter`/`section` — primary. `sections`/`chapters` — все релевантные. `klemma process` создаёт заметки автоматически.
+
+**Куда сохраняются отчёты**: AI-отчёты (`outline`, `research`, `library`) сохраняются в корень проекта (`project_root/`). Только заметки `@citekey.md` — в vault (`notes_folder`).
 
 ## Архитектура
 

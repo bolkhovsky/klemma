@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from .repositories import (
+    BenchmarkRepository,
     CitationsRepository,
     EmbeddingsStoreRepository,
     FragmentRepository,
@@ -156,6 +157,7 @@ class StateManager:
         self.citations = CitationsRepository(self._conn)
         self.plans = PlansRepository(self._conn)
         self.prune = PruneRepository(self._conn)
+        self.benchmarks = BenchmarkRepository(self._conn)
 
     @contextmanager
     def _conn(self):
@@ -181,7 +183,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 3  # bump this when adding new migrations
+        target = 4  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -225,6 +227,32 @@ class StateManager:
                 in_library BOOLEAN DEFAULT 0,
                 UNIQUE(source_id, target_title_hash)
             )""")
+
+        if version < 4:
+            conn.execute("""CREATE TABLE IF NOT EXISTS benchmark_runs (
+                run_id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                dataset_path TEXT,
+                dataset_hash TEXT,
+                metrics_filter TEXT,
+                ai_backend TEXT,
+                ai_model TEXT,
+                results TEXT,
+                results_summary TEXT,
+                paper_citekey TEXT,
+                duration_seconds REAL DEFAULT 0,
+                git_commit TEXT,
+                klemma_version TEXT,
+                config_snapshot TEXT
+            )""")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_benchmark_runs_ts "
+                "ON benchmark_runs(timestamp DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_benchmark_runs_paper "
+                "ON benchmark_runs(paper_citekey)"
+            )
 
         conn.execute(f"PRAGMA user_version = {target}")
 
@@ -435,6 +463,26 @@ class StateManager:
 
     def clear_prune_verdict(self, source_id: str):
         return self.prune.clear_prune_verdict(source_id)
+
+    # ── Benchmark delegation ────────────────────────────────────────────
+
+    def save_benchmark_run(self, **kwargs) -> str:
+        return self.benchmarks.save_run(**kwargs)
+
+    def get_benchmark_runs(self, limit: int = 20, paper_citekey: str = "") -> list[dict]:
+        return self.benchmarks.get_runs(limit, paper_citekey)
+
+    def get_benchmark_run(self, run_id: str):
+        return self.benchmarks.get_run(run_id)
+
+    def get_latest_benchmark_run(self, paper_citekey: str = ""):
+        return self.benchmarks.get_latest_run(paper_citekey)
+
+    def compare_benchmark_runs(self, id_a: str, id_b: str) -> dict:
+        return self.benchmarks.compare_runs(id_a, id_b)
+
+    def get_benchmarked_citekeys(self) -> set[str]:
+        return self.benchmarks.get_benchmarked_citekeys()
 
     # ── Aggregation (cross-repo) ──────────────────────────────────────────
 
