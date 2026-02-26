@@ -1,6 +1,6 @@
 # Tests
 
-## Current test suite (372 tests)
+## Current test suite (397 tests)
 - `test_ai.py` (111 lines) — `extract_json()`, `AIProviderBase`, `create_ai()` factory, `ClaudeClient` detection
 - `test_ai_openai.py` (117 lines) — `OpenAIClient` with mocked openai SDK
 - `test_project_discovery.py` (645 lines) — 42 tests for Git-style project discovery, config merging, context aggregation, prompt resolution, tags inheritance, setup, and deep merge
@@ -18,6 +18,7 @@
 - `test_candidates.py` (116 lines) — 10 tests: candidate ranking by citation coverage, benchmarked penalization, limit, has_pdf flag, format_candidate_hint output
 - `test_prepare.py` (251 lines) — 19 tests: _titles_match (exact/case/partial/no match/empty), resolve_arxiv (success/no match/error), resolve_crossref_doi, resolve_unpaywall, resolve_pdf_url (arxiv first/fallback/no resolution), prepare_benchmark (dry_run/no links/unfetchable/actual fetch)
 - `test_auto_pipeline.py` (199 lines) — 8 tests: run_analyst_from_source (success/missing source/no pdf), run_auto_benchmark (explicit paper/analyst failure/auto-select/no candidates/comparison)
+- `test_prompts.py` (~270 lines) — 25 tests: all 12 prompt templates render without Jinja2 errors, coverage check (all shipped templates have test contexts), reconstruct.md ablation variants (default/max_recs/fewshot/combined), prompt hash determinism + uniqueness, AblationParams defaults + to_snapshot + with_fewshot factory
 
 ## Patterns
 - pytest + `unittest.mock` (`patch`, `MagicMock`)

@@ -12,6 +12,7 @@ from .dataset import (
     load_dataset,
 )
 from .metrics import intent_metrics, ndcg_at_k, precision_at_k, recall_at_k, reconstruction_metrics
+from .pipeline import AblationParams, compute_prompt_hash
 from .runners import (
     build_results_summary,
     run_all,
@@ -21,7 +22,9 @@ from .runners import (
 )
 
 __all__ = [
+    "AblationParams",
     "BenchmarkDataset",
+    "compute_prompt_hash",
     "GapSample",
     "IntentSample",
     "ReconstructionDataset",

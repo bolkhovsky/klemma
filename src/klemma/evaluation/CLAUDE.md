@@ -34,12 +34,12 @@ Benchmark runners — orchestrate DB queries + metric computation.
 - `run_all(state, dataset, metrics_filter, reranked_gaps?, ai?, klemma_home?)` — dispatch to selected runners; includes reconstruction when `metrics_filter` is `"all"` or `"reconstruct"`
 - `build_results_summary(results)` — flatten headline metrics from results dict into flat `{"reconstruction.f1": 0.624, ...}` dict for persistence
 
-### reconstruction.py (~200 lines)
+### reconstruction.py (~230 lines)
 Citation reconstruction benchmark — end-to-end recommendation quality.
 - `run_analyst(ai, pdf_text, library_entries, paper_citekey, paper_title, klemma_home)` — extract ground truth citation map from a paper's PDF via AI
 - `compute_baseline(state, dataset)` — evaluate DB-only fragment assignments against ground truth
-- `run_reconstruction(ai, state, dataset, klemma_home)` — AI-driven citation recommendation against ground truth
-- `run_reconstruction_benchmark(state, dataset, ai?, klemma_home?)` — full benchmark: ground truth stats + baseline + optional AI reconstruction
+- `run_reconstruction(ai, state, dataset, klemma_home, ablation?)` — AI-driven citation recommendation against ground truth; ablation params override temperature, fragments_per_source, and prompt variables (max_recs_per_section, few-shot examples)
+- `run_reconstruction_benchmark(state, dataset, ai?, klemma_home?, ablation?)` — full benchmark: ground truth stats + baseline + optional AI reconstruction with ablation support
 
 ### candidates.py (~97 lines)
 Benchmark candidate discovery from citation graph.
@@ -61,11 +61,13 @@ Auto-fetch missing referenced PDFs before benchmarking.
 - `ReferenceStatus` / `PrepareResult` — Pydantic models
 - `prepare_benchmark(state, citekey, storage_path, dry_run?)` — query citation_links, resolve PDFs, optionally acquire via `acquire_paper_local`
 
-### pipeline.py (~210 lines)
+### pipeline.py (~260 lines)
 Full autonomous benchmark pipeline composing all evaluation steps.
+- `compute_prompt_hash(prompt_name, klemma_home?)` — SHA-256 prefix (12 hex chars) of a prompt template file for change detection between runs
+- `AblationParams` — Pydantic model for ablation experiments (Issue #42): `temperature`, `max_recs_per_section`, `fragments_per_source`, `prompt_variant` ("default"/"fewshot"), `examples`. Defaults match current behavior. `to_snapshot()` serializes for config_snapshot. `with_fewshot(**kwargs)` factory creates params with built-in golden examples
 - `AutoBenchmarkResult` — Pydantic model: paper_citekey, prepare_result, results, run_id, comparison
 - `run_analyst_from_source(state, ai, citekey, config, klemma_home?)` — shared helper: find PDF → extract text → run analyst → build ReconstructionDataset
-- `run_auto_benchmark(state, ai, config, ...)` — full pipeline: select candidate → prepare → analyst → benchmark → persist → compare with previous run
+- `run_auto_benchmark(state, ai, config, ..., ablation?)` — full pipeline: select candidate → prepare → analyst → benchmark → persist → compare. Config snapshot includes ablation params + prompt hash
 
 ## Design rationale
 
@@ -125,11 +127,12 @@ Triggered automatically when embeddings are configured in `status --verbose` and
 
 ```
 klemma benchmark --auto [--paper <citekey>] [--skip-prepare]
+    [--temperature 0.3] [--max-recs 3] [--fragments 10] [--prompt-variant fewshot]
   1. Select: explicit --paper or discover_candidates()[0]
   2. Prepare: resolve missing refs (arXiv/CrossRef/Unpaywall) → acquire PDFs
   3. Analyst: run_analyst_from_source() → ReconstructionDataset
-  4. Benchmark: run_reconstruction_benchmark()
-  5. Persist: save_benchmark_run() with git commit + config snapshot
+  4. Benchmark: run_reconstruction_benchmark(ablation=AblationParams)
+  5. Persist: save_benchmark_run() with git commit + config snapshot + ablation params + prompt hash
   6. Compare: delta with previous run for same paper
 
 klemma benchmark --candidates [-k N]
