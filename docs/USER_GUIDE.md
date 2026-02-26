@@ -111,6 +111,26 @@ embeddings:
 | `local` | Бесплатно | GPU, `[local-embeddings]` | Хорошее (SPECTER2) |
 | `openai` | Платно | API key, `[openai]` | Отличное (1536-dim) |
 
+### 2.7 Дополнительные AI-настройки
+
+В `~/.klemma/config.yaml` (или проектном):
+
+```yaml
+ai:
+  backend: "claude"
+  language: "ru"           # язык AI-ответов (по умолчанию "ru")
+  json_mode: false         # structured JSON output (для бэкендов, поддерживающих JSON mode)
+```
+
+`language` влияет на язык всех AI-генерированных отчётов (план, брифинг, аудит). `json_mode` полезен при интеграции с OpenAI-совместимыми бэкендами, поддерживающими structured output.
+
+### 2.8 Куда сохраняются отчёты
+
+- AI-отчёты (`outline`, `research`, `library`, `ask`) → корень проекта (`project_root/`)
+- Vault-заметки `@citekey.md` → папка `obsidian.notes_folder` в vault
+
+Это значит, что research briefing для раздела 2.3 окажется в `~/research/my-thesis/`, а заметка по источнику — в `~/vault/2 - Refs/@smithML2020.md`.
+
 ---
 
 ## 3. Основные понятия
@@ -385,7 +405,7 @@ ai:
 ~/.klemma/prompts/extract.md        # переопределение глобально
 ```
 
-Доступные шаблоны: `extract.md`, `annotate.md`, `morning.md`, `research.md`, `research_incremental.md`, `librarian.md`, `agent.md`, `outline.md`, `outline_incremental.md`.
+Доступные шаблоны: `extract.md`, `annotate.md`, `morning.md`, `research.md`, `research_incremental.md`, `librarian.md`, `librarian_prune.md`, `agent.md`, `outline.md`, `outline_incremental.md`, `analyst.md`, `reconstruct.md`.
 
 ### 5.4 MCP-сервер для embeddings
 
@@ -401,10 +421,11 @@ python -m klemma.tools.specter_server --local   # локальный SPECTER2
 
 ### 5.5 Бенчмарк и ручная разметка (`klemma benchmark`)
 
-Команда `klemma benchmark` позволяет измерить точность трёх ключевых функций klemma:
+Команда `klemma benchmark` позволяет измерить точность четырёх ключевых функций klemma:
 - **Intent classifier** — правильно ли AI определяет тип цитирования (background / method / result_comparison)
 - **Gap scoring** — насколько хорошо ранжируются недостающие источники по важности
 - **Embedding retrieval** — насколько семантически похожие источники оказываются в топе поиска
+- **Citation reconstruction** — может ли AI восстановить карту цитирования статьи, не видя текста
 
 Чтобы провести бенчмарк, нужен **аннотированный датасет** — JSON-файл, в котором вы (эксперт) сами проставили правильные ответы. Klemma сравнивает свои предсказания с вашими и считает метрики.
 
@@ -443,6 +464,64 @@ klemma benchmark --export dataset.json
 klemma benchmark -d dataset.json --metrics intent
 klemma benchmark -d dataset.json --metrics all
 klemma benchmark -d dataset.json --metrics all --json-output
+klemma benchmark -d dataset.json --semantic          # гибридный keyword × semantic gap scoring
+klemma benchmark -d dataset.json --reconstruct       # citation reconstruction
+```
+
+---
+
+#### Citation reconstruction benchmark
+
+Бенчмарк citation reconstruction проверяет, может ли AI восстановить карту цитирования статьи по одним лишь метаданным (title, abstract) — без доступа к тексту. Это задача, близкая к реальному use case: «какие работы должна цитировать статья на эту тему?»
+
+**Шаг 1. Извлечь ground truth из PDF**
+
+```bash
+klemma benchmark --analyst smithML2020
+```
+
+Команда `--analyst` читает PDF статьи и с помощью AI (промпт `analyst.md`) извлекает список цитируемых работ с intent-классификацией. Результат сохраняется в формате reconstruction dataset.
+
+**Шаг 2. Запустить reconstruction бенчмарк**
+
+```bash
+klemma benchmark -d dataset.json --reconstruct
+```
+
+Сравнивает два подхода:
+- **Baseline** — ранжирование по citation graph (co-citation, общие авторы)
+- **AI-driven** — AI рекомендует цитирования по title/abstract (промпт `reconstruct.md`)
+
+Метрики: Precision@K, Recall@K, nDCG@K, F1.
+
+---
+
+#### Автоматический пайплайн
+
+Для полностью автономного бенчмаркинга:
+
+```bash
+klemma benchmark --candidates                        # показать кандидатов
+klemma benchmark --prepare smithML2020               # подготовить недостающие ссылки
+klemma benchmark --auto                              # полный пайплайн: select → prepare → analyst → benchmark → persist
+klemma benchmark --auto --paper smithML2020           # указать конкретную статью
+klemma benchmark --auto --skip-prepare               # пропустить подготовку ссылок
+```
+
+`--candidates` ранжирует обработанные статьи по пригодности для бенчмарка (количество in-library цитирований, разнообразие intent, наличие PDF).
+
+`--auto` автоматически выбирает лучшего кандидата, готовит данные, запускает analyst + reconstruction и сохраняет результаты в историю.
+
+---
+
+#### История запусков
+
+Klemma сохраняет каждый запуск бенчмарка в SQLite для отслеживания прогресса:
+
+```bash
+klemma benchmark --history                           # список прошлых запусков
+klemma benchmark --compare id1 id2                   # сравнить два запуска
+klemma benchmark --export-history history.json        # экспортировать историю как JSON
 ```
 
 ---
