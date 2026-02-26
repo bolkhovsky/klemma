@@ -995,15 +995,15 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
 
 
 @main.command()
-@click.argument("citekey", required=False)
+@click.argument("citekeys", required=False, nargs=-1)
 @click.option("--dry-run", is_flag=True, help="Show how many would be embedded without calling API")
 @click.option("--backend", type=click.Choice(["s2", "local", "openai"]), help="Override embedding backend")
 @click.pass_context
-def embed(ctx, citekey, dry_run, backend):
+def embed(ctx, citekeys, dry_run, backend):
     """Backfill embeddings for sources with abstracts.
 
-    Without CITEKEY: embed all sources missing embeddings.
-    With CITEKEY: embed a specific source.
+    Without CITEKEYS: embed all sources missing embeddings.
+    With CITEKEYS: embed specific sources.
     Use --dry-run to preview without API calls.
     """
     kctx = _get_context(ctx)
@@ -1025,12 +1025,19 @@ def embed(ctx, citekey, dry_run, backend):
         return
 
     # Get candidates: sources with abstract but no embedding
-    if citekey:
-        source = state.get_source(citekey)
-        if not source:
-            console.print(f"[red]Source {citekey} not found[/red]")
+    if citekeys:
+        candidates = []
+        missing = []
+        for ck in citekeys:
+            source = state.get_source(ck)
+            if not source:
+                missing.append(ck)
+                continue
+            candidates.append(ck)
+        if missing:
+            console.print(f"[yellow]Missing citekeys: {', '.join(missing)}[/yellow]")
+        if not candidates:
             return
-        candidates = [citekey]
     else:
         # Find completed sources without embeddings
         candidates = state.get_sources_without_embeddings()

@@ -1,6 +1,6 @@
 # Tests
 
-## Current test suite (371 tests)
+## Current test suite (372 tests)
 - `test_ai.py` (111 lines) — `extract_json()`, `AIProviderBase`, `create_ai()` factory, `ClaudeClient` detection
 - `test_ai_openai.py` (117 lines) — `OpenAIClient` with mocked openai SDK
 - `test_project_discovery.py` (645 lines) — 42 tests for Git-style project discovery, config merging, context aggregation, prompt resolution, tags inheritance, setup, and deep merge
@@ -10,6 +10,7 @@
 - `test_intent_scoring.py` (422 lines) — intent-weighted reference gap scoring, intent coverage matrix, fragment citation intent classification
 - `test_interactive_init.py` (347 lines) — interactive `klemma init` wizard, auto-discovery, config generation
 - `test_cli_init_outline.py` (37 lines) — `klemma init --outline` CLI behavior, AI-missing skip, no-outline no AI call
+- `test_cli_embed.py` (26 lines) — `klemma embed` multi-citekey CLI behavior and missing-key warnings
 - `test_repositories.py` (~130 lines) — repository composition, facade delegation, per-repo CRUD roundtrips, new public methods (`get_existing_source_ids`, `get_sources_without_embeddings`)
 - `test_evaluation.py` (~320 lines) — 38 tests: pure metrics (intent_metrics, precision@K, recall@K, nDCG@K), dataset load/validate/roundtrip, runner integration (intent/gap/embedding benchmarks with seeded DB), export template, `test_run_gap_benchmark_with_reranked_gaps` (verifies reranked list bypasses DB)
 - `test_security_hardening.py` — path traversal and download safety tests
