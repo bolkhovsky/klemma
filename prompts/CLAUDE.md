@@ -52,7 +52,7 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 `pdf_text`, `library_entries`, `paper_citekey`, `paper_title`
 
 ### reconstruct.md
-`sections` (list of {section_id, title}), `sources` (list of {citekey, title, year, fragments: [{intent, text}]})
+`paper_title`, `abstract`, `keywords`, `sections` (list of {section_id, title, description}), `sources` (list of {citekey, title, year, abstract, fragments: [{intent, text}]}), `max_recs_per_section` (int, optional — caps recommendations per section), `examples` (list of {section_id, section_title, citekey, intent, justification}, optional — few-shot golden examples for ablation)
 
 ## Conventions
 - All templates in Russian (dissertation language) except `extract.md` (English for international papers)

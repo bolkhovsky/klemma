@@ -6,6 +6,7 @@ analyst (extract ground truth) → benchmark → persist → compare.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 from pathlib import Path
@@ -21,6 +22,71 @@ if TYPE_CHECKING:
     from klemma.state import StateManager
 
 logger = logging.getLogger(__name__)
+
+
+def compute_prompt_hash(prompt_name: str, klemma_home: Optional[Path] = None) -> str:
+    """Compute SHA-256 prefix of a prompt template file.
+
+    Returns first 12 hex chars — enough to detect template changes between runs.
+    """
+    from klemma.config import _SHIPPED_PROMPTS_DIR, resolve_prompt
+
+    prompt_path = (
+        resolve_prompt(prompt_name, klemma_home)
+        if klemma_home
+        else _SHIPPED_PROMPTS_DIR / prompt_name
+    )
+    try:
+        content = prompt_path.read_bytes()
+        return hashlib.sha256(content).hexdigest()[:12]
+    except (OSError, FileNotFoundError):
+        return ""
+
+
+class AblationParams(BaseModel):
+    """Overridable parameters for ablation experiments (Issue #42).
+
+    Defaults match current behavior so passing AblationParams() changes nothing.
+    """
+    temperature: float = 0.2
+    max_recs_per_section: Optional[int] = None  # None = uncapped (current)
+    fragments_per_source: int = 5
+    prompt_variant: str = "default"  # "default" | "fewshot"
+
+    # Few-shot golden examples (populated when prompt_variant == "fewshot")
+    examples: list[dict] = []
+
+    def to_snapshot(self) -> dict:
+        """Serialize for config_snapshot storage."""
+        return {
+            "temperature": self.temperature,
+            "max_recs_per_section": self.max_recs_per_section,
+            "fragments_per_source": self.fragments_per_source,
+            "prompt_variant": self.prompt_variant,
+        }
+
+    @classmethod
+    def with_fewshot(cls, **kwargs) -> AblationParams:
+        """Create params with built-in few-shot golden examples."""
+        examples = [
+            {
+                "section_id": "2.1",
+                "section_title": "Citation Intent Classification",
+                "citekey": "cohan2019",
+                "intent": "method",
+                "justification": "SciCite provides the 3-class intent taxonomy "
+                "(background/method/result_comparison) used in this work",
+            },
+            {
+                "section_id": "3.2",
+                "section_title": "Evaluation Metrics",
+                "citekey": "singh2023",
+                "intent": "method",
+                "justification": "SciRepEval's multi-format evaluation design "
+                "justifies separate metrics per task type",
+            },
+        ]
+        return cls(prompt_variant="fewshot", examples=examples, **kwargs)
 
 
 class AutoBenchmarkResult(BaseModel):
@@ -110,6 +176,7 @@ def run_auto_benchmark(
     paper_citekey: Optional[str] = None,
     skip_prepare: bool = False,
     storage_path: str = "",
+    ablation: Optional[AblationParams] = None,
 ) -> AutoBenchmarkResult:
     """Run full autonomous benchmark pipeline.
 
@@ -164,9 +231,11 @@ def run_auto_benchmark(
         return result
 
     # 4. Benchmark
+    effective_ablation = ablation or AblationParams()
     t_start = time.monotonic()
     bench_results = run_reconstruction_benchmark(
         state, dataset, ai=ai, klemma_home=klemma_home,
+        ablation=effective_ablation,
     )
     duration = time.monotonic() - t_start
 
@@ -183,6 +252,8 @@ def run_auto_benchmark(
     except Exception:
         pass
 
+    prompt_hash = compute_prompt_hash("reconstruct.md", klemma_home)
+
     run_id = state.save_benchmark_run(
         metrics_filter="reconstruct",
         ai_backend=config.ai.backend,
@@ -196,6 +267,8 @@ def run_auto_benchmark(
         config_snapshot={
             "ai": {"backend": config.ai.backend, "model": config.ai.model},
             "auto": True,
+            "ablation": effective_ablation.to_snapshot(),
+            "prompt_hash": prompt_hash,
         },
     )
     result.run_id = run_id

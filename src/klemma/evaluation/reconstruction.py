@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Optional
 
 from .dataset import ReconstructionDataset, ReconstructionGroundTruth
 from .metrics import reconstruction_metrics
+from .pipeline import AblationParams
 
 if TYPE_CHECKING:
     from klemma.ai import AIProvider
@@ -130,14 +131,21 @@ def run_reconstruction(
     state: StateManager,
     dataset: ReconstructionDataset,
     klemma_home: Optional[Path] = None,
+    ablation: Optional[AblationParams] = None,
 ) -> dict:
     """Run AI-driven citation reconstruction.
 
     Provides the paper outline and fragment library to AI, which recommends
     citation assignments blind to the actual paper text.
+
+    Args:
+        ablation: Override default parameters for ablation experiments.
+            Controls temperature, fragments_per_source, max_recs_per_section,
+            and prompt variant (few-shot examples).
     """
     from klemma.config import _SHIPPED_PROMPTS_DIR, resolve_prompt
 
+    params = ablation or AblationParams()
     gt = dataset.ground_truth
 
     # Build section list with descriptions from ground truth
@@ -155,7 +163,9 @@ def run_reconstruction(
     sources = []
     for citekey in gt_citekeys:
         source_info = state.get_source(citekey)
-        frags = state.get_fragments(source_id=citekey, limit=5)
+        frags = state.get_fragments(
+            source_id=citekey, limit=params.fragments_per_source,
+        )
         sources.append({
             "citekey": citekey,
             "title": source_info.get("title", "") if source_info else "",
@@ -182,6 +192,8 @@ def run_reconstruction(
         keywords=gt.keywords,
         sections=sections,
         sources=sources,
+        max_recs_per_section=params.max_recs_per_section,
+        examples=params.examples,
     )
 
     system = (
@@ -190,7 +202,10 @@ def run_reconstruction(
         "Output only valid JSON."
     )
 
-    data = ai.call_json(system, user_prompt, max_tokens=4096)
+    data = ai.call_json(
+        system, user_prompt, max_tokens=4096,
+        temperature=params.temperature,
+    )
     if not data:
         logger.error("Reconstruction prompt failed")
         return {"method": "reconstruction", "error": "AI call failed"}
@@ -228,11 +243,16 @@ def run_reconstruction_benchmark(
     dataset: ReconstructionDataset,
     ai: Optional[AIProvider] = None,
     klemma_home: Optional[Path] = None,
+    ablation: Optional[AblationParams] = None,
 ) -> dict:
     """Run full reconstruction benchmark: ground truth stats + baseline + optional AI.
 
     Returns a dict with ground_truth summary, baseline metrics, and
     (if AI provided) reconstruction metrics.
+
+    Args:
+        ablation: Override default parameters for ablation experiments.
+            Passed through to run_reconstruction().
     """
     gt = dataset.ground_truth
     in_library = sum(
@@ -255,7 +275,7 @@ def run_reconstruction_benchmark(
 
     if ai:
         result["reconstruction"] = run_reconstruction(
-            ai, state, dataset, klemma_home
+            ai, state, dataset, klemma_home, ablation=ablation,
         )
 
     return result

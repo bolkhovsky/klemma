@@ -2249,7 +2249,7 @@ def _print_project_tree(root: Path, indent: int = 0, current: Path | None = None
 # --- Benchmark: evaluation framework ---
 
 
-def _run_auto_mode(kctx, paper_citekey, skip_prepare):
+def _run_auto_mode(kctx, paper_citekey, skip_prepare, ablation=None):
     """Run full autonomous benchmark pipeline."""
     from .evaluation.pipeline import run_auto_benchmark
 
@@ -2262,6 +2262,13 @@ def _run_auto_mode(kctx, paper_citekey, skip_prepare):
     target = paper_citekey or "[auto-select]"
     console.print(f"[bold]Auto benchmark: {target}[/bold]")
 
+    if ablation:
+        params = ablation.to_snapshot()
+        non_default = {k: v for k, v in params.items()
+                       if v is not None and k != "prompt_variant"}
+        if non_default or params.get("prompt_variant") != "default":
+            console.print(f"[dim]Ablation: {params}[/dim]")
+
     with console.status("Running autonomous benchmark pipeline...", spinner="arc"):
         result = run_auto_benchmark(
             kctx.state, ai, kctx.config,
@@ -2269,6 +2276,7 @@ def _run_auto_mode(kctx, paper_citekey, skip_prepare):
             paper_citekey=paper_citekey,
             skip_prepare=skip_prepare,
             storage_path=kctx.config.zotero.storage_path,
+            ablation=ablation,
         )
 
     if result.results.get("error"):
@@ -2553,11 +2561,21 @@ def _print_benchmark_compare(state, id_a: str, id_b: str):
               help="Citekey for --auto mode (default: top candidate)")
 @click.option("--skip-prepare", is_flag=True,
               help="Skip reference preparation in --auto mode")
+@click.option("--temperature", "ablation_temperature", type=float, default=None,
+              help="Override AI temperature for ablation (default: 0.2)")
+@click.option("--max-recs", "ablation_max_recs", type=int, default=None,
+              help="Max recommendations per section (default: uncapped)")
+@click.option("--fragments", "ablation_fragments", type=int, default=None,
+              help="Fragments per source for context (default: 5)")
+@click.option("--prompt-variant", "ablation_variant", type=click.Choice(["default", "fewshot"]),
+              default=None, help="Prompt variant for ablation (default: default)")
 @click.pass_context
 def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
               analyst_citekey, reconstruct, history, compare, export_history_path,
               candidates, candidates_limit, prepare_citekey,
-              auto_mode, auto_paper, skip_prepare):
+              auto_mode, auto_paper, skip_prepare,
+              ablation_temperature, ablation_max_recs, ablation_fragments,
+              ablation_variant):
     """Run evaluation benchmarks against annotated ground truth.
 
     Multi-format evaluation (Singh et al. 2023 — SciRepEval):
@@ -2644,7 +2662,24 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
 
     # --- Auto mode: full autonomous pipeline ---
     if auto_mode:
-        _run_auto_mode(kctx, auto_paper, skip_prepare)
+        from .evaluation.pipeline import AblationParams
+
+        ablation = None
+        if any(v is not None for v in [ablation_temperature, ablation_max_recs,
+                                        ablation_fragments, ablation_variant]):
+            kwargs = {}
+            if ablation_temperature is not None:
+                kwargs["temperature"] = ablation_temperature
+            if ablation_max_recs is not None:
+                kwargs["max_recs_per_section"] = ablation_max_recs
+            if ablation_fragments is not None:
+                kwargs["fragments_per_source"] = ablation_fragments
+            if ablation_variant == "fewshot":
+                ablation = AblationParams.with_fewshot(**kwargs)
+            else:
+                ablation = AblationParams(**kwargs)
+
+        _run_auto_mode(kctx, auto_paper, skip_prepare, ablation=ablation)
         return
 
     # --- Analyst mode: extract ground truth from a paper ---
@@ -2689,6 +2724,31 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
     # Determine effective metrics filter
     effective_metrics = "reconstruct" if reconstruct else metrics
 
+    # Build ablation params for -d mode (same logic as --auto)
+    from .evaluation.pipeline import AblationParams, compute_prompt_hash
+
+    ablation = None
+    if any(v is not None for v in [ablation_temperature, ablation_max_recs,
+                                    ablation_fragments, ablation_variant]):
+        kwargs = {}
+        if ablation_temperature is not None:
+            kwargs["temperature"] = ablation_temperature
+        if ablation_max_recs is not None:
+            kwargs["max_recs_per_section"] = ablation_max_recs
+        if ablation_fragments is not None:
+            kwargs["fragments_per_source"] = ablation_fragments
+        if ablation_variant == "fewshot":
+            ablation = AblationParams.with_fewshot(**kwargs)
+        else:
+            ablation = AblationParams(**kwargs)
+
+    if ablation:
+        params = ablation.to_snapshot()
+        non_default = {k: v for k, v in params.items()
+                       if v is not None and k != "prompt_variant"}
+        if non_default or params.get("prompt_variant") != "default":
+            console.print(f"[dim]Ablation: {params}[/dim]")
+
     # Initialize AI if reconstruction benchmark is requested
     ai = None
     if (effective_metrics in ("all", "reconstruct")) and ds.reconstruction:
@@ -2700,6 +2760,7 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
     results = run_all(
         kctx.state, ds, effective_metrics,
         reranked_gaps=reranked_gaps, ai=ai, klemma_home=kctx.klemma_home,
+        ablation=ablation,
     )
 
     duration = time.monotonic() - t_start
@@ -2720,6 +2781,8 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
         paper_citekey = ds.reconstruction.ground_truth.paper_citekey
 
     summary = build_results_summary(results)
+    prompt_hash = compute_prompt_hash("reconstruct.md", kctx.klemma_home)
+    effective_ablation = ablation or AblationParams()
     run_id = kctx.state.save_benchmark_run(
         dataset_path=dataset,
         dataset_hash=ds_hash,
@@ -2734,6 +2797,9 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
         klemma_version=__version__,
         config_snapshot={
             "ai": {"backend": kctx.config.ai.backend, "model": kctx.config.ai.model},
+            "frozen_gt": True,
+            "ablation": effective_ablation.to_snapshot(),
+            "prompt_hash": prompt_hash,
         },
     )
     console.print(f"[dim]Run {run_id} saved ({duration:.1f}s)[/dim]")

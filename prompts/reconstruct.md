@@ -61,8 +61,23 @@ Rules:
 - A source can appear in multiple sections with different intents
 - Prefer specific fragment evidence over general relevance
 - Use section descriptions to understand what each section needs
+{% if max_recs_per_section %}
+- Recommend at most {{ max_recs_per_section }} sources per section — only the most relevant
+{% else %}
 - Be thorough: if a source is relevant to a section, include it
+{% endif %}
 - Order recommendations by confidence (most confident first within each section)
+{% if examples %}
+
+## Examples
+
+Here are examples of correct citation assignments for similar papers:
+
+{% for ex in examples %}
+**Section {{ ex.section_id }}: {{ ex.section_title }}**
+→ {{ ex.citekey }} ({{ ex.intent }}): {{ ex.justification }}
+{% endfor %}
+{% endif %}
 
 ## Output Format
 
