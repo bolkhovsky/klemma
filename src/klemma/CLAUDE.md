@@ -4,7 +4,7 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 
 ## Modules
 
-### cli.py (2268 lines)
+### cli.py (2861 lines)
 Click CLI entry point. Defines 16 commands + hidden aliases.
 - `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
@@ -16,7 +16,7 @@ Click CLI entry point. Defines 16 commands + hidden aliases.
 `KlemmaContext` dataclass — single object per CLI command invocation.
 Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `library` (optional), `project` (optional), `klemma_home`, `dissertation_context`, `available_tags`, `project_root`, `project_chain`, `system_home`.
 
-### config.py (635 lines)
+### config.py (636 lines)
 Pydantic config models + Git-style project discovery.
 Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `EmbeddingsConfig`, `DissertationConfig`, `SystemConfig`, `ProjectConfig`.
 - `discover_project_root(start)` — traverse up from cwd to find nearest `.klemma/`
@@ -38,8 +38,8 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `Embed
 - `init_klemma_home()` — legacy alias for `init_system()`
 - Interactive mode: auto-discovers Obsidian vaults, Zotero exports via `discovery.py`
 
-### state.py (488 lines)
-SQLite state manager — **facade** over 7 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v3), auto-migrates via `_migrate_schema()`. All 58 public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, etc. See [Repositories](repositories/CLAUDE.md).
+### state.py (542 lines)
+SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v4), auto-migrates via `_migrate_schema()`. All 64 public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
 
 Tables:
 - `sources` — Zotero entries (citekey, title, status, chapter, quality, pdf_path, `embedding` BLOB float32, `embedding_model` TEXT)
@@ -50,8 +50,9 @@ Tables:
 - `daily_plans` — generated daily plans
 - `reading_queue` — prioritized reading list
 - `prune_verdicts` — librarian audit results (drop/maybe with reason)
+- `benchmark_runs` — benchmark run history (run_id, timestamp, metrics JSON, paper_citekey, git_commit, klemma_version, config_snapshot, duration)
 
-Key methods: `register_sources()`, `get_by_section()` (JOIN on `source_sections`), `get_coverage_stats()`, `get_gap_summary()`, `save_plan()`, `save_citation_links()`, `get_citation_graph()`, `save_embedding()`, `get_embeddings()`, `save_prune_verdicts()`, `get_prune_verdicts()`.
+Key methods: `register_sources()`, `get_by_section()` (JOIN on `source_sections`), `get_coverage_stats()`, `get_gap_summary()`, `save_plan()`, `save_citation_links()`, `get_citation_graph()`, `save_embedding()`, `get_embeddings()`, `save_prune_verdicts()`, `get_prune_verdicts()`, `save_benchmark_run()`, `get_benchmark_runs()`, `compare_benchmark_runs()`.
 
 ### ai.py (249 lines)
 `AIProvider` protocol → `AIProviderBase` → `ClaudeClient` + `create_ai()` factory.

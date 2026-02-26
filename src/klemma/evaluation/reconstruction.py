@@ -2,7 +2,7 @@
 
 Tests whether Klemma can match real-world citation decisions by comparing
 two approaches against a paper's actual citation map:
-- Baseline: existing DB fragment assignments (no AI call)
+- Baseline: source-coverage check from DB fragments (no AI call)
 - Reconstruction: AI prompt assigns citations to a test paper's sections
 
 Design: take a published paper as ground truth. An analyst prompt extracts
@@ -83,43 +83,45 @@ def compute_baseline(
     state: StateManager,
     dataset: ReconstructionDataset,
 ) -> dict:
-    """Compute baseline metrics using existing DB fragment assignments.
+    """Compute source-coverage baseline (section-agnostic).
 
-    For each ground truth sample, checks if DB has a fragment from that
-    source assigned to a matching section. No AI call needed.
+    For each in-library ground truth citekey, checks whether DB contains
+    at least one fragment. No section matching — measures library coverage
+    as the prerequisite for any recommendation quality.
     """
-    predictions = []
-
-    # Get all fragments from DB, grouped by source
     gt_citekeys = {s.citekey for s in dataset.samples}
+
+    # Which GT citekeys have fragments in DB?
+    covered: set[str] = set()
+    covered_with_intent: dict[str, set[str]] = {}
     for citekey in gt_citekeys:
         frags = state.get_fragments(source_id=citekey, limit=500)
-        for frag in frags:
-            section = frag.get("section", "")
-            intent = frag.get("citation_intent")
-            if section and intent:
-                predictions.append({
-                    "section_id": section,
-                    "citekey": citekey,
-                    "intent": intent,
-                })
+        if frags:
+            covered.add(citekey)
+            intents = {
+                f.get("citation_intent")
+                for f in frags
+                if f.get("citation_intent")
+            }
+            covered_with_intent[citekey] = intents
 
-    # Deduplicate: keep first occurrence of (section_id, citekey)
-    seen = set()
-    unique_preds = []
-    for p in predictions:
-        key = (p["section_id"], p["citekey"])
-        if key not in seen:
-            seen.add(key)
-            unique_preds.append(p)
+    source_recall = len(covered) / len(gt_citekeys) if gt_citekeys else 0.0
 
-    gt_dicts = [s.model_dump() for s in dataset.samples]
-    metrics = reconstruction_metrics(unique_preds, gt_dicts)
+    # Intent coverage: for each GT sample, does DB have a fragment with matching intent?
+    intent_hits = 0
+    for sample in dataset.samples:
+        if sample.citekey in covered_with_intent:
+            if sample.intent in covered_with_intent[sample.citekey]:
+                intent_hits += 1
+
+    intent_coverage = intent_hits / len(dataset.samples) if dataset.samples else 0.0
 
     return {
         "method": "baseline",
-        "predictions_count": len(unique_preds),
-        **metrics,
+        "source_coverage": round(source_recall, 4),
+        "sources_covered": len(covered),
+        "sources_total": len(gt_citekeys),
+        "intent_coverage": round(intent_coverage, 4),
     }
 
 

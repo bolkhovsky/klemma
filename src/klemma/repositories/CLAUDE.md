@@ -1,6 +1,6 @@
 # Repositories
 
-Domain repositories decomposed from `StateManager` (1599 lines -> 7 focused modules). StateManager remains as backward-compatible facade.
+Domain repositories decomposed from `StateManager` (1599 lines -> 8 focused modules). StateManager remains as backward-compatible facade.
 
 ## Architecture
 
@@ -16,7 +16,8 @@ StateManager (facade)
     ├── GapsRepository        — reference gaps, coverage, scoring, semantic rerank
     ├── CitationsRepository   — citation links, graph stats, co-citation, author groups
     ├── PlansRepository       — daily plans, reading queue, writing streak
-    └── PruneRepository       — prune verdicts, protection logic
+    ├── PruneRepository       — prune verdicts, protection logic
+    └── BenchmarkRepository   — benchmark run history, comparison
 ```
 
 All repos receive `StateManager._conn` as their connection factory via `BaseRepository.__init__`.
@@ -67,6 +68,16 @@ Daily plans and reading queue.
 Library audit recommendations.
 - `save_prune_verdicts()` — hard-protects valuable sources
 - `get_prune_drop_ids()`, `get_prune_summary()`, `get_prune_verdicts()`
+
+### benchmarks.py (~148 lines)
+Benchmark run history persistence and comparison.
+- `save_run()` — persist benchmark run with metrics, config snapshot, git commit
+- `get_runs(limit, paper_citekey?)` — list runs newest first, optional paper filter
+- `get_run(run_id)` — fetch single run by ID
+- `get_latest_run(paper_citekey?)` — most recent run
+- `compare_runs(id_a, id_b)` — delta for shared summary metric keys
+- `get_benchmarked_citekeys()` — set of all benchmarked paper citekeys
+- `compute_dataset_hash(path)` — SHA256 of dataset file for reproducibility
 
 ## Cross-repo dependencies
 

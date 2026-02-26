@@ -282,6 +282,7 @@ class ExportConfig(BaseModel):
 class InstanceConfig(BaseModel):
     name: str = "default"
     type: str = "academic"
+    dev_mode: bool = False  # enables benchmark candidate hints after acquire/process
 
 
 class SystemConfig(BaseModel):
