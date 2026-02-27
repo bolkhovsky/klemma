@@ -69,7 +69,10 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     emb_cfg = cfg.embeddings
     emb_provider = None
     if emb_cfg.backend:
-        emb_provider = create_embeddings(emb_cfg.model_dump())
+        emb_provider = create_embeddings(
+            emb_cfg.model_dump(),
+            api_keys=cfg.ai._resolved_api_keys or None,
+        )
 
     dissertation_context = load_project_context(project_chain, cfg)
     available_tags = load_available_tags(klemma_home, cfg, project_chain=project_chain)

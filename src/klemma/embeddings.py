@@ -182,10 +182,12 @@ class OpenAIEmbeddings:
         model: str = "text-embedding-3-small",
         api_key_env: str = "OPENAI_API_KEY",
         base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
     ):
         self.model_name = model
         self._api_key_env = api_key_env
         self._base_url = base_url
+        self._api_key = api_key  # direct key takes priority over env var
 
     def embed(self, title: str, abstract: str = "") -> Optional[list[float]]:
         """Embed using OpenAI API."""
@@ -197,7 +199,7 @@ class OpenAIEmbeddings:
                 "pip install klemma[openai]"
             )
         text = f"{title}. {abstract}" if abstract else title
-        api_key = os.environ.get(self._api_key_env)
+        api_key = self._api_key or os.environ.get(self._api_key_env)
         if not api_key:
             logger.warning("No API key found in %s", self._api_key_env)
             return None
@@ -217,7 +219,10 @@ class OpenAIEmbeddings:
 # ---------------------------------------------------------------------------
 
 
-def create_embeddings(config: dict) -> Optional[EmbeddingProvider]:
+def create_embeddings(
+    config: dict,
+    api_keys: Optional[dict] = None,
+) -> Optional[EmbeddingProvider]:
     """Create an EmbeddingProvider from config dict.
 
     Config keys:
@@ -227,18 +232,23 @@ def create_embeddings(config: dict) -> Optional[EmbeddingProvider]:
         base_url: custom endpoint (OpenAI only)
         throttle: seconds between S2 requests (default: 3.1)
 
+    api_keys: optional dict from klemmarc (e.g. {"openai": "sk-..."}).
+    Direct keys take priority over env vars.
+
     Returns None if backend is disabled or misconfigured.
     """
     if not config:
         return None
 
+    api_keys = api_keys or {}
     backend = config.get("backend", "s2")
 
     if backend == "s2":
-        api_key = None
-        env_var = config.get("api_key_env", "S2_API_KEY")
-        if env_var:
-            api_key = os.environ.get(env_var)
+        api_key = api_keys.get("s2")
+        if not api_key:
+            env_var = config.get("api_key_env", "S2_API_KEY")
+            if env_var:
+                api_key = os.environ.get(env_var)
         throttle = config.get("throttle", 3.1)
         return SemanticScholarEmbeddings(api_key=api_key, throttle=throttle)
 
@@ -251,6 +261,7 @@ def create_embeddings(config: dict) -> Optional[EmbeddingProvider]:
             model=config.get("model", "text-embedding-3-small"),
             api_key_env=config.get("api_key_env", "OPENAI_API_KEY"),
             base_url=config.get("base_url"),
+            api_key=api_keys.get("openai"),
         )
 
     logger.warning("Unknown embedding backend: %s", backend)

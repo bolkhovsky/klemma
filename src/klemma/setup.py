@@ -225,8 +225,37 @@ def init_project(
     return {"created": created, "skipped": skipped}
 
 
+_KLEMMARC_TEMPLATE = """\
+# =============================================================================
+# KLEMMA GLOBAL CONFIG — ~/.klemmarc.yaml
+# =============================================================================
+# Single config file for all klemma projects. Overridden by project configs.
+# This file has 0600 permissions because it may contain API keys.
+
+ai:
+  backend: "litellm"                   # recommended: litellm (100+ providers)
+  model: "anthropic/claude-sonnet-4-6" # litellm model format: provider/model
+  language: "ru"
+  timeout: 300
+  retries: 2
+
+# Direct API keys — no more env var juggling.
+# Uncomment and fill in the keys you need:
+# api_keys:
+#   openai: "sk-..."
+#   anthropic: "sk-ant-..."
+#   google: "AIza..."
+
+# embeddings:
+#   backend: "openai"
+#   model: "text-embedding-3-small"
+"""
+
+_KLEMMARC_NAMES = (".klemmarc.yaml", ".klemmarc.yml", ".klemmarc")
+
+
 def init_system(system_home: Path) -> dict:
-    """Create ~/.klemma/ system directory with global config.
+    """Create ~/.klemma/ system directory with global config + ~/.klemmarc.yaml.
 
     Returns dict with keys: created, skipped.
     """
@@ -235,6 +264,18 @@ def init_system(system_home: Path) -> dict:
 
     system_home.mkdir(parents=True, exist_ok=True)
 
+    # ~/.klemmarc.yaml — new global config with api_keys
+    home = Path.home()
+    has_klemmarc = any((home / name).exists() for name in _KLEMMARC_NAMES)
+    if has_klemmarc:
+        skipped.append("~/.klemmarc.yaml")
+    else:
+        klemmarc_path = home / ".klemmarc.yaml"
+        klemmarc_path.write_text(_KLEMMARC_TEMPLATE, encoding="utf-8")
+        klemmarc_path.chmod(0o600)
+        created.append("~/.klemmarc.yaml")
+
+    # Legacy ~/.klemma/config.yaml — still created as minimal fallback
     config_target = system_home / "config.yaml"
     if config_target.exists():
         skipped.append("config.yaml")

@@ -227,23 +227,23 @@ class ClaudeClient(AIProviderBase):
 def create_ai(config: AIConfig) -> AIProvider:
     """Create the right AI backend from config.
 
-    config.backend == "claude"  → ClaudeClient (default)
-    config.backend == "openai"  → OpenAIClient (OpenAI / Ollama / vLLM / LM Studio)
-    config.backend == "litellm" → LiteLLMClient (100+ providers via LiteLLM)
+    config.backend == "claude"  → ClaudeClient (interactive CLI)
+    config.backend == "litellm" → LiteLLMClient (recommended — 100+ providers)
+    config.backend == "openai"  → OpenAIClient (deprecated — delegates to LiteLLM)
     """
     backend = config.backend
 
     if backend == "claude":
         return ClaudeClient(config)
 
-    if backend == "openai":
-        from .ai_openai import OpenAIClient
-        return OpenAIClient(config)
-
     if backend == "litellm":
         from .ai_litellm import LiteLLMClient
         return LiteLLMClient(config)
 
+    if backend == "openai":
+        from .ai_openai import OpenAIClient
+        return OpenAIClient(config)
+
     raise ValueError(
-        f"Unknown AI backend: {backend!r}. Supported: claude, openai, litellm"
+        f"Unknown AI backend: {backend!r}. Supported: claude, litellm, openai"
     )

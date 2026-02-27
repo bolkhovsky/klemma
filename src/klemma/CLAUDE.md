@@ -17,25 +17,29 @@ Click CLI entry point. Defines 16 commands + hidden aliases.
 `KlemmaContext` dataclass — single object per CLI command invocation.
 Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `library` (optional), `project` (optional), `klemma_home`, `dissertation_context`, `available_tags`, `project_root`, `project_chain`, `system_home`.
 
-### config.py (636 lines)
-Pydantic config models + Git-style project discovery.
-Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig`, `EmbeddingsConfig`, `DissertationConfig`, `SystemConfig`, `ProjectConfig`.
+### config.py (711 lines)
+Pydantic config models + Git-style project discovery + klemmarc loading.
+Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `_resolved_api_keys` PrivateAttr), `EmbeddingsConfig`, `DissertationConfig`, `SystemConfig`, `ProjectConfig`.
+- `_load_klemmarc()` — load `~/.klemmarc.yaml` (or `.yml` / `.klemmarc`) global config
+- `_derive_provider(backend, model)` — extract provider name for api_keys lookup (e.g. `litellm` + `anthropic/claude-sonnet` → `"anthropic"`)
+- `_check_klemmarc_permissions()` — fix permissions on `~/.klemmarc*` if world-readable
 - `discover_project_root(start)` — traverse up from cwd to find nearest `.klemma/`
 - `discover_project_chain(start)` — find all project roots child-first, max depth 3
-- `resolve_effective_config(project_chain, config_override)` — merge: system < parent < child < CLI override
+- `resolve_effective_config(project_chain, config_override)` — merge: klemmarc < system < parent < child < CLI override; injects `api_keys` into `AIConfig._resolved_api_keys`
 - `load_project_context(project_chain, config)` — aggregate KLEMMA.md files parent-first
-- `ensure_system_home()` — auto-create `~/.klemma/` via `init_system()` on first run
+- `ensure_system_home()` — auto-create `~/.klemma/` via `init_system()` on first run; checks klemmarc permissions
 - `get_system_home()` / `get_klemma_home()` — returns `Path(KLEMMA_HOME)` or `~/.klemma`
 - `load_available_tags(klemma_home, config, project_chain?)` — reads `tags.yaml` with parent fallback
 - `resolve_prompt(name, klemma_home, project_chain?)` — 4-level: project → parent → system → shipped
 - `scan_project_files(project_root, max_chars?)` — scan .md/.tex/.bib/.txt files, returns [{name, path, size, content_preview}]
 - `update_project_config(project_root, updates)` — merge updates into .klemma/config.yaml project section
 - Selective inheritance: only `_INHERITED_KEYS = {"obsidian", "zotero", "ai", "embeddings"}` from parent projects
+- Default AI backend: `litellm` (was `claude`)
 
-### setup.py (263 lines)
-`klemma init` logic — creates per-directory `.klemma/` projects and `~/.klemma/` system config. Interactive wizard with auto-discovery.
+### setup.py (304 lines)
+`klemma init` logic — creates per-directory `.klemma/` projects, `~/.klemma/` system config, and `~/.klemmarc.yaml` global config. Interactive wizard with auto-discovery.
 - `init_project(project_dir, project_type)` — creates `.klemma/`, `KLEMMA.md`, updates `.gitignore`
-- `init_system(system_home)` — creates `~/.klemma/config.yaml` (AI defaults only)
+- `init_system(system_home)` — creates `~/.klemmarc.yaml` (0600, with api_keys template) + `~/.klemma/config.yaml` (legacy fallback)
 - `init_klemma_home()` — legacy alias for `init_system()`
 - Interactive mode: auto-discovers Obsidian vaults, Zotero exports via `discovery.py`
 
@@ -63,12 +67,15 @@ Key methods: `register_sources()`, `get_by_section()` (JOIN on `source_sections`
 - `ClaudeClient` — subprocess wrapper for `claude -p --model <model>`
 - Retry logic with configurable timeout
 
-### ai_openai.py (105 lines)
-`OpenAIClient` — wraps OpenAI Python SDK. Supports structured JSON mode (`response_format`).
-Works with: OpenAI, Ollama, vLLM, LM Studio (via `base_url`).
+### ai_openai.py (71 lines)
+**DEPRECATED** — thin delegation wrapper around `LiteLLMClient`. Emits `DeprecationWarning`, prefixes bare model names with `openai/`, delegates all calls to LiteLLM.
 
-### ai_litellm.py (70 lines)
-`LiteLLMClient` — thin wrapper around `litellm.completion()`. Model format: `provider/model`.
+### ai_litellm.py (146 lines)
+`LiteLLMClient` — recommended AI backend via `litellm.completion()`. Model format: `provider/model`.
+- `_build_kwargs()` — single helper for all completion kwargs (model, tokens, temperature, base_url, api_key, response_format)
+- `_is_reasoning_model` — detects o-series/gpt-5 models, switches to `max_completion_tokens`
+- `call_json()` — supports structured JSON mode (`response_format`) when `json_mode=True`
+- `base_url` passthrough for custom endpoints (Ollama, vLLM, etc.)
 
 ### vault.py (263 lines)
 `VaultAdapter` — Obsidian vault file I/O.
@@ -82,7 +89,7 @@ Works with: OpenAI, Ollama, vLLM, LM Studio (via `base_url`).
 - `LocalLibrary` — wraps `PDFExtractor.load_entry_lookup()` (BBT JSON)
 - `create_library(config)` — factory, creates LocalLibrary from config
 
-### embeddings.py (257 lines)
+### embeddings.py (268 lines)
 `EmbeddingProvider` runtime-checkable protocol + 3 backends + utilities.
 - `EmbeddingProvider` protocol — `dim`, `model_name`, `embed(title, abstract) → list[float] | None`
 - `SemanticScholarEmbeddings` — free S2 API (768-dim SPECTER), rate-limited (throttle param)

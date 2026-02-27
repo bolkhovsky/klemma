@@ -1,8 +1,10 @@
 # Tests
 
-## Current test suite (397 tests)
+## Current test suite (432 tests)
 - `test_ai.py` (111 lines) — `extract_json()`, `AIProviderBase`, `create_ai()` factory, `ClaudeClient` detection
-- `test_ai_openai.py` (117 lines) — `OpenAIClient` with mocked openai SDK
+- `test_ai_litellm.py` (188 lines) — `LiteLLMClient` with mocked litellm: call, json_mode, base_url, api_key, reasoning model detection, retry
+- `test_ai_openai.py` (127 lines) — deprecated `OpenAIClient`: DeprecationWarning, delegation to LiteLLMClient, model prefixing
+- `test_klemmarc.py` (244 lines) — `_load_klemmarc()`, `_derive_provider()`, `AIConfig.api_key` resolution, `resolve_effective_config()` with klemmarc, chmod 600 enforcement
 - `test_project_discovery.py` (645 lines) — 42 tests for Git-style project discovery, config merging, context aggregation, prompt resolution, tags inheritance, setup, and deep merge
 - `test_embeddings.py` (354 lines) — `EmbeddingProvider` protocol, `cosine_similarity`, `SemanticScholarEmbeddings`/`LocalSPECTEREmbeddings`/`OpenAIEmbeddings` with mocked backends, `create_embeddings()` factory
 - `test_citation_graph.py` (245 lines) — citation graph storage (`save_citation_links`, `get_citation_graph`), intent scoring for reference gaps, `_migrate_schema()` v1→v4

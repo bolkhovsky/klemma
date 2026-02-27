@@ -23,6 +23,7 @@ exports/
 
 # User-specific files (use config.example.yaml as template)
 config.yaml
+.klemmarc*
 PROJECT_LOG.md
 *.code-workspace
 secure-ai-assistant-roadmap.md
