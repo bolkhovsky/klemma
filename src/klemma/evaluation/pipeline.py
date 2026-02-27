@@ -138,12 +138,27 @@ def run_analyst_from_source(
         logger.error("PDF extraction failed for %s", citekey)
         return None
 
-    # Build library entries
+    # Build library entries with titles from citation_links
     all_sources = state.get_all_sources()
-    library_lines = [
-        f"- {s.get('id', '')}: {s.get('title', '')}"
-        for s in all_sources if s.get("id") != citekey
-    ]
+    # Resolve titles: citation_links stores target_title for each citekey
+    all_links = state.get_citation_links()
+    title_by_citekey: dict[str, str] = {}
+    for link in all_links:
+        ck = link.get("target_citekey")
+        title = link.get("target_title", "")
+        if ck and title and ck not in title_by_citekey:
+            title_by_citekey[ck] = title
+    library_lines = []
+    for s in all_sources:
+        sid = s.get("id", "")
+        if sid == citekey:
+            continue
+        title = title_by_citekey.get(sid, "")
+        if not title:
+            # Fallback: decode citekey slug (Author2023_Some_Title → Some Title)
+            parts = sid.split("_", 1)
+            title = parts[1].replace("_", " ") if len(parts) > 1 else sid
+        library_lines.append(f"- {sid}: {title}")
     library_entries = "\n".join(library_lines)
 
     gt = run_analyst(

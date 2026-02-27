@@ -211,14 +211,21 @@ def run_reconstruction(
         return {"method": "reconstruction", "error": "AI call failed"}
 
     # Parse recommendations into prediction dicts
+    # Normalize section_ids: AI sometimes returns "I: Introduction" instead of "I"
+    gt_section_ids = {s.section_id for s in dataset.ground_truth.sections}
     predictions = []
     seen = set()
     for rec in data.get("recommendations", []):
-        section_id = rec.get("section_id", "")
+        section_id = rec.get("section_id", "").strip()
         citekey = rec.get("citekey", "")
         intent = rec.get("intent", "background")
         if not section_id or not citekey:
             continue
+        # Normalize: strip title suffix (e.g. "I: Introduction" → "I")
+        if section_id not in gt_section_ids and ":" in section_id:
+            prefix = section_id.split(":")[0].strip()
+            if prefix in gt_section_ids:
+                section_id = prefix
         key = (section_id, citekey)
         if key not in seen:
             seen.add(key)
