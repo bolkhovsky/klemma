@@ -183,3 +183,105 @@ class TestRepositoryComposition:
         deleted = state.delete_fragments("facade-del")
         assert deleted == 1
         assert state.fragments.get_fragment_stats()["total"] == 0
+
+
+def test_migration_v5_fragment_embedding_columns(tmp_path):
+    """Migration v5 adds embedding + embedding_model to fragments."""
+    import sqlite3
+
+    from klemma.state import StateManager
+    db = tmp_path / "test.db"
+    StateManager(db)
+    conn = sqlite3.connect(db)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(fragments)")}
+    conn.close()
+    assert "embedding" in cols
+    assert "embedding_model" in cols
+
+
+def test_fragment_embedding_save_retrieve_roundtrip(tmp_path):
+    """Save and retrieve a fragment embedding."""
+    from klemma.state import StateManager
+    sm = StateManager(tmp_path / "test.db")
+    sm.register_sources(["paper1"])
+    sm.save_fragments("paper1", [{"text": "Ice forecast accuracy improved", "type": "result"}])
+    frags = sm.get_fragments(source_id="paper1")
+    frag_id = frags[0]["id"]
+
+    vec = [0.1, 0.2, 0.3, 0.4]
+    sm.save_fragment_embedding(frag_id, vec, "test-model")
+
+    result = sm.get_fragment_embeddings(model="test-model")
+    assert frag_id in result
+    assert len(result[frag_id]) == 4
+    assert abs(result[frag_id][0] - 0.1) < 1e-5
+
+
+def test_fragment_embedding_stats(tmp_path):
+    """Fragment embedding coverage stats."""
+    from klemma.state import StateManager
+    sm = StateManager(tmp_path / "test.db")
+    sm.register_sources(["paper1"])
+    sm.save_fragments("paper1", [
+        {"text": "Fragment A", "type": "result"},
+        {"text": "Fragment B", "type": "method"},
+    ])
+    frags = sm.get_fragments(source_id="paper1")
+    sm.save_fragment_embedding(frags[0]["id"], [0.1, 0.2], "test-model")
+
+    stats = sm.get_fragment_embedding_stats()
+    assert stats["total"] >= 2
+    assert stats["embedded"] == 1
+    assert stats["models"]["test-model"] == 1
+
+
+def test_get_unembedded_fragments(tmp_path):
+    """Get fragments that don't have embeddings yet."""
+    from klemma.state import StateManager
+    sm = StateManager(tmp_path / "test.db")
+    sm.register_sources(["paper1"])
+    sm.save_fragments("paper1", [
+        {"text": "Fragment A", "type": "result"},
+        {"text": "Fragment B", "type": "method"},
+    ])
+    frags = sm.get_fragments(source_id="paper1")
+    sm.save_fragment_embedding(frags[0]["id"], [0.1, 0.2], "test-model")
+
+    unembedded = sm.get_unembedded_fragments()
+    assert len(unembedded) == 1
+    assert unembedded[0]["fragment_text"] == "Fragment B"
+
+
+def test_retrieve_similar_fragments(tmp_path):
+    """Top-K retrieval returns fragments ranked by cosine similarity."""
+    from klemma.state import StateManager
+    sm = StateManager(tmp_path / "test.db")
+    sm.register_sources(["paper1"])
+    sm.save_fragments("paper1", [
+        {"text": "Ice forecast validation methods", "type": "method", "section": "1.1"},
+        {"text": "Neural network architecture", "type": "method", "section": "2.1"},
+        {"text": "Satellite data processing", "type": "background", "section": "1.2"},
+    ])
+    frags = sm.get_fragments(source_id="paper1")
+
+    sm.save_fragment_embedding(frags[0]["id"], [1.0, 0.0, 0.0], "test")
+    sm.save_fragment_embedding(frags[1]["id"], [0.0, 1.0, 0.0], "test")
+    sm.save_fragment_embedding(frags[2]["id"], [0.7, 0.3, 0.0], "test")
+
+    query_vec = [1.0, 0.0, 0.0]
+    results = sm.retrieve_similar_fragments(query_vec, top_k=2, model="test")
+
+    assert len(results) == 2
+    assert results[0]["id"] == frags[0]["id"]
+    assert results[0]["similarity"] > 0.99
+    assert results[1]["id"] == frags[2]["id"]
+    assert "fragment_text" in results[0]
+    assert "citekey" in results[0]
+
+
+def test_retrieve_similar_fragments_empty(tmp_path):
+    """Retrieval with no embeddings returns empty list."""
+    from klemma.state import StateManager
+    sm = StateManager(tmp_path / "test.db")
+    results = sm.retrieve_similar_fragments([1.0, 0.0], top_k=5)
+    assert results == []

@@ -183,7 +183,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 4  # bump this when adding new migrations
+        target = 5  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -253,6 +253,19 @@ class StateManager:
                 "CREATE INDEX IF NOT EXISTS idx_benchmark_runs_paper "
                 "ON benchmark_runs(paper_citekey)"
             )
+
+        if version < 5:
+            existing_frag = {
+                row[1] for row in conn.execute("PRAGMA table_info(fragments)")
+            }
+            if "embedding" not in existing_frag:
+                conn.execute(
+                    "ALTER TABLE fragments ADD COLUMN embedding BLOB"
+                )
+            if "embedding_model" not in existing_frag:
+                conn.execute(
+                    "ALTER TABLE fragments ADD COLUMN embedding_model TEXT"
+                )
 
         conn.execute(f"PRAGMA user_version = {target}")
 
@@ -353,6 +366,23 @@ class StateManager:
 
     def get_intent_coverage(self) -> dict[str, dict[str, int]]:
         return self.fragments.get_intent_coverage()
+
+    def save_fragment_embedding(self, fragment_id: int, embedding: list[float], model: str):
+        return self.fragments.save_fragment_embedding(fragment_id, embedding, model)
+
+    def get_fragment_embeddings(self, model: Optional[str] = None) -> dict[int, list[float]]:
+        return self.fragments.get_fragment_embeddings(model)
+
+    def get_fragment_embedding_stats(self) -> dict:
+        return self.fragments.get_fragment_embedding_stats()
+
+    def get_unembedded_fragments(self, limit: int = 100000) -> list[dict]:
+        return self.fragments.get_unembedded_fragments(limit)
+
+    def retrieve_similar_fragments(
+        self, query_embedding: list[float], top_k: int = 10, model: Optional[str] = None
+    ) -> list[dict]:
+        return self.fragments.retrieve_similar_fragments(query_embedding, top_k, model)
 
     # ── Embedding delegation ──────────────────────────────────────────────
 
