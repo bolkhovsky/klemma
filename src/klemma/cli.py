@@ -1844,7 +1844,17 @@ def ask(ctx, query, section, chapter):
             klemma_home=kctx.klemma_home,
             project_name=kctx.project_name,
             project_root=kctx.project_root,
+            embeddings=kctx.embeddings,
+            query=query,
         )
+
+    # Show RAG status
+    if kctx.embeddings:
+        frag_stats = state.get_fragment_embedding_stats()
+        if frag_stats["embedded"] > 0:
+            console.print(f"[dim]RAG: {frag_stats['embedded']} fragment embeddings available[/dim]")
+        else:
+            console.print("[dim]RAG: no fragment embeddings (run klemma embed --fragments)[/dim]")
 
     console.print(f"[dim]Query: {query}[/dim]")
 
