@@ -1001,12 +1001,14 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
 @click.argument("citekeys", required=False, nargs=-1)
 @click.option("--dry-run", is_flag=True, help="Show how many would be embedded without calling API")
 @click.option("--backend", type=click.Choice(["s2", "local", "openai"]), help="Override embedding backend")
+@click.option("--fragments", is_flag=True, help="Embed fragments instead of sources")
 @click.pass_context
-def embed(ctx, citekeys, dry_run, backend):
+def embed(ctx, citekeys, dry_run, backend, fragments):
     """Backfill embeddings for sources with abstracts.
 
     Without CITEKEYS: embed all sources missing embeddings.
     With CITEKEYS: embed specific sources.
+    Use --fragments to embed fragment text instead of source title+abstract.
     Use --dry-run to preview without API calls.
     """
     kctx = _get_context(ctx)
@@ -1025,6 +1027,40 @@ def embed(ctx, citekeys, dry_run, backend):
             "Set embeddings.backend in config.yaml (s2, local, openai) "
             "or use --backend flag."
         )
+        return
+
+    if fragments:
+        # Fragment embedding mode
+        candidates = state.get_unembedded_fragments()
+        if not candidates:
+            console.print("[green]All fragments already have embeddings.[/green]")
+            return
+        if dry_run:
+            console.print(f"[blue]Would embed {len(candidates)} fragments[/blue]")
+            return
+
+        embedded = 0
+        failed = 0
+        from rich.progress import Progress
+        with Progress(console=console) as progress:
+            task = progress.add_task("Embedding fragments...", total=len(candidates))
+            for frag in candidates:
+                try:
+                    vec = emb.embed(frag["fragment_text"])
+                    if vec:
+                        state.save_fragment_embedding(frag["id"], vec, emb.model_name)
+                        embedded += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    console.print(f"  [red]Fragment {frag['id']}: {e}[/red]")
+                    failed += 1
+                progress.advance(task)
+
+        console.print(f"\n[green]Embedded: {embedded}[/green]", end="")
+        if failed:
+            console.print(f" | [red]Failed: {failed}[/red]", end="")
+        console.print()
         return
 
     # Get candidates: sources with abstract but no embedding
