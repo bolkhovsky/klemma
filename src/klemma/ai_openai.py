@@ -33,6 +33,22 @@ class OpenAIClient(AIProviderBase):
         )
         self._json_mode = config.json_mode
 
+    @property
+    def _is_reasoning_model(self) -> bool:
+        """Detect reasoning models that require different API parameters."""
+        m = self.model.lower()
+        return m.startswith(("o1", "o3", "o4", "gpt-5"))
+
+    def _token_kwargs(self, max_tokens: int) -> dict:
+        """Build the right token-limit kwarg for the model.
+
+        Reasoning models (o-series, gpt-5-*) require
+        ``max_completion_tokens`` instead of ``max_tokens``.
+        """
+        if self._is_reasoning_model:
+            return {"max_completion_tokens": max_tokens}
+        return {"max_tokens": max_tokens}
+
     def call(
         self,
         system: str,
@@ -47,14 +63,17 @@ class OpenAIClient(AIProviderBase):
             {"role": "user", "content": user},
         ]
 
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            **self._token_kwargs(max_tokens),
+        }
+        if not self._is_reasoning_model:
+            kwargs["temperature"] = temperature
+
         for attempt in range(self.retries + 1):
             try:
-                response = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
+                response = self._client.chat.completions.create(**kwargs)
                 return response.choices[0].message.content
             except Exception as e:
                 logger.warning(
@@ -81,15 +100,18 @@ class OpenAIClient(AIProviderBase):
             {"role": "user", "content": user},
         ]
 
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+            **self._token_kwargs(max_tokens),
+        }
+        if not self._is_reasoning_model:
+            kwargs["temperature"] = temperature
+
         for attempt in range(self.retries + 1):
             try:
-                response = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    response_format={"type": "json_object"},
-                )
+                response = self._client.chat.completions.create(**kwargs)
                 text = response.choices[0].message.content
                 if not text:
                     continue
