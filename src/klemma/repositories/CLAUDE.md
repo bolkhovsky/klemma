@@ -37,10 +37,15 @@ Source lifecycle, sections, Zotero key management, vault sync.
 - `sync_source_sections()` — vault frontmatter bidirectional sync
 - `rename_source()`, `delete_source()` — cascade operations
 
-### fragments.py (~120 lines)
-Fragment CRUD and citation intent coverage.
+### fragments.py (~250 lines)
+Fragment CRUD, citation intent coverage, and fragment-level embeddings.
 - `save_fragments()`, `get_fragments()`, `get_fragment_stats()`
 - `get_intent_coverage()` — section x intent matrix
+- `save_fragment_embedding()` — store vector BLOB (struct.pack float32)
+- `get_fragment_embeddings(model?)` — return `{fragment_id: vector}`
+- `get_fragment_embedding_stats()` — coverage stats (total, embedded, by model)
+- `get_unembedded_fragments()` — fragments missing embeddings
+- `retrieve_similar_fragments(query_embedding, top_k, model?)` — top-K cosine retrieval
 
 ### embeddings_store.py (~100 lines)
 Vector BLOB storage with model versioning.

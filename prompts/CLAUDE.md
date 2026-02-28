@@ -40,7 +40,7 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 `source_count`, `sources_compact`
 
 ### agent.md
-`dissertation_context`, `chapters`, `scientific_results`, `priority_terms`, `current_chapter`, `chapter_name`, `current_section`, `current_deadline`, `days_until_deadline`, `sources`, `coverage`, `gaps`, `min_sources`, `fragment_stats`, `today_plan`, `next_reading`, `vault_path`, `today`, `project_root`, `outline_content`, `report_index` (list of {name, size}), `project_file_list` (list of {name, size})
+`dissertation_context`, `chapters`, `scientific_results`, `priority_terms`, `current_chapter`, `chapter_name`, `current_section`, `current_deadline`, `days_until_deadline`, `sources`, `coverage`, `gaps`, `min_sources`, `fragment_stats`, `today_plan`, `next_reading`, `vault_path`, `today`, `project_root`, `outline_content`, `report_index` (list of {name, size}), `project_file_list` (list of {name, size}), `relevant_fragments` (list of fragment dicts with citekey, fragment_text, citation_intent, similarity — populated via RAG when embeddings+query available)
 
 ### outline.md
 `project_type`, `dissertation_context`, `project_files` (list of {name, path, size, content_preview}), `library_summary`, `custom_prompt`, `language`

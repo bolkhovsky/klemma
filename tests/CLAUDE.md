@@ -1,6 +1,6 @@
 # Tests
 
-## Current test suite (472 tests)
+## Current test suite (484 tests)
 - `test_errors.py` (33 lines) — `KlemmaAIError` hierarchy, `retryable` classification, cause chaining
 - `test_ai.py` (170 lines) — `extract_json()`, `AIProviderBase`, `AICallResult` dataclass, `call_with_meta()` base + Claude, `create_ai()` factory
 - `test_ai_litellm.py` (265 lines) — `LiteLLMClient` with mocked litellm: call, json_mode, base_url, api_key, reasoning model detection, retry, `call_with_meta()` with structured error mapping + token extraction
@@ -14,8 +14,9 @@
 - `test_intent_scoring.py` (422 lines) — intent-weighted reference gap scoring, intent coverage matrix, fragment citation intent classification
 - `test_interactive_init.py` (347 lines) — interactive `klemma init` wizard, auto-discovery, config generation
 - `test_cli_init_outline.py` (37 lines) — `klemma init --outline` CLI behavior, AI-missing skip, no-outline no AI call
-- `test_cli_embed.py` (26 lines) — `klemma embed` multi-citekey CLI behavior and missing-key warnings
-- `test_repositories.py` (~130 lines) — repository composition, facade delegation, per-repo CRUD roundtrips, new public methods (`get_existing_source_ids`, `get_sources_without_embeddings`)
+- `test_cli_embed.py` (~70 lines) — `klemma embed` multi-citekey CLI behavior, missing-key warnings, `--fragments` flag (embed + dry-run)
+- `test_repositories.py` (~240 lines) — repository composition, facade delegation, per-repo CRUD roundtrips, new public methods (`get_existing_source_ids`, `get_sources_without_embeddings`), fragment embedding save/retrieve roundtrip, embedding stats, unembedded fragments, top-K cosine retrieval
+- `test_agent_rag.py` (~80 lines) — 4 tests: agent context with fragments (RAG), without embeddings, no fragment embeddings, embed failure graceful degradation
 - `test_evaluation.py` (~320 lines) — 38 tests: pure metrics (intent_metrics, precision@K, recall@K, nDCG@K), dataset load/validate/roundtrip, runner integration (intent/gap/embedding benchmarks with seeded DB), export template, `test_run_gap_benchmark_with_reranked_gaps` (verifies reranked list bypasses DB)
 - `test_security_hardening.py` — path traversal and download safety tests
 - `test_benchmark_history.py` (179 lines) — 17 tests: benchmark run save/get roundtrip, ordering, paper filtering, latest_run, compare deltas, migration idempotency, schema version, build_results_summary, compute_dataset_hash
