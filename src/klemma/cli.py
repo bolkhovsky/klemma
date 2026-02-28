@@ -1547,6 +1547,7 @@ def research(ctx, section, no_save, force):
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
             project_root=kctx.project_root,
+            embeddings=kctx.embeddings,
         )
 
     if not result.section_status:

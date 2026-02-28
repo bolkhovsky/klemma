@@ -17,6 +17,7 @@
 - `test_cli_embed.py` (~70 lines) — `klemma embed` multi-citekey CLI behavior, missing-key warnings, `--fragments` flag (embed + dry-run)
 - `test_repositories.py` (~240 lines) — repository composition, facade delegation, per-repo CRUD roundtrips, new public methods (`get_existing_source_ids`, `get_sources_without_embeddings`), fragment embedding save/retrieve roundtrip, embedding stats, unembedded fragments, top-K cosine retrieval
 - `test_agent_rag.py` (~80 lines) — 4 tests: agent context with fragments (RAG), without embeddings, no fragment embeddings, embed failure graceful degradation
+- `test_researcher_budget.py` (~280 lines) — 12 tests: `_fit_prompt_budget()` progressive reduction (7 tests), RAG-first fragment retrieval (5 tests: RAG used, fallback on few results, fallback without embeddings, embed error graceful degradation, dedup with fallback), `@pytest.mark.benchmark` section vs RAG quality comparison
 - `test_evaluation.py` (~320 lines) — 38 tests: pure metrics (intent_metrics, precision@K, recall@K, nDCG@K), dataset load/validate/roundtrip, runner integration (intent/gap/embedding benchmarks with seeded DB), export template, `test_run_gap_benchmark_with_reranked_gaps` (verifies reranked list bypasses DB)
 - `test_security_hardening.py` — path traversal and download safety tests
 - `test_benchmark_history.py` (179 lines) — 17 tests: benchmark run save/get roundtrip, ordering, paper filtering, latest_run, compare deltas, migration idempotency, schema version, build_results_summary, compute_dataset_hash
