@@ -59,22 +59,29 @@ Tables:
 
 Key methods: `register_sources()`, `get_by_section()` (JOIN on `source_sections`), `get_coverage_stats()`, `get_gap_summary()`, `save_plan()`, `save_citation_links()`, `get_citation_graph()`, `save_embedding()`, `get_embeddings()`, `save_prune_verdicts()`, `get_prune_verdicts()`, `save_benchmark_run()`, `get_benchmark_runs()`, `compare_benchmark_runs()`.
 
-### ai.py (249 lines)
+### errors.py (32 lines)
+Klemma error taxonomy for AI backends.
+- `KlemmaAIError` — base class with `retryable` flag and optional `cause` chaining
+- `AITimeoutError` (retryable), `AIRateLimitError` (retryable), `AIAuthError` (fatal), `AIResponseError` (fatal)
+
+### ai.py (351 lines)
 `AIProvider` protocol → `AIProviderBase` → `ClaudeClient` + `create_ai()` factory.
-- `AIProvider.call()` / `call_json()` — main interface for AI calls
+- `AICallResult` — dataclass with `text`, `duration_ms`, `input_tokens`, `output_tokens`, `retries_used`, `model`, `error`; truthy when `text is not None`
+- `AIProvider.call()` / `call_json()` / `call_with_meta()` — main interface for AI calls
+- `call_with_meta()` — returns `AICallResult` with timing/tokens/error metadata; base wraps `call()`, backends override with structured error mapping
 - `AIProviderBase.render_prompt()` — Jinja2 template rendering
 - `extract_json()` — parses JSON from markdown code blocks and unstructured text
-- `ClaudeClient` — subprocess wrapper for `claude -p --model <model>`
-- Retry logic with configurable timeout
+- `ClaudeClient` — subprocess wrapper for `claude -p --model <model>` with structured error tracking (timeout, CLI error, FileNotFoundError)
 
 ### ai_openai.py (71 lines)
 **DEPRECATED** — thin delegation wrapper around `LiteLLMClient`. Emits `DeprecationWarning`, prefixes bare model names with `openai/`, delegates all calls to LiteLLM.
 
-### ai_litellm.py (146 lines)
+### ai_litellm.py (230 lines)
 `LiteLLMClient` — recommended AI backend via `litellm.completion()`. Model format: `provider/model`.
 - `_build_kwargs()` — single helper for all completion kwargs (model, tokens, temperature, base_url, api_key, response_format)
 - `_is_reasoning_model` — detects o-series/gpt-5 models, switches to `max_completion_tokens`
 - `call_json()` — supports structured JSON mode (`response_format`) when `json_mode=True`
+- `call_with_meta()` — structured error mapping: `AuthenticationError` (fatal, no retry), `Timeout`/`RateLimitError` (retryable), token extraction from `response.usage`
 - `base_url` passthrough for custom endpoints (Ollama, vLLM, etc.)
 
 ### vault.py (263 lines)

@@ -419,6 +419,9 @@ class StateManager:
     def get_key_author_groups(self, min_papers: int = 2) -> list[dict]:
         return self.citations.get_key_author_groups(min_papers)
 
+    def get_benchmark_candidates(self) -> list[dict]:
+        return self.citations.get_benchmark_candidates()
+
     # ── Plans delegation ──────────────────────────────────────────────────
 
     def save_plan(self, dissertation_task: str, assistant_task: str, reading_target: str = "",

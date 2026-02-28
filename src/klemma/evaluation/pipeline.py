@@ -246,11 +246,14 @@ def run_auto_benchmark(
         return result
 
     # 4. Benchmark
+    from .reconstruction import AICallStats
+
     effective_ablation = ablation or AblationParams()
+    call_stats = AICallStats()
     t_start = time.monotonic()
     bench_results = run_reconstruction_benchmark(
         state, dataset, ai=ai, klemma_home=klemma_home,
-        ablation=effective_ablation,
+        ablation=effective_ablation, stats=call_stats,
     )
     duration = time.monotonic() - t_start
 
@@ -284,6 +287,7 @@ def run_auto_benchmark(
             "auto": True,
             "ablation": effective_ablation.to_snapshot(),
             "prompt_hash": prompt_hash,
+            "call_stats": call_stats.to_dict(),
         },
     )
     result.run_id = run_id

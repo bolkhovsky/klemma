@@ -1,9 +1,11 @@
 # Tests
 
-## Current test suite (432 tests)
-- `test_ai.py` (111 lines) — `extract_json()`, `AIProviderBase`, `create_ai()` factory, `ClaudeClient` detection
-- `test_ai_litellm.py` (188 lines) — `LiteLLMClient` with mocked litellm: call, json_mode, base_url, api_key, reasoning model detection, retry
+## Current test suite (472 tests)
+- `test_errors.py` (33 lines) — `KlemmaAIError` hierarchy, `retryable` classification, cause chaining
+- `test_ai.py` (170 lines) — `extract_json()`, `AIProviderBase`, `AICallResult` dataclass, `call_with_meta()` base + Claude, `create_ai()` factory
+- `test_ai_litellm.py` (265 lines) — `LiteLLMClient` with mocked litellm: call, json_mode, base_url, api_key, reasoning model detection, retry, `call_with_meta()` with structured error mapping + token extraction
 - `test_ai_openai.py` (127 lines) — deprecated `OpenAIClient`: DeprecationWarning, delegation to LiteLLMClient, model prefixing
+- `test_ai_contract.py` (203 lines) — parametrized contract tests: all 3 backends (Claude/LiteLLM/OpenAI) satisfy same behavioral contract (call → str|None, call_json → dict|None, call_with_meta → AICallResult, protocol conformance)
 - `test_klemmarc.py` (244 lines) — `_load_klemmarc()`, `_derive_provider()`, `AIConfig.api_key` resolution, `resolve_effective_config()` with klemmarc, chmod 600 enforcement
 - `test_project_discovery.py` (645 lines) — 42 tests for Git-style project discovery, config merging, context aggregation, prompt resolution, tags inheritance, setup, and deep merge
 - `test_embeddings.py` (354 lines) — `EmbeddingProvider` protocol, `cosine_similarity`, `SemanticScholarEmbeddings`/`LocalSPECTEREmbeddings`/`OpenAIEmbeddings` with mocked backends, `create_embeddings()` factory

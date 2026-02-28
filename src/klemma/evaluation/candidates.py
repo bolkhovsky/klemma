@@ -48,21 +48,7 @@ def discover_candidates(
     if benchmarked_citekeys is None:
         benchmarked_citekeys = state.get_benchmarked_citekeys()
 
-    with state._conn() as conn:
-        cur = conn.execute("""
-            SELECT s.id, s.pdf_path,
-                   COUNT(DISTINCT CASE WHEN cl.in_library=1
-                         THEN cl.target_title_hash END) as in_lib,
-                   COUNT(DISTINCT cl.target_title_hash) as total,
-                   COUNT(DISTINCT cl.citation_intent) as intent_div
-            FROM sources s
-            JOIN citation_links cl ON cl.source_id = s.id
-            WHERE s.status = 'completed'
-            GROUP BY s.id
-            HAVING in_lib >= 3
-            ORDER BY in_lib DESC
-        """)
-        rows = cur.fetchall()
+    rows = state.get_benchmark_candidates()
 
     candidates = []
     for row in rows:

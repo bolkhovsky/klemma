@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from klemma.ai import AICallResult
 from klemma.config import AIConfig
 
 # ---------------------------------------------------------------------------
@@ -186,3 +187,100 @@ def test_litellm_retry_on_error():
     result = client.call("sys", "usr")
     assert result is None
     assert mock_litellm.completion.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# call_with_meta
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_response_with_usage(content="Hello", input_tokens=50, output_tokens=20):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+        usage=SimpleNamespace(prompt_tokens=input_tokens, completion_tokens=output_tokens),
+    )
+
+
+def test_litellm_call_with_meta_returns_result():
+    config = AIConfig(backend="litellm", model="gpt-4.1")
+    mock_litellm = MagicMock()
+    mock_litellm.completion.return_value = _make_mock_response_with_usage(
+        "response", input_tokens=100, output_tokens=50,
+    )
+    # Need to define exception types so they exist on the mock
+    mock_litellm.Timeout = type("Timeout", (Exception,), {})
+    mock_litellm.RateLimitError = type("RateLimitError", (Exception,), {})
+    mock_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    client, _ = _create_client_with_mock(config, mock_litellm)
+
+    result = client.call_with_meta("sys", "usr")
+    assert isinstance(result, AICallResult)
+    assert result.text == "response"
+    assert result.input_tokens == 100
+    assert result.output_tokens == 50
+    assert result.duration_ms >= 0
+    assert result.error is None
+    assert result.model == "gpt-4.1"
+
+
+def test_litellm_call_with_meta_timeout():
+    config = AIConfig(backend="litellm", model="gpt-4.1", retries=0)
+    mock_litellm = MagicMock()
+    mock_litellm.Timeout = type("Timeout", (Exception,), {})
+    mock_litellm.RateLimitError = type("RateLimitError", (Exception,), {})
+    mock_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    mock_litellm.completion.side_effect = mock_litellm.Timeout("timed out")
+
+    client, _ = _create_client_with_mock(config, mock_litellm)
+    result = client.call_with_meta("sys", "usr")
+    assert result.text is None
+    assert "timeout" in result.error.lower()
+
+
+def test_litellm_call_with_meta_rate_limit():
+    config = AIConfig(backend="litellm", model="gpt-4.1", retries=0)
+    mock_litellm = MagicMock()
+    mock_litellm.Timeout = type("Timeout", (Exception,), {})
+    mock_litellm.RateLimitError = type("RateLimitError", (Exception,), {})
+    mock_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    mock_litellm.completion.side_effect = mock_litellm.RateLimitError("429")
+
+    client, _ = _create_client_with_mock(config, mock_litellm)
+    result = client.call_with_meta("sys", "usr")
+    assert result.text is None
+    assert "rate" in result.error.lower()
+
+
+def test_litellm_call_with_meta_auth_error():
+    config = AIConfig(backend="litellm", model="gpt-4.1", retries=2)
+    mock_litellm = MagicMock()
+    mock_litellm.Timeout = type("Timeout", (Exception,), {})
+    mock_litellm.RateLimitError = type("RateLimitError", (Exception,), {})
+    mock_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    mock_litellm.completion.side_effect = mock_litellm.AuthenticationError("bad key")
+
+    client, _ = _create_client_with_mock(config, mock_litellm)
+    result = client.call_with_meta("sys", "usr")
+    assert result.text is None
+    assert "auth" in result.error.lower()
+    # Auth errors should NOT retry
+    assert mock_litellm.completion.call_count == 1
+
+
+def test_litellm_call_with_meta_retries_counted():
+    config = AIConfig(backend="litellm", model="gpt-4.1", retries=2)
+    mock_litellm = MagicMock()
+    mock_litellm.Timeout = type("Timeout", (Exception,), {})
+    mock_litellm.RateLimitError = type("RateLimitError", (Exception,), {})
+    mock_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    # Fail twice, succeed on third
+    mock_litellm.completion.side_effect = [
+        Exception("err1"),
+        Exception("err2"),
+        _make_mock_response_with_usage("ok"),
+    ]
+
+    client, _ = _create_client_with_mock(config, mock_litellm)
+    result = client.call_with_meta("sys", "usr")
+    assert result.text == "ok"
+    assert result.retries_used == 2

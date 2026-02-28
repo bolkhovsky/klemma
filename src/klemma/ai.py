@@ -7,6 +7,8 @@ Optional backends: OpenAI-compatible API, LiteLLM.
 import json
 import logging
 import subprocess
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
 
@@ -56,6 +58,22 @@ def extract_json(text: str) -> Optional[dict]:
         return None
 
 
+@dataclass
+class AICallResult:
+    """Result of an AI call with metadata for observability."""
+
+    text: Optional[str] = None
+    duration_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    retries_used: int = 0
+    model: str = ""
+    error: Optional[str] = None
+
+    def __bool__(self) -> bool:
+        return self.text is not None
+
+
 # ---------------------------------------------------------------------------
 # Protocol
 # ---------------------------------------------------------------------------
@@ -87,6 +105,15 @@ class AIProvider(Protocol):
         temperature: float = 0.2,
         timeout: Optional[int] = None,
     ) -> Optional[dict]: ...
+
+    def call_with_meta(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 8192,
+        temperature: float = 0.3,
+        timeout: Optional[int] = None,
+    ) -> AICallResult: ...
 
     def render_prompt(self, template_path: Path, **kwargs) -> str: ...
 
@@ -133,6 +160,25 @@ class AIProviderBase:
         if not text:
             return None
         return extract_json(text)
+
+    def call_with_meta(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 8192,
+        temperature: float = 0.3,
+        timeout: Optional[int] = None,
+    ) -> AICallResult:
+        """Call the backend and return result with metadata."""
+        t0 = time.monotonic()
+        text = self.call(system, user, max_tokens=max_tokens, temperature=temperature, timeout=timeout)
+        elapsed = int((time.monotonic() - t0) * 1000)
+        return AICallResult(
+            text=text,
+            duration_ms=elapsed,
+            model=self.model,
+            error=None if text else "all retries exhausted",
+        )
 
     def render_prompt(self, template_path: Path, **kwargs) -> str:
         """Load a prompt template and render with Jinja2."""
@@ -200,6 +246,62 @@ class ClaudeClient(AIProviderBase):
             except Exception as e:
                 logger.error("Error (attempt %d/%d): %s", attempt + 1, self.retries + 1, e)
         return None
+
+    def call_with_meta(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 8192,
+        temperature: float = 0.3,
+        timeout: Optional[int] = None,
+    ) -> AICallResult:
+        """Call Claude CLI with structured error tracking."""
+        effective_timeout = timeout or self.timeout
+        prompt = f"{system}\n\n---\n\n{user}"
+
+        t0 = time.monotonic()
+        retries_used = 0
+        last_error = ""
+
+        for attempt in range(self.retries + 1):
+            try:
+                result = subprocess.run(
+                    ["claude", "-p", "--model", self.model, prompt],
+                    capture_output=True, text=True, timeout=effective_timeout,
+                )
+                if result.returncode != 0:
+                    retries_used = attempt + 1
+                    last_error = f"cli_error: exit {result.returncode}"
+                    logger.warning(
+                        "Claude CLI error (attempt %d/%d): %s",
+                        attempt + 1, self.retries + 1, result.stderr[:200],
+                    )
+                    continue
+                elapsed = int((time.monotonic() - t0) * 1000)
+                return AICallResult(
+                    text=result.stdout, duration_ms=elapsed,
+                    retries_used=retries_used, model=self.model,
+                )
+            except subprocess.TimeoutExpired:
+                retries_used = attempt + 1
+                last_error = f"timeout: {effective_timeout}s"
+                logger.warning("Timeout (attempt %d/%d)", attempt + 1, self.retries + 1)
+            except FileNotFoundError:
+                elapsed = int((time.monotonic() - t0) * 1000)
+                return AICallResult(
+                    text=None, duration_ms=elapsed, model=self.model,
+                    error="claude CLI not found",
+                )
+            except Exception as e:
+                retries_used = attempt + 1
+                last_error = f"error: {e}"
+                logger.error("Error (attempt %d/%d): %s", attempt + 1, self.retries + 1, e)
+
+        elapsed = int((time.monotonic() - t0) * 1000)
+        return AICallResult(
+            text=None, duration_ms=elapsed, model=self.model,
+            retries_used=retries_used, error=last_error or "all retries exhausted",
+        )
 
     @property
     def interactive_available(self) -> bool:

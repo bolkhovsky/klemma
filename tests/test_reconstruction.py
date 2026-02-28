@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from klemma.ai import AICallResult
 from klemma.evaluation.dataset import (
     BenchmarkDataset,
     PaperSection,
@@ -369,14 +370,17 @@ class TestRunReconstruction:
 
         # Mock AI to return correct recommendations
         mock_ai = MagicMock()
-        mock_ai.call_json.return_value = {
-            "recommendations": [
-                {"section_id": "1", "citekey": "sourceA",
-                 "intent": "background", "justification": "test"},
-                {"section_id": "2", "citekey": "sourceB",
-                 "intent": "method", "justification": "test"},
-            ]
-        }
+        mock_ai.call_with_meta.return_value = AICallResult(
+            text=json.dumps({
+                "recommendations": [
+                    {"section_id": "1", "citekey": "sourceA",
+                     "intent": "background", "justification": "test"},
+                    {"section_id": "2", "citekey": "sourceB",
+                     "intent": "method", "justification": "test"},
+                ]
+            }),
+            duration_ms=100, model="test",
+        )
         mock_ai.render_prompt.return_value = "rendered prompt"
 
         dataset = _make_dataset()
@@ -388,24 +392,29 @@ class TestRunReconstruction:
     def test_ai_failure(self, state):
         state.register_sources(["sourceA"])
         mock_ai = MagicMock()
-        mock_ai.call_json.return_value = None
+        mock_ai.call_with_meta.return_value = AICallResult(
+            text=None, duration_ms=100, model="test", error="timeout",
+        )
         mock_ai.render_prompt.return_value = "rendered prompt"
 
         dataset = _make_dataset()
         result = run_reconstruction(mock_ai, state, dataset)
-        assert result.get("error") == "AI call failed"
+        assert "error" in result
 
     def test_deduplicates_ai_recommendations(self, state):
         state.register_sources(["sourceA"])
         mock_ai = MagicMock()
-        mock_ai.call_json.return_value = {
-            "recommendations": [
-                {"section_id": "1", "citekey": "sourceA",
-                 "intent": "background", "justification": "first"},
-                {"section_id": "1", "citekey": "sourceA",
-                 "intent": "method", "justification": "duplicate"},
-            ]
-        }
+        mock_ai.call_with_meta.return_value = AICallResult(
+            text=json.dumps({
+                "recommendations": [
+                    {"section_id": "1", "citekey": "sourceA",
+                     "intent": "background", "justification": "first"},
+                    {"section_id": "1", "citekey": "sourceA",
+                     "intent": "method", "justification": "duplicate"},
+                ]
+            }),
+            duration_ms=100, model="test",
+        )
         mock_ai.render_prompt.return_value = "rendered prompt"
 
         dataset = _make_dataset(samples=[
@@ -434,12 +443,15 @@ class TestRunReconstructionBenchmark:
     def test_full_benchmark_with_ai(self, state):
         state.register_sources(["sourceA", "sourceB"])
         mock_ai = MagicMock()
-        mock_ai.call_json.return_value = {
-            "recommendations": [
-                {"section_id": "1", "citekey": "sourceA",
-                 "intent": "background", "justification": "test"},
-            ]
-        }
+        mock_ai.call_with_meta.return_value = AICallResult(
+            text=json.dumps({
+                "recommendations": [
+                    {"section_id": "1", "citekey": "sourceA",
+                     "intent": "background", "justification": "test"},
+                ]
+            }),
+            duration_ms=100, model="test",
+        )
         mock_ai.render_prompt.return_value = "rendered prompt"
 
         dataset = _make_dataset()

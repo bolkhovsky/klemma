@@ -13,6 +13,7 @@ assignments using only the outline + fragment library (blind to paper text).
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -21,10 +22,38 @@ from .metrics import reconstruction_metrics
 from .pipeline import AblationParams
 
 if TYPE_CHECKING:
-    from klemma.ai import AIProvider
+    from klemma.ai import AICallResult, AIProvider
     from klemma.state import StateManager
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class AICallStats:
+    """Accumulates stats from AI calls during reconstruction."""
+
+    total_calls: int = 0
+    total_duration_ms: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    def record(self, result: AICallResult) -> None:
+        self.total_calls += 1
+        self.total_duration_ms += result.duration_ms
+        self.total_input_tokens += result.input_tokens
+        self.total_output_tokens += result.output_tokens
+        if result.error:
+            self.errors.append(result.error)
+
+    def to_dict(self) -> dict:
+        return {
+            "total_calls": self.total_calls,
+            "total_duration_ms": self.total_duration_ms,
+            "total_input_tokens": self.total_input_tokens,
+            "total_output_tokens": self.total_output_tokens,
+            "errors": self.errors,
+        }
 
 
 def run_analyst(
@@ -132,6 +161,7 @@ def run_reconstruction(
     dataset: ReconstructionDataset,
     klemma_home: Optional[Path] = None,
     ablation: Optional[AblationParams] = None,
+    stats: Optional[AICallStats] = None,
 ) -> dict:
     """Run AI-driven citation reconstruction.
 
@@ -142,6 +172,7 @@ def run_reconstruction(
         ablation: Override default parameters for ablation experiments.
             Controls temperature, fragments_per_source, max_recs_per_section,
             and prompt variant (few-shot examples).
+        stats: Optional accumulator for AI call metadata (timing, tokens).
     """
     from klemma.config import _SHIPPED_PROMPTS_DIR, resolve_prompt
 
@@ -202,13 +233,21 @@ def run_reconstruction(
         "Output only valid JSON."
     )
 
-    data = ai.call_json(
+    from klemma.ai import extract_json
+
+    meta = ai.call_with_meta(
         system, user_prompt, max_tokens=4096,
         temperature=params.temperature,
     )
+    if stats:
+        stats.record(meta)
+    if not meta.text:
+        logger.error("Reconstruction prompt failed: %s", meta.error)
+        return {"method": "reconstruction", "error": meta.error or "AI call failed"}
+    data = extract_json(meta.text)
     if not data:
-        logger.error("Reconstruction prompt failed")
-        return {"method": "reconstruction", "error": "AI call failed"}
+        logger.error("Reconstruction JSON parse failed")
+        return {"method": "reconstruction", "error": "JSON parse failed"}
 
     # Parse recommendations into prediction dicts
     # Normalize section_ids: AI sometimes returns "I: Introduction" instead of "I"
@@ -251,6 +290,7 @@ def run_reconstruction_benchmark(
     ai: Optional[AIProvider] = None,
     klemma_home: Optional[Path] = None,
     ablation: Optional[AblationParams] = None,
+    stats: Optional[AICallStats] = None,
 ) -> dict:
     """Run full reconstruction benchmark: ground truth stats + baseline + optional AI.
 
@@ -260,6 +300,7 @@ def run_reconstruction_benchmark(
     Args:
         ablation: Override default parameters for ablation experiments.
             Passed through to run_reconstruction().
+        stats: Optional accumulator for AI call metadata (timing, tokens).
     """
     gt = dataset.ground_truth
     in_library = sum(
@@ -282,7 +323,7 @@ def run_reconstruction_benchmark(
 
     if ai:
         result["reconstruction"] = run_reconstruction(
-            ai, state, dataset, klemma_home, ablation=ablation,
+            ai, state, dataset, klemma_home, ablation=ablation, stats=stats,
         )
 
     return result
