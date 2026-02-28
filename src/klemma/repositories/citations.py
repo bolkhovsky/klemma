@@ -108,6 +108,28 @@ class CitationsRepository(BaseRepository):
                 "most_connected_internal": most_connected,
             }
 
+    def get_benchmark_candidates(self) -> list[dict]:
+        """Find sources with 3+ in-library citations for benchmark candidacy.
+
+        Returns rows with: id, pdf_path, in_lib, total, intent_div.
+        Scoring and filtering done by caller (evaluation.candidates).
+        """
+        with self._conn() as conn:
+            cur = conn.execute("""
+                SELECT s.id, s.pdf_path,
+                       COUNT(DISTINCT CASE WHEN cl.in_library=1
+                             THEN cl.target_title_hash END) as in_lib,
+                       COUNT(DISTINCT cl.target_title_hash) as total,
+                       COUNT(DISTINCT cl.citation_intent) as intent_div
+                FROM sources s
+                JOIN citation_links cl ON cl.source_id = s.id
+                WHERE s.status = 'completed'
+                GROUP BY s.id
+                HAVING in_lib >= 3
+                ORDER BY in_lib DESC
+            """)
+            return [dict(row) for row in cur.fetchall()]
+
     def get_co_cited(self, citekey: str) -> list[dict]:
         """Find works frequently co-cited with the given citekey."""
         with self._conn() as conn:
