@@ -1,7 +1,8 @@
-"""Tests for OpenAI-compatible AI backend."""
+"""Tests for OpenAI-compatible AI backend (deprecated — delegates to LiteLLM)."""
 
 import importlib
 import sys
+import warnings
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -19,99 +20,108 @@ def _make_mock_response(content="Hello from AI"):
     )
 
 
-def _create_client_with_mock(config, mock_client=None):
-    """Create OpenAIClient with a mocked openai SDK."""
-    if mock_client is None:
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _make_mock_response()
+def _create_client_with_mock(config, mock_litellm=None):
+    """Create OpenAIClient with a mocked litellm module (since it delegates)."""
+    if mock_litellm is None:
+        mock_litellm = MagicMock()
+        mock_litellm.completion.return_value = _make_mock_response()
 
-    mock_openai_module = MagicMock()
-    mock_openai_module.OpenAI.return_value = mock_client
-
-    with patch.dict(sys.modules, {"openai": mock_openai_module}):
+    with patch.dict(sys.modules, {"litellm": mock_litellm}):
+        import klemma.ai_litellm as litellm_mod
         import klemma.ai_openai as mod
+        importlib.reload(litellm_mod)
         importlib.reload(mod)
-        client = mod.OpenAIClient(config)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            client = mod.OpenAIClient(config)
 
-    return client
+    return client, mock_litellm
 
 
 # ---------------------------------------------------------------------------
-# Import guard
+# Deprecation warning
 # ---------------------------------------------------------------------------
 
-def test_openai_import_error():
-    """Clean error when openai package is not installed."""
-    with patch.dict(sys.modules, {"openai": None}):
+def test_openai_emits_deprecation_warning():
+    """OpenAIClient should emit DeprecationWarning on construction."""
+    mock_litellm = MagicMock()
+    mock_litellm.completion.return_value = _make_mock_response()
+
+    with patch.dict(sys.modules, {"litellm": mock_litellm}):
+        import klemma.ai_litellm as litellm_mod
         import klemma.ai_openai as mod
+        importlib.reload(litellm_mod)
         importlib.reload(mod)
 
         config = AIConfig(backend="openai", model="gpt-4o")
-        with pytest.raises(ImportError, match="openai"):
+        with pytest.warns(DeprecationWarning, match="backend: openai is deprecated"):
             mod.OpenAIClient(config)
 
 
 # ---------------------------------------------------------------------------
-# OpenAIClient with mocked SDK
+# Import guard (litellm required)
 # ---------------------------------------------------------------------------
 
-def test_openai_call():
-    config = AIConfig(backend="openai", model="gpt-4o", base_url="http://localhost:8000/v1")
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = _make_mock_response("Hello from AI")
+def test_openai_import_error_without_litellm():
+    """Clean error when litellm package is not installed."""
+    with patch.dict(sys.modules, {"litellm": None}):
+        import klemma.ai_litellm as litellm_mod
+        import klemma.ai_openai as mod
+        importlib.reload(litellm_mod)
+        importlib.reload(mod)
 
-    client = _create_client_with_mock(config, mock_client)
+        config = AIConfig(backend="openai", model="gpt-4o")
+        with pytest.raises(ImportError, match="litellm"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                mod.OpenAIClient(config)
+
+
+# ---------------------------------------------------------------------------
+# Delegation to LiteLLMClient
+# ---------------------------------------------------------------------------
+
+def test_openai_call_delegates_to_litellm():
+    config = AIConfig(backend="openai", model="gpt-4o")
+    client, mock = _create_client_with_mock(config)
 
     result = client.call("system prompt", "user prompt", max_tokens=1024, temperature=0.5)
     assert result == "Hello from AI"
 
-    mock_client.chat.completions.create.assert_called_once_with(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "system prompt"},
-            {"role": "user", "content": "user prompt"},
-        ],
-        max_tokens=1024,
-        temperature=0.5,
-    )
+    mock.completion.assert_called_once()
+    call_kwargs = mock.completion.call_args.kwargs
+    # Model should be prefixed with openai/
+    assert call_kwargs["model"] == "openai/gpt-4o"
 
 
-def test_openai_json_mode():
+def test_openai_model_already_prefixed():
+    """Model with provider/ prefix should not be double-prefixed."""
+    config = AIConfig(backend="openai", model="openai/gpt-4o")
+    client, mock = _create_client_with_mock(config)
+
+    client.call("sys", "usr")
+    call_kwargs = mock.completion.call_args.kwargs
+    assert call_kwargs["model"] == "openai/gpt-4o"
+
+
+def test_openai_call_json_delegates():
     config = AIConfig(backend="openai", model="gpt-4o", json_mode=True)
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = _make_mock_response('{"key": "value"}')
+    mock_litellm = MagicMock()
+    mock_litellm.completion.return_value = _make_mock_response('{"key": "value"}')
 
-    client = _create_client_with_mock(config, mock_client)
+    client, _ = _create_client_with_mock(config, mock_litellm)
 
     result = client.call_json("sys", "usr")
     assert result == {"key": "value"}
 
-    call_kwargs = mock_client.chat.completions.create.call_args
-    assert call_kwargs.kwargs.get("response_format") == {"type": "json_object"}
-
-
-def test_openai_call_json_fallback_no_json_mode():
-    """Without json_mode, call_json uses extract_json from base class."""
-    config = AIConfig(backend="openai", model="gpt-4o", json_mode=False)
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = _make_mock_response(
-        'Some text\n{"key": "val"}'
-    )
-
-    client = _create_client_with_mock(config, mock_client)
-
-    result = client.call_json("sys", "usr")
-    assert result == {"key": "val"}
-
 
 def test_openai_retry_on_error():
     config = AIConfig(backend="openai", model="gpt-4o", retries=2)
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.side_effect = Exception("API error")
+    mock_litellm = MagicMock()
+    mock_litellm.completion.side_effect = Exception("API error")
 
-    client = _create_client_with_mock(config, mock_client)
+    client, _ = _create_client_with_mock(config, mock_litellm)
 
     result = client.call("sys", "usr")
     assert result is None
-    # Should have been called retries + 1 = 3 times
-    assert mock_client.chat.completions.create.call_count == 3
+    assert mock_litellm.completion.call_count == 3

@@ -2,16 +2,22 @@
 # KLEMMA SYSTEM CONFIG — global defaults (~/.klemma/config.yaml)
 # =============================================================================
 # Shared settings for all klemma projects. Project-level configs override these.
+#
+# NOTE: Consider using ~/.klemmarc.yaml instead — it supports direct API keys
+# and is the recommended way to configure klemma globally.
+# See klemmarc.example.yaml for the full reference.
 
 zotero:
   # storage_path: ~/Zotero/storage     # local Zotero PDF storage
 
 ai:
-  model: "sonnet"                      # default AI model: "opus", "sonnet", "haiku"
+  backend: "litellm"                   # recommended: litellm (100+ providers)
+  model: "sonnet"                      # default AI model
   language: "ru"                       # default AI response language
   timeout: 300
   retries: 2
-  # Uncomment for OpenAI-compatible backends:
-  # backend: "openai"
-  # base_url: "http://localhost:11434/v1"
-  # api_key_env: "OPENAI_API_KEY"
+  # For specific providers via LiteLLM:
+  # model: "anthropic/claude-sonnet-4-6"
+  # model: "openai/gpt-4.1"
+  # model: "ollama/llama3"
+  # base_url: "http://localhost:11434"  # custom endpoint

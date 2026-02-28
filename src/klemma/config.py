@@ -8,11 +8,12 @@ Supports Git/NPM-style per-directory projects:
 
 import logging
 import os
+import stat
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +41,27 @@ def ensure_system_home() -> Path:
 
     Delegates to setup.init_system() for config creation to ensure
     consistent content with 'klemma init --global-only'.
+    Also checks ~/.klemmarc.yaml permissions (should be 0o600).
     """
     system_home = get_system_home()
     if not system_home.exists():
         from .setup import init_system
         init_system(system_home)
         logger.info("Created system config at %s", system_home)
+    _check_klemmarc_permissions()
     return system_home
+
+
+def _check_klemmarc_permissions():
+    """Fix permissions on ~/.klemmarc* if world-readable (contains secrets)."""
+    home = Path.home()
+    for name in _KLEMMARC_NAMES:
+        path = home / name
+        if path.exists():
+            mode = path.stat().st_mode
+            if mode & (stat.S_IRGRP | stat.S_IROTH):
+                path.chmod(0o600)
+                logger.warning("Fixed permissions on %s → 0600 (contains secrets)", path)
 
 
 # --- Project discovery (Git-style) ---
@@ -116,7 +131,7 @@ class ObsidianConfig(BaseModel):
 
 
 class AIConfig(BaseModel):
-    backend: str = "claude"  # "claude" | "openai" | "litellm"
+    backend: str = "litellm"  # "claude" | "litellm" | "openai" (deprecated)
     model: str = "opus"
     max_pdf_chars: int = 50000
     timeout: int = 180
@@ -125,10 +140,19 @@ class AIConfig(BaseModel):
     api_key_env: str = ""  # env var name for API key (e.g. "OPENAI_API_KEY")
     json_mode: bool = False  # use structured JSON mode when backend supports it
     language: str = "ru"  # AI response language (e.g. "en", "ru", "de")
+    _resolved_api_keys: dict = PrivateAttr(default_factory=dict)
 
     @property
     def api_key(self) -> Optional[str]:
-        """Resolve API key from environment variable."""
+        """Resolve API key: klemmarc api_keys → env var fallback.
+
+        Looks up the provider derived from backend+model in _resolved_api_keys
+        first, then falls back to os.environ.get(api_key_env).
+        """
+        provider = _derive_provider(self.backend, self.model)
+        key = self._resolved_api_keys.get(provider)
+        if key:
+            return key
         if self.api_key_env:
             return os.environ.get(self.api_key_env)
         return None
@@ -332,6 +356,44 @@ def _load_yaml(path: Path) -> dict:
         return yaml.safe_load(f) or {}
 
 
+# --- klemmarc global config ---
+
+_KLEMMARC_NAMES = (".klemmarc.yaml", ".klemmarc.yml", ".klemmarc")
+
+
+def _load_klemmarc() -> dict:
+    """Load ~/.klemmarc.yaml (or .yml / .klemmarc) global config.
+
+    Returns raw dict (including api_keys section). Empty dict if missing.
+    """
+    home = Path.home()
+    for name in _KLEMMARC_NAMES:
+        path = home / name
+        if path.exists():
+            return _load_yaml(path)
+    return {}
+
+
+def _derive_provider(backend: str, model: str) -> str:
+    """Extract provider name from backend+model for api_keys lookup.
+
+    Examples:
+        litellm + "anthropic/claude-sonnet" → "anthropic"
+        litellm + "gpt-4.1" (bare) → "openai"
+        "openai" backend → "openai"
+        "claude" backend → "anthropic"
+    """
+    if backend == "claude":
+        return "anthropic"
+    if backend == "openai":
+        return "openai"
+    # litellm: model may be "provider/model-name" or bare
+    if "/" in model:
+        return model.split("/", 1)[0]
+    # Bare model name → assume openai
+    return "openai"
+
+
 def load_config(config_path: str | Path | None = None) -> KlemmaConfig:
     """Load and validate configuration from YAML file.
 
@@ -362,10 +424,13 @@ def resolve_effective_config(
     project_chain: list[Path],
     config_override: Optional[str | Path] = None,
 ) -> tuple[KlemmaConfig, ProjectConfig, Path]:
-    """Resolve effective config by merging: system → parent → child → CLI override.
+    """Resolve effective config by merging: klemmarc → system → parent → child → CLI.
 
     project_chain is child-first: [child_root, parent_root].
     Can be empty if only config_override is given (fallback to override path).
+
+    Merge order (later wins):
+    ~/.klemmarc.yaml < ~/.klemma/config.yaml < parent project < child project < CLI override
 
     Selective inheritance: only shared resource keys (obsidian, zotero, ai)
     are inherited from parent. Project structure (project, tags, state, etc.)
@@ -373,6 +438,11 @@ def resolve_effective_config(
 
     Returns (merged_config, project_config, active_project_root).
     """
+    # 0. klemmarc base layer (global config with api_keys)
+    klemmarc_raw = _load_klemmarc()
+    api_keys = klemmarc_raw.pop("api_keys", {})
+    # Start from klemmarc (without api_keys — not part of KlemmaConfig schema)
+
     # 1. System defaults
     system_raw = _load_yaml(get_system_home() / "config.yaml")
 
@@ -389,8 +459,9 @@ def resolve_effective_config(
             inherited = {k: v for k, v in project_raw.items() if k in _INHERITED_KEYS}
             merged = _deep_merge(merged, inherited)
 
-    # 3. System provides defaults for unset keys
-    effective = _deep_merge(system_raw, merged)
+    # 3. Merge: klemmarc < system < projects
+    effective = _deep_merge(klemmarc_raw, system_raw)
+    effective = _deep_merge(effective, merged)
 
     # 4. CLI --config override wins over everything
     if config_override:
@@ -398,6 +469,10 @@ def resolve_effective_config(
         effective = _deep_merge(effective, override_raw)
 
     cfg = KlemmaConfig.model_validate(effective)
+
+    # Inject resolved api_keys (PrivateAttr, never serialized)
+    if api_keys:
+        cfg.ai._resolved_api_keys = api_keys
 
     # Determine project root
     if project_chain:

@@ -1,37 +1,54 @@
-"""OpenAI-compatible AI backend.
+"""OpenAI-compatible AI backend — DEPRECATED, delegates to LiteLLM.
 
-Works with: OpenAI API, Ollama (/v1), vLLM, LM Studio, llama-cpp-python server.
-Install: pip install klemma[openai]
+Use ``backend: litellm`` with ``model: openai/gpt-4.1`` instead.
+This module emits a DeprecationWarning and delegates all calls to LiteLLMClient
+with an ``openai/`` prefix on the model name.
 """
 
-import json
 import logging
+import warnings
 from typing import Optional
 
-from .ai import AIProviderBase, extract_json
+from .ai import AIProviderBase
 from .config import AIConfig
 
 logger = logging.getLogger(__name__)
 
 
 class OpenAIClient(AIProviderBase):
-    """AI backend using the OpenAI Python SDK (chat completions API)."""
+    """Deprecated OpenAI backend — thin wrapper around LiteLLMClient.
+
+    Emits DeprecationWarning on construction. Prefixes bare model names
+    with ``openai/`` so LiteLLM routes them correctly.
+    """
 
     def __init__(self, config: AIConfig):
+        warnings.warn(
+            "backend: openai is deprecated. Use backend: litellm with "
+            "model: openai/<model-name> instead (e.g. model: openai/gpt-4.1).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(config)
+
         try:
-            from openai import OpenAI
+            from .ai_litellm import LiteLLMClient
         except ImportError:
             raise ImportError(
-                "OpenAI backend requires the 'openai' package. "
-                "Install with: pip install klemma[openai]"
+                "OpenAI backend now requires the 'litellm' package (delegates to LiteLLM). "
+                "Install with: pip install klemma[litellm]"
             )
 
-        self._client = OpenAI(
-            api_key=config.api_key or "not-needed",
-            base_url=config.base_url,
-        )
-        self._json_mode = config.json_mode
+        # Prefix bare model names with openai/ for LiteLLM routing
+        prefixed_model = config.model
+        if "/" not in prefixed_model:
+            prefixed_model = f"openai/{prefixed_model}"
+
+        # Create a modified config for the delegate
+        delegate_config = config.model_copy(update={"model": prefixed_model, "backend": "litellm"})
+        # Preserve private attrs
+        delegate_config._resolved_api_keys = config._resolved_api_keys
+        self._delegate = LiteLLMClient(delegate_config)
 
     @property
     def _is_reasoning_model(self) -> bool:
@@ -57,30 +74,7 @@ class OpenAIClient(AIProviderBase):
         temperature: float = 0.3,
         timeout: Optional[int] = None,
     ) -> Optional[str]:
-        """Call OpenAI-compatible chat completions API with retries."""
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ]
-
-        kwargs = {
-            "model": self.model,
-            "messages": messages,
-            **self._token_kwargs(max_tokens),
-        }
-        if not self._is_reasoning_model:
-            kwargs["temperature"] = temperature
-
-        for attempt in range(self.retries + 1):
-            try:
-                response = self._client.chat.completions.create(**kwargs)
-                return response.choices[0].message.content
-            except Exception as e:
-                logger.warning(
-                    "OpenAI API error (attempt %d/%d): %s",
-                    attempt + 1, self.retries + 1, e,
-                )
-        return None
+        return self._delegate.call(system, user, max_tokens, temperature, timeout)
 
     def call_json(
         self,
@@ -90,38 +84,4 @@ class OpenAIClient(AIProviderBase):
         temperature: float = 0.2,
         timeout: Optional[int] = None,
     ) -> Optional[dict]:
-        """Call API and parse JSON, optionally using structured JSON mode."""
-        if not self._json_mode:
-            return super().call_json(system, user, max_tokens, temperature, timeout)
-
-        # JSON mode: request structured output from the API
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ]
-
-        kwargs = {
-            "model": self.model,
-            "messages": messages,
-            "response_format": {"type": "json_object"},
-            **self._token_kwargs(max_tokens),
-        }
-        if not self._is_reasoning_model:
-            kwargs["temperature"] = temperature
-
-        for attempt in range(self.retries + 1):
-            try:
-                response = self._client.chat.completions.create(**kwargs)
-                text = response.choices[0].message.content
-                if not text:
-                    continue
-                try:
-                    return json.loads(text)
-                except json.JSONDecodeError:
-                    return extract_json(text)
-            except Exception as e:
-                logger.warning(
-                    "OpenAI API error (attempt %d/%d): %s",
-                    attempt + 1, self.retries + 1, e,
-                )
-        return None
+        return self._delegate.call_json(system, user, max_tokens, temperature, timeout)

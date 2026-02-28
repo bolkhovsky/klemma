@@ -1,0 +1,47 @@
+# =============================================================================
+# KLEMMA GLOBAL CONFIG — ~/.klemmarc.yaml
+# =============================================================================
+# Single config file for all klemma projects. Overridden by project configs.
+# This file should have 0600 permissions because it may contain API keys.
+#
+# Merge order (later wins):
+# ~/.klemmarc.yaml < ~/.klemma/config.yaml < parent project < child project < CLI
+#
+# Install klemma with LiteLLM support:
+#   pip install klemma[litellm]
+
+# --- AI backend ---
+
+ai:
+  backend: "litellm"                    # recommended (100+ providers via LiteLLM)
+  model: "anthropic/claude-sonnet-4-6"  # format: provider/model-name
+  language: "ru"                        # AI response language
+  timeout: 300
+  retries: 2
+  # json_mode: true                     # structured JSON output (if model supports it)
+  # base_url: "http://localhost:11434"   # custom endpoint (Ollama, vLLM, etc.)
+
+# --- API keys ---
+# Direct API keys — no more env var juggling.
+# Only uncomment keys you actually use.
+
+# api_keys:
+#   openai: "sk-..."
+#   anthropic: "sk-ant-..."
+#   google: "AIza..."
+#   cohere: "..."
+#   mistral: "..."
+
+# --- Embeddings ---
+
+# embeddings:
+#   backend: "openai"                   # "s2" (free) | "local" | "openai"
+#   model: "text-embedding-3-small"
+
+# --- Common model examples ---
+# ai:
+#   model: "openai/gpt-4.1"            # OpenAI GPT-4.1
+#   model: "anthropic/claude-opus-4-6"  # Anthropic Claude Opus
+#   model: "ollama/llama3"              # Local Ollama
+#   model: "openai/o3"                  # OpenAI reasoning model
+#   model: "google/gemini-2.5-pro"      # Google Gemini

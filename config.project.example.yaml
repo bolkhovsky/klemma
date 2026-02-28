@@ -17,12 +17,12 @@ obsidian:
   tags_folder: "Tags"                  # optional folder for tag notes
 
 ai:
-  model: "sonnet"                      # claude model: "opus", "sonnet", "haiku"
+  backend: "litellm"                   # recommended: litellm (100+ providers)
+  model: "anthropic/claude-sonnet-4-6" # litellm model format: provider/model
   language: "ru"                       # AI response language
-  # Uncomment for OpenAI-compatible backends:
-  # backend: "openai"
-  # base_url: "http://localhost:11434/v1"
-  # api_key_env: "OPENAI_API_KEY"
+  # For local models:
+  # model: "ollama/llama3"
+  # base_url: "http://localhost:11434"
 
 # --- Per-project settings (NOT inherited from parent) ---
 
