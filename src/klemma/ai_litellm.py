@@ -8,9 +8,10 @@ Install: pip install klemma[litellm]
 import json
 import logging
 import re
+import time
 from typing import Optional
 
-from .ai import AIProviderBase, extract_json
+from .ai import AICallResult, AIProviderBase, extract_json
 from .config import AIConfig
 
 logger = logging.getLogger(__name__)
@@ -144,3 +145,86 @@ class LiteLLMClient(AIProviderBase):
                     attempt + 1, self.retries + 1, e,
                 )
         return None
+
+    def call_with_meta(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 8192,
+        temperature: float = 0.3,
+        timeout: Optional[int] = None,
+    ) -> AICallResult:
+        """Call LiteLLM with structured error handling and token tracking."""
+
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        kwargs = self._build_kwargs(messages, max_tokens, temperature, timeout)
+
+        t0 = time.monotonic()
+        retries_used = 0
+        last_error = ""
+
+        for attempt in range(self.retries + 1):
+            try:
+                response = self._litellm.completion(**kwargs)
+                elapsed = int((time.monotonic() - t0) * 1000)
+                text = response.choices[0].message.content
+
+                # Extract token usage if available
+                usage = getattr(response, "usage", None)
+                input_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
+                output_tokens = (
+                    getattr(usage, "completion_tokens", 0) if usage else 0
+                )
+
+                return AICallResult(
+                    text=text,
+                    duration_ms=elapsed,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    retries_used=retries_used,
+                    model=self.model,
+                )
+            except self._litellm.AuthenticationError as e:
+                # Fatal — do not retry
+                elapsed = int((time.monotonic() - t0) * 1000)
+                logger.error("Auth error: %s", e)
+                return AICallResult(
+                    text=None,
+                    duration_ms=elapsed,
+                    model=self.model,
+                    retries_used=retries_used,
+                    error=f"auth: {e}",
+                )
+            except self._litellm.Timeout as e:
+                retries_used = attempt + 1
+                last_error = f"timeout: {e}"
+                logger.warning(
+                    "Timeout (attempt %d/%d)", attempt + 1, self.retries + 1
+                )
+            except self._litellm.RateLimitError as e:
+                retries_used = attempt + 1
+                last_error = f"rate_limit: {e}"
+                logger.warning(
+                    "Rate limit (attempt %d/%d)", attempt + 1, self.retries + 1
+                )
+            except Exception as e:
+                retries_used = attempt + 1
+                last_error = f"error: {e}"
+                logger.warning(
+                    "LiteLLM error (attempt %d/%d): %s",
+                    attempt + 1,
+                    self.retries + 1,
+                    e,
+                )
+
+        elapsed = int((time.monotonic() - t0) * 1000)
+        return AICallResult(
+            text=None,
+            duration_ms=elapsed,
+            model=self.model,
+            retries_used=retries_used,
+            error=last_error or "all retries exhausted",
+        )
