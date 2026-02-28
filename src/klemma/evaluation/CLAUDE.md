@@ -34,12 +34,13 @@ Benchmark runners — orchestrate DB queries + metric computation.
 - `run_all(state, dataset, metrics_filter, reranked_gaps?, ai?, klemma_home?)` — dispatch to selected runners; includes reconstruction when `metrics_filter` is `"all"` or `"reconstruct"`
 - `build_results_summary(results)` — flatten headline metrics from results dict into flat `{"reconstruction.f1": 0.624, ...}` dict for persistence
 
-### reconstruction.py (~230 lines)
+### reconstruction.py (~329 lines)
 Citation reconstruction benchmark — end-to-end recommendation quality.
+- `AICallStats` — dataclass accumulator for AI call metadata (total_calls, duration_ms, input/output tokens, errors); `record(result)` accepts `AICallResult`, `to_dict()` for serialization
 - `run_analyst(ai, pdf_text, library_entries, paper_citekey, paper_title, klemma_home)` — extract ground truth citation map from a paper's PDF via AI
 - `compute_baseline(state, dataset)` — evaluate DB-only fragment assignments against ground truth
-- `run_reconstruction(ai, state, dataset, klemma_home, ablation?)` — AI-driven citation recommendation against ground truth; ablation params override temperature, fragments_per_source, and prompt variables (max_recs_per_section, few-shot examples)
-- `run_reconstruction_benchmark(state, dataset, ai?, klemma_home?, ablation?)` — full benchmark: ground truth stats + baseline + optional AI reconstruction with ablation support
+- `run_reconstruction(ai, state, dataset, klemma_home, ablation?, stats?)` — AI-driven citation recommendation using `call_with_meta()` for structured error handling and token tracking; ablation params override temperature, fragments_per_source, and prompt variables
+- `run_reconstruction_benchmark(state, dataset, ai?, klemma_home?, ablation?, stats?)` — full benchmark: ground truth stats + baseline + optional AI reconstruction; passes stats through to run_reconstruction
 
 ### candidates.py (~97 lines)
 Benchmark candidate discovery from citation graph.
