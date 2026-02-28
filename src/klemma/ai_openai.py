@@ -50,6 +50,22 @@ class OpenAIClient(AIProviderBase):
         delegate_config._resolved_api_keys = config._resolved_api_keys
         self._delegate = LiteLLMClient(delegate_config)
 
+    @property
+    def _is_reasoning_model(self) -> bool:
+        """Detect reasoning models that require different API parameters."""
+        m = self.model.lower()
+        return m.startswith(("o1", "o3", "o4", "gpt-5"))
+
+    def _token_kwargs(self, max_tokens: int) -> dict:
+        """Build the right token-limit kwarg for the model.
+
+        Reasoning models (o-series, gpt-5-*) require
+        ``max_completion_tokens`` instead of ``max_tokens``.
+        """
+        if self._is_reasoning_model:
+            return {"max_completion_tokens": max_tokens}
+        return {"max_tokens": max_tokens}
+
     def call(
         self,
         system: str,
