@@ -1,5 +1,6 @@
 """Tests for AI provider abstraction: extract_json, AIProviderBase, factory."""
 
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -168,3 +169,51 @@ def test_base_call_with_meta_on_failure():
     result = base.call_with_meta("sys", "usr")
     assert result.text is None
     assert result.error == "all retries exhausted"
+
+
+# ---------------------------------------------------------------------------
+# ClaudeClient.call_with_meta()
+# ---------------------------------------------------------------------------
+
+@patch.object(ClaudeClient, "check_cli_available", return_value=True)
+def test_claude_call_with_meta_success(mock_check):
+    config = AIConfig(backend="claude")
+    client = ClaudeClient(config)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="response text", stderr="",
+        )
+        result = client.call_with_meta("sys", "usr")
+
+    assert isinstance(result, AICallResult)
+    assert result.text == "response text"
+    assert result.duration_ms >= 0
+    assert result.error is None
+
+
+@patch.object(ClaudeClient, "check_cli_available", return_value=True)
+def test_claude_call_with_meta_timeout(mock_check):
+    config = AIConfig(backend="claude", retries=0)
+    client = ClaudeClient(config)
+
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("claude", 180)):
+        result = client.call_with_meta("sys", "usr")
+
+    assert result.text is None
+    assert "timeout" in result.error.lower()
+
+
+@patch.object(ClaudeClient, "check_cli_available", return_value=True)
+def test_claude_call_with_meta_cli_error(mock_check):
+    config = AIConfig(backend="claude", retries=0)
+    client = ClaudeClient(config)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="error output",
+        )
+        result = client.call_with_meta("sys", "usr")
+
+    assert result.text is None
+    assert result.error is not None
