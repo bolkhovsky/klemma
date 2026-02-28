@@ -7,6 +7,8 @@ Optional backends: OpenAI-compatible API, LiteLLM.
 import json
 import logging
 import subprocess
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
 
@@ -56,6 +58,22 @@ def extract_json(text: str) -> Optional[dict]:
         return None
 
 
+@dataclass
+class AICallResult:
+    """Result of an AI call with metadata for observability."""
+
+    text: Optional[str] = None
+    duration_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    retries_used: int = 0
+    model: str = ""
+    error: Optional[str] = None
+
+    def __bool__(self) -> bool:
+        return self.text is not None
+
+
 # ---------------------------------------------------------------------------
 # Protocol
 # ---------------------------------------------------------------------------
@@ -87,6 +105,15 @@ class AIProvider(Protocol):
         temperature: float = 0.2,
         timeout: Optional[int] = None,
     ) -> Optional[dict]: ...
+
+    def call_with_meta(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 8192,
+        temperature: float = 0.3,
+        timeout: Optional[int] = None,
+    ) -> AICallResult: ...
 
     def render_prompt(self, template_path: Path, **kwargs) -> str: ...
 
@@ -133,6 +160,25 @@ class AIProviderBase:
         if not text:
             return None
         return extract_json(text)
+
+    def call_with_meta(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 8192,
+        temperature: float = 0.3,
+        timeout: Optional[int] = None,
+    ) -> AICallResult:
+        """Call the backend and return result with metadata."""
+        t0 = time.monotonic()
+        text = self.call(system, user, max_tokens=max_tokens, temperature=temperature, timeout=timeout)
+        elapsed = int((time.monotonic() - t0) * 1000)
+        return AICallResult(
+            text=text,
+            duration_ms=elapsed,
+            model=self.model,
+            error=None if text else "all retries exhausted",
+        )
 
     def render_prompt(self, template_path: Path, **kwargs) -> str:
         """Load a prompt template and render with Jinja2."""

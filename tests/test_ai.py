@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from klemma.ai import (
+    AICallResult,
     AIProvider,
     AIProviderBase,
     ClaudeClient,
@@ -109,3 +110,61 @@ def test_create_ai_unknown_backend():
     config = AIConfig(backend="unknown")
     with pytest.raises(ValueError, match="Unknown AI backend"):
         create_ai(config)
+
+
+# ---------------------------------------------------------------------------
+# AICallResult
+# ---------------------------------------------------------------------------
+
+def test_aicallresult_fields():
+    r = AICallResult(
+        text="hello",
+        duration_ms=150,
+        input_tokens=10,
+        output_tokens=5,
+        retries_used=0,
+        model="gpt-4.1",
+    )
+    assert r.text == "hello"
+    assert r.duration_ms == 150
+    assert r.input_tokens == 10
+    assert r.output_tokens == 5
+    assert r.retries_used == 0
+    assert r.model == "gpt-4.1"
+    assert r.error is None
+
+
+def test_aicallresult_failed():
+    r = AICallResult(text=None, duration_ms=3000, model="gpt-4.1", error="timeout")
+    assert r.text is None
+    assert r.error == "timeout"
+
+
+def test_aicallresult_bool():
+    """Truthy when text is present, falsy when None."""
+    assert bool(AICallResult(text="ok", duration_ms=1, model="m"))
+    assert not bool(AICallResult(text=None, duration_ms=1, model="m"))
+
+
+def test_base_call_with_meta_delegates():
+    """AIProviderBase.call_with_meta() wraps call() with timing."""
+    config = AIConfig()
+    base = AIProviderBase(config)
+    base.call = lambda system, user, max_tokens=8192, temperature=0.3, timeout=None: "response text"
+
+    result = base.call_with_meta("sys", "usr")
+    assert isinstance(result, AICallResult)
+    assert result.text == "response text"
+    assert result.duration_ms >= 0
+    assert result.retries_used == 0
+    assert result.model == config.model
+
+
+def test_base_call_with_meta_on_failure():
+    config = AIConfig()
+    base = AIProviderBase(config)
+    base.call = lambda system, user, max_tokens=8192, temperature=0.3, timeout=None: None
+
+    result = base.call_with_meta("sys", "usr")
+    assert result.text is None
+    assert result.error == "all retries exhausted"
