@@ -78,6 +78,8 @@ def build_agent_context(
     klemma_home: Optional[Path] = None,
     project_name: str = "",
     project_root: Optional[Path] = None,
+    embeddings=None,
+    query: Optional[str] = None,
 ) -> str:
     """Build a rich system prompt with full research context for the agent.
 
@@ -170,6 +172,18 @@ def build_agent_context(
         report_index = scan["report_index"]
         project_file_list = scan["project_files"]
 
+    # Fragment RAG: retrieve relevant fragments when embeddings + query available
+    relevant_fragments = []
+    if embeddings and query:
+        try:
+            query_vec = embeddings.embed(query)
+            if query_vec:
+                relevant_fragments = state.retrieve_similar_fragments(
+                    query_vec, top_k=10, model=embeddings.model_name
+                )
+        except Exception:
+            logger.debug("Fragment RAG retrieval failed", exc_info=True)
+
     # Render prompt
     prompt_path = (
         resolve_prompt("agent.md", klemma_home)
@@ -206,6 +220,7 @@ def build_agent_context(
         outline_content=outline_content,
         report_index=report_index,
         project_file_list=project_file_list,
+        relevant_fragments=relevant_fragments,
         range=range,
     )
 

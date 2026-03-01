@@ -1,5 +1,6 @@
 """Fragment repository — CRUD and intent coverage stats."""
 
+import struct
 from typing import Optional
 
 from .base import BaseRepository
@@ -134,3 +135,117 @@ class FragmentRepository(BaseRepository):
                     result[sec][intent] = row["cnt"]
                     result[sec]["total"] += row["cnt"]
             return result
+
+    def save_fragment_embedding(
+        self, fragment_id: int, embedding: list[float], model: str
+    ):
+        """Store fragment embedding vector as BLOB with model name."""
+        blob = struct.pack(f"{len(embedding)}f", *embedding)
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE fragments SET embedding=?, embedding_model=? WHERE id=?",
+                (blob, model, fragment_id),
+            )
+
+    def get_fragment_embeddings(
+        self, model: Optional[str] = None
+    ) -> dict[int, list[float]]:
+        """Get all fragment embeddings, optionally filtered by model.
+        Returns {fragment_id: vector}.
+        """
+        with self._conn() as conn:
+            if model:
+                cur = conn.execute(
+                    "SELECT id, embedding FROM fragments "
+                    "WHERE embedding IS NOT NULL AND embedding_model=?",
+                    (model,),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT id, embedding FROM fragments WHERE embedding IS NOT NULL"
+                )
+            result = {}
+            for row in cur.fetchall():
+                blob = row["embedding"]
+                n = len(blob) // 4
+                result[row["id"]] = list(struct.unpack(f"{n}f", blob))
+            return result
+
+    def get_fragment_embedding_stats(self) -> dict:
+        """Get fragment embedding coverage stats."""
+        with self._conn() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) as cnt FROM fragments"
+            ).fetchone()["cnt"]
+            embedded = conn.execute(
+                "SELECT COUNT(*) as cnt FROM fragments WHERE embedding IS NOT NULL"
+            ).fetchone()["cnt"]
+            models: dict[str, int] = {}
+            cur = conn.execute(
+                "SELECT embedding_model, COUNT(*) as cnt FROM fragments "
+                "WHERE embedding IS NOT NULL GROUP BY embedding_model"
+            )
+            for row in cur.fetchall():
+                models[row["embedding_model"] or "unknown"] = row["cnt"]
+            return {"total": total, "embedded": embedded, "models": models}
+
+    def get_unembedded_fragments(self, limit: int = 100000) -> list[dict]:
+        """Get fragments without embeddings. Returns id, source_id, fragment_text."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                """SELECT f.id, f.source_id, f.fragment_text, s.id as citekey
+                   FROM fragments f
+                   JOIN sources s ON f.source_id = s.id
+                   WHERE f.embedding IS NULL
+                   LIMIT ?""",
+                (limit,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def retrieve_similar_fragments(
+        self,
+        query_embedding: list[float],
+        top_k: int = 10,
+        model: Optional[str] = None,
+    ) -> list[dict]:
+        """Retrieve top-K fragments by cosine similarity to query vector.
+        Returns fragment dicts enriched with 'similarity' and 'citekey' fields.
+        """
+        from ..embeddings import cosine_similarity
+
+        all_emb = self.get_fragment_embeddings(model=model)
+        if not all_emb:
+            return []
+
+        scored: list[tuple[int, float]] = []
+        for frag_id, vec in all_emb.items():
+            sim = cosine_similarity(query_embedding, vec)
+            scored.append((frag_id, sim))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        top_ids = scored[:top_k]
+
+        if not top_ids:
+            return []
+
+        with self._conn() as conn:
+            placeholders = ",".join("?" * len(top_ids))
+            id_list = [t[0] for t in top_ids]
+            cur = conn.execute(
+                f"""SELECT f.id, f.source_id, f.fragment_text, f.fragment_type,
+                           f.chapter, f.section, f.relevance_score, f.usage_hint,
+                           f.page_number, f.citation_intent, s.id as citekey
+                    FROM fragments f
+                    JOIN sources s ON f.source_id = s.id
+                    WHERE f.id IN ({placeholders})""",
+                id_list,
+            )
+            frag_map = {row["id"]: dict(row) for row in cur.fetchall()}
+
+        results = []
+        for frag_id, sim in top_ids:
+            if frag_id in frag_map:
+                frag = frag_map[frag_id]
+                frag["similarity"] = round(sim, 4)
+                results.append(frag)
+        return results

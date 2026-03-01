@@ -38,9 +38,9 @@ Library health analysis. Three modes: `status` (health), `recommend` (section-fo
 - Prune mode: `prompts/librarian_prune.md` → AI generates drop/maybe verdicts → `state.save_prune_verdicts()`
 - `list_prune_verdicts()` / `clear_prune_verdict()` — CLI for browsing/clearing verdicts
 
-### agent.py (212 lines)
+### agent.py (~230 lines)
 Builds full project context for interactive Claude sessions.
-- `build_agent_context(project_root=...)` — gathers sources, coverage, gaps, fragments, plan, reading queue + scans project_root for reports/files → `prompts/agent.md` → system prompt
+- `build_agent_context(project_root=..., embeddings=?, query=?)` — gathers sources, coverage, gaps, fragments, plan, reading queue + scans project_root for reports/files → optional fragment RAG (embeds query → top-K retrieval) → `prompts/agent.md` → system prompt
 - `_scan_project_reports(project_root)` — finds Outline/Research/Library/Agent reports + project files (.md, .tex, .bib, .pdf, .doc, .docx)
 - For Claude backend: launches `claude --system-prompt` interactively
 - For non-Claude backends: `ai.call()` with full context → terminal output

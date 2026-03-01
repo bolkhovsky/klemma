@@ -44,12 +44,12 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `
 - Interactive mode: auto-discovers Obsidian vaults, Zotero exports via `discovery.py`
 
 ### state.py (542 lines)
-SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v4), auto-migrates via `_migrate_schema()`. All 64 public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
+SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v5), auto-migrates via `_migrate_schema()`. All 64 public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
 
 Tables:
 - `sources` — Zotero entries (citekey, title, status, chapter, quality, pdf_path, `embedding` BLOB float32, `embedding_model` TEXT)
 - `source_sections` — junction table: source_id × section (multi-section support)
-- `fragments` — extracted citation fragments (text, type, chapter, section, relevance, page, `citation_intent`: background/method/result_comparison)
+- `fragments` — extracted citation fragments (text, type, chapter, section, relevance, page, `citation_intent`: background/method/result_comparison, `embedding` BLOB float32, `embedding_model` TEXT)
 - `reference_gaps` — missing references from bibliographies (status: open/resolved, score, `citation_intent`, intent-weighted scoring)
 - `citation_links` — citation graph: source_id → target (title_hash MD5 for dedup, citation_intent, in_library flag)
 - `daily_plans` — generated daily plans

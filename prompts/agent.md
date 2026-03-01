@@ -72,6 +72,15 @@ No critical gaps.
 - @{{ s.id }}: [{% if s.primary_chapter %}Ch.{{ s.primary_chapter }}, {% endif %}S{{ s.primary_section or "-" }}] quality={{ s.quality_score or 0 }}, fragments={{ s.fragment_count or 0 }}
 {% endfor %}
 
+{% if relevant_fragments %}
+
+## Relevant Fragments ({{ relevant_fragments | length }})
+
+{% for f in relevant_fragments %}
+- @{{ f.citekey }} [{{ f.citation_intent or "?" }}] (sim={{ f.similarity }}): {{ f.fragment_text[:300] }}
+{% endfor %}
+{% endif %}
+
 ## Today's Plan
 
 {% if today_plan %}
