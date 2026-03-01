@@ -149,14 +149,20 @@ def _fit_prompt_budget(
     Budget of 80K chars ~ 20K tokens — leaves room for template
     overhead, system prompt, and 4K output tokens within 30K TPM.
 
+    The overhead accounts for prompt template text (~4K), dissertation_context,
+    coverage stats, gaps, fragment_stats, chapter_plan, section_text, and
+    other variables injected into the rendered prompt.
+
     Reduction order (least to most aggressive):
     1. Trim chapter_draft to 12K chars
     2. Trim vault_summary per source to 400 chars
     3. Trim fragment text to 150 chars
     4. Reduce sources to 15
     5. Reduce fragments to 20
+    6. Reduce sources to 10
+    7. Reduce fragments to 10
     """
-    overhead = 8_000  # template text, instructions, metadata JSON keys
+    overhead = 20_000  # template + dissertation_context + coverage + gaps + other vars
 
     def _estimate():
         return (
@@ -199,6 +205,18 @@ def _fit_prompt_budget(
 
     logger.debug("Still over budget (%d), reducing fragments to 20", _estimate())
     formatted_fragments = formatted_fragments[:20]
+
+    if _estimate() <= max_chars:
+        return chapter_draft, formatted_sources, formatted_fragments
+
+    logger.debug("Still over budget (%d), reducing sources to 10", _estimate())
+    formatted_sources = formatted_sources[:10]
+
+    if _estimate() <= max_chars:
+        return chapter_draft, formatted_sources, formatted_fragments
+
+    logger.debug("Still over budget (%d), reducing fragments to 10", _estimate())
+    formatted_fragments = formatted_fragments[:10]
 
     return chapter_draft, formatted_sources, formatted_fragments
 

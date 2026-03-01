@@ -117,6 +117,54 @@ class TestFitPromptBudget:
         for s in rs:
             assert len(s["summary"]) == 100  # untouched
 
+    def test_extreme_sources_fits_token_limit(self):
+        """85 sources (section 1.3 scenario) must leave room for template overhead.
+
+        Real prompt includes ~20K chars of untracked template variables
+        (dissertation_context, coverage, gaps, template text, etc.).
+        Content must stay under 60K chars so total prompt fits 30K TPM.
+        """
+        draft = "A" * 30_000
+        # 85 sources with realistic vault summaries (~600 chars each)
+        sources = self._make_sources(85, summary_len=600)
+        fragments = self._make_fragments(40, text_len=300)
+
+        rd, rs, rf = _fit_prompt_budget(draft, sources, fragments)
+
+        content_chars = (
+            len(rd)
+            + sum(len(json.dumps(s, ensure_ascii=False)) for s in rs)
+            + sum(len(json.dumps(f, ensure_ascii=False)) for f in rf)
+        )
+        # Content must leave ~20K chars room for template + context variables
+        # 60K content + 20K template ≈ 80K chars ≈ 20K tokens + 4K output = 24K < 30K TPM
+        assert content_chars <= 60_000, (
+            f"Content too large for safe prompt: {content_chars} chars. "
+            f"With ~20K template overhead, total ≈ {content_chars + 20_000} chars "
+            f"≈ {(content_chars + 20_000) // 4} tokens, exceeds 30K TPM with output."
+        )
+
+    def test_worst_case_fits_token_limit(self):
+        """Worst case inputs (85 sources × 1K summaries) must still fit.
+
+        Even with very large source summaries, the budget function must
+        aggressively reduce to fit within safe limits.
+        """
+        draft = "A" * 50_000
+        sources = self._make_sources(85, summary_len=1000)
+        fragments = self._make_fragments(40, text_len=500)
+
+        rd, rs, rf = _fit_prompt_budget(draft, sources, fragments)
+
+        content_chars = (
+            len(rd)
+            + sum(len(json.dumps(s, ensure_ascii=False)) for s in rs)
+            + sum(len(json.dumps(f, ensure_ascii=False)) for f in rf)
+        )
+        assert content_chars <= 60_000, (
+            f"Content too large: {content_chars} chars"
+        )
+
 
 # ---------------------------------------------------------------------------
 # RAG-first fragment retrieval tests
