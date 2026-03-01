@@ -12,7 +12,7 @@
 
 </div>
 
-AI-ассистент для академического письма. Управляет библиотекой источников (Zotero), извлекает цитируемые фрагменты из PDF (AI — Claude, OpenAI, Ollama, LiteLLM), классифицирует citation intent, генерирует ежедневные планы, исследовательские брифинги, анализ библиотеки, семантический поиск похожих источников и отслеживает покрытие глав. Поддерживает вложенные проекты (диссертация + статьи) с раздельными базами и наследованием ресурсов.
+AI-ассистент для академического письма. Управляет библиотекой источников (Zotero), извлекает цитируемые фрагменты из PDF (AI — Claude, OpenAI, Ollama, LiteLLM), классифицирует citation intent, генерирует ежедневные планы, исследовательские брифинги, анализ библиотеки, семантический поиск похожих источников и отслеживает покрытие глав. Fragment RAG обеспечивает ответы, подкреплённые реальными цитатами из библиотеки. Поддерживает вложенные проекты (диссертация + статьи) с раздельными базами и наследованием ресурсов.
 
 ## Установка
 
@@ -24,15 +24,16 @@ pip install -e .
 Требуется:
 - Python 3.11+
 - AI-бэкенд (один из):
-  - Claude Code CLI (`claude` в PATH) — по умолчанию
+  - `pip install klemma[recommended]` — LiteLLM: 100+ провайдеров (рекомендуется)
   - `pip install klemma[openai]` — OpenAI API / Ollama / vLLM / LM Studio
-  - `pip install klemma[litellm]` — 100+ провайдеров через LiteLLM
+  - Claude Code CLI (`claude` в PATH) — без дополнительных пакетов
 - Obsidian vault с заметками источников
 - Zotero с BetterBibTeX plugin (JSON auto-export)
 
 ### Опциональные зависимости
 
 ```bash
+pip install klemma[recommended]        # LiteLLM — рекомендуемый AI-бэкенд
 pip install klemma[embeddings]         # семантический поиск (S2/OpenAI бэкенды)
 pip install klemma[local-embeddings]   # офлайн SPECTER2 (sentence-transformers)
 pip install klemma[mcp]                # MCP-серверы (расширяемость)
@@ -68,7 +69,7 @@ klemma library                                 # здоровье
 klemma library -s 2.3                          # рекомендации
 klemma library --audit                         # аудит + citation graph
 
-# 7. Задать вопрос агенту с контекстом проекта
+# 7. Задать вопрос агенту с контекстом проекта (Fragment RAG)
 klemma ask "Какие методы валидации прогнозов ледовой обстановки?"
 
 # 8. Структура проекта
@@ -156,6 +157,8 @@ klemma similar smithML2020 -k 20               # top-20 результатов
 
 При повторном запуске — инкрементальный режим: читает заметки пользователя из `## ✏️ Что нового`, определяет дельту и обновляет брифинг.
 
+Token-aware prompt budget (~20K токенов): автоматически сокращает контекст (draft → summaries → fragment text → source count → fragment count) при превышении лимита. Использует RAG-first поиск фрагментов через семантический embedding (fallback на section-based при <10 результатах).
+
 ```bash
 klemma research -s 1.3.2                       # первый запуск: полный анализ
 klemma research -s 1.3.2                       # повторный: инкрементальное обновление
@@ -190,7 +193,7 @@ klemma library prune --clear smithML2020       # очистить вердикт
 ```
 
 ### `klemma ask "query"`
-Интерактивный исследовательский агент с полным контекстом проекта: структура, источники, покрытие, пробелы, фрагменты, outline. Ответы сохраняются в `project_root/`.
+Исследовательский агент с полным контекстом проекта и **Fragment RAG**: семантически ищет релевантные фрагменты из обработанных PDF и подставляет их в промпт. Ответы подкреплены реальными цитатами из библиотеки, а не общими знаниями модели. Без fragment embeddings — работает как раньше (metadata-only).
 
 ```bash
 klemma ask "Какие основные методы валидации прогнозов?"
@@ -215,7 +218,7 @@ klemma acquire <url> --no-process              # не извлекать фра�
 Дерево вложенных проектов от текущего корня.
 
 ### `klemma benchmark`
-Фреймворк оценки качества: intent classification, gap ranking, embedding retrieval, citation reconstruction. Поддерживает историю запусков, сравнение и автоматический пайплайн.
+Фреймворк оценки качества: intent classification, gap ranking, embedding retrieval, citation reconstruction. Поддерживает историю запусков, сравнение, автоматический пайплайн и ablation-эксперименты.
 
 ```bash
 klemma benchmark --export dataset.json          # шаблон датасета из БД
@@ -228,6 +231,12 @@ klemma benchmark --prepare smithML2020          # подготовить нед�
 klemma benchmark --auto                         # полный автономный пайплайн
 klemma benchmark --history                      # история запусков
 klemma benchmark --compare id1 id2              # сравнить два запуска
+
+# Ablation-параметры
+klemma benchmark --auto --temperature 0.5       # override температуры
+klemma benchmark --auto --max-recs 3            # макс. рекомендаций на раздел
+klemma benchmark --auto --fragments 10          # фрагментов на источник
+klemma benchmark --auto --prompt-variant fewshot # few-shot промпт
 ```
 
 ### `klemma migrate [--dry-run]`
@@ -239,19 +248,37 @@ klemma benchmark --compare id1 id2              # сравнить два зап
 
 ## Конфигурация
 
-Двухуровневая: system (`~/.klemma/config.yaml`) + project (`.klemma/config.yaml`). Вложенные проекты наследуют `obsidian`, `zotero`, `ai`, `embeddings` от родителя.
+Трёхуровневая: `~/.klemmarc.yaml` (глобальный) → `~/.klemma/config.yaml` (системный) → `.klemma/config.yaml` (проектный). Вложенные проекты наследуют `obsidian`, `zotero`, `ai`, `embeddings` от родителя.
 
-### Системный конфиг (`~/.klemma/config.yaml`)
+### Глобальный конфиг (`~/.klemmarc.yaml`)
+
+Создаётся автоматически при первом `klemma init` (permissions 0600). Содержит API-ключи и AI-настройки, общие для всех проектов.
 
 ```yaml
 ai:
-  backend: "claude"            # "claude" (default) | "openai" | "litellm"
-  model: "opus"                # имя модели
+  backend: "litellm"           # "litellm" (default) | "claude" | "openai"
+  model: "anthropic/claude-sonnet-4-20250514"  # provider/model формат
   timeout: 180                 # таймаут AI-вызова (сек)
   language: "ru"               # язык AI-ответов ("en", "ru", "de", ...)
   # json_mode: true            # structured JSON output (если бэкенд поддерживает)
   # base_url: "http://localhost:11434/v1"  # для Ollama/vLLM/LM Studio
-  # api_key_env: "OPENAI_API_KEY"          # env-переменная для API-ключа
+
+api_keys:
+  anthropic: "sk-ant-..."      # для anthropic/* моделей
+  openai: "sk-..."             # для openai/* моделей
+  # google: "..."              # для gemini/* моделей
+```
+
+### Системный конфиг (`~/.klemma/config.yaml`)
+
+Альтернативное расположение для AI-настроек (legacy). Перекрывается `~/.klemmarc.yaml`.
+
+```yaml
+ai:
+  backend: "litellm"           # "litellm" (default) | "claude" | "openai"
+  model: "anthropic/claude-sonnet-4-20250514"
+  timeout: 180
+  language: "ru"
 ```
 
 ### Проектный конфиг (`.klemma/config.yaml`)
@@ -348,27 +375,32 @@ tags: ["NLP", "Machine-Learning"]
 ## Архитектура
 
 ```
-klemma (CLI)
+klemma (CLI, v0.4.1)
 ├── AI Provider ─────── AI-анализ (pluggable backend)
-│   ├── ClaudeClient ── Claude Code CLI (claude -p) — default
-│   ├── OpenAIClient ── OpenAI / Ollama / vLLM / LM Studio
-│   └── LiteLLMClient ─ 100+ провайдеров (litellm SDK)
+│   ├── LiteLLMClient ─ 100+ провайдеров (litellm SDK) — recommended, default
+│   ├── ClaudeClient ── Claude Code CLI (claude -p)
+│   └── OpenAIClient ── deprecated (делегирует в LiteLLM)
+├── Error Taxonomy ──── KlemmaAIError (timeout/rate-limit/auth/response)
+│   └── AICallResult ── timing, tokens, retries, model metadata
 ├── Embeddings ──────── семантический поиск (pluggable backend)
 │   ├── SemanticScholar ─ S2 API (768-dim SPECTER, бесплатно)
 │   ├── LocalSPECTER ──── sentence-transformers (офлайн)
 │   └── OpenAI ─────────── text-embedding-3-small (1536-dim)
+├── Fragment RAG ────── семантический поиск по фрагментам (ask, research)
 ├── LibraryProvider ── BBT JSON → citekey/PDF/metadata
 ├── Obsidian vault ─── @citekey.md + research notes + reports
 ├── BetterBibTeX JSON ─ citekey → PDF path mapping
 ├── Zotero storage ─── PDF файлы
 ├── PyMuPDF ────────── извлечение текста из PDF
-└── SQLite
+├── Config ────────── ~/.klemmarc.yaml → ~/.klemma/ → .klemma/ (3-level merge)
+└── SQLite (schema v5)
     ├── sources ─────────── записи Zotero (+ embedding BLOB, embedding_model)
     ├── source_sections ─── source × section (multi-section)
-    ├── fragments ───────── фрагменты для цитирования (+ citation_intent)
+    ├── fragments ───────── фрагменты для цитирования (+ citation_intent, embedding, embedding_model)
     ├── reference_gaps ──── пробелы из библиографий (+ citation_intent, intent scoring)
     ├── citation_links ──── citation graph (source → target, intent, in_library)
     ├── daily_plans ─────── сгенерированные планы
     ├── reading_queue ───── очередь чтения
-    └── prune_verdicts ──── результаты аудита (drop/maybe)
+    ├── prune_verdicts ──── результаты аудита (drop/maybe)
+    └── benchmark_runs ──── история бенчмарков (metrics, config_snapshot, git_commit)
 ```
