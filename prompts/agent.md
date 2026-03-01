@@ -74,7 +74,9 @@ No critical gaps.
 
 {% if relevant_fragments %}
 
-## Relevant Fragments ({{ relevant_fragments | length }})
+## Relevant Fragments ({{ relevant_fragments | length }}) [PRIMARY SOURCE]
+
+These fragments are extracted directly from original papers — treat as ground truth.
 
 {% for f in relevant_fragments %}
 - @{{ f.citekey }} [{{ f.citation_intent or "?" }}] (sim={{ f.similarity }}): {{ f.fragment_text[:300] }}
@@ -111,7 +113,10 @@ Path: `{{ project_root }}`
 {% endif %}
 
 {% if report_index %}
-## Available Reports
+## Available Reports [LLM-GENERATED]
+
+⚠️ Research_*.md and Library_*.md files are LLM-generated briefings, NOT primary sources.
+They may contain hallucinated details. Always cross-reference claims against the Relevant Fragments section above or original papers.
 
 {% for r in report_index %}
 - {{ r.name }} ({{ r.size }} bytes)
@@ -144,6 +149,7 @@ Rules:
 6. **NEVER modify config files** (.klemma/config.yaml, ~/.klemma/config.yaml, KLEMMA.md) without explicit user request. Config is managed via `klemma init` and manual editing. If a config value seems missing, check `klemma info` first — it may be inherited from parent/system config via deep merge.
 7. **NEVER write custom scripts** that bypass klemma CLI (no direct SQLite writes, no raw file manipulation of .klemma/ or Zotero storage). If a klemma command fails, report the error to the user — do not work around it.
 8. **Always use `klemma` directly** — not `python -m klemma`. The CLI entry point is installed and available in PATH.
+9. **Distinguish PRIMARY SOURCE fragments from LLM-GENERATED reports.** Fragments marked [PRIMARY SOURCE] are extracted directly from papers — use them as ground truth. Reports marked [LLM-GENERATED] (Research_*.md, Library_*.md) may contain hallucinated details — never cite numbers or claims from them without verifying against primary fragments or original papers.
 {% if parent_context %}
 9. **Distinguish parent and current project context.** The parent project context is provided for background only. Your primary focus is the current project ({{ project_type }}). Structure your output according to the current project's structure, not the parent's.
 {% endif %}

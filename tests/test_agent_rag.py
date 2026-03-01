@@ -41,6 +41,30 @@ def test_agent_context_with_fragments(tmp_path):
     assert "paper1" in context
 
 
+def test_agent_context_provenance_markers(tmp_path):
+    """Agent context marks RAG fragments as PRIMARY SOURCE."""
+    sm = _make_state(tmp_path)
+
+    mock_emb = MagicMock()
+    mock_emb.model_name = "test-model"
+    mock_emb.embed.return_value = [1.0, 0.0, 0.0]
+
+    from klemma.config import KlemmaConfig
+    from klemma.skills.agent import build_agent_context
+
+    config = KlemmaConfig()
+
+    context = build_agent_context(
+        config, sm, MagicMock(),
+        embeddings=mock_emb,
+        query="ice forecast",
+        project_root=tmp_path,
+    )
+
+    assert "PRIMARY SOURCE" in context
+    assert "ground truth" in context.lower()
+
+
 def test_agent_context_without_embeddings(tmp_path):
     """Without embeddings, no fragment section in context."""
     sm = _make_state(tmp_path)

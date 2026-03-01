@@ -21,10 +21,26 @@ logger = logging.getLogger(__name__)
 # Shared utility
 # ---------------------------------------------------------------------------
 
+_MAX_JSON_SIZE = 512_000  # 512KB max response size
+_MAX_JSON_DEPTH = 20      # max nesting depth
+
+
+def _check_json_depth(obj: object, depth: int = 0) -> bool:
+    """Return True if object nesting exceeds _MAX_JSON_DEPTH."""
+    if depth > _MAX_JSON_DEPTH:
+        return True
+    if isinstance(obj, dict):
+        return any(_check_json_depth(v, depth + 1) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_check_json_depth(v, depth + 1) for v in obj)
+    return False
+
+
 def extract_json(text: str) -> Optional[dict]:
     """Extract a JSON object from an AI text response.
 
     Handles markdown code blocks and leading/trailing text around JSON.
+    Rejects oversized (>512KB) or deeply nested (>20 levels) responses.
     """
     text = text.strip()
 
@@ -51,11 +67,25 @@ def extract_json(text: str) -> Optional[dict]:
         logger.error("No JSON found in response")
         return None
 
+    json_str = text[start:end]
+
+    # Size guard
+    if len(json_str) > _MAX_JSON_SIZE:
+        logger.error("JSON response too large: %d bytes (max %d)", len(json_str), _MAX_JSON_SIZE)
+        return None
+
     try:
-        return json.loads(text[start:end])
+        result = json.loads(json_str)
     except json.JSONDecodeError as e:
         logger.error("JSON parse error: %s", e)
         return None
+
+    # Depth guard
+    if _check_json_depth(result):
+        logger.error("JSON response too deeply nested (max %d levels)", _MAX_JSON_DEPTH)
+        return None
+
+    return result
 
 
 @dataclass

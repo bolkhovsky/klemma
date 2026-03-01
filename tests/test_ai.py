@@ -43,6 +43,34 @@ def test_extract_json_invalid_json():
     assert extract_json("{invalid json}") is None
 
 
+def test_extract_json_rejects_deeply_nested():
+    """Deeply nested JSON (>20 levels) is rejected to prevent stack issues."""
+    # Build 25 levels of nesting
+    nested = '{"a":' * 25 + '1' + '}' * 25
+    assert extract_json(nested) is None
+
+
+def test_extract_json_rejects_oversized():
+    """JSON responses over 512KB are rejected."""
+    huge = '{"data": "' + "x" * 600_000 + '"}'
+    assert extract_json(huge) is None
+
+
+def test_extract_json_accepts_reasonable_nesting():
+    """Normal nesting (≤20 levels) is accepted."""
+    nested = '{"a": {"b": {"c": 1}}}'
+    result = extract_json(nested)
+    assert result == {"a": {"b": {"c": 1}}}
+
+
+def test_extract_json_accepts_reasonable_size():
+    """Moderately sized JSON (< 512KB) is accepted."""
+    data = '{"data": "' + "x" * 100_000 + '"}'
+    result = extract_json(data)
+    assert result is not None
+    assert len(result["data"]) == 100_000
+
+
 # ---------------------------------------------------------------------------
 # AIProviderBase
 # ---------------------------------------------------------------------------
