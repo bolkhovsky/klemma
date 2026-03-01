@@ -138,6 +138,71 @@ def _load_section_sources(
     return enriched
 
 
+def _fit_prompt_budget(
+    chapter_draft: str,
+    formatted_sources: list[dict],
+    formatted_fragments: list[dict],
+    max_chars: int = 80_000,
+) -> tuple[str, list[dict], list[dict]]:
+    """Progressively reduce prompt content to fit within token budget.
+
+    Budget of 80K chars ~ 20K tokens — leaves room for template
+    overhead, system prompt, and 4K output tokens within 30K TPM.
+
+    Reduction order (least to most aggressive):
+    1. Trim chapter_draft to 12K chars
+    2. Trim vault_summary per source to 400 chars
+    3. Trim fragment text to 150 chars
+    4. Reduce sources to 15
+    5. Reduce fragments to 20
+    """
+    overhead = 8_000  # template text, instructions, metadata JSON keys
+
+    def _estimate():
+        return (
+            len(chapter_draft)
+            + sum(len(json.dumps(s, ensure_ascii=False)) for s in formatted_sources)
+            + sum(len(json.dumps(f, ensure_ascii=False)) for f in formatted_fragments)
+            + overhead
+        )
+
+    if _estimate() <= max_chars:
+        return chapter_draft, formatted_sources, formatted_fragments
+
+    logger.debug("Prompt budget exceeded (%d > %d), trimming chapter_draft", _estimate(), max_chars)
+    chapter_draft = chapter_draft[:12_000]
+
+    if _estimate() <= max_chars:
+        return chapter_draft, formatted_sources, formatted_fragments
+
+    logger.debug("Still over budget (%d), trimming source summaries to 400 chars", _estimate())
+    for s in formatted_sources:
+        if len(s.get("summary", "")) > 400:
+            s["summary"] = s["summary"][:400]
+
+    if _estimate() <= max_chars:
+        return chapter_draft, formatted_sources, formatted_fragments
+
+    logger.debug("Still over budget (%d), trimming fragment text to 150 chars", _estimate())
+    for f in formatted_fragments:
+        if len(f.get("text", "")) > 150:
+            f["text"] = f["text"][:150]
+
+    if _estimate() <= max_chars:
+        return chapter_draft, formatted_sources, formatted_fragments
+
+    logger.debug("Still over budget (%d), reducing sources to 15", _estimate())
+    formatted_sources = formatted_sources[:15]
+
+    if _estimate() <= max_chars:
+        return chapter_draft, formatted_sources, formatted_fragments
+
+    logger.debug("Still over budget (%d), reducing fragments to 20", _estimate())
+    formatted_fragments = formatted_fragments[:20]
+
+    return chapter_draft, formatted_sources, formatted_fragments
+
+
 def _validate_citekeys(data: dict, valid_citekeys: set[str]) -> dict:
     """Strip hallucinated citekeys from AI response and log warnings."""
     hallucinated: list[str] = []
@@ -509,6 +574,7 @@ def research_section(
     dissertation_context: str = "",
     klemma_home: Optional[Path] = None,
     project_root: Optional[Path] = None,
+    embeddings=None,
 ) -> ResearchResult:
     """Сгенерировать исследовательский брифинг для раздела диссертации.
 
@@ -560,15 +626,35 @@ def research_section(
         else:
             chapter_plan = chapter_plan[:6000]
 
-    # 3. Фрагменты для раздела + главы
-    section_fragments = state.get_fragments(section=section, limit=50)
-    chapter_fragments = state.get_fragments(chapter=chapter, limit=30)
+    # 3. Фрагменты: RAG-first, затем section-based fallback
+    section_fragments = []
+    if embeddings and section_text:
+        try:
+            query_vec = embeddings.embed(section_text[:500])
+            if query_vec:
+                section_fragments = state.retrieve_similar_fragments(
+                    query_vec, top_k=40, model=embeddings.model_name
+                )
+                logger.debug(
+                    "RAG: retrieved %d fragments for section '%s'",
+                    len(section_fragments), section,
+                )
+        except Exception:
+            logger.debug("Fragment RAG failed, falling back to section-based", exc_info=True)
 
-    seen_ids = {f["id"] for f in section_fragments}
-    for cf in chapter_fragments:
-        if cf["id"] not in seen_ids:
-            section_fragments.append(cf)
-            seen_ids.add(cf["id"])
+    # Fallback: section-based lookup if RAG yielded <10 results or unavailable
+    if len(section_fragments) < 10:
+        fallback = state.get_fragments(section=section, limit=50)
+        chapter_fallback = state.get_fragments(chapter=chapter, limit=30)
+        seen_ids = {f["id"] for f in section_fragments}
+        for ff in fallback + chapter_fallback:
+            if ff["id"] not in seen_ids:
+                section_fragments.append(ff)
+                seen_ids.add(ff["id"])
+        logger.debug(
+            "Fallback: total %d fragments after section-based supplement",
+            len(section_fragments),
+        )
 
     # 4. Аннотации источников из vault
     source_summaries = _load_section_sources(section, chapter, state, vault)
@@ -608,6 +694,14 @@ def research_section(
             }
         )
 
+    # 7b. Budget-aware prompt reduction
+    chapter_draft_trimmed = draft_content[:30000] if draft_content else ""
+    chapter_draft_trimmed, formatted_sources, formatted_fragments = _fit_prompt_budget(
+        chapter_draft_trimmed,
+        formatted_sources,
+        formatted_fragments,
+    )
+
     # 8. Рендер промпта (полный или инкрементальный)
     if is_incremental:
         # Вычислить дельту: новые citekeys
@@ -631,9 +725,8 @@ def research_section(
             current_fragment_count=len(section_fragments),
             section_text=section_text or "Section not written yet.",
             full_chapter_draft=(
-                draft_content[:30000]
-                if draft_content
-                else "Chapter draft not found."
+                chapter_draft_trimmed
+                or "Chapter draft not found."
             ),
             fragments=json.dumps(
                 formatted_fragments, ensure_ascii=False, indent=2
@@ -675,9 +768,8 @@ def research_section(
             chapter_name=chapter_name,
             section_text=section_text or "Section not written yet.",
             full_chapter_draft=(
-                draft_content[:30000]
-                if draft_content
-                else "Chapter draft not found."
+                chapter_draft_trimmed
+                or "Chapter draft not found."
             ),
             chapter_plan=chapter_plan or "Session plan not found.",
             fragments=json.dumps(

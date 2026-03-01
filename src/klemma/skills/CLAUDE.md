@@ -19,11 +19,12 @@ Fragment extraction from PDFs with citation intent classification.
 - `extract_from_citekey()` — full pipeline (find PDF → extract text → analyze → save citation_links to graph)
 - `save_fragments_to_vault(citekey, fragments, vault, ..., dissertation_context, available_tags, klemma_home)` — appends to `@citekey.md`; auto-creates note if missing
 
-### researcher.py (771 lines — largest skill)
+### researcher.py (~830 lines — largest skill)
 Section research briefings. Two modes:
 - **Initial**: auto-extract fragments → collect context → `prompts/research.md` → `ResearchResult` → `project_root/Research_{section}.md`
 - **Incremental**: reads existing research note from project_root `## ✏️ Что нового` (user annotations), computes delta (new sources, fragment count), `prompts/research_incremental.md` → merged result. User notes archived to `## 📋 История изменений` with timestamp.
-- `research_section(project_root=...)` — main entry point
+- `research_section(project_root=..., embeddings=?)` — main entry point; optional `embeddings` param enables RAG-first fragment retrieval (semantic search via `retrieve_similar_fragments`), falls back to section-based lookup when RAG yields <10 results or is unavailable
+- `_fit_prompt_budget(chapter_draft, sources, fragments, max_chars=80K)` — progressively reduces prompt content to fit TPM budget; reduction order: draft→summaries→fragment text→source count→fragment count
 - `pre_extract_sources()` — auto-extract fragments for section/chapter sources before research
 - `_load_previous_research(section, chapter, state, project_root)` — reads from project_root, parses user notes, history, delta
 - `_save_report(section, content, project_root)` — writes report to project_root
