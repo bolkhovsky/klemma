@@ -1,6 +1,6 @@
 # Tests
 
-## Current test suite (484 tests)
+## Current test suite (506 tests)
 - `test_errors.py` (33 lines) — `KlemmaAIError` hierarchy, `retryable` classification, cause chaining
 - `test_ai.py` (170 lines) — `extract_json()`, `AIProviderBase`, `AICallResult` dataclass, `call_with_meta()` base + Claude, `create_ai()` factory
 - `test_ai_litellm.py` (265 lines) — `LiteLLMClient` with mocked litellm: call, json_mode, base_url, api_key, reasoning model detection, retry, `call_with_meta()` with structured error mapping + token extraction
@@ -15,6 +15,7 @@
 - `test_interactive_init.py` (347 lines) — interactive `klemma init` wizard, auto-discovery, config generation
 - `test_cli_init_outline.py` (37 lines) — `klemma init --outline` CLI behavior, AI-missing skip, no-outline no AI call
 - `test_cli_embed.py` (~70 lines) — `klemma embed` multi-citekey CLI behavior, missing-key warnings, `--fragments` flag (embed + dry-run)
+- `test_cli_model_override.py` (~96 lines) — `--model` CLI override: verifies override reaches `create_ai()`, default model preserved without flag
 - `test_repositories.py` (~240 lines) — repository composition, facade delegation, per-repo CRUD roundtrips, new public methods (`get_existing_source_ids`, `get_sources_without_embeddings`), fragment embedding save/retrieve roundtrip, embedding stats, unembedded fragments, top-K cosine retrieval
 - `test_agent_rag.py` (~80 lines) — 4 tests: agent context with fragments (RAG), without embeddings, no fragment embeddings, embed failure graceful degradation
 - `test_researcher_budget.py` (~280 lines) — 12 tests: `_fit_prompt_budget()` progressive reduction (7 tests), RAG-first fragment retrieval (5 tests: RAG used, fallback on few results, fallback without embeddings, embed error graceful degradation, dedup with fallback), `@pytest.mark.benchmark` section vs RAG quality comparison

@@ -4,7 +4,7 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 
 ## Modules
 
-### cli.py (2993 lines)
+### cli.py (3082 lines)
 Click CLI entry point. Defines 16 commands + hidden aliases.
 - `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
@@ -12,6 +12,7 @@ Click CLI entry point. Defines 16 commands + hidden aliases.
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
 - Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`
 - `init --outline` generates an outline after project setup (requires AI backend)
+- `--model` override available on: `research`, `ask`, `library`, `process` — overrides `cfg.ai.model` per invocation
 
 ### context.py (41 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.
