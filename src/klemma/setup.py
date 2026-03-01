@@ -126,6 +126,38 @@ def _setup_claude_skills(project_dir: Path, created: list[str], skipped: list[st
             created.append(f".claude/skills/{skill_dir.name}")
 
 
+_GITIGNORE_TEMPLATE = (
+    "# Klemma data (SQLite DBs — not for version control)\n"
+    "**/.klemma/data/\n"
+    "**/.klemma/state.db\n"
+    "\n"
+    "# macOS\n"
+    ".DS_Store\n"
+    "\n"
+    "# LaTeX build artifacts\n"
+    "*.aux\n"
+    "*.log\n"
+    "*.blg\n"
+    "*.bbl\n"
+    "*.out\n"
+    "*.fls\n"
+    "*.fdb_latexmk\n"
+    "*.synctex.gz\n"
+    "\n"
+    "# Python\n"
+    "__pycache__/\n"
+    "*.pyc\n"
+)
+
+_GITIGNORE_PATTERNS = [
+    "**/.klemma/data/",
+    "**/.klemma/state.db",
+    ".DS_Store",
+    "*.aux",
+    "__pycache__/",
+]
+
+
 def init_project(
     project_dir: Path,
     project_type: str = "dissertation",
@@ -208,35 +240,6 @@ def init_project(
     _setup_claude_skills(project_dir, created, skipped)
 
     # .gitignore: exclude DBs and build artifacts, keep config in VCS
-    _GITIGNORE_TEMPLATE = (
-        "# Klemma data (SQLite DBs — not for version control)\n"
-        "**/.klemma/data/\n"
-        "**/.klemma/state.db\n"
-        "\n"
-        "# macOS\n"
-        ".DS_Store\n"
-        "\n"
-        "# LaTeX build artifacts\n"
-        "*.aux\n"
-        "*.log\n"
-        "*.blg\n"
-        "*.bbl\n"
-        "*.out\n"
-        "*.fls\n"
-        "*.fdb_latexmk\n"
-        "*.synctex.gz\n"
-        "\n"
-        "# Python\n"
-        "__pycache__/\n"
-        "*.pyc\n"
-    )
-    _GITIGNORE_PATTERNS = [
-        "**/.klemma/data/",
-        "**/.klemma/state.db",
-        ".DS_Store",
-        "*.aux",
-        "__pycache__/",
-    ]
     gitignore = project_dir / ".gitignore"
     if gitignore.exists():
         content = gitignore.read_text(encoding="utf-8")
