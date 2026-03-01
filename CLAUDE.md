@@ -34,6 +34,11 @@ Every epic/feature follows this sequence. Do not skip or reorder steps. Skip thi
    ### Results
    Quantitative outcomes: test counts, LOC, lint status, measurable improvements.
    ```
+6a. **Version bump** — after merging a PR, trigger the `Bump version` GitHub Actions
+    workflow (Actions → Bump version → Run workflow). Pick `patch` for bug fixes,
+    `minor` for new features, `major` for breaking changes.
+    Both `pyproject.toml` and `src/klemma/__init__.py` are updated automatically.
+    Never edit version numbers by hand.
 7. **Paper draft** — export the Release Note into `~/research/klemma-paper/sections/` as a section draft. Russian academic style, `[@citekey]` references, matching existing sections format. File name: `section_N_<topic>.md` where N maps to the paper outline section. Add any missing BibTeX entries to `~/research/klemma-paper/references.bib`. Also create a results file in `~/research/klemma-paper/results/` with frontmatter `step`, `date`, `paper_sections` and sections: Baseline / Implementation / Results / Delta / Paper Section.
 
 ## Maintaining CLAUDE.md documentation
