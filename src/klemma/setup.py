@@ -207,19 +207,49 @@ def init_project(
     # Claude Code skills (symlink from package)
     _setup_claude_skills(project_dir, created, skipped)
 
-    # .gitignore: exclude DB but keep config in VCS
+    # .gitignore: exclude DBs and build artifacts, keep config in VCS
+    _GITIGNORE_TEMPLATE = (
+        "# Klemma data (SQLite DBs — not for version control)\n"
+        "**/.klemma/data/\n"
+        "**/.klemma/state.db\n"
+        "\n"
+        "# macOS\n"
+        ".DS_Store\n"
+        "\n"
+        "# LaTeX build artifacts\n"
+        "*.aux\n"
+        "*.log\n"
+        "*.blg\n"
+        "*.bbl\n"
+        "*.out\n"
+        "*.fls\n"
+        "*.fdb_latexmk\n"
+        "*.synctex.gz\n"
+        "\n"
+        "# Python\n"
+        "__pycache__/\n"
+        "*.pyc\n"
+    )
+    _GITIGNORE_PATTERNS = [
+        "**/.klemma/data/",
+        "**/.klemma/state.db",
+        ".DS_Store",
+        "*.aux",
+        "__pycache__/",
+    ]
     gitignore = project_dir / ".gitignore"
-    ignore_line = ".klemma/data/"
     if gitignore.exists():
         content = gitignore.read_text(encoding="utf-8")
-        if ignore_line not in content:
+        missing = [p for p in _GITIGNORE_PATTERNS if p not in content]
+        if missing:
             with open(gitignore, "a", encoding="utf-8") as f:
                 if not content.endswith("\n"):
                     f.write("\n")
-                f.write(f"{ignore_line}\n")
+                f.write("# Added by klemma init\n")
+                f.write("\n".join(missing) + "\n")
             created.append(".gitignore (updated)")
     else:
-        gitignore.write_text(f"# Klemma data (SQLite DB)\n{ignore_line}\n", encoding="utf-8")
+        gitignore.write_text(_GITIGNORE_TEMPLATE, encoding="utf-8")
         created.append(".gitignore")
 
     return {"created": created, "skipped": skipped}
