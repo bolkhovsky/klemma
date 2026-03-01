@@ -801,8 +801,9 @@ def plan(ctx):
 @click.option("--serial", is_flag=True, help="Disable parallel processing")
 @click.option("--force", is_flag=True,
               help="Reprocess completed sources, replacing existing fragments")
+@click.option("--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)")
 @click.pass_context
-def process(ctx, citekeys, serial, force):
+def process(ctx, citekeys, serial, force, model):
     """Process source(s): extract fragments, annotate, create vault note.
 
     With CITEKEY(s): process specified sources (parallel when >1).
@@ -811,6 +812,8 @@ def process(ctx, citekeys, serial, force):
     """
     kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
+    if model:
+        cfg.ai.model = model
     ai = _init_ai(cfg)
 
     from .literature.pdf import PDFExtractor
@@ -1481,8 +1484,9 @@ def gaps(ctx, min_sources):
 @click.option("--section", "-s", required=True, help="Идентификатор раздела, например 1.3.2")
 @click.option("--no-save", is_flag=True, help="Не сохранять в vault")
 @click.option("--force", is_flag=True, help="Переизвлечь фрагменты даже если уже есть")
+@click.option("--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)")
 @click.pass_context
-def research(ctx, section, no_save, force):
+def research(ctx, section, no_save, force, model):
     """Deep section analysis — argument structure, citation plan, gaps.
 
     Auto-processes unextracted sources before analysis.
@@ -1493,6 +1497,8 @@ def research(ctx, section, no_save, force):
     kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
     _sync_sections(kctx)
+    if model:
+        cfg.ai.model = model
     ai = _init_ai(cfg)
 
     from .config import parse_chapter_from_section
@@ -1825,14 +1831,17 @@ def import_vault(ctx, with_queue):
 @click.argument("query")
 @click.option("--section", "-s", help="Focus on a specific section")
 @click.option("--chapter", "-ch", type=int, help="Focus on a specific chapter")
+@click.option("--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)")
 @click.pass_context
-def ask(ctx, query, section, chapter):
+def ask(ctx, query, section, chapter, model):
     """Ask a research question with full dissertation context.
 
     Example: klemma ask "What are the main ice forecast validation methods?"
     """
     kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
+    if model:
+        cfg.ai.model = model
     ai = _init_ai(cfg)
 
     from .skills.agent import build_agent_context
@@ -1877,8 +1886,9 @@ def ask(ctx, query, section, chapter):
 @main.group(invoke_without_command=True)
 @click.option("--section", "-s", help="Focus on a specific section (recommend mode)")
 @click.option("--audit", is_flag=True, help="Deep quality audit")
+@click.option("--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)")
 @click.pass_context
-def library(ctx, section, audit):
+def library(ctx, section, audit, model):
     """AI-powered library analysis and recommendations.
 
     Without flags: overall health assessment.
@@ -1891,6 +1901,8 @@ def library(ctx, section, audit):
     kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
     _sync_sections(kctx)
+    if model:
+        cfg.ai.model = model
     ai = _init_ai(cfg)
 
     from .skills.librarian import analyze_library
