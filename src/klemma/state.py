@@ -148,6 +148,7 @@ class StateManager:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        self.parent_state: Optional["StateManager"] = None
 
         # Compose domain repositories
         self.sources = SourceRepository(self._conn)
@@ -158,6 +159,28 @@ class StateManager:
         self.plans = PlansRepository(self._conn)
         self.prune = PruneRepository(self._conn)
         self.benchmarks = BenchmarkRepository(self._conn)
+
+    # ── Parent DB inheritance ────────────────────────────────────────────
+
+    def set_parent(self, parent_db_path: str | Path) -> None:
+        """Attach a parent StateManager for read-only data inheritance."""
+        self.parent_state = StateManager(parent_db_path)
+
+    @staticmethod
+    def _merge_by_id(
+        child_list: list[dict], parent_list: list[dict], key: str = "id",
+    ) -> list[dict]:
+        """Merge parent results into child results, deduplicating by key.
+
+        Child entries win on key collision.
+        """
+        seen = {item[key] for item in child_list}
+        merged = list(child_list)
+        for item in parent_list:
+            if item[key] not in seen:
+                merged.append(item)
+                seen.add(item[key])
+        return merged
 
     @contextmanager
     def _conn(self):
@@ -328,13 +351,25 @@ class StateManager:
         return self.sources.set_source_sections(source_id, sections, chapters)
 
     def get_all_sources(self) -> list[dict]:
-        return self.sources.get_all_sources()
+        child = self.sources.get_all_sources()
+        if not self.parent_state:
+            return child
+        parent = self.parent_state.sources.get_all_sources()
+        return self._merge_by_id(child, parent, key="id")
 
     def get_by_chapter(self, chapter: int) -> list[dict]:
-        return self.sources.get_by_chapter(chapter)
+        child = self.sources.get_by_chapter(chapter)
+        if not self.parent_state:
+            return child
+        parent = self.parent_state.sources.get_by_chapter(chapter)
+        return self._merge_by_id(child, parent, key="id")
 
     def get_by_section(self, section: str) -> list[dict]:
-        return self.sources.get_by_section(section)
+        child = self.sources.get_by_section(section)
+        if not self.parent_state:
+            return child
+        parent = self.parent_state.sources.get_by_section(section)
+        return self._merge_by_id(child, parent, key="id")
 
     def get_zotero_key_map(self) -> dict[str, str]:
         return self.sources.get_zotero_key_map()
@@ -359,7 +394,14 @@ class StateManager:
     def get_fragments(self, source_id: Optional[str] = None, chapter: Optional[int] = None,
                       section: Optional[str] = None, fragment_type: Optional[str] = None,
                       limit: int = 50) -> list[dict]:
-        return self.fragments.get_fragments(source_id, chapter, section, fragment_type, limit)
+        child = self.fragments.get_fragments(source_id, chapter, section, fragment_type, limit)
+        if not self.parent_state:
+            return child
+        parent = self.parent_state.fragments.get_fragments(
+            source_id, chapter, section, fragment_type, limit,
+        )
+        merged = self._merge_by_id(child, parent, key="id")
+        return merged[:limit]
 
     def get_fragment_stats(self) -> dict:
         return self.fragments.get_fragment_stats()
@@ -371,7 +413,14 @@ class StateManager:
         return self.fragments.save_fragment_embedding(fragment_id, embedding, model)
 
     def get_fragment_embeddings(self, model: Optional[str] = None) -> dict[int, list[float]]:
-        return self.fragments.get_fragment_embeddings(model)
+        child = self.fragments.get_fragment_embeddings(model)
+        if not self.parent_state:
+            return child
+        parent = self.parent_state.fragments.get_fragment_embeddings(model)
+        # Parent first, child overwrites on collision
+        merged = dict(parent)
+        merged.update(child)
+        return merged
 
     def get_fragment_embedding_stats(self) -> dict:
         return self.fragments.get_fragment_embedding_stats()
@@ -382,7 +431,15 @@ class StateManager:
     def retrieve_similar_fragments(
         self, query_embedding: list[float], top_k: int = 10, model: Optional[str] = None
     ) -> list[dict]:
-        return self.fragments.retrieve_similar_fragments(query_embedding, top_k, model)
+        child = self.fragments.retrieve_similar_fragments(query_embedding, top_k, model)
+        if not self.parent_state:
+            return child
+        parent = self.parent_state.fragments.retrieve_similar_fragments(
+            query_embedding, top_k, model,
+        )
+        merged = self._merge_by_id(child, parent, key="id")
+        merged.sort(key=lambda x: x.get("similarity", 0), reverse=True)
+        return merged[:top_k]
 
     # ── Embedding delegation ──────────────────────────────────────────────
 
@@ -393,7 +450,14 @@ class StateManager:
         return self.embeddings_store.get_embedding(source_id)
 
     def get_all_embeddings(self, model: Optional[str] = None) -> dict[str, list[float]]:
-        return self.embeddings_store.get_all_embeddings(model)
+        child = self.embeddings_store.get_all_embeddings(model)
+        if not self.parent_state:
+            return child
+        parent = self.parent_state.embeddings_store.get_all_embeddings(model)
+        # Parent first, child overwrites on collision
+        merged = dict(parent)
+        merged.update(child)
+        return merged
 
     def get_embedding_stats(self) -> dict:
         return self.embeddings_store.get_embedding_stats()
@@ -404,7 +468,19 @@ class StateManager:
         return self.gaps.save_reference_gaps(source_id, gaps)
 
     def get_reference_gaps(self, section: Optional[str] = None, limit: int = 50) -> list[dict]:
-        return self.gaps.get_reference_gaps(section, limit)
+        child = self.gaps.get_reference_gaps(section, limit)
+        if not self.parent_state:
+            return child
+        parent = self.parent_state.gaps.get_reference_gaps(section, limit)
+        # Dedup by (ref_authors, ref_year, ref_title) — use ref_title as key
+        seen = {g["ref_title"] for g in child}
+        merged = list(child)
+        for g in parent:
+            if g["ref_title"] not in seen:
+                merged.append(g)
+                seen.add(g["ref_title"])
+        merged.sort(key=lambda x: x.get("score", 0), reverse=True)
+        return merged[:limit]
 
     def rerank_gaps_semantic(self, gaps: list[dict], embeddings=None,
                              query_section: Optional[str] = None) -> list[dict]:
@@ -424,7 +500,22 @@ class StateManager:
         return self.gaps.resolve_gaps(entry_lookup)
 
     def get_coverage_stats(self) -> dict:
-        return self.gaps.get_coverage_stats()
+        child = self.gaps.get_coverage_stats()
+        if not self.parent_state:
+            return child
+        parent = self.parent_state.gaps.get_coverage_stats()
+        merged: dict = {"chapters": {}, "sections": {}, "nr1": {}, "nr2": {}}
+        # Sum chapter/section counts
+        for key in ("chapters", "sections"):
+            all_keys = set(child.get(key, {})) | set(parent.get(key, {}))
+            for k in all_keys:
+                merged[key][k] = child.get(key, {}).get(k, 0) + parent.get(key, {}).get(k, 0)
+        # NR thresholds: sum
+        for key in ("nr1", "nr2"):
+            all_keys = set(child.get(key, {})) | set(parent.get(key, {}))
+            for k in all_keys:
+                merged[key][k] = child.get(key, {}).get(k, 0) + parent.get(key, {}).get(k, 0)
+        return merged
 
     def get_gaps(self, min_sources: int = 3) -> list[dict]:
         return self.gaps.get_gaps(min_sources)

@@ -4,14 +4,16 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 
 ## Modules
 
-### cli.py (2993 lines)
+### cli.py (3082 lines)
 Click CLI entry point. Defines 16 commands + hidden aliases.
-- `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery
+- `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery; attaches parent DB for inheritance when `inherit_db=True` and project chain > 1
+- `_resolve_parent_db(parent_root)` — reads parent's `.klemma/config.yaml` to locate its DB path
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
 - Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`
 - `init --outline` generates an outline after project setup (requires AI backend)
+- `--model` override available on: `research`, `ask`, `library`, `process` — overrides `cfg.ai.model` per invocation
 
 ### context.py (41 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.
@@ -19,7 +21,7 @@ Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `li
 
 ### config.py (711 lines)
 Pydantic config models + Git-style project discovery + klemmarc loading.
-Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `_resolved_api_keys` PrivateAttr), `EmbeddingsConfig`, `DissertationConfig`, `SystemConfig`, `ProjectConfig`.
+Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `_resolved_api_keys` PrivateAttr), `EmbeddingsConfig`, `StateConfig` (`db_path`, `inherit_db`), `DissertationConfig`, `SystemConfig`, `ProjectConfig`.
 - `_load_klemmarc()` — load `~/.klemmarc.yaml` (or `.yml` / `.klemmarc`) global config
 - `_derive_provider(backend, model)` — extract provider name for api_keys lookup (e.g. `litellm` + `anthropic/claude-sonnet` → `"anthropic"`)
 - `_check_klemmarc_permissions()` — fix permissions on `~/.klemmarc*` if world-readable
@@ -43,8 +45,10 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `
 - `init_klemma_home()` — legacy alias for `init_system()`
 - Interactive mode: auto-discovers Obsidian vaults, Zotero exports via `discovery.py`
 
-### state.py (542 lines)
+### state.py (~600 lines)
 SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v5), auto-migrates via `_migrate_schema()`. All 64 public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
+
+**DB inheritance (#55):** `set_parent(db_path)` attaches a read-only parent `StateManager`. Nine read methods merge parent data: `get_all_sources`, `get_by_chapter`, `get_by_section`, `get_fragments`, `get_coverage_stats`, `retrieve_similar_fragments`, `get_fragment_embeddings`, `get_all_embeddings`, `get_reference_gaps`. Child wins on key collision. Writes go only to child DB. Controlled by `StateConfig.inherit_db` (default `True`).
 
 Tables:
 - `sources` — Zotero entries (citekey, title, status, chapter, quality, pdf_path, `embedding` BLOB float32, `embedding_model` TEXT)

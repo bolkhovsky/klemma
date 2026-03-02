@@ -168,6 +168,7 @@ class EmbeddingsConfig(BaseModel):
 
 class StateConfig(BaseModel):
     db_path: str = "./data/klemma.db"
+    inherit_db: bool = True  # inherit parent project's DB (read-only)
 
 
 class ChapterMapping(BaseModel):
