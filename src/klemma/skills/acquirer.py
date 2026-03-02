@@ -16,6 +16,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB hard limit
+_USER_AGENT = "Mozilla/5.0 (compatible; Klemma/1.0; +https://github.com/klemma-ai/klemma)"
 
 
 @dataclass
@@ -77,7 +78,10 @@ def download_pdf(
 
     tmp = None
     try:
-        resp = requests.get(url, timeout=timeout, stream=True, allow_redirects=True)
+        resp = requests.get(
+            url, timeout=timeout, stream=True, allow_redirects=True,
+            headers={"User-Agent": _USER_AGENT},
+        )
         resp.raise_for_status()
 
         content_length = resp.headers.get("content-length")
