@@ -384,7 +384,7 @@ def _print_recommended_actions(
     for g in ref_gaps[:2]:
         authors = (g.get("ref_authors") or "")[:30]
         year = g.get("ref_year") or ""
-        title = (g.get("ref_title") or "")[:50]
+        title = g.get("ref_title") or ""
         query = f"{authors} {year}".strip()
         if title:
             query = title
