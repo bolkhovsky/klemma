@@ -337,13 +337,14 @@ def _print_status_line(state: StateManager, project_name: str = "default"):
         pass  # Don't crash on status line failure
 
 
-def _print_ref_gaps_table(state: StateManager, limit: int = 20, embeddings=None):
+def _print_ref_gaps_table(state: StateManager, limit: int = 20, embeddings=None,
+                          section_weights: dict[str, float] | None = None):
     """Print reference gaps as a Rich table.
 
     When embeddings is provided, applies semantic reranking via
     rerank_gaps_semantic() before display.
     """
-    ref_gaps = state.get_reference_gaps(limit=limit)
+    ref_gaps = state.get_reference_gaps(limit=limit, section_weights=section_weights)
     if not ref_gaps:
         return
     if embeddings:
@@ -1408,10 +1409,12 @@ def status(ctx, verbose, chapter):
             console.print(f"  [dim]... and {len(gaps_data) - 5} more (use --verbose)[/dim]")
 
     # --- Reference gaps ---
+    _sw = kctx.project.section_weights if kctx.project else None
     if verbose:
-        _print_ref_gaps_table(state, limit=20, embeddings=kctx.embeddings)
+        _print_ref_gaps_table(state, limit=20, embeddings=kctx.embeddings,
+                              section_weights=_sw)
     else:
-        ref_gaps = state.get_reference_gaps(limit=5)
+        ref_gaps = state.get_reference_gaps(limit=5, section_weights=_sw)
         if ref_gaps:
             gap_summary = state.get_gap_summary()
             console.print()
@@ -2833,7 +2836,8 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
 
     reranked_gaps = None
     if semantic and kctx.embeddings:
-        all_gaps = kctx.state.get_reference_gaps(limit=100)
+        _bsw = kctx.project.section_weights if kctx.project else None
+        all_gaps = kctx.state.get_reference_gaps(limit=100, section_weights=_bsw)
         reranked_gaps = kctx.state.rerank_gaps_semantic(all_gaps, kctx.embeddings)
     elif semantic:
         console.print("[yellow]--semantic requires embeddings to be configured[/yellow]")

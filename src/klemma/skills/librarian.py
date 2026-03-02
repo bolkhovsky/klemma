@@ -225,7 +225,8 @@ def _gather_library_context(
     deadline, days_remaining = _get_current_deadline(config, project=project)
     summary = state.get_library_summary()
     quality_data = state.get_sources_by_quality()
-    ref_gaps = state.get_reference_gaps(limit=15)
+    _sw = project.section_weights if project else None
+    ref_gaps = state.get_reference_gaps(limit=15, section_weights=_sw)
 
     # Mode-aware source filtering
     selected, omit_info = _select_sources_for_mode(active_sources, mode, focus_section)

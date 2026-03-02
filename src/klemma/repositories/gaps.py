@@ -37,6 +37,7 @@ class GapsRepository(BaseRepository):
         self,
         section: Optional[str] = None,
         limit: int = 50,
+        section_weights: Optional[dict[str, float]] = None,
     ) -> list[dict]:
         """Get open reference gaps aggregated by (authors, year, title).
 
@@ -91,10 +92,47 @@ class GapsRepository(BaseRepository):
                 avg_q = r["avg_quality"] or 3
                 intent_w = r.get("intent_weight") or 1.0
                 sections_str = r.get("dissertation_sections") or ""
-                section_weight = 2.0 if '"2.' in sections_str else 1.0
+                section_weight = self._compute_section_weight(
+                    sections_str, section_weights
+                )
                 r["score"] = round(count * avg_q * section_weight * intent_w, 1)
                 results.append(r)
+            results.sort(key=lambda g: g["score"], reverse=True)
             return results
+
+    @staticmethod
+    def _compute_section_weight(
+        sections_str: str,
+        section_weights: Optional[dict[str, float]],
+    ) -> float:
+        """Compute max section weight from JSON-serialized sections list.
+
+        When section_weights is None (no config), all sections get 1.0 (uniform).
+        When section_weights is provided, unlisted sections default to 0.5.
+        """
+        if section_weights is None:
+            return 1.0
+        if not sections_str:
+            return 0.5
+        try:
+            # sections_str may contain multiple GROUP_CONCAT'd JSON arrays
+            # e.g. '["2.1","2.3"],["2.1"]' — split and parse each
+            sections: list[str] = []
+            for part in sections_str.split("],"):
+                part = part.strip().rstrip(",")
+                if not part.endswith("]"):
+                    part += "]"
+                try:
+                    parsed = json.loads(part)
+                    if isinstance(parsed, list):
+                        sections.extend(str(s) for s in parsed)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+        except Exception:
+            return 0.5
+        if not sections:
+            return 0.5
+        return max(section_weights.get(s, 0.5) for s in sections)
 
     def rerank_gaps_semantic(
         self,

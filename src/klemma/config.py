@@ -198,6 +198,7 @@ class DissertationConfig(BaseModel):
     chapter_plan_pattern: str = "План_Глава{chapter}"
     writing_constraints: str = "1-1.5 ч/день, 200-300 слов/день, Pomodoro"
     chapter_draft_pattern: str = "Глава_{chapter}"
+    section_weights: dict[str, float] = Field(default_factory=dict)
 
 
 class ProjectConfig(BaseModel):
@@ -216,6 +217,7 @@ class ProjectConfig(BaseModel):
     chapter_plan_pattern: str = "План_Глава{chapter}"
     writing_constraints: str = ""
     chapter_draft_pattern: str = "Глава_{chapter}"
+    section_weights: dict[str, float] = Field(default_factory=dict)
 
     @property
     def current_chapter(self) -> int:
