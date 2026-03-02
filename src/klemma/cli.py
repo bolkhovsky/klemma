@@ -337,6 +337,81 @@ def _print_status_line(state: StateManager, project_name: str = "default"):
         pass  # Don't crash on status line failure
 
 
+def _print_recommended_actions(
+    proc_stats: dict,
+    emb_stats: dict | None,
+    gaps_data: list[dict],
+    ref_gaps: list[dict],
+    prune_summary: dict,
+):
+    """Print recommended next actions with copy-paste commands."""
+    actions: list[tuple[str, str]] = []  # (reason, command)
+
+    # 1. Pending/failed sources → process
+    pending = proc_stats.get("pending", 0)
+    failed = proc_stats.get("failed", 0)
+    if pending > 0:
+        actions.append((
+            f"{pending} sources pending extraction",
+            "klemma process",
+        ))
+    if failed > 0:
+        actions.append((
+            f"{failed} failed sources to retry",
+            "klemma process --retry",
+        ))
+
+    # 2. Embedding coverage < 100%
+    if emb_stats:
+        total = emb_stats.get("total", 0)
+        embedded = emb_stats.get("embedded", 0)
+        remaining = total - embedded
+        if remaining > 0:
+            actions.append((
+                f"{remaining} sources missing embeddings ({embedded}/{total})",
+                "klemma embed",
+            ))
+
+    # 3. Top coverage gaps → research
+    if gaps_data:
+        top_gap = gaps_data[0]
+        actions.append((
+            f"section {top_gap['section']} has only {top_gap['count']} sources",
+            f"klemma research -s {top_gap['section']}",
+        ))
+
+    # 4. Top ref gaps → acquire
+    for g in ref_gaps[:2]:
+        authors = (g.get("ref_authors") or "")[:30]
+        year = g.get("ref_year") or ""
+        title = (g.get("ref_title") or "")[:50]
+        query = f"{authors} {year}".strip()
+        if title:
+            query = title
+        actions.append((
+            f"missing ref: {authors} ({year}), cited x{g['count']}",
+            f"klemma acquire \"{query}\"",
+        ))
+
+    # 5. Prune verdicts pending review
+    if prune_summary.get("total", 0) > 0:
+        drop = prune_summary.get("drop", 0)
+        maybe = prune_summary.get("maybe", 0)
+        actions.append((
+            f"{drop} drop + {maybe} maybe prune verdicts pending",
+            "klemma library prune --list",
+        ))
+
+    if not actions:
+        return
+
+    console.print()
+    console.print("[bold]Recommended Actions[/bold]")
+    for i, (reason, cmd) in enumerate(actions, 1):
+        console.print(f"  [dim]{i}.[/dim] {reason}")
+        console.print(f"     [green]$ {cmd}[/green]")
+
+
 def _print_ref_gaps_table(state: StateManager, limit: int = 20, embeddings=None,
                           section_weights: dict[str, float] | None = None):
     """Print reference gaps as a Rich table.
@@ -1504,6 +1579,12 @@ def status(ctx, verbose, chapter):
                     console.print(
                         f"  [green]x{ref['cite_count']}[/green]  @{ref['target_citekey']}"
                     )
+
+    # --- Recommended actions ---
+    _emb = state.get_embedding_stats()
+    _prune = state.get_prune_summary()
+    _ref = state.get_reference_gaps(limit=3, section_weights=_sw)
+    _print_recommended_actions(proc_stats, _emb, gaps_data, _ref, _prune)
 
 
 # Backward-compatible aliases
