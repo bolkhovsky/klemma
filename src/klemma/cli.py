@@ -10,6 +10,7 @@ from rich.table import Table
 from . import __version__, get_banner
 from .ai import create_ai
 from .config import (
+    _load_yaml,
     discover_project_chain,
     discover_project_root,
     ensure_system_home,
@@ -24,6 +25,19 @@ from .state import StateManager
 from .vault import VaultAdapter
 
 console = Console()
+
+
+def _resolve_parent_db(parent_root: Path) -> Path | None:
+    """Resolve parent project's DB path from its .klemma/config.yaml."""
+    parent_config_path = parent_root / ".klemma" / "config.yaml"
+    if not parent_config_path.exists():
+        return None
+    raw = _load_yaml(parent_config_path)
+    db_rel = raw.get("state", {}).get("db_path", "./data/klemma.db")
+    db_path = Path(db_rel)
+    if not db_path.is_absolute():
+        db_path = parent_root / ".klemma" / db_rel
+    return db_path
 
 
 def _init_components(config_path: str | None = None) -> KlemmaContext:
@@ -62,6 +76,13 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
         db_path = str(klemma_home / db_path)
 
     state = StateManager(db_path)
+
+    # Attach parent DB for read-only inheritance (#55)
+    if len(project_chain) > 1 and cfg.state.inherit_db:
+        parent_db = _resolve_parent_db(project_chain[1])
+        if parent_db and parent_db.exists():
+            state.set_parent(parent_db)
+
     vault = VaultAdapter(cfg.obsidian.vault_path, use_cli=cfg.obsidian.use_cli)
     library = create_library(cfg)
 
@@ -475,6 +496,31 @@ def init(ctx, project_type, global_only, no_input, force, outline):
     if result["skipped"]:
         for name in result["skipped"]:
             console.print(f"  [dim]~ {name} (already exists, skipped)[/dim]")
+
+    # Parent project detection: offer DB inheritance (#55)
+    chain = discover_project_chain(project_dir)
+    if len(chain) > 1:
+        parent_root = chain[1]
+        console.print(f"\n[cyan]Parent project detected at {parent_root}.[/cyan]")
+        if not no_input:
+            inherit = click.confirm("Inherit parent library?", default=True)
+        else:
+            inherit = True
+        if not inherit:
+            from .config import update_project_config
+            update_project_config(project_dir, {})  # ensure file exists
+            # Write inherit_db: false to state section
+            cfg_path = project_dir / ".klemma" / "config.yaml"
+            raw = _load_yaml(cfg_path)
+            raw.setdefault("state", {})["inherit_db"] = False
+            import yaml
+            cfg_path.write_text(
+                yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            console.print("[dim]  inherit_db: false (parent library not inherited)[/dim]")
+        else:
+            console.print("[dim]  inherit_db: true (parent library will be inherited)[/dim]")
 
     # Paper: discover relevant sources from vault + BBT JSON
     if (
