@@ -420,3 +420,65 @@ class TestSemanticGapScoring:
         scores = {g["ref_authors"]: g["score"] for g in result}
         # Close source has better alignment so gets higher multiplier
         assert scores["Close"] > 0
+
+
+class TestSectionWeights:
+    """Tests for configurable per-section weights in gap scoring."""
+
+    def _setup_weighted_gaps(self, state):
+        """Create gaps in different sections with equal count/quality/intent."""
+        state.register_sources(["src1"])
+        with state._conn() as conn:
+            conn.execute("UPDATE sources SET quality_score=4 WHERE id='src1'")
+        state.save_reference_gaps("src1", [
+            {
+                "authors": "Weighted et al.",
+                "year": 2022,
+                "title": "Weighted Section Paper",
+                "why_relevant": "In high-weight section",
+                "dissertation_sections": ["2.1"],
+            },
+            {
+                "authors": "Unweighted et al.",
+                "year": 2022,
+                "title": "Unweighted Section Paper",
+                "why_relevant": "In unlisted section",
+                "dissertation_sections": ["4.3"],
+            },
+        ])
+
+    def test_custom_weight_boosts_score(self, state):
+        """Gap in section with weight 1.0 scores higher than default 0.5."""
+        self._setup_weighted_gaps(state)
+        weights = {"2.1": 1.0}
+        gaps = state.get_reference_gaps(section_weights=weights)
+        scores = {g["ref_authors"]: g["score"] for g in gaps}
+        assert scores["Weighted et al."] > scores["Unweighted et al."]
+
+    def test_unlisted_section_defaults_to_half(self, state):
+        """Gap in unconfigured section gets w_s=0.5."""
+        self._setup_weighted_gaps(state)
+        weights = {"2.1": 1.0}
+        gaps = state.get_reference_gaps(section_weights=weights)
+        weighted = [g for g in gaps if "Weighted" in g["ref_authors"]][0]
+        unweighted = [g for g in gaps if "Unweighted" in g["ref_authors"]][0]
+        # Both have same count=1, quality=4, intent=1.0
+        # Weighted: 1*4*1.0*1.0 = 4.0, Unweighted: 1*4*0.5*1.0 = 2.0
+        assert weighted["score"] == 4.0
+        assert unweighted["score"] == 2.0
+
+    def test_no_weights_uniform(self, state):
+        """section_weights=None → all sections get w_s=1.0 (backward compat)."""
+        self._setup_weighted_gaps(state)
+        gaps = state.get_reference_gaps(section_weights=None)
+        scores = {g["ref_authors"]: g["score"] for g in gaps}
+        # Both sections get uniform weight 1.0
+        assert scores["Weighted et al."] == scores["Unweighted et al."]
+
+    def test_results_sorted_by_score(self, state):
+        """Output is sorted descending by score."""
+        self._setup_weighted_gaps(state)
+        weights = {"2.1": 1.0}
+        gaps = state.get_reference_gaps(section_weights=weights)
+        scores = [g["score"] for g in gaps]
+        assert scores == sorted(scores, reverse=True)

@@ -337,13 +337,94 @@ def _print_status_line(state: StateManager, project_name: str = "default"):
         pass  # Don't crash on status line failure
 
 
-def _print_ref_gaps_table(state: StateManager, limit: int = 20, embeddings=None):
+def _print_recommended_actions(
+    proc_stats: dict,
+    emb_stats: dict | None,
+    gaps_data: list[dict],
+    ref_gaps: list[dict],
+    prune_summary: dict,
+):
+    """Print recommended next actions with copy-paste commands."""
+    actions: list[tuple[str, str]] = []  # (reason, command)
+
+    # 1. Pending/failed sources → process
+    pending = proc_stats.get("pending", 0)
+    failed = proc_stats.get("failed", 0)
+    if pending > 0:
+        actions.append((
+            f"{pending} sources pending extraction",
+            "klemma process",
+        ))
+    if failed > 0:
+        actions.append((
+            f"{failed} failed sources to retry",
+            "klemma process --retry",
+        ))
+
+    # 2. Embedding coverage < 100%
+    if emb_stats:
+        total = emb_stats.get("total", 0)
+        embedded = emb_stats.get("embedded", 0)
+        remaining = total - embedded
+        if remaining > 0:
+            actions.append((
+                f"{remaining} sources missing embeddings ({embedded}/{total})",
+                "klemma embed",
+            ))
+
+    # 3. Top coverage gaps → research
+    if gaps_data:
+        top_gap = gaps_data[0]
+        actions.append((
+            f"section {top_gap['section']} has only {top_gap['count']} sources",
+            f"klemma research -s {top_gap['section']}",
+        ))
+
+    # 4. Top ref gaps → acquire with pre-filled metadata flags
+    for g in ref_gaps[:2]:
+        authors = (g.get("ref_authors") or "").strip()
+        year = g.get("ref_year") or ""
+        title = (g.get("ref_title") or "").strip()
+        flags = []
+        if title:
+            flags.append(f'-t "{title}"')
+        if authors:
+            flags.append(f'-a "{authors}"')
+        if year:
+            flags.append(f"-y {year}")
+        flag_str = " ".join(flags)
+        actions.append((
+            f"missing ref: {authors[:30]} ({year}), cited x{g['count']}",
+            f"klemma acquire <pdf_url> {flag_str}",
+        ))
+
+    # 5. Prune verdicts pending review
+    if prune_summary.get("total", 0) > 0:
+        drop = prune_summary.get("drop", 0)
+        maybe = prune_summary.get("maybe", 0)
+        actions.append((
+            f"{drop} drop + {maybe} maybe prune verdicts pending",
+            "klemma library prune --list",
+        ))
+
+    if not actions:
+        return
+
+    console.print()
+    console.print("[bold]Recommended Actions[/bold]")
+    for i, (reason, cmd) in enumerate(actions, 1):
+        console.print(f"  [dim]{i}.[/dim] {reason}")
+        console.print(f"     [green]$ {cmd}[/green]")
+
+
+def _print_ref_gaps_table(state: StateManager, limit: int = 20, embeddings=None,
+                          section_weights: dict[str, float] | None = None):
     """Print reference gaps as a Rich table.
 
     When embeddings is provided, applies semantic reranking via
     rerank_gaps_semantic() before display.
     """
-    ref_gaps = state.get_reference_gaps(limit=limit)
+    ref_gaps = state.get_reference_gaps(limit=limit, section_weights=section_weights)
     if not ref_gaps:
         return
     if embeddings:
@@ -1408,10 +1489,12 @@ def status(ctx, verbose, chapter):
             console.print(f"  [dim]... and {len(gaps_data) - 5} more (use --verbose)[/dim]")
 
     # --- Reference gaps ---
+    _sw = kctx.project.section_weights if kctx.project else None
     if verbose:
-        _print_ref_gaps_table(state, limit=20, embeddings=kctx.embeddings)
+        _print_ref_gaps_table(state, limit=20, embeddings=kctx.embeddings,
+                              section_weights=_sw)
     else:
-        ref_gaps = state.get_reference_gaps(limit=5)
+        ref_gaps = state.get_reference_gaps(limit=5, section_weights=_sw)
         if ref_gaps:
             gap_summary = state.get_gap_summary()
             console.print()
@@ -1501,6 +1584,12 @@ def status(ctx, verbose, chapter):
                     console.print(
                         f"  [green]x{ref['cite_count']}[/green]  @{ref['target_citekey']}"
                     )
+
+    # --- Recommended actions ---
+    _emb = state.get_embedding_stats()
+    _prune = state.get_prune_summary()
+    _ref = state.get_reference_gaps(limit=3, section_weights=_sw)
+    _print_recommended_actions(proc_stats, _emb, gaps_data, _ref, _prune)
 
 
 # Backward-compatible aliases
@@ -2833,7 +2922,8 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
 
     reranked_gaps = None
     if semantic and kctx.embeddings:
-        all_gaps = kctx.state.get_reference_gaps(limit=100)
+        _bsw = kctx.project.section_weights if kctx.project else None
+        all_gaps = kctx.state.get_reference_gaps(limit=100, section_weights=_bsw)
         reranked_gaps = kctx.state.rerank_gaps_semantic(all_gaps, kctx.embeddings)
     elif semantic:
         console.print("[yellow]--semantic requires embeddings to be configured[/yellow]")

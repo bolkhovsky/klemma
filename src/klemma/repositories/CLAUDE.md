@@ -52,9 +52,9 @@ Vector BLOB storage with model versioning.
 - `save_embedding()`, `get_embedding()`, `get_all_embeddings()`
 - `get_embedding_stats()` — coverage by model
 
-### gaps.py (~280 lines)
+### gaps.py (~330 lines)
 Reference gaps, coverage analysis, intent-weighted scoring.
-- `get_reference_gaps()` — aggregated with intent-weighted scoring formula
+- `get_reference_gaps(section?, limit?, section_weights?)` — aggregated with intent-weighted scoring formula; `section_weights` dict maps section IDs to `w_s ∈ (0,1]` (unlisted→0.5, None→uniform 1.0)
 - `rerank_gaps_semantic()` — centroid-based semantic reranking (cross-repo via callables)
 - `resolve_gaps()` — auto-resolve against library entries
 - `get_coverage_stats()`, `get_gaps()`, `reset_non_completed()`

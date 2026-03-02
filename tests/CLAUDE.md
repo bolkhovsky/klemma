@@ -1,6 +1,6 @@
 # Tests
 
-## Current test suite (534 tests)
+## Current test suite (547 tests)
 - `test_errors.py` (33 lines) — `KlemmaAIError` hierarchy, `retryable` classification, cause chaining
 - `test_ai.py` (170 lines) — `extract_json()`, `AIProviderBase`, `AICallResult` dataclass, `call_with_meta()` base + Claude, `create_ai()` factory
 - `test_ai_litellm.py` (265 lines) — `LiteLLMClient` with mocked litellm: call, json_mode, base_url, api_key, reasoning model detection, retry, `call_with_meta()` with structured error mapping + token extraction
@@ -11,7 +11,7 @@
 - `test_embeddings.py` (354 lines) — `EmbeddingProvider` protocol, `cosine_similarity`, `SemanticScholarEmbeddings`/`LocalSPECTEREmbeddings`/`OpenAIEmbeddings` with mocked backends, `create_embeddings()` factory
 - `test_citation_graph.py` (245 lines) — citation graph storage (`save_citation_links`, `get_citation_graph`), intent scoring for reference gaps, `_migrate_schema()` v1→v4
 - `test_mcp.py` (404 lines) — `ToolRegistry` CRUD + routing, `ToolInfo`, SPECTER MCP server creation (4 tools), embed/similar/batch tool logic via helpers, `compare_intents()` (LLM vs S2 accuracy, confusion matrix)
-- `test_intent_scoring.py` (422 lines) — intent-weighted reference gap scoring, intent coverage matrix, fragment citation intent classification
+- `test_intent_scoring.py` (~490 lines) — intent-weighted reference gap scoring, configurable section weights (`TestSectionWeights`), intent coverage matrix, fragment citation intent classification
 - `test_interactive_init.py` (347 lines) — interactive `klemma init` wizard, auto-discovery, config generation
 - `test_cli_init_outline.py` (37 lines) — `klemma init --outline` CLI behavior, AI-missing skip, no-outline no AI call
 - `test_cli_embed.py` (~70 lines) — `klemma embed` multi-citekey CLI behavior, missing-key warnings, `--fragments` flag (embed + dry-run)

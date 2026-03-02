@@ -487,11 +487,16 @@ class StateManager:
     def save_reference_gaps(self, source_id: str, gaps: list[dict]) -> int:
         return self.gaps.save_reference_gaps(source_id, gaps)
 
-    def get_reference_gaps(self, section: Optional[str] = None, limit: int = 50) -> list[dict]:
-        child = self.gaps.get_reference_gaps(section, limit)
+    def get_reference_gaps(
+        self,
+        section: Optional[str] = None,
+        limit: int = 50,
+        section_weights: Optional[dict[str, float]] = None,
+    ) -> list[dict]:
+        child = self.gaps.get_reference_gaps(section, limit, section_weights)
         if not self.parent_state:
             return child
-        parent = self.parent_state.gaps.get_reference_gaps(section, limit)
+        parent = self.parent_state.gaps.get_reference_gaps(section, limit, section_weights)
         # Dedup by (ref_authors, ref_year, ref_title) — use ref_title as key
         seen = {g["ref_title"] for g in child}
         merged = list(child)
