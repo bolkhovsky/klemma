@@ -16,6 +16,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB hard limit
+_USER_AGENT = "Mozilla/5.0 (compatible; Klemma/1.0; +https://github.com/klemma-ai/klemma)"
 
 
 @dataclass
@@ -41,6 +42,7 @@ class AcquireResult:
     citekey: str = ""
     pdf_path: str = ""
     status: str = ""  # ok, download_failed
+    zotero_added: bool = False
 
 
 def _is_allowed_download_url(url: str) -> bool:
@@ -77,7 +79,10 @@ def download_pdf(
 
     tmp = None
     try:
-        resp = requests.get(url, timeout=timeout, stream=True, allow_redirects=True)
+        resp = requests.get(
+            url, timeout=timeout, stream=True, allow_redirects=True,
+            headers={"User-Agent": _USER_AGENT},
+        )
         resp.raise_for_status()
 
         content_length = resp.headers.get("content-length")
@@ -110,6 +115,14 @@ def download_pdf(
 
         if size < 10_000:
             logger.warning("Downloaded file too small (%d bytes), may not be a valid PDF", size)
+            Path(tmp.name).unlink(missing_ok=True)
+            return None
+
+        # Validate PDF magic bytes
+        with open(tmp.name, "rb") as f:
+            magic = f.read(5)
+        if magic != b"%PDF-":
+            logger.warning("Downloaded file is not a PDF (magic: %r)", magic[:20])
             Path(tmp.name).unlink(missing_ok=True)
             return None
 
@@ -159,30 +172,112 @@ def _generate_citekey(meta: PaperMetadata) -> str:
     return f"{first_author}{year}_{slug}"
 
 
+def _extract_doi(url: str) -> str:
+    """Extract DOI from doi.org / dx.doi.org URLs. Returns DOI or empty string."""
+    parsed = urlparse(url)
+    if parsed.hostname in {"doi.org", "dx.doi.org"}:
+        # DOI is the path without leading slash
+        return parsed.path.lstrip("/")
+    return ""
+
+
+def _resolve_doi_to_pdf(doi: str) -> Optional[str]:
+    """Try to find a downloadable PDF URL for a DOI via Unpaywall."""
+    try:
+        from ..evaluation.resolvers import resolve_unpaywall
+        pdf_url = resolve_unpaywall(doi)
+        if pdf_url:
+            logger.info("Resolved DOI %s → %s", doi, pdf_url)
+            return pdf_url
+    except Exception as e:
+        logger.debug("DOI resolution failed: %s", e)
+    return None
+
+
 def acquire_paper_local(
     meta: PaperMetadata,
     storage_path: str,
     state=None,
 ) -> AcquireResult:
-    """Local acquire: download PDF → generate citekey → store → register in DB."""
-    # 1. Download PDF
-    pdf_path = download_pdf(meta.url)
-    if not pdf_path:
-        return AcquireResult(status="download_failed")
+    """Local acquire: download PDF → auto-extract metadata → generate citekey → store → register in DB."""
+    # 0. Handle local file:// URLs directly
+    parsed_url = urlparse(meta.url)
+    if parsed_url.scheme == "file":
+        local_file = Path(parsed_url.path)
+        if not local_file.is_file():
+            logger.error("Local file not found: %s", local_file)
+            return AcquireResult(status="download_failed")
+        pdf_path = local_file
+    else:
+        # 0a. If URL is a DOI link, extract DOI and resolve to actual PDF URL
+        doi_from_url = _extract_doi(meta.url)
+        if doi_from_url:
+            if not meta.doi:
+                meta.doi = doi_from_url
+            pdf_url = _resolve_doi_to_pdf(doi_from_url)
+            if pdf_url:
+                meta.url = pdf_url
+            else:
+                logger.warning("Could not resolve DOI %s to a PDF URL", doi_from_url)
 
-    # 2. Generate citekey locally
-    citekey = _generate_citekey(meta)
+        # 1. Download PDF
+        pdf_path = download_pdf(meta.url)
+        if not pdf_path:
+            return AcquireResult(status="download_failed")
 
-    # 3. Store PDF in local storage
+    is_local_file = parsed_url.scheme == "file"
+
+    # 2. Auto-extract metadata (CLI flags win → PDF → S2 → empty)
+    try:
+        from ..literature.metadata import resolve_metadata
+
+        resolved = resolve_metadata(
+            pdf_path,
+            cli_title=meta.title,
+            cli_authors=meta.authors,
+            cli_year=meta.year,
+            cli_doi=meta.doi,
+        )
+        # Fill in blanks on meta from resolved data
+        if not meta.title and resolved.get("title"):
+            meta.title = resolved["title"]
+        if not meta.authors and resolved.get("authors"):
+            meta.authors = resolved["authors"]
+        if meta.year is None and resolved.get("year"):
+            meta.year = resolved["year"]
+        if not meta.doi and resolved.get("doi"):
+            meta.doi = resolved["doi"]
+    except Exception as e:
+        logger.warning("Metadata extraction failed, continuing: %s", e)
+        resolved = {}
+
+    # 2a. Add to Zotero if running
+    zotero_citekey = None
+    try:
+        from ..literature.zotero_api import create_zotero_item, get_bbt_citekey, is_zotero_running
+        if is_zotero_running():
+            ok = create_zotero_item(
+                meta.title, meta.authors, meta.year, meta.doi,
+                resolved.get("abstract", ""), pdf_path,
+            )
+            if ok:
+                zotero_citekey = get_bbt_citekey(meta.title)
+    except Exception as e:
+        logger.warning("Zotero integration failed: %s", e)
+
+    # 3. Generate citekey — prefer BBT, fallback to local
+    citekey = zotero_citekey or _generate_citekey(meta)
+
+    # 4. Store PDF in local storage (skip if Zotero already has it)
     permanent_path = ""
-    if storage_path:
+    if storage_path and not zotero_citekey:
         try:
             dest = _store_pdf_locally(pdf_path, storage_path, citekey, meta.title)
             permanent_path = str(dest)
         except Exception as e:
             logger.error("Local PDF storage failed: %s", e)
 
-    # 4. Register in klemma DB
+    # 5. Register in klemma DB + persist metadata
     if state:
         state.register_sources([citekey])
         if permanent_path:
@@ -190,12 +285,23 @@ def acquire_paper_local(
         if meta.sections:
             chapters = list({int(s.split(".")[0]) for s in meta.sections if "." in s})
             state.set_source_sections(citekey, meta.sections, chapters)
+        # Persist extracted metadata
+        state.update_source_info(
+            citekey,
+            title=resolved.get("title", ""),
+            authors=resolved.get("authors", ""),
+            year=resolved.get("year"),
+            abstract=resolved.get("abstract", ""),
+            doi=resolved.get("doi", ""),
+        )
 
-    pdf_path.unlink(missing_ok=True)
+    if not is_local_file:
+        pdf_path.unlink(missing_ok=True)
     return AcquireResult(
         citekey=citekey,
         pdf_path=permanent_path or str(pdf_path),
         status="ok",
+        zotero_added=zotero_citekey is not None,
     )
 
 

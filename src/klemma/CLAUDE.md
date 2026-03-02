@@ -45,13 +45,13 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `
 - `init_klemma_home()` — legacy alias for `init_system()`
 - Interactive mode: auto-discovers Obsidian vaults, Zotero exports via `discovery.py`
 
-### state.py (~600 lines)
-SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v5), auto-migrates via `_migrate_schema()`. All 64 public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
+### state.py (~620 lines)
+SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v6), auto-migrates via `_migrate_schema()`. All 65 public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
 
 **DB inheritance (#55):** `set_parent(db_path)` attaches a read-only parent `StateManager`. Nine read methods merge parent data: `get_all_sources`, `get_by_chapter`, `get_by_section`, `get_fragments`, `get_coverage_stats`, `retrieve_similar_fragments`, `get_fragment_embeddings`, `get_all_embeddings`, `get_reference_gaps`. Child wins on key collision. Writes go only to child DB. Controlled by `StateConfig.inherit_db` (default `True`).
 
 Tables:
-- `sources` — Zotero entries (citekey, title, status, chapter, quality, pdf_path, `embedding` BLOB float32, `embedding_model` TEXT)
+- `sources` — Zotero entries (citekey, title, authors, year, abstract, doi, status, chapter, quality, pdf_path, `embedding` BLOB float32, `embedding_model` TEXT)
 - `source_sections` — junction table: source_id × section (multi-section support)
 - `fragments` — extracted citation fragments (text, type, chapter, section, relevance, page, `citation_intent`: background/method/result_comparison, `embedding` BLOB float32, `embedding_model` TEXT)
 - `reference_gaps` — missing references from bibliographies (status: open/resolved, score, `citation_intent`, intent-weighted scoring)
@@ -61,7 +61,7 @@ Tables:
 - `prune_verdicts` — librarian audit results (drop/maybe with reason)
 - `benchmark_runs` — benchmark run history (run_id, timestamp, metrics JSON, paper_citekey, git_commit, klemma_version, config_snapshot, duration)
 
-Key methods: `register_sources()`, `get_by_section()` (JOIN on `source_sections`), `get_coverage_stats()`, `get_gap_summary()`, `save_plan()`, `save_citation_links()`, `get_citation_graph()`, `save_embedding()`, `get_embeddings()`, `save_prune_verdicts()`, `get_prune_verdicts()`, `save_benchmark_run()`, `get_benchmark_runs()`, `compare_benchmark_runs()`.
+Key methods: `register_sources()`, `update_source_info()`, `get_by_section()` (JOIN on `source_sections`), `get_coverage_stats()`, `get_gap_summary()`, `save_plan()`, `save_citation_links()`, `get_citation_graph()`, `save_embedding()`, `get_embeddings()`, `save_prune_verdicts()`, `get_prune_verdicts()`, `save_benchmark_run()`, `get_benchmark_runs()`, `compare_benchmark_runs()`.
 
 ### errors.py (32 lines)
 Klemma error taxonomy for AI backends.

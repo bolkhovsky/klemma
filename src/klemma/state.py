@@ -206,7 +206,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 5  # bump this when adding new migrations
+        target = 6  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -290,6 +290,22 @@ class StateManager:
                     "ALTER TABLE fragments ADD COLUMN embedding_model TEXT"
                 )
 
+        if version < 6:
+            existing_src = {
+                row[1] for row in conn.execute("PRAGMA table_info(sources)")
+            }
+            for col, col_type in [
+                ("title", "TEXT"),
+                ("authors", "TEXT"),
+                ("year", "INTEGER"),
+                ("abstract", "TEXT"),
+                ("doi", "TEXT"),
+            ]:
+                if col not in existing_src:
+                    conn.execute(
+                        f"ALTER TABLE sources ADD COLUMN {col} {col_type}"
+                    )
+
         conn.execute(f"PRAGMA user_version = {target}")
 
     # ── Source delegation ─────────────────────────────────────────────────
@@ -337,6 +353,10 @@ class StateManager:
 
     def get_source(self, source_id: str) -> Optional[dict]:
         return self.sources.get_source(source_id)
+
+    def update_source_info(self, source_id: str, title: str = "", authors: str = "",
+                           year: Optional[int] = None, abstract: str = "", doi: str = ""):
+        return self.sources.update_source_info(source_id, title, authors, year, abstract, doi)
 
     def get_existing_source_ids(self) -> set[str]:
         return self.sources.get_existing_source_ids()
