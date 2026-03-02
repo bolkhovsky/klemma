@@ -71,10 +71,11 @@ def create_zotero_item(
 
     attachments = []
     if pdf_path and Path(pdf_path).is_file():
+        file_url = Path(pdf_path).resolve().as_uri()
         attachments.append({
             "title": "Full Text PDF",
             "mimeType": "application/pdf",
-            "path": str(Path(pdf_path).resolve()),
+            "url": file_url,
         })
 
     payload = {
