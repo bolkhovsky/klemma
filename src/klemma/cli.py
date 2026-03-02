@@ -380,16 +380,22 @@ def _print_recommended_actions(
             f"klemma research -s {top_gap['section']}",
         ))
 
-    # 4. Top ref gaps → acquire (build Scholar search URL)
+    # 4. Top ref gaps → acquire with pre-filled metadata flags
     for g in ref_gaps[:2]:
-        authors = (g.get("ref_authors") or "")[:30]
+        authors = (g.get("ref_authors") or "").strip()
         year = g.get("ref_year") or ""
-        title = g.get("ref_title") or ""
-        search_terms = f"{authors} {year} {title}".strip().replace(" ", "+")
-        search_url = f"https://scholar.google.com/scholar?q={search_terms}"
+        title = (g.get("ref_title") or "").strip()
+        flags = []
+        if title:
+            flags.append(f'-t "{title}"')
+        if authors:
+            flags.append(f'-a "{authors}"')
+        if year:
+            flags.append(f"-y {year}")
+        flag_str = " ".join(flags)
         actions.append((
-            f"missing ref: {authors} ({year}), cited x{g['count']}",
-            f"klemma acquire <pdf_url>  # {search_url}",
+            f"missing ref: {authors[:30]} ({year}), cited x{g['count']}",
+            f"klemma acquire <pdf_url> {flag_str}",
         ))
 
     # 5. Prune verdicts pending review
