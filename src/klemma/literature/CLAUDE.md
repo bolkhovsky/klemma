@@ -11,6 +11,13 @@ Auto-extract paper metadata from PDF properties + Semantic Scholar API lookup.
 - `resolve_metadata(pdf_path, cli_title?, cli_authors?, cli_year?, cli_doi?)` — orchestrator: CLI flags → PDF metadata → S2 enrichment → empty fallback
 - `_titles_match(query, candidate)` — fuzzy word-overlap comparison (>0.6 threshold)
 
+### zotero_api.py (~80 lines)
+Zotero local API integration via Connector + Better BibTeX JSON-RPC.
+- `is_zotero_running()` — checks BBT `api.ready` on localhost:23119 (2s timeout)
+- `create_zotero_item(title, authors_str, year, doi, abstract, pdf_path)` — `POST /connector/saveItems` with parsed creators + optional PDF attachment
+- `get_bbt_citekey(title, retries=3)` — `POST /better-bibtex/json-rpc` → `item.search(title)` → citekey (retries with 1s delay)
+- `_parse_authors(authors_str)` — splits "Smith J., Jones K." into Zotero creators array
+
 ### models.py (202 lines)
 All Pydantic models for the data layer:
 - `ZoteroEntry`, `Author` — Zotero item representation (`year`, `authors_str`, `citation` properties)

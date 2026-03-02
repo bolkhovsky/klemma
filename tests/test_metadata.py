@@ -1,9 +1,10 @@
-"""Tests for auto-metadata extraction in klemma acquire (#33)."""
+"""Tests for auto-metadata extraction in klemma acquire (#33) and Zotero API (#70)."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch  # noqa: I001
 
 import pytest
+import requests
 
 # ---------------------------------------------------------------------------
 # extract_pdf_metadata
@@ -312,3 +313,77 @@ class TestSourceInfoDB:
 
         for col in ("title", "authors", "year", "abstract", "doi"):
             assert col in cols, f"Column '{col}' missing after migration v6"
+
+
+# ---------------------------------------------------------------------------
+# Zotero local API (#70)
+# ---------------------------------------------------------------------------
+
+
+class TestZoteroAPI:
+    def test_is_zotero_running_true(self):
+        """POST to BBT returns 200 → True."""
+        from klemma.literature.zotero_api import is_zotero_running
+
+        with patch("klemma.literature.zotero_api.requests") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_req.post.return_value = mock_resp
+            assert is_zotero_running() is True
+
+    def test_is_zotero_running_false(self):
+        """Connection error → False."""
+        from klemma.literature.zotero_api import is_zotero_running
+
+        with patch("klemma.literature.zotero_api.requests") as mock_req:
+            mock_req.post.side_effect = requests.ConnectionError("refused")
+            assert is_zotero_running() is False
+
+    def test_create_zotero_item_success(self):
+        """POST 201 → True."""
+        from klemma.literature.zotero_api import create_zotero_item
+
+        with patch("klemma.literature.zotero_api.requests") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 201
+            mock_req.post.return_value = mock_resp
+
+            result = create_zotero_item(
+                "Deep Learning", "Smith J., Jones K.", 2024,
+                "10.1234/test", "Abstract text", None,
+            )
+
+        assert result is True
+        call_args = mock_req.post.call_args
+        payload = call_args.kwargs.get("json") or call_args[1].get("json")
+        item = payload["items"][0]
+        assert item["title"] == "Deep Learning"
+        assert item["DOI"] == "10.1234/test"
+
+    def test_create_zotero_item_parse_authors(self):
+        """Authors string parsed into Zotero creators array."""
+        from klemma.literature.zotero_api import _parse_authors
+
+        creators = _parse_authors("Smith J., Jones K.L.")
+        assert len(creators) == 2
+        assert creators[0]["lastName"] == "Smith"
+        assert creators[0]["firstName"] == "J."
+        assert creators[1]["lastName"] == "Jones"
+        assert creators[1]["firstName"] == "K.L."
+
+    def test_get_bbt_citekey_success(self):
+        """BBT JSON-RPC returns citekey on first attempt."""
+        from klemma.literature.zotero_api import get_bbt_citekey
+
+        with patch("klemma.literature.zotero_api.requests") as mock_req, \
+             patch("klemma.literature.zotero_api.time"):
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "result": [{"citekey": "smith2024DeepLearning"}],
+            }
+            mock_req.post.return_value = mock_resp
+
+            citekey = get_bbt_citekey("Deep Learning")
+
+        assert citekey == "smith2024DeepLearning"

@@ -42,6 +42,7 @@ class AcquireResult:
     citekey: str = ""
     pdf_path: str = ""
     status: str = ""  # ok, download_failed
+    zotero_added: bool = False
 
 
 def _is_allowed_download_url(url: str) -> bool:
@@ -250,12 +251,26 @@ def acquire_paper_local(
         logger.warning("Metadata extraction failed, continuing: %s", e)
         resolved = {}
 
-    # 3. Generate citekey locally
-    citekey = _generate_citekey(meta)
+    # 2a. Add to Zotero if running
+    zotero_citekey = None
+    try:
+        from ..literature.zotero_api import create_zotero_item, get_bbt_citekey, is_zotero_running
+        if is_zotero_running():
+            ok = create_zotero_item(
+                meta.title, meta.authors, meta.year, meta.doi,
+                resolved.get("abstract", ""), pdf_path,
+            )
+            if ok:
+                zotero_citekey = get_bbt_citekey(meta.title)
+    except Exception as e:
+        logger.warning("Zotero integration failed: %s", e)
 
-    # 4. Store PDF in local storage
+    # 3. Generate citekey — prefer BBT, fallback to local
+    citekey = zotero_citekey or _generate_citekey(meta)
+
+    # 4. Store PDF in local storage (skip if Zotero already has it)
     permanent_path = ""
-    if storage_path:
+    if storage_path and not zotero_citekey:
         try:
             dest = _store_pdf_locally(pdf_path, storage_path, citekey, meta.title)
             permanent_path = str(dest)
@@ -286,6 +301,7 @@ def acquire_paper_local(
         citekey=citekey,
         pdf_path=permanent_path or str(pdf_path),
         status="ok",
+        zotero_added=zotero_citekey is not None,
     )
 
 

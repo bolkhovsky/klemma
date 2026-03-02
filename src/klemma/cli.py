@@ -2208,6 +2208,8 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
                 console.print(f"  Authors: {meta.authors}")
             if meta.year:
                 console.print(f"  Year: {meta.year}")
+            if result.zotero_added:
+                console.print("  [blue]Added to Zotero (BBT citekey)[/blue]")
             if meta.sections:
                 console.print(f"  [dim]sections: {', '.join(meta.sections)}[/dim]")
 
