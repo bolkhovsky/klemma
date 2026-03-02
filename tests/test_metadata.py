@@ -387,3 +387,36 @@ class TestZoteroAPI:
             citekey = get_bbt_citekey("Deep Learning")
 
         assert citekey == "smith2024DeepLearning"
+
+
+# ---------------------------------------------------------------------------
+# arXiv URL resolution
+# ---------------------------------------------------------------------------
+
+
+class TestArxivResolution:
+    def test_abs_to_pdf(self):
+        """arXiv abstract URL → PDF URL."""
+        from klemma.skills.acquirer import _resolve_arxiv_pdf_url
+
+        assert _resolve_arxiv_pdf_url("https://arxiv.org/abs/2001.01520") == \
+            "https://arxiv.org/pdf/2001.01520"
+
+    def test_abs_with_version(self):
+        """arXiv abstract URL with version → PDF URL preserves version."""
+        from klemma.skills.acquirer import _resolve_arxiv_pdf_url
+
+        assert _resolve_arxiv_pdf_url("https://arxiv.org/abs/2001.01520v2") == \
+            "https://arxiv.org/pdf/2001.01520v2"
+
+    def test_non_arxiv_url(self):
+        """Non-arXiv URL → None."""
+        from klemma.skills.acquirer import _resolve_arxiv_pdf_url
+
+        assert _resolve_arxiv_pdf_url("https://example.com/abs/2001.01520") is None
+
+    def test_already_pdf_url(self):
+        """arXiv PDF URL (no /abs/) → None (no conversion needed)."""
+        from klemma.skills.acquirer import _resolve_arxiv_pdf_url
+
+        assert _resolve_arxiv_pdf_url("https://arxiv.org/pdf/2001.01520") is None

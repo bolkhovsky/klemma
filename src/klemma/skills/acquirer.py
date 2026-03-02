@@ -172,6 +172,20 @@ def _generate_citekey(meta: PaperMetadata) -> str:
     return f"{first_author}{year}_{slug}"
 
 
+def _resolve_arxiv_pdf_url(url: str) -> Optional[str]:
+    """Convert arXiv abstract URL to PDF URL. Returns PDF URL or None."""
+    parsed = urlparse(url)
+    if parsed.hostname not in {"arxiv.org", "www.arxiv.org"}:
+        return None
+    # /abs/2001.01520 or /abs/2001.01520v2 → /pdf/2001.01520v2
+    m = re.match(r"/abs/(.+)", parsed.path)
+    if m:
+        pdf_url = f"https://arxiv.org/pdf/{m.group(1)}"
+        logger.info("Resolved arXiv abstract → %s", pdf_url)
+        return pdf_url
+    return None
+
+
 def _extract_doi(url: str) -> str:
     """Extract DOI from doi.org / dx.doi.org URLs. Returns DOI or empty string."""
     parsed = urlparse(url)
@@ -209,7 +223,12 @@ def acquire_paper_local(
             return AcquireResult(status="download_failed")
         pdf_path = local_file
     else:
-        # 0a. If URL is a DOI link, extract DOI and resolve to actual PDF URL
+        # 0a. If URL is an arXiv abstract page, resolve to PDF URL
+        arxiv_pdf = _resolve_arxiv_pdf_url(meta.url)
+        if arxiv_pdf:
+            meta.url = arxiv_pdf
+
+        # 0b. If URL is a DOI link, extract DOI and resolve to actual PDF URL
         doi_from_url = _extract_doi(meta.url)
         if doi_from_url:
             if not meta.doi:
