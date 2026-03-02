@@ -199,21 +199,32 @@ def acquire_paper_local(
     state=None,
 ) -> AcquireResult:
     """Local acquire: download PDF → auto-extract metadata → generate citekey → store → register in DB."""
-    # 0. If URL is a DOI link, extract DOI and resolve to actual PDF URL
-    doi_from_url = _extract_doi(meta.url)
-    if doi_from_url:
-        if not meta.doi:
-            meta.doi = doi_from_url
-        pdf_url = _resolve_doi_to_pdf(doi_from_url)
-        if pdf_url:
-            meta.url = pdf_url
-        else:
-            logger.warning("Could not resolve DOI %s to a PDF URL", doi_from_url)
+    # 0. Handle local file:// URLs directly
+    parsed_url = urlparse(meta.url)
+    if parsed_url.scheme == "file":
+        local_file = Path(parsed_url.path)
+        if not local_file.is_file():
+            logger.error("Local file not found: %s", local_file)
+            return AcquireResult(status="download_failed")
+        pdf_path = local_file
+    else:
+        # 0a. If URL is a DOI link, extract DOI and resolve to actual PDF URL
+        doi_from_url = _extract_doi(meta.url)
+        if doi_from_url:
+            if not meta.doi:
+                meta.doi = doi_from_url
+            pdf_url = _resolve_doi_to_pdf(doi_from_url)
+            if pdf_url:
+                meta.url = pdf_url
+            else:
+                logger.warning("Could not resolve DOI %s to a PDF URL", doi_from_url)
 
-    # 1. Download PDF
-    pdf_path = download_pdf(meta.url)
-    if not pdf_path:
-        return AcquireResult(status="download_failed")
+        # 1. Download PDF
+        pdf_path = download_pdf(meta.url)
+        if not pdf_path:
+            return AcquireResult(status="download_failed")
+
+    is_local_file = parsed_url.scheme == "file"
 
     # 2. Auto-extract metadata (CLI flags win → PDF → S2 → empty)
     try:
@@ -269,7 +280,8 @@ def acquire_paper_local(
             doi=resolved.get("doi", ""),
         )
 
-    pdf_path.unlink(missing_ok=True)
+    if not is_local_file:
+        pdf_path.unlink(missing_ok=True)
     return AcquireResult(
         citekey=citekey,
         pdf_path=permanent_path or str(pdf_path),
