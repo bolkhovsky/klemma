@@ -1,7 +1,9 @@
 """Zotero local API integration via Connector + Better BibTeX JSON-RPC."""
 
+import json
 import logging
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -12,6 +14,7 @@ logger = logging.getLogger(__name__)
 ZOTERO_BASE = "http://localhost:23119"
 BBT_RPC = f"{ZOTERO_BASE}/better-bibtex/json-rpc"
 CONNECTOR_SAVE = f"{ZOTERO_BASE}/connector/saveItems"
+CONNECTOR_ATTACH = f"{ZOTERO_BASE}/connector/saveAttachment"
 
 
 def is_zotero_running() -> bool:
@@ -51,6 +54,41 @@ def _parse_authors(authors_str: str) -> list[dict]:
     return creators
 
 
+def _attach_pdf(session_id: str, item_id: str, pdf_path: Path) -> bool:
+    """Attach a PDF to a Zotero item via the Connector saveAttachment endpoint."""
+    resolved = Path(pdf_path).resolve()
+    if not resolved.is_file():
+        return False
+
+    pdf_bytes = resolved.read_bytes()
+    metadata = json.dumps({
+        "sessionID": session_id,
+        "parentItemID": item_id,
+        "title": "Full Text PDF",
+        "url": f"klemma://acquire/{resolved.name}",
+    })
+
+    try:
+        resp = requests.post(
+            CONNECTOR_ATTACH,
+            data=pdf_bytes,
+            headers={
+                "Content-Type": "application/pdf",
+                "Content-Length": str(len(pdf_bytes)),
+                "X-Metadata": metadata,
+            },
+            timeout=30,
+        )
+        if resp.status_code == 201:
+            logger.info("Attached PDF to Zotero item: %s", resolved.name)
+            return True
+        logger.warning("Zotero saveAttachment returned %d: %s", resp.status_code, resp.text[:200])
+        return False
+    except Exception as e:
+        logger.warning("Zotero saveAttachment failed: %s", e)
+        return False
+
+
 def create_zotero_item(
     title: str,
     authors_str: str,
@@ -59,8 +97,12 @@ def create_zotero_item(
     abstract: str,
     pdf_path: Optional[Path],
 ) -> bool:
-    """Create a Zotero item via the Connector saveItems endpoint."""
+    """Create a Zotero item via the Connector saveItems + saveAttachment endpoints."""
+    session_id = str(uuid.uuid4())
+    item_id = "klemma_item_0"
+
     item: dict = {
+        "id": item_id,
         "itemType": "journalArticle",
         "title": title,
         "creators": _parse_authors(authors_str),
@@ -69,31 +111,27 @@ def create_zotero_item(
         "abstractNote": abstract,
     }
 
-    attachments = []
-    if pdf_path and Path(pdf_path).is_file():
-        attachments.append({
-            "title": "Full Text PDF",
-            "mimeType": "application/pdf",
-            "path": str(Path(pdf_path).resolve()),
-        })
-
     payload = {
+        "sessionID": session_id,
         "items": [item],
         "uri": "https://klemma.ai/acquire",
     }
-    if attachments:
-        payload["items"][0]["attachments"] = attachments
 
     try:
         resp = requests.post(CONNECTOR_SAVE, json=payload, timeout=10)
-        if resp.status_code == 201:
-            logger.info("Created Zotero item: %s", title)
-            return True
-        logger.warning("Zotero saveItems returned %d: %s", resp.status_code, resp.text[:200])
-        return False
+        if resp.status_code != 201:
+            logger.warning("Zotero saveItems returned %d: %s", resp.status_code, resp.text[:200])
+            return False
+        logger.info("Created Zotero item: %s", title)
     except Exception as e:
         logger.warning("Zotero saveItems failed: %s", e)
         return False
+
+    # Step 2: Attach PDF via separate endpoint
+    if pdf_path and Path(pdf_path).is_file():
+        _attach_pdf(session_id, item_id, Path(pdf_path))
+
+    return True
 
 
 def get_bbt_citekey(title: str, retries: int = 3, delay: float = 1.0) -> Optional[str]:
