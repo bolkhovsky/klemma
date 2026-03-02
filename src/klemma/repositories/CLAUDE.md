@@ -28,9 +28,9 @@ All repos receive `StateManager._conn` as their connection factory via `BaseRepo
 Base class providing shared `_conn` factory.
 - `BaseRepository` — all repos inherit from this
 
-### sources.py (~400 lines)
+### sources.py (~420 lines)
 Source lifecycle, sections, Zotero key management, vault sync.
-- `register_sources()`, `mark_completed()`, `get_source()`, `get_stats()`
+- `register_sources()`, `mark_completed()`, `get_source()`, `get_stats()`, `update_source_info()` (persist title/authors/year/abstract/doi)
 - `set_source_sections()` — replaces old `_set_sections_inline`
 - `get_existing_source_ids()` — replaces old direct `_conn()` usage in cli.py
 - `get_sources_without_embeddings()` — replaces old direct `_conn()` usage in cli.py

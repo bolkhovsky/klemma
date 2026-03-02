@@ -1,8 +1,15 @@
 # Literature Management
 
-PDF text extraction, Pydantic data models, and vault note generation.
+PDF text extraction, Pydantic data models, vault note generation, and metadata auto-extraction.
 
 ## Modules
+
+### metadata.py (~150 lines)
+Auto-extract paper metadata from PDF properties + Semantic Scholar API lookup.
+- `extract_pdf_metadata(pdf_path)` — PyMuPDF `doc.metadata` for title/author; first-page heuristic fallback for generic titles
+- `lookup_s2(title)` — S2 `paper/search` API with rate limiting, fuzzy title match, returns title/authors/year/abstract/doi
+- `resolve_metadata(pdf_path, cli_title?, cli_authors?, cli_year?, cli_doi?)` — orchestrator: CLI flags → PDF metadata → S2 enrichment → empty fallback
+- `_titles_match(query, candidate)` — fuzzy word-overlap comparison (>0.6 threshold)
 
 ### models.py (202 lines)
 All Pydantic models for the data layer:

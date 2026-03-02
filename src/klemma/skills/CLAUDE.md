@@ -57,12 +57,12 @@ Project outline generation from directory contents + database context. Two modes
 - `OutlineResult` dataclass: title, description, chapters, sections, scientific_results, outline_text, update_summary
 - CLI options: `-p/--prompt` (custom directive), `--fresh` (force full regeneration)
 
-### acquirer.py (164 lines)
-Local-only paper acquisition pipeline: download → local storage → DB.
-- `acquire_paper()` — orchestrates full pipeline
+### acquirer.py (~220 lines)
+Local-only paper acquisition pipeline: download → auto-extract metadata → local storage → DB.
+- `acquire_paper_local()` — orchestrates full pipeline; calls `resolve_metadata()` after download to auto-fill title/authors/year/doi from PDF+S2
 - `download_pdf()` — HTTP stream with validation (min 10KB, content-type check)
 - `_store_pdf_locally()` — copy to Zotero storage dir
-- `poll_bbt_citekey()` — polls BBT JSON export for new citekey (2s intervals, 30s timeout)
+- `_generate_citekey()` — generates `author2024_title_slug` from metadata (now produces real citekeys via auto-extraction)
 - `load_batch()` — parse JSON batch file
 - Dataclasses: `PaperMetadata`, `AcquireResult`
 
@@ -82,7 +82,7 @@ If vault note missing: triggers `literature.note_factory.create_vault_note()` fi
 `klemma research -s X.X` → `_sync_sections()` → `researcher.research_section()` → auto-extracts fragments (if needed) → builds context → Claude → `ResearchResult` → `project_root/Research_{section}.md`.
 
 ### Paper acquisition
-`klemma acquire <url>` → `acquirer.acquire_paper()` → download PDF → local storage → poll BBT for citekey → `state.register_sources()`.
+`klemma acquire <url>` → `acquirer.acquire_paper_local()` → download PDF → `resolve_metadata()` (PDF props + S2 API) → auto-generate citekey → local storage → `state.register_sources()` + `state.update_source_info()` (title/authors/year/abstract/doi).
 
 ### Library analysis
 `klemma library` → `librarian.analyze_library()` → `LibraryReport` → `project_root/Library_{mode}_{date}.md`.

@@ -164,16 +164,40 @@ def acquire_paper_local(
     storage_path: str,
     state=None,
 ) -> AcquireResult:
-    """Local acquire: download PDF → generate citekey → store → register in DB."""
+    """Local acquire: download PDF → auto-extract metadata → generate citekey → store → register in DB."""
     # 1. Download PDF
     pdf_path = download_pdf(meta.url)
     if not pdf_path:
         return AcquireResult(status="download_failed")
 
-    # 2. Generate citekey locally
+    # 2. Auto-extract metadata (CLI flags win → PDF → S2 → empty)
+    try:
+        from ..literature.metadata import resolve_metadata
+
+        resolved = resolve_metadata(
+            pdf_path,
+            cli_title=meta.title,
+            cli_authors=meta.authors,
+            cli_year=meta.year,
+            cli_doi=meta.doi,
+        )
+        # Fill in blanks on meta from resolved data
+        if not meta.title and resolved.get("title"):
+            meta.title = resolved["title"]
+        if not meta.authors and resolved.get("authors"):
+            meta.authors = resolved["authors"]
+        if meta.year is None and resolved.get("year"):
+            meta.year = resolved["year"]
+        if not meta.doi and resolved.get("doi"):
+            meta.doi = resolved["doi"]
+    except Exception as e:
+        logger.warning("Metadata extraction failed, continuing: %s", e)
+        resolved = {}
+
+    # 3. Generate citekey locally
     citekey = _generate_citekey(meta)
 
-    # 3. Store PDF in local storage
+    # 4. Store PDF in local storage
     permanent_path = ""
     if storage_path:
         try:
@@ -182,7 +206,7 @@ def acquire_paper_local(
         except Exception as e:
             logger.error("Local PDF storage failed: %s", e)
 
-    # 4. Register in klemma DB
+    # 5. Register in klemma DB + persist metadata
     if state:
         state.register_sources([citekey])
         if permanent_path:
@@ -190,6 +214,15 @@ def acquire_paper_local(
         if meta.sections:
             chapters = list({int(s.split(".")[0]) for s in meta.sections if "." in s})
             state.set_source_sections(citekey, meta.sections, chapters)
+        # Persist extracted metadata
+        state.update_source_info(
+            citekey,
+            title=resolved.get("title", ""),
+            authors=resolved.get("authors", ""),
+            year=resolved.get("year"),
+            abstract=resolved.get("abstract", ""),
+            doi=resolved.get("doi", ""),
+        )
 
     pdf_path.unlink(missing_ok=True)
     return AcquireResult(

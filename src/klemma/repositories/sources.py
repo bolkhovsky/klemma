@@ -143,6 +143,31 @@ class SourceRepository(BaseRepository):
                 (ProcessingStatus.SKIPPED, reason, source_id),
             )
 
+    def update_source_info(
+        self,
+        source_id: str,
+        title: str = "",
+        authors: str = "",
+        year: Optional[int] = None,
+        abstract: str = "",
+        doi: str = "",
+    ):
+        """Persist paper metadata (title/authors/year/abstract/doi).
+
+        Only sets non-empty values — existing data is preserved via COALESCE.
+        """
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE sources SET
+                    title = COALESCE(NULLIF(?, ''), title),
+                    authors = COALESCE(NULLIF(?, ''), authors),
+                    year = COALESCE(?, year),
+                    abstract = COALESCE(NULLIF(?, ''), abstract),
+                    doi = COALESCE(NULLIF(?, ''), doi)
+                WHERE id = ?""",
+                (title, authors, year, abstract, doi, source_id),
+            )
+
     def get_source(self, source_id: str) -> Optional[dict]:
         with self._conn() as conn:
             cur = conn.execute("SELECT * FROM sources WHERE id=?", (source_id,))
