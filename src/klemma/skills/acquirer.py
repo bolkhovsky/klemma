@@ -287,9 +287,9 @@ def acquire_paper_local(
     # 3. Generate citekey — prefer BBT, fallback to local
     citekey = zotero_citekey or _generate_citekey(meta)
 
-    # 4. Store PDF in local storage (skip if Zotero already has it)
+    # 4. Store PDF in local storage
     permanent_path = ""
-    if storage_path and not zotero_citekey:
+    if storage_path:
         try:
             dest = _store_pdf_locally(pdf_path, storage_path, citekey, meta.title)
             permanent_path = str(dest)
