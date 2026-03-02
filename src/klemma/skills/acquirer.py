@@ -117,6 +117,14 @@ def download_pdf(
             Path(tmp.name).unlink(missing_ok=True)
             return None
 
+        # Validate PDF magic bytes
+        with open(tmp.name, "rb") as f:
+            magic = f.read(5)
+        if magic != b"%PDF-":
+            logger.warning("Downloaded file is not a PDF (magic: %r)", magic[:20])
+            Path(tmp.name).unlink(missing_ok=True)
+            return None
+
         logger.info("Downloaded %d bytes → %s", size, tmp.name)
         return Path(tmp.name)
 
@@ -163,12 +171,45 @@ def _generate_citekey(meta: PaperMetadata) -> str:
     return f"{first_author}{year}_{slug}"
 
 
+def _extract_doi(url: str) -> str:
+    """Extract DOI from doi.org / dx.doi.org URLs. Returns DOI or empty string."""
+    parsed = urlparse(url)
+    if parsed.hostname in {"doi.org", "dx.doi.org"}:
+        # DOI is the path without leading slash
+        return parsed.path.lstrip("/")
+    return ""
+
+
+def _resolve_doi_to_pdf(doi: str) -> Optional[str]:
+    """Try to find a downloadable PDF URL for a DOI via Unpaywall."""
+    try:
+        from ..evaluation.resolvers import resolve_unpaywall
+        pdf_url = resolve_unpaywall(doi)
+        if pdf_url:
+            logger.info("Resolved DOI %s → %s", doi, pdf_url)
+            return pdf_url
+    except Exception as e:
+        logger.debug("DOI resolution failed: %s", e)
+    return None
+
+
 def acquire_paper_local(
     meta: PaperMetadata,
     storage_path: str,
     state=None,
 ) -> AcquireResult:
     """Local acquire: download PDF → auto-extract metadata → generate citekey → store → register in DB."""
+    # 0. If URL is a DOI link, extract DOI and resolve to actual PDF URL
+    doi_from_url = _extract_doi(meta.url)
+    if doi_from_url:
+        if not meta.doi:
+            meta.doi = doi_from_url
+        pdf_url = _resolve_doi_to_pdf(doi_from_url)
+        if pdf_url:
+            meta.url = pdf_url
+        else:
+            logger.warning("Could not resolve DOI %s to a PDF URL", doi_from_url)
+
     # 1. Download PDF
     pdf_path = download_pdf(meta.url)
     if not pdf_path:
