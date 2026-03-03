@@ -26,13 +26,13 @@ Section research briefings. Two modes:
 - `research_section(project_root=..., embeddings=?)` — main entry point; optional `embeddings` param enables RAG-first fragment retrieval (semantic search via `retrieve_similar_fragments`), falls back to section-based lookup when RAG yields <10 results or is unavailable
 - `_fit_prompt_budget(chapter_draft, sources, fragments, max_chars=80K)` — progressively reduces prompt content to fit TPM budget; reduction order: draft→summaries→fragment text→source count→fragment count
 - `pre_extract_sources()` — auto-extract fragments for section/chapter sources before research
-- `_load_previous_research(section, chapter, state, project_root)` — reads from project_root, parses user notes, history, delta
-- `_save_report(section, content, project_root)` — writes report to project_root
+- `_load_previous_research(section, chapter, state, project_root)` — reads from `notes/research/` first, falls back to project_root for legacy projects
+- `_save_report(section, content, project_root)` — writes report to `project_root/notes/research/`
 - `_load_section_sources()` — enrich sources with vault AI summaries
 
 ### librarian.py (522 lines)
 Library health analysis. Three modes: `status` (health), `recommend` (section-focused), `audit` (deep quality check + citation graph + prune).
-- `analyze_library(project_root=...)` — gathers context → `prompts/librarian.md` → `LibraryReport` → `project_root/Library_{mode}_{date}.md`
+- `analyze_library(project_root=...)` — gathers context → `prompts/librarian.md` → `LibraryReport` → `project_root/notes/library/Library_{mode}_{date}.md`
 - `_gather_library_context()` — summary, quality tiers, ref-gaps, sources compact list, citation graph stats
 - `_format_sources_compact()` — compact list for prompt (citekey, author, year, title, q, ch, s, f, intent)
 - `_get_citation_graph_stats()` — co-citation analysis, author network, hub scores from `citation_links`
@@ -42,7 +42,7 @@ Library health analysis. Three modes: `status` (health), `recommend` (section-fo
 ### agent.py (~230 lines)
 Builds full project context for interactive Claude sessions.
 - `build_agent_context(project_root=..., embeddings=?, query=?)` — gathers sources, coverage, gaps, fragments, plan, reading queue + scans project_root for reports/files → optional fragment RAG (embeds query → top-K retrieval) → `prompts/agent.md` → system prompt
-- `_scan_project_reports(project_root)` — finds Outline/Research/Library/Agent reports + project files (.md, .tex, .bib, .pdf, .doc, .docx)
+- `_scan_project_reports(project_root)` — finds Outline/Research/Library/Agent reports at project root (legacy) + `notes/{research,library,agents}/` (new layout) + project files (.md, .tex, .bib, .pdf, .doc, .docx)
 - For Claude backend: launches `claude --system-prompt` interactively
 - For non-Claude backends: `ai.call()` with full context → terminal output
 - Saves responses to `project_root/Agent_<date>.md`
@@ -79,20 +79,20 @@ Dynamic work context builder — replaces hardcoded DISSERTATION_CONTEXT constan
 If vault note missing: triggers `literature.note_factory.create_vault_note()` first.
 
 ### Research briefing
-`klemma research -s X.X` → `_sync_sections()` → `researcher.research_section()` → auto-extracts fragments (if needed) → builds context → Claude → `ResearchResult` → `project_root/Research_{section}.md`.
+`klemma research -s X.X` → `_sync_sections()` → `researcher.research_section()` → auto-extracts fragments (if needed) → builds context → Claude → `ResearchResult` → `project_root/notes/research/Research_{section}.md` (reads legacy `project_root/Research_{section}.md` as fallback).
 
 ### Paper acquisition
 `klemma acquire <url>` → `acquirer.acquire_paper_local()` → download PDF → `resolve_metadata()` (PDF props + S2 API) → if Zotero running: create item via Connector + get BBT citekey → else: local citekey + local PDF storage → `state.register_sources()` + `state.update_source_info()` (title/authors/year/abstract/doi).
 
 ### Library analysis
-`klemma library` → `librarian.analyze_library()` → `LibraryReport` → `project_root/Library_{mode}_{date}.md`.
+`klemma library` → `librarian.analyze_library()` → `LibraryReport` → `project_root/notes/library/Library_{mode}_{date}.md`.
 
 ### Project outline
 `klemma outline` → `scan_project_files()` → `outliner.generate_outline()` → Claude → `OutlineResult` → `project_root/Outline_{name}.md` (with feedback sections).
 On repeat: reads previous outline → incremental update. With `--fresh`: full regeneration. With `-p`: custom AI directive.
 
 ### Agent context
-`klemma ask "query"` → `agent.build_agent_context(project_root=...)` → scans project_root for outline/reports/files → system prompt → interactive Claude or `ai.call()`. Agent saves to `project_root/Agent_*.md`.
+`klemma ask "query"` → `agent.build_agent_context(project_root=...)` → scans project_root for outline/reports/files + `notes/{research,library,agents}/` → system prompt → interactive Claude or `ai.call()`. Agent saves to `project_root/Agent_*.md`.
 
 ### Agent Skills (Claude Code)
 Agent uses Claude Code Skills from `.claude/skills/` instead of reading source code:

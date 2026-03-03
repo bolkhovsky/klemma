@@ -1780,7 +1780,7 @@ def research(ctx, section, no_save, force, model):
 
     # Сохранение
     if not no_save:
-        console.print(f"\n[dim]Брифинг сохранён: Research_{section}.md[/dim]")
+        console.print(f"\n[dim]Брифинг сохранён: notes/research/Research_{section}.md[/dim]")
 
 
 @main.command()
@@ -2169,7 +2169,10 @@ def library(ctx, section, audit, model):
     # Reference gaps table
     _print_ref_gaps_table(state, embeddings=kctx.embeddings)
 
-    console.print("\n[dim]Full report saved to vault.[/dim]")
+    if kctx.project_root:
+        console.print("\n[dim]Full report saved to notes/library/[/dim]")
+    else:
+        console.print("\n[dim]Full report saved to vault.[/dim]")
 
 
 @library.command()

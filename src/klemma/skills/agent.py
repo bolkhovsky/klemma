@@ -46,6 +46,15 @@ def _scan_project_reports(project_root: Path) -> dict:
         elif not p.name.startswith("."):
             project_files.append({"name": p.name, "size": p.stat().st_size})
 
+    # Scan notes/ subdirectories for reports (new layout)
+    for subdir in ("research", "library", "agents"):
+        notes_dir = project_root / "notes" / subdir
+        if not notes_dir.is_dir():
+            continue
+        for p in sorted(notes_dir.glob("*.md")):
+            rel = str(p.relative_to(project_root))
+            report_index.append({"name": rel, "size": p.stat().st_size})
+
     # Also list non-.md files recursively (tex, bib, pdf, etc.)
     for p in sorted(project_root.rglob("*")):
         if not p.is_file() or p.suffix not in _AGENT_SCAN_EXTENSIONS:

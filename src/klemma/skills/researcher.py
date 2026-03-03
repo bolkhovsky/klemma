@@ -368,7 +368,10 @@ def _load_previous_research(
     - previous_fragment_count: кол-во фрагментов на момент прошлого запуска
     Возвращает None если предыдущего брифинга нет.
     """
-    report_path = project_root / f"Research_{section}.md"
+    # Check new notes/research/ path first, fall back to legacy flat location
+    report_path = project_root / "notes" / "research" / f"Research_{section}.md"
+    if not report_path.exists():
+        report_path = project_root / f"Research_{section}.md"
     if not report_path.exists():
         return None
 
@@ -554,8 +557,10 @@ def pre_extract_sources(
 def _save_report(
     section: str, content: str, project_root: Path,
 ) -> Path:
-    """Сохранить исследовательский брифинг в project_root."""
-    path = project_root / f"Research_{section}.md"
+    """Сохранить исследовательский брифинг в project_root/notes/research/."""
+    notes_dir = project_root / "notes" / "research"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    path = notes_dir / f"Research_{section}.md"
     path.write_text(content, encoding="utf-8")
     return path
 
@@ -831,7 +836,10 @@ def research_section(
         )
 
     # 10. Валидировать citekeys — удалить галлюцинации
-    valid_citekeys = {src["id"] for src in source_summaries}
+    # Use full library, not just section sources: AI sees fragments from
+    # across the library (via RAG or cross-section references) and may
+    # legitimately cite sources outside the current section.
+    valid_citekeys = state.get_existing_source_ids()
     data = _validate_citekeys(data, valid_citekeys)
 
     # 11. Построить результат
