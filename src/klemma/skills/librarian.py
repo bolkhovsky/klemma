@@ -512,7 +512,9 @@ def _save_report_to_vault(
 
     try:
         if project_root:
-            path = project_root / f"{note_name}.md"
+            notes_dir = project_root / "notes" / "library"
+            notes_dir.mkdir(parents=True, exist_ok=True)
+            path = notes_dir / f"{note_name}.md"
             path.write_text(content, encoding="utf-8")
         else:
             path = vault.create_note(note_name, content, folder="Library")
