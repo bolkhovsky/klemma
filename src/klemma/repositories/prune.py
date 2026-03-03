@@ -70,8 +70,13 @@ class PruneRepository(BaseRepository):
             result["total"] = result["drop"] + result["maybe"]
             return result
 
-    def get_prune_verdicts(self, chapter: Optional[int] = None, verdict: Optional[str] = None) -> list[dict]:
-        """Get prune verdicts with source metadata, optionally filtered by chapter/verdict."""
+    def get_prune_verdicts(
+        self,
+        chapter: Optional[int] = None,
+        verdict: Optional[str] = None,
+        section_type: Optional[str] = None,
+    ) -> list[dict]:
+        """Get prune verdicts with source metadata, optionally filtered by chapter/verdict/section_type."""
         with self._conn() as conn:
             conditions = [f"pv.updated_at > datetime('now', '-{PRUNE_EXPIRY_DAYS} days')"]
             params: list = []
@@ -87,6 +92,13 @@ class PruneRepository(BaseRepository):
                     "WHERE ss2.source_id = pv.source_id AND (ss2.section = ? OR ss2.section LIKE ?))"
                 )
                 params.extend([ch, f"{ch}.%"])
+
+            if section_type:
+                conditions.append(
+                    "EXISTS (SELECT 1 FROM source_sections ss3 "
+                    "WHERE ss3.source_id = pv.source_id AND ss3.section_type = ?)"
+                )
+                params.append(section_type)
 
             where = " AND ".join(conditions)
             cur = conn.execute(

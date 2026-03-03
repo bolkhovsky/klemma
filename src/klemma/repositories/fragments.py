@@ -42,6 +42,7 @@ class FragmentRepository(BaseRepository):
         section: Optional[str] = None,
         fragment_type: Optional[str] = None,
         limit: int = 50,
+        section_type: Optional[str] = None,
     ) -> list[dict]:
         """Query fragments with optional filters."""
         conditions = []
@@ -55,6 +56,9 @@ class FragmentRepository(BaseRepository):
         if section:
             conditions.append("section LIKE ?")
             params.append(f"{section}%")
+        if section_type:
+            conditions.append("f.section_type=?")
+            params.append(section_type)
         if fragment_type:
             conditions.append("fragment_type=?")
             params.append(fragment_type)

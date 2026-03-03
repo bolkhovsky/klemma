@@ -56,8 +56,9 @@ SECTION_TYPE_KEYWORDS: dict[SectionType, list[str]] = {
         "methodology", "methods", "approach", "method",
     ],
     SectionType.DATA_DESCRIPTION: [
-        "данные", "датасет", "корпус", "набор данных",
+        "данны", "датасет", "корпус", "набор данн",
         "data", "dataset", "corpus", "data description",
+        "описание данн",
     ],
     SectionType.EXPERIMENTS: [
         "эксперимент", "экспериментальн", "апробация",

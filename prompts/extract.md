@@ -86,5 +86,8 @@ Guidelines:
 7. Usage hints should be in {{ language }}
 8. Fragments text stays in original paper language
 9. citation_intent must be one of: background, method, result_comparison
+{% if section_types %}
+10. When assigning section, prefer semantic section types: {{ section_types }}
+{% endif %}
 
 Respond with ONLY valid JSON.

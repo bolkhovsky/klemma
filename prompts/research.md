@@ -7,6 +7,9 @@ You are a research analyst for a {{ project_type }}. Your task is to prepare a s
 ## Target Section
 
 **Section {{ target_section }}** (Chapter {{ chapter_num }}: {{ chapter_name }})
+{% if section_type %}
+**Section type:** {{ section_type }}
+{% endif %}
 
 ## Current Section State
 

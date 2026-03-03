@@ -1523,6 +1523,16 @@ def status(ctx, verbose, chapter):
             table.add_row(f"Ch {ch}: {name}", f"[{style}]{count}[/{style}]")
         console.print(table)
 
+    # --- Coverage by semantic type ---
+    section_types = cov.get("section_types", {})
+    if section_types:
+        console.print()
+        type_parts = []
+        for st_name, st_count in sorted(section_types.items()):
+            style = "green" if st_count >= 10 else "yellow" if st_count >= 5 else "dim"
+            type_parts.append(f"[{style}]{st_name} {st_count}[/{style}]")
+        console.print(f"[bold]By type:[/bold] {' | '.join(type_parts)}")
+
     # --- Top gaps ---
     min_sources = (project.min_sources_per_section if project
                    else cfg.dissertation.min_sources_per_section)
@@ -1667,7 +1677,8 @@ def gaps(ctx, min_sources):
 
 
 @main.command()
-@click.option("--section", "-s", required=True, help="Идентификатор раздела, например 1.3.2")
+@click.option("--section", "-s", required=True,
+              help="Section ID (e.g. 1.3.2) or semantic type (e.g. methodology)")
 @click.option("--no-save", is_flag=True, help="Не сохранять в vault")
 @click.option("--force", is_flag=True, help="Переизвлечь фрагменты даже если уже есть")
 @click.option("--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)")
@@ -1679,6 +1690,7 @@ def research(ctx, section, no_save, force, model):
     Use --force to re-extract all fragments.
 
     Example: klemma research --section 1.3.2
+    Example: klemma research -s methodology
     """
     kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
@@ -1688,7 +1700,18 @@ def research(ctx, section, no_save, force, model):
     ai = _init_ai(cfg)
 
     from .config import parse_chapter_from_section
+    from .section_types import resolve_section_identifier
     from .skills.researcher import pre_extract_sources, research_section
+
+    # Resolve semantic type → numeric section if possible
+    resolved_section, section_type = resolve_section_identifier(section, kctx.project)
+    if section_type and resolved_section:
+        console.print(f"[dim]Resolved {section} → section {resolved_section} ({section_type.value})[/dim]")
+        section = resolved_section
+    elif section_type and not resolved_section:
+        console.print(f"[yellow]Semantic type '{section_type.value}' has no mapped numeric section.[/yellow]")
+        console.print("[yellow]Add section_type_map to config or use a numeric section ID.[/yellow]")
+        raise SystemExit(1)
 
     chapter = parse_chapter_from_section(section)
 

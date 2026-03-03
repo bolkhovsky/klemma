@@ -268,19 +268,35 @@ class SourceRepository(BaseRepository):
             )
             return [dict(row) for row in cur.fetchall()]
 
-    def get_by_section(self, section: str) -> list[dict]:
+    def get_by_section(
+        self, section: str, section_type: str | None = None,
+    ) -> list[dict]:
         with self._conn() as conn:
-            cur = conn.execute(
-                f"""SELECT DISTINCT s.id, s.note_path, s.quality_score, s.primary_chapter,
-                          s.relevance_nr1, s.relevance_nr2, s.citation_priority,
-                          s.fragment_count
-                   FROM sources s
-                   LEFT JOIN source_sections ss ON s.id = ss.source_id
-                   WHERE s.status=? AND (s.primary_section LIKE ? OR ss.section LIKE ?)
-                     AND s.id NOT IN ({PRUNE_DROP_SUBQUERY})
-                   ORDER BY s.citation_priority DESC, s.quality_score DESC""",
-                (ProcessingStatus.COMPLETED, f"{section}%", f"{section}%"),
-            )
+            if section_type:
+                # Filter by semantic section type via source_sections
+                cur = conn.execute(
+                    f"""SELECT DISTINCT s.id, s.note_path, s.quality_score,
+                              s.primary_chapter, s.relevance_nr1, s.relevance_nr2,
+                              s.citation_priority, s.fragment_count
+                       FROM sources s
+                       JOIN source_sections ss ON s.id = ss.source_id
+                       WHERE s.status=? AND ss.section_type=?
+                         AND s.id NOT IN ({PRUNE_DROP_SUBQUERY})
+                       ORDER BY s.citation_priority DESC, s.quality_score DESC""",
+                    (ProcessingStatus.COMPLETED, section_type),
+                )
+            else:
+                cur = conn.execute(
+                    f"""SELECT DISTINCT s.id, s.note_path, s.quality_score,
+                              s.primary_chapter, s.relevance_nr1, s.relevance_nr2,
+                              s.citation_priority, s.fragment_count
+                       FROM sources s
+                       LEFT JOIN source_sections ss ON s.id = ss.source_id
+                       WHERE s.status=? AND (s.primary_section LIKE ? OR ss.section LIKE ?)
+                         AND s.id NOT IN ({PRUNE_DROP_SUBQUERY})
+                       ORDER BY s.citation_priority DESC, s.quality_score DESC""",
+                    (ProcessingStatus.COMPLETED, f"{section}%", f"{section}%"),
+                )
             return [dict(row) for row in cur.fetchall()]
 
     # ── Zotero Key / Rename ────────────────────────────────────────────────
