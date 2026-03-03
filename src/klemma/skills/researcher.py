@@ -836,7 +836,10 @@ def research_section(
         )
 
     # 10. Валидировать citekeys — удалить галлюцинации
-    valid_citekeys = {src["id"] for src in source_summaries}
+    # Use full library, not just section sources: AI sees fragments from
+    # across the library (via RAG or cross-section references) and may
+    # legitimately cite sources outside the current section.
+    valid_citekeys = state.get_existing_source_ids()
     data = _validate_citekeys(data, valid_citekeys)
 
     # 11. Построить результат
