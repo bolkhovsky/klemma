@@ -1986,7 +1986,11 @@ def ask(ctx, query, section, chapter, model):
         cfg.ai.model = model
     ai = _init_ai(cfg)
 
-    from .skills.agent import build_agent_context
+    from .skills.agent import build_agent_context, update_agents_index
+
+    # Ensure notes/agents/ exists before launching agent
+    if kctx.project_root:
+        (kctx.project_root / "notes" / "agents").mkdir(parents=True, exist_ok=True)
 
     with console.status("Сборка контекста исследования", spinner="dots"):
         context = build_agent_context(
@@ -2021,6 +2025,12 @@ def ask(ctx, query, section, chapter, model):
             console.print(response)
         else:
             console.print("[red]Не удалось получить ответ.[/red]")
+
+    # Update AGENTS.md index after session
+    if kctx.project_root:
+        idx = update_agents_index(kctx.project_root)
+        if idx:
+            console.print("[dim]Updated notes/AGENTS.md[/dim]")
 
     console.print("\n[dim]Сессия агента завершена.[/dim]")
 

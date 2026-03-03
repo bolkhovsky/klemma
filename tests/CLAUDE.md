@@ -28,7 +28,7 @@
 - `test_metadata.py` (~350 lines) — 18 tests: extract_pdf_metadata (title+author/empty/first-page fallback), lookup_s2 (success/no match/API error), resolve_metadata (CLI wins/PDF+S2/no sources), citekey from real metadata, DB update_source_info (persist/partial), migration v6 column check, Zotero API (is_running true/false, create_item success, parse_authors, get_bbt_citekey)
 - `test_auto_pipeline.py` (199 lines) — 8 tests: run_analyst_from_source (success/missing source/no pdf), run_auto_benchmark (explicit paper/analyst failure/auto-select/no candidates/comparison)
 - `test_prompts.py` (~270 lines) — 25 tests: all 12 prompt templates render without Jinja2 errors, coverage check (all shipped templates have test contexts), reconstruct.md ablation variants (default/max_recs/fewshot/combined), prompt hash determinism + uniqueness, AblationParams defaults + to_snapshot + with_fewshot factory
-- `test_notes_subdirs.py` (~100 lines) — 6 tests: `notes/` subdirectory layout (#34) — researcher save/load (new path, legacy fallback, preference), librarian save to `notes/library/`, agent scanner finds `notes/{research,library,agents}/`, backward compat for flat reports
+- `test_notes_subdirs.py` (~190 lines) — 10 tests: `notes/` subdirectory layout (#34) — researcher save/load (new path, legacy fallback, preference), librarian save to `notes/library/`, agent scanner finds `notes/{research,library,agents}/`, backward compat for flat reports, `update_agents_index` (generation, no-dir, empty-dir, reverse sort)
 
 ## Patterns
 - pytest + `unittest.mock` (`patch`, `MagicMock`)

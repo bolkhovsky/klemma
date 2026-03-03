@@ -155,7 +155,7 @@ Rules:
 {% endif %}
 
 Saving results:
-{% if project_root %}- Path: {{ project_root }}/Agent_{% if project_name %}{{ project_name }}_{% endif %}{{ today }}_<brief_name>.md
+{% if project_root %}- Path: {{ project_root }}/notes/agents/Agent_{% if project_name %}{{ project_name }}_{% endif %}{{ today }}_<brief_name>.md
 {% else %}- Path: {{ vault_path }}/Agent/Agent_{% if project_name %}{{ project_name }}_{% endif %}{{ today }}_<brief_name>.md
 {% endif %}- Format: YAML frontmatter (type: agent, date: {{ today }}, query: <user query>) + markdown body
 - For long sessions with multiple queries — use unique suffixes (_literature, _search, _analysis, etc.)

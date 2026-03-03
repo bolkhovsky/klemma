@@ -6,7 +6,7 @@ project_root/notes/{research,library,agents}/ layout with legacy fallback.
 
 from pathlib import Path
 
-from klemma.skills.agent import _scan_project_reports
+from klemma.skills.agent import _scan_project_reports, update_agents_index
 from klemma.skills.researcher import _load_previous_research, _save_report
 
 # ---------------------------------------------------------------------------
@@ -122,3 +122,75 @@ def test_scan_backward_compat(tmp_path: Path):
     names = [r["name"] for r in result["report_index"]]
     assert "Research_1.1.md" in names
     assert "Library_test_status_2026-01-01.md" in names
+
+
+# ---------------------------------------------------------------------------
+# AGENTS.md auto-index
+# ---------------------------------------------------------------------------
+
+
+def test_agents_index_generated(tmp_path: Path):
+    """update_agents_index creates notes/AGENTS.md from agent files."""
+    agents_dir = tmp_path / "notes" / "agents"
+    agents_dir.mkdir(parents=True)
+
+    # File with frontmatter
+    (agents_dir / "Agent_test_2026-03-01_literature.md").write_text(
+        "---\ntype: agent\ndate: 2026-03-01\nquery: What are ice methods?\n---\n\n# Body\n",
+        encoding="utf-8",
+    )
+    # File without frontmatter (date from filename)
+    (agents_dir / "Agent_test_2026-03-02_search.md").write_text(
+        "# No frontmatter\n",
+        encoding="utf-8",
+    )
+
+    result = update_agents_index(tmp_path)
+    assert result == tmp_path / "notes" / "AGENTS.md"
+    assert result.exists()
+
+    content = result.read_text(encoding="utf-8")
+    assert "Agent Reports Index" in content
+    assert "Agent_test_2026-03-01_literature.md" in content
+    assert "Agent_test_2026-03-02_search.md" in content
+    assert "2026-03-01" in content
+    assert "What are ice methods?" in content
+
+
+def test_agents_index_no_dir(tmp_path: Path):
+    """update_agents_index returns None when notes/agents/ doesn't exist."""
+    result = update_agents_index(tmp_path)
+    assert result is None
+
+
+def test_agents_index_empty_dir(tmp_path: Path):
+    """update_agents_index returns None when no Agent_*.md files exist."""
+    agents_dir = tmp_path / "notes" / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "README.md").write_text("not an agent file", encoding="utf-8")
+
+    result = update_agents_index(tmp_path)
+    assert result is None
+
+
+def test_agents_index_sorted_reverse(tmp_path: Path):
+    """AGENTS.md lists newest files first."""
+    agents_dir = tmp_path / "notes" / "agents"
+    agents_dir.mkdir(parents=True)
+
+    (agents_dir / "Agent_2026-01-01_old.md").write_text(
+        "---\ndate: 2026-01-01\nquery: old query\n---\n",
+        encoding="utf-8",
+    )
+    (agents_dir / "Agent_2026-03-01_new.md").write_text(
+        "---\ndate: 2026-03-01\nquery: new query\n---\n",
+        encoding="utf-8",
+    )
+
+    update_agents_index(tmp_path)
+    content = (tmp_path / "notes" / "AGENTS.md").read_text(encoding="utf-8")
+    lines = content.splitlines()
+    table_rows = [row for row in lines if row.startswith("| 20")]
+    # Newest first (reverse alphabetical of Agent_ filenames)
+    assert "2026-03-01" in table_rows[0]
+    assert "2026-01-01" in table_rows[1]
