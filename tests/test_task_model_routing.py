@@ -65,11 +65,12 @@ def test_openai_backend_with_map():
 # ---------------------------------------------------------------------------
 
 def test_claude_client_model_override():
-    """ClaudeClient passes model_override to subprocess."""
+    """ClaudeClient passes model_override to subprocess when API key is set."""
     from klemma.ai import ClaudeClient
 
     cfg = AIConfig(backend="claude", model="sonnet")
-    with patch("klemma.ai.ClaudeClient.check_cli_available", return_value=True):
+    with patch("klemma.ai.ClaudeClient.check_cli_available", return_value=True), \
+         patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test"}):
         client = ClaudeClient(cfg)
 
     mock_result = MagicMock()
@@ -90,7 +91,8 @@ def test_claude_client_default_model_without_override():
     from klemma.ai import ClaudeClient
 
     cfg = AIConfig(backend="claude", model="sonnet")
-    with patch("klemma.ai.ClaudeClient.check_cli_available", return_value=True):
+    with patch("klemma.ai.ClaudeClient.check_cli_available", return_value=True), \
+         patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test"}):
         client = ClaudeClient(cfg)
 
     mock_result = MagicMock()
@@ -102,6 +104,26 @@ def test_claude_client_default_model_without_override():
         args = mock_run.call_args[0][0]
         model_idx = args.index("--model")
         assert args[model_idx + 1] == "sonnet"
+
+
+def test_claude_client_skips_model_flag_without_api_key():
+    """Without ANTHROPIC_API_KEY, --model is omitted (Max subscription)."""
+    from klemma.ai import ClaudeClient
+
+    cfg = AIConfig(backend="claude", model="sonnet")
+    with patch("klemma.ai.ClaudeClient.check_cli_available", return_value=True), \
+         patch.dict("os.environ", {}, clear=True):
+        client = ClaudeClient(cfg)
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = "response"
+
+    with patch("subprocess.run", return_value=mock_result) as mock_run:
+        result = client.call("sys", "usr")
+        assert result == "response"
+        args = mock_run.call_args[0][0]
+        assert "--model" not in args
 
 
 # ---------------------------------------------------------------------------
