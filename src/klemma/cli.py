@@ -2016,10 +2016,6 @@ def ask(ctx, query, section, chapter, model):
 
     from .skills.agent import build_agent_context, update_agents_index
 
-    # Ensure notes/agents/ exists before launching agent
-    if kctx.project_root:
-        (kctx.project_root / "notes" / "agents").mkdir(parents=True, exist_ok=True)
-
     with console.status("Сборка контекста исследования", spinner="dots"):
         context = build_agent_context(
             cfg, state, vault, section=section, chapter=chapter,
@@ -2042,10 +2038,22 @@ def ask(ctx, query, section, chapter, model):
 
     console.print(f"[dim]Query: {query}[/dim]")
 
+    response = None
     if ai.interactive_available:
-        import subprocess
+        import subprocess as _sp
 
-        subprocess.run(["claude", "--system-prompt", context, query])
+        result = _sp.run(
+            ["claude", "-p", "--model", cfg.ai.model, "--system-prompt", context, query],
+            capture_output=True, text=True, timeout=cfg.ai.timeout,
+        )
+        response = result.stdout
+        if response:
+            console.print(response)
+        else:
+            stderr = (result.stderr or "").strip()
+            console.print("[red]Не удалось получить ответ.[/red]")
+            if stderr:
+                console.print(f"[dim]{stderr[:300]}[/dim]")
     else:
         with console.status("Генерация ответа", spinner="dots"):
             response = ai.call(system=context, user=query, max_tokens=8192)
@@ -2054,13 +2062,32 @@ def ask(ctx, query, section, chapter, model):
         else:
             console.print("[red]Не удалось получить ответ.[/red]")
 
-    # Update AGENTS.md index after session
-    if kctx.project_root:
+    # Save agent response to notes/agents/
+    if response and kctx.project_root:
+        from datetime import date as _date
+
+        slug = query[:40].strip().replace(" ", "_").replace("/", "-")
+        slug = "".join(c for c in slug if c.isalnum() or c in "_-")
+        today = _date.today().isoformat()
+        project_tag = f"{kctx.project_name}_" if kctx.project_name else ""
+        filename = f"Agent_{project_tag}{today}_{slug}.md"
+
+        agents_dir = kctx.project_root / "notes" / "agents"
+        agents_dir.mkdir(parents=True, exist_ok=True)
+        save_path = agents_dir / filename
+
+        frontmatter = (
+            f"---\ntype: agent\ndate: {today}\n"
+            f"query: \"{query[:200]}\"\n---\n\n"
+        )
+        save_path.write_text(frontmatter + response, encoding="utf-8")
+        console.print(f"\n[green]Saved: {save_path}[/green]")
+
         idx = update_agents_index(kctx.project_root)
         if idx:
             console.print("[dim]Updated notes/AGENTS.md[/dim]")
 
-    console.print("\n[dim]Сессия агента завершена.[/dim]")
+    console.print("[dim]Сессия агента завершена.[/dim]")
 
 
 @main.group(invoke_without_command=True)
