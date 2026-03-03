@@ -510,16 +510,24 @@ def main(ctx, config):
               help="Project type")
 @click.option("--global-only", is_flag=True, help="Only create/update ~/.klemma/ system config")
 @click.option("--no-input", is_flag=True, help="Skip interactive prompts, use defaults")
+@click.option("--non-interactive", is_flag=True, help="Alias for --no-input")
 @click.option("--force", is_flag=True, help="Re-run wizard even if project exists (prefills from current config)")
 @click.option("--outline", is_flag=True, help="Generate outline after init (requires AI)")
+@click.option("--name", "project_name", default=None, help="Project title (non-interactive)")
+@click.option("--description", "-d", default=None, help="Project description (non-interactive)")
+@click.option("--keywords", "-k", default=None, help="Comma-separated keywords (non-interactive)")
+@click.option("--language", "-l", default=None, help="AI language: ru or en (non-interactive)")
 @click.pass_context
-def init(ctx, project_type, global_only, no_input, force, outline):
+def init(ctx, project_type, global_only, no_input, non_interactive, force, outline,
+         project_name, description, keywords, language):
     """Initialize a new klemma project in current directory.
 
     Creates .klemma/ and KLEMMA.md in the current directory.
     Also ensures ~/.klemma/ system config exists.
 
     Runs an interactive setup wizard by default. Use --no-input to skip prompts.
+    Pass --name, --description, --keywords, --language for non-interactive setup
+    with custom values (auto-implies --no-input).
 
     \b
     Examples:
@@ -528,8 +536,18 @@ def init(ctx, project_type, global_only, no_input, force, outline):
       klemma init --no-input         # skip prompts, use defaults
       klemma init --force            # re-run wizard, prefill from existing config
       klemma init --global-only      # only create system config
+      klemma init --type paper --name "My Paper" --language en
     """
-    from .setup import init_project, init_system
+    from .setup import InitValues, init_project, init_system
+
+    # --non-interactive is an alias for --no-input
+    if non_interactive:
+        no_input = True
+
+    # If any value flags provided, auto-imply non-interactive mode
+    has_value_flags = any(v is not None for v in [project_name, description, keywords, language])
+    if has_value_flags:
+        no_input = True
 
     system_home = ensure_system_home()
 
@@ -567,6 +585,16 @@ def init(ctx, project_type, global_only, no_input, force, outline):
     if not no_input:
         values = _interactive_init(project_type, prefill=prefill)
         project_type = values.project_type
+    elif has_value_flags:
+        # Build InitValues from CLI flags
+        kw_list = [k.strip() for k in keywords.split(",") if k.strip()] if keywords else []
+        values = InitValues(
+            project_type=project_type,
+            title=project_name or "",
+            description=description or "",
+            keywords=kw_list,
+            language=language or "ru",
+        )
 
     result = init_project(project_dir, project_type=project_type, values=values)
 

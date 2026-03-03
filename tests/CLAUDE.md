@@ -14,6 +14,7 @@
 - `test_intent_scoring.py` (~490 lines) — intent-weighted reference gap scoring, configurable section weights (`TestSectionWeights`), intent coverage matrix, fragment citation intent classification
 - `test_interactive_init.py` (347 lines) — interactive `klemma init` wizard, auto-discovery, config generation
 - `test_cli_init_outline.py` (37 lines) — `klemma init --outline` CLI behavior, AI-missing skip, no-outline no AI call
+- `test_cli_init_non_interactive.py` (~100 lines) — 6 tests: `klemma init` non-interactive mode (#54) — --name creates project, CLI flags populate config.yaml, KLEMMA.md content, --non-interactive alias, minimal init, no wizard prompts
 - `test_cli_embed.py` (~70 lines) — `klemma embed` multi-citekey CLI behavior, missing-key warnings, `--fragments` flag (embed + dry-run)
 - `test_cli_model_override.py` (~96 lines) — `--model` CLI override: verifies override reaches `create_ai()`, default model preserved without flag
 - `test_db_inheritance.py` (~195 lines) — 15 tests: DB inheritance (#55) — parent sources/fragments/embeddings/gaps visible through child, child wins on duplicate, write isolation, coverage stats aggregation, RAG across both DBs, disabled/absent parent

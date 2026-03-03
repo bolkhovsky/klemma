@@ -13,6 +13,7 @@ Click CLI entry point. Defines 16 commands + hidden aliases.
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
 - Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`
 - `init --outline` generates an outline after project setup (requires AI backend)
+- `init` non-interactive mode: `--name`, `--description`, `--keywords`, `--language` flags auto-skip wizard; `--non-interactive` is alias for `--no-input`
 - `--model` override available on: `research`, `ask`, `library`, `process` — overrides `cfg.ai.model` per invocation
 
 ### context.py (41 lines)
@@ -38,9 +39,9 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `
 - Selective inheritance: only `_INHERITED_KEYS = {"obsidian", "zotero", "ai", "embeddings"}` from parent projects
 - Default AI backend: `litellm` (was `claude`)
 
-### setup.py (304 lines)
-`klemma init` logic — creates per-directory `.klemma/` projects, `~/.klemma/` system config, and `~/.klemmarc.yaml` global config. Interactive wizard with auto-discovery.
-- `init_project(project_dir, project_type)` — creates `.klemma/`, `KLEMMA.md`, updates `.gitignore`
+### setup.py (338 lines)
+`klemma init` logic — creates per-directory `.klemma/` projects, `~/.klemma/` system config, and `~/.klemmarc.yaml` global config. Interactive wizard with auto-discovery; non-interactive mode via CLI flags.
+- `init_project(project_dir, project_type, values?)` — creates `.klemma/`, `KLEMMA.md`, updates `.gitignore`; accepts `InitValues` from wizard or CLI flags
 - `init_system(system_home)` — creates `~/.klemmarc.yaml` (0600, with api_keys template) + `~/.klemma/config.yaml` (legacy fallback)
 - `init_klemma_home()` — legacy alias for `init_system()`
 - Interactive mode: auto-discovers Obsidian vaults, Zotero exports via `discovery.py`
