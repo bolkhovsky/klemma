@@ -312,7 +312,7 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
     return result
 
 
-def _print_status_line(state: StateManager, project_name: str = "default"):
+def _print_status_line(state: StateManager, project_name: str = "default", model: str = ""):
     """Print a compact status line with key metrics."""
     try:
         stats = state.get_stats()
@@ -323,6 +323,8 @@ def _print_status_line(state: StateManager, project_name: str = "default"):
         ]
         if project_name != "default":
             parts.insert(0, f"[cyan]{project_name}[/cyan]")
+        if model:
+            parts.insert(1 if project_name != "default" else 0, f"[magenta]{model}[/magenta]")
         gap_summary = state.get_gap_summary()
         if gap_summary["open_count"] > 0:
             top = ""
@@ -496,7 +498,7 @@ def main(ctx, config):
         try:
             kctx = _init_components(config)
             ctx.obj["kctx"] = kctx
-            _print_status_line(kctx.state, project_name=kctx.project_name)
+            _print_status_line(kctx.state, project_name=kctx.project_name, model=kctx.config.ai.model)
         except Exception:
             pass
 
