@@ -39,13 +39,14 @@ Library health analysis. Three modes: `status` (health), `recommend` (section-fo
 - Prune mode: `prompts/librarian_prune.md` → AI generates drop/maybe verdicts → `state.save_prune_verdicts()`
 - `list_prune_verdicts()` / `clear_prune_verdict()` — CLI for browsing/clearing verdicts
 
-### agent.py (~230 lines)
+### agent.py (~290 lines)
 Builds full project context for interactive Claude sessions.
 - `build_agent_context(project_root=..., embeddings=?, query=?)` — gathers sources, coverage, gaps, fragments, plan, reading queue + scans project_root for reports/files → optional fragment RAG (embeds query → top-K retrieval) → `prompts/agent.md` → system prompt
 - `_scan_project_reports(project_root)` — finds Outline/Research/Library/Agent reports at project root (legacy) + `notes/{research,library,agents}/` (new layout) + project files (.md, .tex, .bib, .pdf, .doc, .docx)
+- `update_agents_index(project_root)` — regenerates `notes/AGENTS.md` index from `notes/agents/Agent_*.md` files; parses YAML frontmatter for date/query, writes sorted table (newest first)
 - For Claude backend: launches `claude --system-prompt` interactively
 - For non-Claude backends: `ai.call()` with full context → terminal output
-- Saves responses to `project_root/Agent_<date>.md`
+- Agent saves responses to `project_root/notes/agents/Agent_<date>.md`; `notes/AGENTS.md` auto-updated after session
 
 ### outliner.py (296 lines)
 Project outline generation from directory contents + database context. Two modes:
@@ -92,7 +93,7 @@ If vault note missing: triggers `literature.note_factory.create_vault_note()` fi
 On repeat: reads previous outline → incremental update. With `--fresh`: full regeneration. With `-p`: custom AI directive.
 
 ### Agent context
-`klemma ask "query"` → `agent.build_agent_context(project_root=...)` → scans project_root for outline/reports/files + `notes/{research,library,agents}/` → system prompt → interactive Claude or `ai.call()`. Agent saves to `project_root/Agent_*.md`.
+`klemma ask "query"` → pre-creates `notes/agents/` → `agent.build_agent_context(project_root=...)` → scans project_root for outline/reports/files + `notes/{research,library,agents}/` → system prompt → interactive Claude or `ai.call()`. Agent saves to `project_root/notes/agents/Agent_*.md` → `update_agents_index()` regenerates `notes/AGENTS.md`.
 
 ### Agent Skills (Claude Code)
 Agent uses Claude Code Skills from `.claude/skills/` instead of reading source code:
