@@ -1778,6 +1778,13 @@ def research(ctx, section, no_save, force, model):
         for s in result.writing_suggestions:
             console.print(f"  - {s}")
 
+    # Отфильтрованные цитаты
+    if result.filtered_citekeys:
+        console.print(
+            f"\n[yellow]Removed {len(result.filtered_citekeys)} hallucinated citekeys "
+            f"(not in library): {result.filtered_citekeys}[/yellow]"
+        )
+
     # Сохранение
     if not no_save:
         console.print(f"\n[dim]Брифинг сохранён: notes/research/Research_{section}.md[/dim]")

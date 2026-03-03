@@ -186,6 +186,7 @@ class ResearchResult(BaseModel):
     citation_plan: list[CitationEntry] = Field(default_factory=list)
     missing_coverage: list[str] = Field(default_factory=list)
     writing_suggestions: list[str] = Field(default_factory=list)
+    filtered_citekeys: list[str] = Field(default_factory=list)
     research_text: str = ""
     generated_at: datetime = Field(default_factory=datetime.now)
 
