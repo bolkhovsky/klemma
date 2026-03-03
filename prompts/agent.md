@@ -145,7 +145,7 @@ Rules:
 2. When searching for papers, follow the Academic Search section below
 3. Reference @citekey when mentioning known sources
 4. When working with project files — path: {{ project_root or vault_path }}
-5. **ALWAYS save query results to a note** — even if the user doesn't explicitly ask
+5. **Do NOT save query results to a file** — the CLI saves output automatically to `notes/agents/`. Do not create Agent_*.md files yourself.
 6. **NEVER modify config files** (.klemma/config.yaml, ~/.klemma/config.yaml, KLEMMA.md) without explicit user request. Config is managed via `klemma init` and manual editing. If a config value seems missing, check `klemma info` first — it may be inherited from parent/system config via deep merge.
 7. **NEVER write custom scripts** that bypass klemma CLI (no direct SQLite writes, no raw file manipulation of .klemma/ or Zotero storage). If a klemma command fails, report the error to the user — do not work around it.
 8. **Always use `klemma` directly** — not `python -m klemma`. The CLI entry point is installed and available in PATH.
@@ -153,12 +153,6 @@ Rules:
 {% if parent_context %}
 9. **Distinguish parent and current project context.** The parent project context is provided for background only. Your primary focus is the current project ({{ project_type }}). Structure your output according to the current project's structure, not the parent's.
 {% endif %}
-
-Saving results:
-{% if project_root %}- Path: {{ project_root }}/notes/agents/Agent_{% if project_name %}{{ project_name }}_{% endif %}{{ today }}_<brief_name>.md
-{% else %}- Path: {{ vault_path }}/Agent/Agent_{% if project_name %}{{ project_name }}_{% endif %}{{ today }}_<brief_name>.md
-{% endif %}- Format: YAML frontmatter (type: agent, date: {{ today }}, query: <user query>) + markdown body
-- For long sessions with multiple queries — use unique suffixes (_literature, _search, _analysis, etc.)
 
 ## Academic Search
 
