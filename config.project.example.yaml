@@ -23,6 +23,10 @@ ai:
   # For local models:
   # model: "ollama/llama3"
   # base_url: "http://localhost:11434"
+  # Per-task model routing:
+  # task_classes:
+  #   planner: "haiku"
+  #   research: "opus"
 
 # --- Per-project settings (NOT inherited from parent) ---
 

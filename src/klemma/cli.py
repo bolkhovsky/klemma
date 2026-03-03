@@ -2056,7 +2056,12 @@ def ask(ctx, query, section, chapter, model):
                 console.print(f"[dim]{stderr[:300]}[/dim]")
     else:
         with console.status("Генерация ответа", spinner="dots"):
-            response = ai.call(system=context, user=query, max_tokens=8192)
+            from .ai import resolve_task_model
+
+            response = ai.call(
+                system=context, user=query, max_tokens=8192,
+                model_override=resolve_task_model("ask", cfg.ai),
+            )
         if response:
             console.print(response)
         else:

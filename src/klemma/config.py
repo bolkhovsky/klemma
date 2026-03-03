@@ -140,6 +140,11 @@ class AIConfig(BaseModel):
     api_key_env: str = ""  # env var name for API key (e.g. "OPENAI_API_KEY")
     json_mode: bool = False  # use structured JSON mode when backend supports it
     language: str = "ru"  # AI response language (e.g. "en", "ru", "de")
+    task_classes: dict[str, str] = Field(default_factory=dict)
+    # Maps task name → model class: {"planner": "haiku", "research": "opus"}
+    class_model_map: dict[str, dict[str, str]] = Field(default_factory=dict)
+    # Maps backend → {class → model_id}: {"openai": {"opus": "gpt-4o"}}
+    # For claude backend: not needed (class names work as --model shorthands)
     _resolved_api_keys: dict = PrivateAttr(default_factory=dict)
 
     @property

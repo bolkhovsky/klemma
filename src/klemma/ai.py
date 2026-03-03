@@ -17,6 +17,25 @@ from .config import AIConfig
 logger = logging.getLogger(__name__)
 
 
+def resolve_task_model(task: str, cfg: AIConfig) -> Optional[str]:
+    """Resolve model override for a named task.
+
+    Resolution order:
+    1. class_model_map[backend][class] — explicit user-configured model ID
+    2. class name itself — for claude backend, valid --model shorthand
+    3. None — use default cfg.model (no override)
+    """
+    cls = cfg.task_classes.get(task)
+    if not cls:
+        return None
+    model_id = cfg.class_model_map.get(cfg.backend, {}).get(cls)
+    if model_id:
+        return model_id
+    if cfg.backend == "claude":
+        return cls  # "opus"/"sonnet"/"haiku" are valid --model args
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Shared utility
 # ---------------------------------------------------------------------------
@@ -125,6 +144,7 @@ class AIProvider(Protocol):
         max_tokens: int = 8192,
         temperature: float = 0.3,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> Optional[str]: ...
 
     def call_json(
@@ -134,6 +154,7 @@ class AIProvider(Protocol):
         max_tokens: int = 8192,
         temperature: float = 0.2,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> Optional[dict]: ...
 
     def call_with_meta(
@@ -143,6 +164,7 @@ class AIProvider(Protocol):
         max_tokens: int = 8192,
         temperature: float = 0.3,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> AICallResult: ...
 
     def render_prompt(self, template_path: Path, **kwargs) -> str: ...
@@ -174,6 +196,7 @@ class AIProviderBase:
         max_tokens: int = 8192,
         temperature: float = 0.3,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> Optional[str]:
         raise NotImplementedError
 
@@ -184,9 +207,13 @@ class AIProviderBase:
         max_tokens: int = 8192,
         temperature: float = 0.2,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> Optional[dict]:
         """Call the backend and parse JSON from the response."""
-        text = self.call(system, user, max_tokens=max_tokens, temperature=temperature, timeout=timeout)
+        text = self.call(
+            system, user, max_tokens=max_tokens, temperature=temperature,
+            timeout=timeout, model_override=model_override,
+        )
         if not text:
             return None
         return extract_json(text)
@@ -198,15 +225,20 @@ class AIProviderBase:
         max_tokens: int = 8192,
         temperature: float = 0.3,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> AICallResult:
         """Call the backend and return result with metadata."""
         t0 = time.monotonic()
-        text = self.call(system, user, max_tokens=max_tokens, temperature=temperature, timeout=timeout)
+        effective_model = model_override or self.model
+        text = self.call(
+            system, user, max_tokens=max_tokens, temperature=temperature,
+            timeout=timeout, model_override=model_override,
+        )
         elapsed = int((time.monotonic() - t0) * 1000)
         return AICallResult(
             text=text,
             duration_ms=elapsed,
-            model=self.model,
+            model=effective_model,
             error=None if text else "all retries exhausted",
         )
 
@@ -244,18 +276,20 @@ class ClaudeClient(AIProviderBase):
         max_tokens: int = 8192,
         temperature: float = 0.3,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> Optional[str]:
         """Call Claude via CLI with retries.
 
         Returns the text response or None on failure.
         """
         effective_timeout = timeout or self.timeout
+        effective_model = model_override or self.model
         prompt = f"{system}\n\n---\n\n{user}"
 
         for attempt in range(self.retries + 1):
             try:
                 result = subprocess.run(
-                    ["claude", "-p", "--model", self.model, prompt],
+                    ["claude", "-p", "--model", effective_model, prompt],
                     capture_output=True,
                     text=True,
                     timeout=effective_timeout,
@@ -284,9 +318,11 @@ class ClaudeClient(AIProviderBase):
         max_tokens: int = 8192,
         temperature: float = 0.3,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> AICallResult:
         """Call Claude CLI with structured error tracking."""
         effective_timeout = timeout or self.timeout
+        effective_model = model_override or self.model
         prompt = f"{system}\n\n---\n\n{user}"
 
         t0 = time.monotonic()
@@ -296,7 +332,7 @@ class ClaudeClient(AIProviderBase):
         for attempt in range(self.retries + 1):
             try:
                 result = subprocess.run(
-                    ["claude", "-p", "--model", self.model, prompt],
+                    ["claude", "-p", "--model", effective_model, prompt],
                     capture_output=True, text=True, timeout=effective_timeout,
                 )
                 if result.returncode != 0:
@@ -310,7 +346,7 @@ class ClaudeClient(AIProviderBase):
                 elapsed = int((time.monotonic() - t0) * 1000)
                 return AICallResult(
                     text=result.stdout, duration_ms=elapsed,
-                    retries_used=retries_used, model=self.model,
+                    retries_used=retries_used, model=effective_model,
                 )
             except subprocess.TimeoutExpired:
                 retries_used = attempt + 1
@@ -319,7 +355,7 @@ class ClaudeClient(AIProviderBase):
             except FileNotFoundError:
                 elapsed = int((time.monotonic() - t0) * 1000)
                 return AICallResult(
-                    text=None, duration_ms=elapsed, model=self.model,
+                    text=None, duration_ms=elapsed, model=effective_model,
                     error="claude CLI not found",
                 )
             except Exception as e:
@@ -329,7 +365,7 @@ class ClaudeClient(AIProviderBase):
 
         elapsed = int((time.monotonic() - t0) * 1000)
         return AICallResult(
-            text=None, duration_ms=elapsed, model=self.model,
+            text=None, duration_ms=elapsed, model=effective_model,
             retries_used=retries_used, error=last_error or "all retries exhausted",
         )
 

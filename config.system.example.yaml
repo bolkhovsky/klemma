@@ -21,3 +21,13 @@ ai:
   # model: "openai/gpt-4.1"
   # model: "ollama/llama3"
   # base_url: "http://localhost:11434"  # custom endpoint
+
+  # Per-task model routing (opt-in):
+  # task_classes:
+  #   planner: "haiku"
+  #   research: "opus"
+  # class_model_map:
+  #   litellm:
+  #     opus: "anthropic/claude-opus-4-6"
+  #     sonnet: "anthropic/claude-sonnet-4-6"
+  #     haiku: "anthropic/claude-haiku-4-5-20251001"

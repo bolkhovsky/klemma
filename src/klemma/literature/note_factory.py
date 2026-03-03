@@ -114,7 +114,12 @@ def annotate_source(
         "Output only valid JSON."
     )
 
-    data = ai.call_json(system, user_prompt, max_tokens=4096)
+    from klemma.ai import resolve_task_model
+
+    data = ai.call_json(
+        system, user_prompt, max_tokens=4096,
+        model_override=resolve_task_model("annotate", config.ai),
+    )
     if not data:
         logger.warning("Annotation failed for %s", entry.id)
         return None

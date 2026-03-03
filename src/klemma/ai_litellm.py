@@ -45,12 +45,14 @@ class LiteLLMClient(AIProviderBase):
         self._base_url = config.base_url
         self._json_mode = config.json_mode
 
+    def _is_reasoning(self, model: str) -> bool:
+        """Detect reasoning models that require different API parameters."""
+        bare = model.split("/")[-1] if "/" in model else model
+        return bool(_REASONING_RE.match(bare))
+
     @property
     def _is_reasoning_model(self) -> bool:
-        """Detect reasoning models that require different API parameters."""
-        # Strip provider prefix (e.g. "openai/o3-mini" → "o3-mini")
-        bare = self.model.split("/")[-1] if "/" in self.model else self.model
-        return bool(_REASONING_RE.match(bare))
+        return self._is_reasoning(self.model)
 
     def _build_kwargs(
         self,
@@ -59,14 +61,16 @@ class LiteLLMClient(AIProviderBase):
         temperature: float,
         timeout: Optional[int] = None,
         response_format: Optional[dict] = None,
+        model_override: Optional[str] = None,
     ) -> dict:
         """Build kwargs dict for litellm.completion() with all conditionals."""
+        effective_model = model_override or self.model
         kwargs: dict = {
-            "model": self.model,
+            "model": effective_model,
             "messages": messages,
         }
         # Token limit
-        if self._is_reasoning_model:
+        if self._is_reasoning(effective_model):
             kwargs["max_completion_tokens"] = max_tokens
         else:
             kwargs["max_tokens"] = max_tokens
@@ -89,13 +93,17 @@ class LiteLLMClient(AIProviderBase):
         max_tokens: int = 8192,
         temperature: float = 0.3,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> Optional[str]:
         """Call LiteLLM completion with retries."""
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
-        kwargs = self._build_kwargs(messages, max_tokens, temperature, timeout)
+        kwargs = self._build_kwargs(
+            messages, max_tokens, temperature, timeout,
+            model_override=model_override,
+        )
 
         for attempt in range(self.retries + 1):
             try:
@@ -115,10 +123,14 @@ class LiteLLMClient(AIProviderBase):
         max_tokens: int = 8192,
         temperature: float = 0.2,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> Optional[dict]:
         """Call API and parse JSON, optionally using structured JSON mode."""
         if not self._json_mode:
-            return super().call_json(system, user, max_tokens, temperature, timeout)
+            return super().call_json(
+                system, user, max_tokens, temperature, timeout,
+                model_override=model_override,
+            )
 
         messages = [
             {"role": "system", "content": system},
@@ -127,6 +139,7 @@ class LiteLLMClient(AIProviderBase):
         kwargs = self._build_kwargs(
             messages, max_tokens, temperature, timeout,
             response_format={"type": "json_object"},
+            model_override=model_override,
         )
 
         for attempt in range(self.retries + 1):
@@ -153,14 +166,19 @@ class LiteLLMClient(AIProviderBase):
         max_tokens: int = 8192,
         temperature: float = 0.3,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> AICallResult:
         """Call LiteLLM with structured error handling and token tracking."""
+        effective_model = model_override or self.model
 
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
-        kwargs = self._build_kwargs(messages, max_tokens, temperature, timeout)
+        kwargs = self._build_kwargs(
+            messages, max_tokens, temperature, timeout,
+            model_override=model_override,
+        )
 
         t0 = time.monotonic()
         retries_used = 0
@@ -185,7 +203,7 @@ class LiteLLMClient(AIProviderBase):
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     retries_used=retries_used,
-                    model=self.model,
+                    model=effective_model,
                 )
             except self._litellm.AuthenticationError as e:
                 # Fatal — do not retry
@@ -194,7 +212,7 @@ class LiteLLMClient(AIProviderBase):
                 return AICallResult(
                     text=None,
                     duration_ms=elapsed,
-                    model=self.model,
+                    model=effective_model,
                     retries_used=retries_used,
                     error=f"auth: {e}",
                 )
@@ -224,7 +242,7 @@ class LiteLLMClient(AIProviderBase):
         return AICallResult(
             text=None,
             duration_ms=elapsed,
-            model=self.model,
+            model=effective_model,
             retries_used=retries_used,
             error=last_error or "all retries exhausted",
         )

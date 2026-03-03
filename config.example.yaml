@@ -34,6 +34,28 @@ ai:
   # api_key_env: "OPENAI_API_KEY"
   # json_mode: true
 
+  # Per-task model class routing (opt-in, all tasks fall back to ai.model if absent):
+  # task_classes:
+  #   planner: "haiku"           # daily plans — fast is fine
+  #   extract: "sonnet"          # fragment extraction — needs accuracy
+  #   annotate: "sonnet"         # vault note annotation
+  #   research: "opus"           # research briefings — highest quality
+  #   outline_initial: "opus"
+  #   outline_incremental: "opus"
+  #   library_status: "sonnet"
+  #   library_recommend: "opus"
+  #   library_audit: "opus"
+  #   library_prune: "sonnet"
+  #   ask: "opus"
+
+  # Model IDs per class per backend (only needed for openai/litellm backends):
+  # For claude backend: class names work as --model shorthands, no mapping needed.
+  # class_model_map:
+  #   litellm:
+  #     opus: "anthropic/claude-opus-4-6"
+  #     sonnet: "anthropic/claude-sonnet-4-6"
+  #     haiku: "anthropic/claude-haiku-4-5-20251001"
+
 state:
   db_path: "./data/klemma.db"          # relative to ~/.klemma/ or absolute
 
