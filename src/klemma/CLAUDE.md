@@ -20,7 +20,7 @@ Click CLI entry point. Defines 16 commands + hidden aliases.
 `KlemmaContext` dataclass — single object per CLI command invocation.
 Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `library` (optional), `project` (optional), `klemma_home`, `dissertation_context`, `available_tags`, `project_root`, `project_chain`, `system_home`.
 
-### config.py (711 lines)
+### config.py (~800 lines)
 Pydantic config models + Git-style project discovery + klemmarc loading.
 Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `_resolved_api_keys` PrivateAttr), `EmbeddingsConfig`, `StateConfig` (`db_path`, `inherit_db`), `DissertationConfig`, `SystemConfig`, `ProjectConfig`.
 - `_load_klemmarc()` — load `~/.klemmarc.yaml` (or `.yml` / `.klemmarc`) global config
@@ -28,7 +28,8 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `
 - `_check_klemmarc_permissions()` — fix permissions on `~/.klemmarc*` if world-readable
 - `discover_project_root(start)` — traverse up from cwd to find nearest `.klemma/`
 - `discover_project_chain(start)` — find all project roots child-first, max depth 3
-- `resolve_effective_config(project_chain, config_override)` — merge: klemmarc < system < parent < child < CLI override; injects `api_keys` into `AIConfig._resolved_api_keys`
+- `resolve_effective_config(project_chain, config_override)` — merge: klemmarc < system < parent < child < CLI override; injects `api_keys` into `AIConfig._resolved_api_keys`; runs `_warn_config_issues()` on each layer
+- `_warn_config_issues(raw, source)` — warns about misplaced keys, unknown keys, bare Claude model shorthands with litellm backend; uses `warnings.warn()` for stderr visibility
 - `load_project_context(project_chain, config)` — aggregate KLEMMA.md files parent-first
 - `ensure_system_home()` — auto-create `~/.klemma/` via `init_system()` on first run; checks klemmarc permissions
 - `get_system_home()` / `get_klemma_home()` — returns `Path(KLEMMA_HOME)` or `~/.klemma`

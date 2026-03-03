@@ -9,6 +9,7 @@ Supports Git/NPM-style per-directory projects:
 import logging
 import os
 import stat
+import warnings
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,6 +23,174 @@ _SHIPPED_PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
 # Config keys inherited from parent project (shared resources)
 _INHERITED_KEYS = {"obsidian", "zotero", "ai", "embeddings"}
+
+# Claude model shorthands → litellm model IDs (for bare-name detection)
+_CLAUDE_SHORTHANDS: dict[str, str] = {
+    "opus": "anthropic/claude-opus-4-6",
+    "sonnet": "anthropic/claude-sonnet-4-6",
+    "haiku": "anthropic/claude-haiku-4-5-20251001",
+}
+
+# Models supported by Claude Code CLI (claude -p --model <alias>)
+_CLAUDE_CLI_MODELS = {"sonnet", "opus"}
+
+# Known fields per Pydantic model — used by _warn_config_issues()
+_KNOWN_FIELDS: dict[str, set[str]] = {}  # populated lazily
+
+
+def _get_known_fields() -> dict[str, set[str]]:
+    """Return known fields for each config section (cached)."""
+    if _KNOWN_FIELDS:
+        return _KNOWN_FIELDS
+    _KNOWN_FIELDS["root"] = set(KlemmaConfig.model_fields.keys())
+    _KNOWN_FIELDS["ai"] = set(AIConfig.model_fields.keys())
+    _KNOWN_FIELDS["zotero"] = set(ZoteroConfig.model_fields.keys())
+    _KNOWN_FIELDS["obsidian"] = set(ObsidianConfig.model_fields.keys())
+    _KNOWN_FIELDS["embeddings"] = set(EmbeddingsConfig.model_fields.keys())
+    _KNOWN_FIELDS["state"] = set(StateConfig.model_fields.keys())
+    _KNOWN_FIELDS["instance"] = set(InstanceConfig.model_fields.keys())
+    _KNOWN_FIELDS["project"] = set(ProjectConfig.model_fields.keys())
+    _KNOWN_FIELDS["dissertation"] = set(DissertationConfig.model_fields.keys())
+    _KNOWN_FIELDS["planning"] = set(PlanningConfig.model_fields.keys())
+    _KNOWN_FIELDS["reading"] = set(ReadingConfig.model_fields.keys())
+    _KNOWN_FIELDS["processing"] = set(ProcessingConfig.model_fields.keys())
+    _KNOWN_FIELDS["tags"] = set(TagsConfig.model_fields.keys())
+    _KNOWN_FIELDS["export"] = set(ExportConfig.model_fields.keys())
+    return _KNOWN_FIELDS
+
+
+def _warn_config_issues(raw: dict, source: str) -> None:
+    """Emit warnings for common config problems in a raw YAML dict.
+
+    Checks:
+    1. Misplaced keys — keys that belong inside a section but sit at root level
+    2. Unknown keys — keys not recognized at any level
+    3. Bare model names — Claude shorthands used with litellm backend
+
+    Uses warnings.warn() so messages appear on stderr even without logging setup.
+    """
+    if not raw or not isinstance(raw, dict):
+        return
+
+    fields = _get_known_fields()
+    root_keys = fields["root"]
+
+    # --- 1. Misplaced keys: known sub-section fields placed at root ---
+    # Map: child field → list of sections it belongs to
+    child_fields: dict[str, list[str]] = {}
+    for section in ("ai", "zotero", "obsidian", "embeddings", "state",
+                    "instance", "project", "dissertation", "planning",
+                    "reading", "processing", "tags", "export"):
+        for field in fields.get(section, set()):
+            if field not in root_keys:
+                child_fields.setdefault(field, []).append(section)
+
+    for key in raw:
+        if key not in root_keys and key in child_fields:
+            sections = child_fields[key]
+            hint = sections[0] if len(sections) == 1 else "/".join(sections)
+            warnings.warn(
+                f"[{source}] '{key}' should be inside '{hint}:', not at top level"
+                f" (currently ignored — move it under the correct section)",
+                UserWarning,
+                stacklevel=2,
+            )
+
+    # --- 2. Unknown keys at every level ---
+    for key in raw:
+        if key not in root_keys and key not in child_fields:
+            if key in ("api_keys", "mcp"):
+                continue  # api_keys valid in klemmarc; mcp reserved
+            warnings.warn(
+                f"[{source}] unknown top-level key '{key}' (ignored)",
+                UserWarning,
+                stacklevel=2,
+            )
+
+    # Check sub-sections for unknown keys
+    for section_name in ("ai", "zotero", "obsidian", "embeddings", "state",
+                         "instance", "project", "dissertation", "planning",
+                         "reading", "processing", "tags", "export"):
+        section_data = raw.get(section_name)
+        if not isinstance(section_data, dict):
+            continue
+        known = fields.get(section_name, set())
+        for key in section_data:
+            if key not in known:
+                warnings.warn(
+                    f"[{source}] unknown key '{key}' inside '{section_name}:' (ignored)",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
+    # --- 3. Model compatibility checks ---
+    ai_section = raw.get("ai", {})
+    if not isinstance(ai_section, dict):
+        return
+    backend = ai_section.get("backend", "litellm")
+    task_classes = ai_section.get("task_classes", {})
+
+    if backend == "claude":
+        # Claude CLI: --model requires ANTHROPIC_API_KEY (Max subscriptions don't support it)
+        has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        model = ai_section.get("model", "")
+        if model and model not in _CLAUDE_CLI_MODELS and "/" not in model:
+            warnings.warn(
+                f"[{source}] ai.model='{model}' is not supported by Claude CLI."
+                f" Supported: {', '.join(sorted(_CLAUDE_CLI_MODELS))}."
+                " Use backend: litellm for other models",
+                UserWarning,
+                stacklevel=2,
+            )
+        if isinstance(task_classes, dict) and task_classes:
+            if not has_api_key:
+                warnings.warn(
+                    f"[{source}] task_classes requires ANTHROPIC_API_KEY with backend: claude"
+                    " (--model flag needs API access). Set ANTHROPIC_API_KEY"
+                    " or switch to backend: litellm with class_model_map",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            for task, cls in task_classes.items():
+                if cls not in _CLAUDE_CLI_MODELS:
+                    suggestion = _CLAUDE_SHORTHANDS.get(cls, "")
+                    hint = (
+                        f" Use backend: litellm with"
+                        f" class_model_map.litellm.{cls}: '{suggestion}'"
+                        if suggestion else
+                        f" Supported by Claude CLI: {', '.join(sorted(_CLAUDE_CLI_MODELS))}"
+                    )
+                    warnings.warn(
+                        f"[{source}] task_classes.{task}='{cls}' is not supported"
+                        f" by Claude CLI.{hint}",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+    elif backend == "litellm":
+        # LiteLLM needs full model IDs, not bare shorthands
+        model = ai_section.get("model", "")
+        if model in _CLAUDE_SHORTHANDS:
+            suggestion = _CLAUDE_SHORTHANDS[model]
+            warnings.warn(
+                f"[{source}] ai.model='{model}' is a Claude shorthand but backend is litellm."
+                f" Use '{suggestion}' or switch to backend: claude",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        class_model_map = ai_section.get("class_model_map", {})
+        litellm_map = class_model_map.get("litellm", {}) if isinstance(class_model_map, dict) else {}
+        if isinstance(task_classes, dict):
+            for task, cls in task_classes.items():
+                if cls in _CLAUDE_SHORTHANDS and cls not in litellm_map:
+                    suggestion = _CLAUDE_SHORTHANDS[cls]
+                    warnings.warn(
+                        f"[{source}] task_classes.{task}='{cls}' is a Claude shorthand"
+                        f" but backend is litellm and no class_model_map entry exists."
+                        f" Add class_model_map.litellm.{cls}: '{suggestion}'",
+                        UserWarning,
+                        stacklevel=2,
+                    )
 
 
 # --- System home ---
@@ -121,6 +290,10 @@ class ZoteroConfig(BaseModel):
     library_json: Optional[str] = None  # Path to BetterBibTeX JSON export
     storage_path: str = str(Path.home() / "Zotero" / "storage")  # Zotero PDF storage
     collection: Optional[str] = None  # Optional Zotero collection ID for filtering
+    library_id: Optional[str] = None  # Zotero library ID (for API access)
+    library_type: str = "user"  # "user" or "group"
+    api_key_env: str = ""  # env var holding Zotero API key
+    local: bool = True  # use local BBT JSON (vs API)
 
 
 class ObsidianConfig(BaseModel):
@@ -416,6 +589,8 @@ def load_config(config_path: str | Path | None = None) -> KlemmaConfig:
         raise FileNotFoundError(f"Config file not found: {path}")
 
     raw = _load_yaml(path)
+    if raw:
+        _warn_config_issues(raw, str(path))
 
     # Migration: Zotero fields were originally under instance:
     if "zotero" not in raw and "instance" in raw:
@@ -450,15 +625,23 @@ def resolve_effective_config(
     klemmarc_raw = _load_klemmarc()
     api_keys = klemmarc_raw.pop("api_keys", {})
     # Start from klemmarc (without api_keys — not part of KlemmaConfig schema)
+    if klemmarc_raw:
+        _warn_config_issues(klemmarc_raw, "~/.klemmarc.yaml")
 
     # 1. System defaults
-    system_raw = _load_yaml(get_system_home() / "config.yaml")
+    system_path = get_system_home() / "config.yaml"
+    system_raw = _load_yaml(system_path)
+    if system_raw:
+        _warn_config_issues(system_raw, str(system_path))
 
     # 2. Project chain: parent first, child last (child wins)
     #    Only inherit shared resource keys from parents
     merged: dict[str, Any] = {}
     for root in reversed(project_chain):  # parent first
-        project_raw = _load_yaml(root / ".klemma" / "config.yaml")
+        config_file = root / ".klemma" / "config.yaml"
+        project_raw = _load_yaml(config_file)
+        if project_raw:
+            _warn_config_issues(project_raw, str(config_file))
         if root == project_chain[0]:
             # Active (child) project: merge everything
             merged = _deep_merge(merged, project_raw)
@@ -473,7 +656,10 @@ def resolve_effective_config(
 
     # 4. CLI --config override wins over everything
     if config_override:
-        override_raw = _load_yaml(Path(config_override))
+        override_path = Path(config_override)
+        override_raw = _load_yaml(override_path)
+        if override_raw:
+            _warn_config_issues(override_raw, str(override_path))
         effective = _deep_merge(effective, override_raw)
 
     cfg = KlemmaConfig.model_validate(effective)

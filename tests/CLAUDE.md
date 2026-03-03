@@ -1,6 +1,6 @@
 # Tests
 
-## Current test suite (553 tests)
+## Current test suite (597 tests)
 - `test_errors.py` (33 lines) — `KlemmaAIError` hierarchy, `retryable` classification, cause chaining
 - `test_ai.py` (170 lines) — `extract_json()`, `AIProviderBase`, `AICallResult` dataclass, `call_with_meta()` base + Claude, `create_ai()` factory
 - `test_ai_litellm.py` (265 lines) — `LiteLLMClient` with mocked litellm: call, json_mode, base_url, api_key, reasoning model detection, retry, `call_with_meta()` with structured error mapping + token extraction
@@ -30,6 +30,8 @@
 - `test_auto_pipeline.py` (199 lines) — 8 tests: run_analyst_from_source (success/missing source/no pdf), run_auto_benchmark (explicit paper/analyst failure/auto-select/no candidates/comparison)
 - `test_prompts.py` (~270 lines) — 25 tests: all 12 prompt templates render without Jinja2 errors, coverage check (all shipped templates have test contexts), reconstruct.md ablation variants (default/max_recs/fewshot/combined), prompt hash determinism + uniqueness, AblationParams defaults + to_snapshot + with_fewshot factory
 - `test_notes_subdirs.py` (~190 lines) — 10 tests: `notes/` subdirectory layout (#34) — researcher save/load (new path, legacy fallback, preference), librarian save to `notes/library/`, agent scanner finds `notes/{research,library,agents}/`, backward compat for flat reports, `update_agents_index` (generation, no-dir, empty-dir, reverse sort)
+- `test_task_model_routing.py` (~166 lines) — 13 tests: `resolve_task_model()` routing (no classes, not in classes, claude returns class, class_model_map priority, litellm with/without map, openai with map), model_override forwarding (ClaudeClient subprocess args, LiteLLMClient completion kwargs), AIConfig task_classes/class_model_map parsing
+- `test_config_validation.py` (~200 lines) — 21 tests: `_warn_config_issues()` — misplaced keys at root (task_classes, model, backend, vault_path), unknown keys (top-level, inside sections, api_keys/mcp exemptions), bare Claude shorthands with litellm backend (model, task_classes without map, correct backend no warning), edge cases (empty/None/non-dict, source label, multiple issues)
 
 ## Patterns
 - pytest + `unittest.mock` (`patch`, `MagicMock`)

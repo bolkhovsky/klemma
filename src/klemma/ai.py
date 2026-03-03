@@ -6,6 +6,7 @@ Optional backends: OpenAI-compatible API, LiteLLM.
 
 import json
 import logging
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -268,6 +269,15 @@ class ClaudeClient(AIProviderBase):
             raise RuntimeError(
                 "'claude' command not found. Install Claude Code CLI: https://claude.ai/code"
             )
+        # --model flag requires ANTHROPIC_API_KEY (Max subscriptions don't support it)
+        self._has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+    def _build_cmd(self, model: str) -> list[str]:
+        """Build claude CLI command, omitting --model when no API key."""
+        cmd = ["claude", "-p"]
+        if self._has_api_key:
+            cmd += ["--model", model]
+        return cmd
 
     def call(
         self,
@@ -284,21 +294,22 @@ class ClaudeClient(AIProviderBase):
         """
         effective_timeout = timeout or self.timeout
         effective_model = model_override or self.model
+        cmd = self._build_cmd(effective_model)
         prompt = f"{system}\n\n---\n\n{user}"
 
         for attempt in range(self.retries + 1):
             try:
                 result = subprocess.run(
-                    ["claude", "-p", "--model", effective_model, prompt],
-                    capture_output=True,
-                    text=True,
+                    cmd, input=prompt,
+                    capture_output=True, text=True,
                     timeout=effective_timeout,
                 )
                 if result.returncode != 0:
+                    error_msg = (result.stderr or result.stdout or "")[:300]
                     logger.warning(
                         "Claude CLI error (attempt %d/%d): %s",
                         attempt + 1, self.retries + 1,
-                        result.stderr[:200],
+                        error_msg,
                     )
                     continue
                 return result.stdout
@@ -323,6 +334,7 @@ class ClaudeClient(AIProviderBase):
         """Call Claude CLI with structured error tracking."""
         effective_timeout = timeout or self.timeout
         effective_model = model_override or self.model
+        cmd = self._build_cmd(effective_model)
         prompt = f"{system}\n\n---\n\n{user}"
 
         t0 = time.monotonic()
@@ -332,15 +344,16 @@ class ClaudeClient(AIProviderBase):
         for attempt in range(self.retries + 1):
             try:
                 result = subprocess.run(
-                    ["claude", "-p", "--model", effective_model, prompt],
+                    cmd, input=prompt,
                     capture_output=True, text=True, timeout=effective_timeout,
                 )
                 if result.returncode != 0:
                     retries_used = attempt + 1
+                    error_msg = (result.stderr or result.stdout or "")[:300]
                     last_error = f"cli_error: exit {result.returncode}"
                     logger.warning(
                         "Claude CLI error (attempt %d/%d): %s",
-                        attempt + 1, self.retries + 1, result.stderr[:200],
+                        attempt + 1, self.retries + 1, error_msg,
                     )
                     continue
                 elapsed = int((time.monotonic() - t0) * 1000)

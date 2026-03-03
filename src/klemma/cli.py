@@ -26,6 +26,12 @@ from .vault import VaultAdapter
 
 console = Console()
 
+# CLI command → task name for model routing (used in status line)
+_CMD_TASK_MAP = {
+    "plan": "planner", "process": "extract", "research": "research",
+    "library": "library_status", "ask": "ask", "outline": "outline_initial",
+}
+
 
 def _resolve_parent_db(parent_root: Path) -> Path | None:
     """Resolve parent project's DB path from its .klemma/config.yaml."""
@@ -498,7 +504,15 @@ def main(ctx, config):
         try:
             kctx = _init_components(config)
             ctx.obj["kctx"] = kctx
-            _print_status_line(kctx.state, project_name=kctx.project_name, model=kctx.config.ai.model)
+            # Resolve effective model: task-specific override > default
+            effective_model = kctx.config.ai.model
+            task = _CMD_TASK_MAP.get(ctx.invoked_subcommand)
+            if task:
+                from .ai import resolve_task_model
+                override = resolve_task_model(task, kctx.config.ai)
+                if override:
+                    effective_model = override
+            _print_status_line(kctx.state, project_name=kctx.project_name, model=effective_model)
         except Exception:
             pass
 
