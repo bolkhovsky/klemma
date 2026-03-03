@@ -9,7 +9,7 @@ import logging
 import warnings
 from typing import Optional
 
-from .ai import AIProviderBase
+from .ai import AICallResult, AIProviderBase
 from .config import AIConfig
 
 logger = logging.getLogger(__name__)
@@ -73,8 +73,12 @@ class OpenAIClient(AIProviderBase):
         max_tokens: int = 8192,
         temperature: float = 0.3,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> Optional[str]:
-        return self._delegate.call(system, user, max_tokens, temperature, timeout)
+        return self._delegate.call(
+            system, user, max_tokens, temperature, timeout,
+            model_override=model_override,
+        )
 
     def call_json(
         self,
@@ -83,5 +87,23 @@ class OpenAIClient(AIProviderBase):
         max_tokens: int = 8192,
         temperature: float = 0.2,
         timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
     ) -> Optional[dict]:
-        return self._delegate.call_json(system, user, max_tokens, temperature, timeout)
+        return self._delegate.call_json(
+            system, user, max_tokens, temperature, timeout,
+            model_override=model_override,
+        )
+
+    def call_with_meta(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 8192,
+        temperature: float = 0.3,
+        timeout: Optional[int] = None,
+        model_override: Optional[str] = None,
+    ) -> AICallResult:
+        return self._delegate.call_with_meta(
+            system, user, max_tokens, temperature, timeout,
+            model_override=model_override,
+        )

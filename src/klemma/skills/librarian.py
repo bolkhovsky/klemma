@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..ai import AIProvider
-from ..config import KlemmaConfig, ProjectConfig, resolve_prompt
+from ..config import AIConfig, KlemmaConfig, ProjectConfig, resolve_prompt
 from ..literature.models import LibraryReport
 from ..state import StateManager
 from ..vault import VaultAdapter
@@ -59,7 +59,12 @@ def analyze_library(
         "Output only valid JSON."
     )
 
-    data = ai.call_json(system, user_prompt, max_tokens=8192, timeout=LIBRARY_TIMEOUT)
+    from klemma.ai import resolve_task_model
+
+    data = ai.call_json(
+        system, user_prompt, max_tokens=8192, timeout=LIBRARY_TIMEOUT,
+        model_override=resolve_task_model(f"library_{mode}", config.ai),
+    )
     if not data:
         logger.error("Failed to get library analysis from AI")
         return None
@@ -355,7 +360,7 @@ def _run_prune_analysis(
     """
     if len(active_sources) <= 300:
         lang = config.ai.language
-        return _prune_batch(active_sources, entry_lookup, ai, klemma_home=klemma_home, language=lang)
+        return _prune_batch(active_sources, entry_lookup, ai, klemma_home=klemma_home, language=lang, ai_config=config.ai)
 
     # Per-chapter parallel batching
     lang = config.ai.language
@@ -369,7 +374,7 @@ def _run_prune_analysis(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = {
-            pool.submit(_prune_batch, sources, entry_lookup, ai, klemma_home=klemma_home, language=lang): ch
+            pool.submit(_prune_batch, sources, entry_lookup, ai, klemma_home=klemma_home, language=lang, ai_config=config.ai): ch
             for ch, sources in by_chapter.items()
         }
         for future in as_completed(futures):
@@ -391,6 +396,7 @@ def _prune_batch(
     sources: list[dict], entry_lookup: dict, ai: AIProvider,
     klemma_home: Optional[Path] = None,
     language: str = "en",
+    ai_config: Optional[AIConfig] = None,
 ) -> Optional[dict]:
     """Run prune on a batch of sources."""
     sources_compact = _format_sources_compact(sources, entry_lookup)
@@ -409,7 +415,10 @@ def _prune_batch(
         "Output only valid JSON."
     )
 
-    return ai.call_json(system, user_prompt, max_tokens=4096, timeout=LIBRARY_TIMEOUT)
+    from klemma.ai import resolve_task_model
+
+    override = resolve_task_model("library_prune", ai_config) if ai_config else None
+    return ai.call_json(system, user_prompt, max_tokens=4096, timeout=LIBRARY_TIMEOUT, model_override=override)
 
 
 # ---------------------------------------------------------------------------

@@ -207,7 +207,12 @@ def generate_morning_plan(
         "Output only valid JSON."
     )
 
-    data = ai.call_json(system, user_prompt, max_tokens=2048)
+    from klemma.ai import resolve_task_model
+
+    data = ai.call_json(
+        system, user_prompt, max_tokens=2048,
+        model_override=resolve_task_model("planner", config.ai),
+    )
 
     if not data:
         logger.error("Не удалось сгенерировать утренний план")

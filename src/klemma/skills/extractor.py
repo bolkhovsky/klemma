@@ -48,7 +48,12 @@ def extract_fragments(
         "Output only valid JSON with fragments array."
     )
 
-    data = ai.call_json(system, user_prompt, max_tokens=4096)
+    from klemma.ai import resolve_task_model
+
+    data = ai.call_json(
+        system, user_prompt, max_tokens=4096,
+        model_override=resolve_task_model("extract", config.ai),
+    )
     if not data:
         logger.error("Failed to extract fragments for %s", entry.id)
         return None

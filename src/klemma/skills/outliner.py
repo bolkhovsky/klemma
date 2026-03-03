@@ -192,7 +192,13 @@ def generate_outline(
     )
 
     # 6. AI call
-    data = ai.call_json(system, user_prompt, max_tokens=4096)
+    from klemma.ai import resolve_task_model
+
+    task_name = "outline_incremental" if mode == "incremental" else "outline_initial"
+    data = ai.call_json(
+        system, user_prompt, max_tokens=4096,
+        model_override=resolve_task_model(task_name, config.ai),
+    )
 
     if not data:
         logger.error("Failed to generate outline")

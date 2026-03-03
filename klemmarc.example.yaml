@@ -11,37 +11,48 @@
 #   pip install klemma[litellm]
 
 # --- AI backend ---
+# Choose ONE backend preset.
 
 ai:
-  backend: "litellm"                    # recommended (100+ providers via LiteLLM)
-  model: "anthropic/claude-sonnet-4-6"  # format: provider/model-name
-  language: "ru"                        # AI response language
+  language: "ru"
   timeout: 300
   retries: 2
-  # json_mode: true                     # structured JSON output (if model supports it)
-  # base_url: "http://localhost:11434"   # custom endpoint (Ollama, vLLM, etc.)
+
+  # --- Claude Max (no API key, no model routing) ----------------------------
+  backend: "claude"
+  model: "opus"                         # "opus" or "sonnet" only
+
+  # --- Anthropic API via LiteLLM (with model routing) -----------------------
+  # backend: "litellm"
+  # model: "anthropic/claude-sonnet-4-6"
+  # task_classes:
+  #   planner: "haiku"
+  #   research: "opus"
+  # class_model_map:
+  #   litellm:
+  #     opus: "anthropic/claude-opus-4-6"
+  #     sonnet: "anthropic/claude-sonnet-4-6"
+  #     haiku: "anthropic/claude-haiku-4-5-20251001"
+
+  # --- OpenAI API via LiteLLM -----------------------------------------------
+  # backend: "litellm"
+  # model: "openai/gpt-4.1"
+
+  # --- Local (Ollama / vLLM) ------------------------------------------------
+  # backend: "litellm"
+  # model: "ollama/llama3"
+  # base_url: "http://localhost:11434"
 
 # --- API keys ---
-# Direct API keys — no more env var juggling.
-# Only uncomment keys you actually use.
+# Direct keys — no env var juggling. Only uncomment what you use.
 
 # api_keys:
-#   openai: "sk-..."
 #   anthropic: "sk-ant-..."
+#   openai: "sk-..."
 #   google: "AIza..."
-#   cohere: "..."
-#   mistral: "..."
 
 # --- Embeddings ---
 
 # embeddings:
 #   backend: "openai"                   # "s2" (free) | "local" | "openai"
 #   model: "text-embedding-3-small"
-
-# --- Common model examples ---
-# ai:
-#   model: "openai/gpt-4.1"            # OpenAI GPT-4.1
-#   model: "anthropic/claude-opus-4-6"  # Anthropic Claude Opus
-#   model: "ollama/llama3"              # Local Ollama
-#   model: "openai/o3"                  # OpenAI reasoning model
-#   model: "google/gemini-2.5-pro"      # Google Gemini

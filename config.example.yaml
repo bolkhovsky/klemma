@@ -23,16 +23,58 @@ obsidian:
   use_cli: null
 
 ai:
-  model: "sonnet"                      # claude model: "opus", "sonnet", "haiku"
   language: "ru"                       # AI response language: "en", "ru", "de", etc.
   max_pdf_chars: 50000
   timeout: 300
   retries: 2
-  # Uncomment for OpenAI-compatible backends (Ollama, vLLM, LM Studio):
-  # backend: "openai"
-  # base_url: "http://localhost:11434/v1"
-  # api_key_env: "OPENAI_API_KEY"
-  # json_mode: true
+
+  # ===========================================================================
+  # Choose ONE backend preset below. Uncomment the one you need.
+  # ===========================================================================
+
+  # --- Preset 1: Claude Max subscription (no API key needed) -----------------
+  # Uses Claude Code CLI. Simplest setup, but no per-task model routing.
+  # Works with: `claude` CLI installed + active Max subscription.
+  backend: "claude"
+  model: "opus"                        # "opus" or "sonnet" (only these two)
+
+  # --- Preset 2: Anthropic API via LiteLLM (ANTHROPIC_API_KEY required) ------
+  # Full model routing support. Set key in ~/.klemmarc.yaml or env var.
+  # backend: "litellm"
+  # model: "anthropic/claude-sonnet-4-6"
+  # task_classes:                       # per-task model routing (opt-in):
+  #   planner: "haiku"                  #   daily plans — fast & cheap
+  #   extract: "sonnet"                 #   fragment extraction — accuracy
+  #   annotate: "sonnet"                #   vault note annotation
+  #   research: "opus"                  #   research briefings — highest quality
+  #   outline_initial: "opus"
+  #   outline_incremental: "opus"
+  #   library_status: "sonnet"
+  #   library_recommend: "opus"
+  #   library_audit: "opus"
+  #   library_prune: "sonnet"
+  #   ask: "opus"
+  # class_model_map:
+  #   litellm:
+  #     opus: "anthropic/claude-opus-4-6"
+  #     sonnet: "anthropic/claude-sonnet-4-6"
+  #     haiku: "anthropic/claude-haiku-4-5-20251001"
+
+  # --- Preset 3: OpenAI API via LiteLLM (OPENAI_API_KEY required) -----------
+  # backend: "litellm"
+  # model: "openai/gpt-4.1"
+  # task_classes:
+  #   planner: "mini"
+  #   research: "gpt4"
+  # class_model_map:
+  #   litellm:
+  #     gpt4: "openai/gpt-4.1"
+  #     mini: "openai/gpt-4.1-mini"
+
+  # --- Preset 4: Local models via Ollama -------------------------------------
+  # backend: "litellm"
+  # model: "ollama/llama3"
+  # base_url: "http://localhost:11434"
 
 state:
   db_path: "./data/klemma.db"          # relative to ~/.klemma/ or absolute

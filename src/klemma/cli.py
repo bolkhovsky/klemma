@@ -26,6 +26,12 @@ from .vault import VaultAdapter
 
 console = Console()
 
+# CLI command → task name for model routing (used in status line)
+_CMD_TASK_MAP = {
+    "plan": "planner", "process": "extract", "research": "research",
+    "library": "library_status", "ask": "ask", "outline": "outline_initial",
+}
+
 
 def _resolve_parent_db(parent_root: Path) -> Path | None:
     """Resolve parent project's DB path from its .klemma/config.yaml."""
@@ -312,7 +318,7 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
     return result
 
 
-def _print_status_line(state: StateManager, project_name: str = "default"):
+def _print_status_line(state: StateManager, project_name: str = "default", model: str = ""):
     """Print a compact status line with key metrics."""
     try:
         stats = state.get_stats()
@@ -323,6 +329,8 @@ def _print_status_line(state: StateManager, project_name: str = "default"):
         ]
         if project_name != "default":
             parts.insert(0, f"[cyan]{project_name}[/cyan]")
+        if model:
+            parts.insert(1 if project_name != "default" else 0, f"[magenta]{model}[/magenta]")
         gap_summary = state.get_gap_summary()
         if gap_summary["open_count"] > 0:
             top = ""
@@ -496,7 +504,15 @@ def main(ctx, config):
         try:
             kctx = _init_components(config)
             ctx.obj["kctx"] = kctx
-            _print_status_line(kctx.state, project_name=kctx.project_name)
+            # Resolve effective model: task-specific override > default
+            effective_model = kctx.config.ai.model
+            task = _CMD_TASK_MAP.get(ctx.invoked_subcommand)
+            if task:
+                from .ai import resolve_task_model
+                override = resolve_task_model(task, kctx.config.ai)
+                if override:
+                    effective_model = override
+            _print_status_line(kctx.state, project_name=kctx.project_name, model=effective_model)
         except Exception:
             pass
 
@@ -2056,7 +2072,12 @@ def ask(ctx, query, section, chapter, model):
                 console.print(f"[dim]{stderr[:300]}[/dim]")
     else:
         with console.status("Генерация ответа", spinner="dots"):
-            response = ai.call(system=context, user=query, max_tokens=8192)
+            from .ai import resolve_task_model
+
+            response = ai.call(
+                system=context, user=query, max_tokens=8192,
+                model_override=resolve_task_model("ask", cfg.ai),
+            )
         if response:
             console.print(response)
         else:

@@ -11,13 +11,33 @@ zotero:
   # storage_path: ~/Zotero/storage     # local Zotero PDF storage
 
 ai:
-  backend: "litellm"                   # recommended: litellm (100+ providers)
-  model: "sonnet"                      # default AI model
   language: "ru"                       # default AI response language
   timeout: 300
   retries: 2
-  # For specific providers via LiteLLM:
+
+  # Choose ONE backend. Uncomment the preset you need.
+
+  # --- Claude Max (no API key) -----------------------------------------------
+  backend: "claude"
+  model: "opus"                        # "opus" or "sonnet" only
+
+  # --- Anthropic API via LiteLLM (ANTHROPIC_API_KEY in ~/.klemmarc.yaml) -----
+  # backend: "litellm"
   # model: "anthropic/claude-sonnet-4-6"
+  # task_classes:
+  #   planner: "haiku"
+  #   research: "opus"
+  # class_model_map:
+  #   litellm:
+  #     opus: "anthropic/claude-opus-4-6"
+  #     sonnet: "anthropic/claude-sonnet-4-6"
+  #     haiku: "anthropic/claude-haiku-4-5-20251001"
+
+  # --- OpenAI API via LiteLLM (OPENAI_API_KEY in ~/.klemmarc.yaml) -----------
+  # backend: "litellm"
   # model: "openai/gpt-4.1"
+
+  # --- Local (Ollama / vLLM / LM Studio) ------------------------------------
+  # backend: "litellm"
   # model: "ollama/llama3"
-  # base_url: "http://localhost:11434"  # custom endpoint
+  # base_url: "http://localhost:11434"

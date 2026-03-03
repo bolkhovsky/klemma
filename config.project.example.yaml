@@ -17,12 +17,23 @@ obsidian:
   tags_folder: "Tags"                  # optional folder for tag notes
 
 ai:
-  backend: "litellm"                   # recommended: litellm (100+ providers)
-  model: "anthropic/claude-sonnet-4-6" # litellm model format: provider/model
   language: "ru"                       # AI response language
-  # For local models:
-  # model: "ollama/llama3"
-  # base_url: "http://localhost:11434"
+
+  # --- Claude Max (no API key) -----------------------------------------------
+  backend: "claude"
+  model: "opus"                        # "opus" or "sonnet" only
+
+  # --- Anthropic API via LiteLLM ---------------------------------------------
+  # backend: "litellm"
+  # model: "anthropic/claude-sonnet-4-6"
+  # task_classes:
+  #   planner: "haiku"
+  #   research: "opus"
+  # class_model_map:
+  #   litellm:
+  #     opus: "anthropic/claude-opus-4-6"
+  #     sonnet: "anthropic/claude-sonnet-4-6"
+  #     haiku: "anthropic/claude-haiku-4-5-20251001"
 
 # --- Per-project settings (NOT inherited from parent) ---
 
