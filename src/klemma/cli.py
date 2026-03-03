@@ -302,6 +302,13 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
 
     result = state.sync_source_sections(vault_data, new_entries)
 
+    # Sync section type mappings (backfill section_type columns)
+    project = ctx.project
+    if project and (project.chapters or project.section_type_map):
+        st_result = state.sync_section_types(project)
+        result["section_types_updated"] = st_result["updated"]
+        result["section_types_unmapped"] = st_result["unmapped"]
+
     if not quiet:
         parts = []
         if renames:

@@ -206,7 +206,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 6  # bump this when adding new migrations
+        target = 7  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -305,6 +305,43 @@ class StateManager:
                     conn.execute(
                         f"ALTER TABLE sources ADD COLUMN {col} {col_type}"
                     )
+
+        if version < 7:
+            # Add section_type columns to existing tables
+            existing_ss = {
+                row[1] for row in conn.execute("PRAGMA table_info(source_sections)")
+            }
+            if "section_type" not in existing_ss:
+                conn.execute(
+                    "ALTER TABLE source_sections ADD COLUMN section_type TEXT"
+                )
+
+            existing_frag = {
+                row[1] for row in conn.execute("PRAGMA table_info(fragments)")
+            }
+            if "section_type" not in existing_frag:
+                conn.execute(
+                    "ALTER TABLE fragments ADD COLUMN section_type TEXT"
+                )
+
+            existing_gaps = {
+                row[1] for row in conn.execute("PRAGMA table_info(reference_gaps)")
+            }
+            if "section_type" not in existing_gaps:
+                conn.execute(
+                    "ALTER TABLE reference_gaps ADD COLUMN section_type TEXT"
+                )
+
+            # Lookup table: numeric section → semantic type
+            conn.execute("""CREATE TABLE IF NOT EXISTS section_type_map (
+                section TEXT PRIMARY KEY,
+                section_type TEXT NOT NULL,
+                chapter INTEGER
+            )""")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_stm_type "
+                "ON section_type_map(section_type)"
+            )
 
         conn.execute(f"PRAGMA user_version = {target}")
 
@@ -632,6 +669,76 @@ class StateManager:
 
     def get_benchmarked_citekeys(self) -> set[str]:
         return self.benchmarks.get_benchmarked_citekeys()
+
+    # ── Section type sync ──────────────────────────────────────────────────
+
+    def sync_section_types(self, config) -> dict:
+        """Populate section_type_map table and backfill section_type columns.
+
+        1. Read config.section_type_map (explicit) + infer from config.chapters
+        2. Populate section_type_map table
+        3. Backfill section_type on source_sections, fragments, reference_gaps
+        4. Return stats: {updated: N, unmapped: [sections]}
+
+        config: ProjectConfig instance.
+        """
+        from .section_types import infer_section_type
+
+        # Build complete mapping: explicit config + heuristic from chapter names
+        mapping: dict[str, str] = {}
+        if config.section_type_map:
+            mapping.update(config.section_type_map)
+
+        if config.chapters:
+            for ch_num, ch_name in config.chapters.items():
+                key = str(ch_num)
+                if key not in mapping:
+                    inferred = infer_section_type(ch_name)
+                    if inferred:
+                        mapping[key] = inferred.value
+
+        updated = 0
+        unmapped: list[str] = []
+
+        with self._conn() as conn:
+            # Populate section_type_map table
+            for section, section_type in mapping.items():
+                ch = int(section.split(".")[0]) if section[0].isdigit() else None
+                conn.execute(
+                    "INSERT OR REPLACE INTO section_type_map "
+                    "(section, section_type, chapter) VALUES (?, ?, ?)",
+                    (section, section_type, ch),
+                )
+
+            # Backfill source_sections.section_type
+            cur = conn.execute(
+                """UPDATE source_sections SET section_type = (
+                    SELECT stm.section_type FROM section_type_map stm
+                    WHERE source_sections.section LIKE stm.section || '%'
+                    ORDER BY LENGTH(stm.section) DESC LIMIT 1
+                ) WHERE section_type IS NULL"""
+            )
+            updated += cur.rowcount
+
+            # Backfill fragments.section_type
+            cur = conn.execute(
+                """UPDATE fragments SET section_type = (
+                    SELECT stm.section_type FROM section_type_map stm
+                    WHERE fragments.section LIKE stm.section || '%'
+                    ORDER BY LENGTH(stm.section) DESC LIMIT 1
+                ) WHERE section_type IS NULL AND section IS NOT NULL"""
+            )
+            updated += cur.rowcount
+
+            # Backfill reference_gaps.section_type — uses dissertation_sections JSON
+            # For gaps, match against the first section in the JSON array
+            cur = conn.execute(
+                "SELECT DISTINCT section FROM source_sections "
+                "WHERE section_type IS NULL"
+            )
+            unmapped = [row["section"] for row in cur.fetchall()]
+
+        return {"updated": updated, "unmapped": unmapped}
 
     # ── Aggregation (cross-repo) ──────────────────────────────────────────
 

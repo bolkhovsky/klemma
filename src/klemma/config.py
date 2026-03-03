@@ -396,6 +396,10 @@ class ProjectConfig(BaseModel):
     writing_constraints: str = ""
     chapter_draft_pattern: str = "Глава_{chapter}"
     section_weights: dict[str, float] = Field(default_factory=dict)
+    section_type_map: dict[str, str] = Field(default_factory=dict)
+    # Maps numeric section → semantic type: {"2": "literature_review", "3": "methodology"}
+    section_type_weights: dict[str, float] = Field(default_factory=dict)
+    # Optional weights by semantic type for gap scoring: {"methodology": 1.0, "appendix": 0.3}
 
     @property
     def current_chapter(self) -> int:
@@ -421,6 +425,15 @@ class ProjectConfig(BaseModel):
     @classmethod
     def from_dissertation(cls, d: DissertationConfig) -> "ProjectConfig":
         """Convert legacy DissertationConfig to ProjectConfig."""
+        # Auto-infer section_type_map from chapter names
+        section_type_map: dict[str, str] = {}
+        if d.chapters:
+            from .section_types import infer_section_type
+            for ch_num, ch_name in d.chapters.items():
+                inferred = infer_section_type(ch_name)
+                if inferred:
+                    section_type_map[str(ch_num)] = inferred.value
+
         return cls(
             type="dissertation",
             title=d.title,
@@ -434,6 +447,7 @@ class ProjectConfig(BaseModel):
             chapter_plan_pattern=d.chapter_plan_pattern,
             writing_constraints=d.writing_constraints,
             chapter_draft_pattern=d.chapter_draft_pattern,
+            section_type_map=section_type_map,
         )
 
 
