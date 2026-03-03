@@ -221,8 +221,11 @@ def _fit_prompt_budget(
     return chapter_draft, formatted_sources, formatted_fragments
 
 
-def _validate_citekeys(data: dict, valid_citekeys: set[str]) -> dict:
-    """Strip hallucinated citekeys from AI response and log warnings."""
+def _validate_citekeys(data: dict, valid_citekeys: set[str]) -> tuple[dict, list[str]]:
+    """Strip hallucinated citekeys from AI response.
+
+    Returns (cleaned_data, list_of_removed_citekeys).
+    """
     hallucinated: list[str] = []
 
     clean_citations = []
@@ -241,13 +244,14 @@ def _validate_citekeys(data: dict, valid_citekeys: set[str]) -> dict:
         hallucinated.extend(removed)
         block["citations"] = valid
 
-    if hallucinated:
+    filtered = sorted(set(hallucinated))
+    if filtered:
         logger.warning(
             "Removed %d hallucinated citekeys (not in library): %s",
-            len(hallucinated),
-            sorted(set(hallucinated)),
+            len(filtered),
+            filtered,
         )
-    return data
+    return data, filtered
 
 
 def _format_research(section: str, data: dict) -> str:
@@ -840,7 +844,7 @@ def research_section(
     # across the library (via RAG or cross-section references) and may
     # legitimately cite sources outside the current section.
     valid_citekeys = state.get_existing_source_ids()
-    data = _validate_citekeys(data, valid_citekeys)
+    data, filtered_citekeys = _validate_citekeys(data, valid_citekeys)
 
     # 11. Построить результат
     data["available_sources"] = len(source_summaries)
@@ -882,6 +886,7 @@ def research_section(
         ],
         missing_coverage=data.get("missing_coverage", []),
         writing_suggestions=data.get("writing_suggestions", []),
+        filtered_citekeys=filtered_citekeys,
         research_text=research_text,
     )
 
