@@ -377,6 +377,7 @@ class DissertationConfig(BaseModel):
     writing_constraints: str = "1-1.5 ч/день, 200-300 слов/день, Pomodoro"
     chapter_draft_pattern: str = "Глава_{chapter}"
     section_weights: dict[str, float] = Field(default_factory=dict)
+    section_type_map: dict[str, str] = Field(default_factory=dict)
 
 
 class ProjectConfig(BaseModel):
@@ -425,9 +426,9 @@ class ProjectConfig(BaseModel):
     @classmethod
     def from_dissertation(cls, d: DissertationConfig) -> "ProjectConfig":
         """Convert legacy DissertationConfig to ProjectConfig."""
-        # Auto-infer section_type_map from chapter names
-        section_type_map: dict[str, str] = {}
-        if d.chapters:
+        # Use explicit map if provided, otherwise auto-infer from chapter names
+        section_type_map: dict[str, str] = dict(d.section_type_map)
+        if not section_type_map and d.chapters:
             from .section_types import infer_section_type
             for ch_num, ch_name in d.chapters.items():
                 inferred = infer_section_type(ch_name)

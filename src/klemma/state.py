@@ -757,8 +757,19 @@ class StateManager:
             )
             updated += cur.rowcount
 
-            # Backfill reference_gaps.section_type — uses dissertation_sections JSON
-            # For gaps, match against the first section in the JSON array
+            # Backfill reference_gaps.section_type from dissertation_sections JSON
+            # Match first element of JSON array against section_type_map
+            cur = conn.execute(
+                """UPDATE reference_gaps SET section_type = (
+                    SELECT stm.section_type FROM section_type_map stm
+                    WHERE json_extract(dissertation_sections, '$[0]') LIKE stm.section || '%'
+                    ORDER BY LENGTH(stm.section) DESC LIMIT 1
+                ) WHERE section_type IS NULL
+                  AND dissertation_sections IS NOT NULL
+                  AND dissertation_sections != '[]'"""
+            )
+            updated += cur.rowcount
+
             cur = conn.execute(
                 "SELECT DISTINCT section FROM source_sections "
                 "WHERE section_type IS NULL"
