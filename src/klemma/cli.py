@@ -551,6 +551,9 @@ def main(ctx, config):
 @click.option("--non-interactive", is_flag=True, help="Alias for --no-input")
 @click.option("--force", is_flag=True, help="Re-run wizard even if project exists (prefills from current config)")
 @click.option("--outline", is_flag=True, help="Generate outline after init (requires AI)")
+@click.option("--plan", "plan_path", default=None,
+              type=click.Path(exists=True),
+              help="Path to dissertation plan-prospect .docx — auto-fills project from it")
 @click.option("--name", "project_name", default=None, help="Project title (non-interactive)")
 @click.option("--description", "-d", default=None, help="Project description (non-interactive)")
 @click.option("--keywords", "-k", default=None, help="Comma-separated keywords (non-interactive)")
@@ -561,24 +564,22 @@ def main(ctx, config):
 @click.option("--api-key", "api_key", default=None, help="OpenAI API key for litellm backend")
 @click.pass_context
 def init(ctx, project_type, global_only, no_input, non_interactive, force, outline,
-         project_name, description, keywords, language, backend, api_key):
+         plan_path, project_name, description, keywords, language, backend, api_key):
     """Initialize a new klemma project in current directory.
 
     Creates .klemma/ and KLEMMA.md in the current directory.
     Also ensures ~/.klemma/ system config exists.
 
     Runs an interactive setup wizard by default. Use --no-input to skip prompts.
-    Pass --name, --description, --keywords, --language for non-interactive setup
-    with custom values (auto-implies --no-input).
+    Use --plan to initialize from a dissertation plan-prospect .docx file.
 
     \b
     Examples:
       klemma init                                  # interactive setup
-      klemma init --type paper                     # paper project
+      klemma init --plan plan.docx                 # from dissertation plan
       klemma init --backend claude                 # Claude Code Max, S2 embeddings
       klemma init --backend litellm --api-key sk-  # OpenAI LLM + embeddings
       klemma init --force                          # re-run wizard
-      klemma init --global-only                    # only create system config
     """
     from .setup import InitValues, init_project, init_system
 
@@ -623,8 +624,42 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
     if not force and config_path.exists():
         no_input = True
 
+    # --- --plan: initialize from dissertation plan-prospect .docx ---
+    plan_data = None
+    if plan_path:
+        from .plan_parser import parse as parse_plan
+        try:
+            plan_data = parse_plan(plan_path)
+        except ImportError as e:
+            console.print(f"[red]{e}[/red]")
+            return
+        except (FileNotFoundError, ValueError) as e:
+            console.print(f"[red]Cannot parse plan: {e}[/red]")
+            return
+
+        console.print(f"\n[green]Parsed plan-prospect:[/green] {plan_path}")
+        console.print(f"  Title: {plan_data.title[:80]}...")
+        console.print(f"  Chapters: {len(plan_data.chapters)}")
+        console.print(f"  Scientific results: {len(plan_data.results)}")
+        console.print(f"  Research tasks: {len(plan_data.tasks)}")
+
+        # Pre-fill from plan (user can still override via wizard)
+        project_name = project_name or plan_data.title
+        description = description or plan_data.description[:200]
+        project_type = "dissertation"
+        # Auto-enable outline
+        outline = True
+
     values = None
-    if not no_input:
+    if plan_data and not no_input:
+        # Plan mode: run wizard but pre-fill from plan
+        prefill = prefill or {}
+        prefill["title"] = plan_data.title
+        prefill["description"] = plan_data.description[:200]
+        prefill["project_type"] = "dissertation"
+        values = _interactive_init(project_type, prefill=prefill)
+        values.project_type = "dissertation"
+    elif not no_input:
         values = _interactive_init(project_type, prefill=prefill)
         project_type = values.project_type
     elif has_value_flags:
@@ -650,6 +685,13 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
         )
 
     result = init_project(project_dir, project_type=project_type, values=values)
+
+    # Overwrite KLEMMA.md with rich plan content if --plan was used
+    if plan_data:
+        from .plan_parser import to_klemma_md as plan_to_klemma_md  # noqa: F811
+        klemma_md_path = project_dir / "KLEMMA.md"
+        klemma_md_path.write_text(plan_to_klemma_md(plan_data), encoding="utf-8")
+        console.print("  [green]+ KLEMMA.md (from plan-prospect)[/green]")
 
     # Update klemmarc with AI backend/keys from wizard
     if values and (values.backend or values.openai_api_key):
