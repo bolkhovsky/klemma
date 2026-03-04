@@ -86,6 +86,25 @@ def _build_project_config(values: InitValues) -> dict:
         project["description"] = values.description
     if values.keywords:
         project["priority_terms"] = values.keywords
+
+    # Dissertation structure from plan-prospect → merge into project section
+    if values.plan_data and values.project_type == "dissertation":
+        diss = _build_dissertation_config(values.plan_data)
+        # Map dissertation fields to project fields
+        if "chapters" in diss:
+            project["chapters"] = diss["chapters"]
+        if "section_type_map" in diss:
+            project["section_type_map"] = diss["section_type_map"]
+        if "scientific_results" in diss:
+            project["scientific_results"] = diss["scientific_results"]
+        if "current_section" in diss:
+            project["current_focus"] = diss["current_section"]
+        if "min_sources_per_section" in diss:
+            project["min_sources_per_section"] = diss["min_sources_per_section"]
+        # Also keep title from plan if not already set
+        if not project.get("title") and "title" in diss:
+            project["title"] = diss["title"]
+
     cfg["project"] = project
 
     # Embeddings — derived from whether OpenAI key is available
@@ -96,10 +115,6 @@ def _build_project_config(values: InitValues) -> dict:
         cfg["embeddings"] = {"backend": "openai", "model": "text-embedding-3-small"}
     elif emb_backend == "s2":
         cfg["embeddings"] = {"backend": "s2"}
-
-    # Dissertation structure from plan-prospect
-    if values.plan_data and values.project_type == "dissertation":
-        cfg["dissertation"] = _build_dissertation_config(values.plan_data)
 
     # State
     cfg["state"] = {"db_path": "./data/klemma.db"}

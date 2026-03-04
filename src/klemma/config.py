@@ -697,6 +697,27 @@ def resolve_effective_config(
     # Extract ProjectConfig
     if cfg.project:
         project = cfg.project
+        # Merge dissertation data into project if project is missing key fields
+        # (backward compat: old configs put chapters/section_type_map under dissertation:)
+        if cfg.dissertation and cfg.dissertation.title:
+            diss = cfg.dissertation
+            if not project.chapters and diss.chapters:
+                project.chapters = diss.chapters
+            if not project.section_type_map and diss.section_type_map:
+                project.section_type_map = diss.section_type_map
+            if not project.scientific_results and diss.scientific_results:
+                project.scientific_results = diss.scientific_results
+            if not project.title and diss.title:
+                project.title = diss.title
+            if not project.current_focus and diss.current_section:
+                project.current_focus = diss.current_section
+            # Auto-infer section types from chapter names if still empty
+            if not project.section_type_map and project.chapters:
+                from .section_types import infer_section_type
+                for ch_num, ch_name in project.chapters.items():
+                    inferred = infer_section_type(ch_name)
+                    if inferred:
+                        project.section_type_map[str(ch_num)] = inferred.value
     elif cfg.dissertation and cfg.dissertation.title:
         project = ProjectConfig.from_dissertation(cfg.dissertation)
     else:
