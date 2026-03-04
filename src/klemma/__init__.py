@@ -1,6 +1,6 @@
 """Klemma — AI academic assistant."""
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 # Two mascot variants — user picks one later, both shipped for now.
 # Each is a list of (mascot_line, info_line) tuples for side-by-side rendering.
