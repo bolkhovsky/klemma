@@ -191,7 +191,7 @@ class TestMigrationV7:
         conn = sqlite3.connect(state.db_path)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.close()
-        assert version == 7
+        assert version >= 7
 
     def test_section_type_columns_exist(self, state):
         import sqlite3

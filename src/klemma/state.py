@@ -206,7 +206,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 7  # bump this when adding new migrations
+        target = 8  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -343,6 +343,15 @@ class StateManager:
                 "ON section_type_map(section_type)"
             )
 
+        if version < 8:
+            existing_src = {
+                row[1] for row in conn.execute("PRAGMA table_info(sources)")
+            }
+            if "source_role" not in existing_src:
+                conn.execute(
+                    "ALTER TABLE sources ADD COLUMN source_role TEXT DEFAULT 'external'"
+                )
+
         conn.execute(f"PRAGMA user_version = {target}")
 
     # ── Source delegation ─────────────────────────────────────────────────
@@ -394,6 +403,12 @@ class StateManager:
     def update_source_info(self, source_id: str, title: str = "", authors: str = "",
                            year: Optional[int] = None, abstract: str = "", doi: str = ""):
         return self.sources.update_source_info(source_id, title, authors, year, abstract, doi)
+
+    def set_source_role(self, source_id: str, role: str):
+        return self.sources.set_source_role(source_id, role)
+
+    def get_author_publication_counts(self) -> dict[str, int]:
+        return self.sources.get_author_publication_counts()
 
     def get_existing_source_ids(self) -> set[str]:
         return self.sources.get_existing_source_ids()
