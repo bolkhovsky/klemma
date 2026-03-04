@@ -1736,8 +1736,14 @@ def research(ctx, section, no_save, force, model):
             section = db_sections[0]
             console.print(f"[dim]Resolved {section_type.value} → section {section}[/dim]")
         else:
-            console.print(f"[yellow]Semantic type '{section_type.value}' has no mapped numeric section.[/yellow]")
-            console.print("[yellow]Add section_type_map to config or run klemma status to trigger auto-sync.[/yellow]")
+            # Show available types so the user can pick the right one
+            all_types = state.get_available_section_types()
+            console.print(f"[yellow]No sections mapped to '{section_type.value}' in this project.[/yellow]")
+            if all_types:
+                type_list = ", ".join(all_types)
+                console.print(f"[dim]Available types: {type_list}[/dim]")
+            else:
+                console.print("[dim]No section types mapped yet. Run klemma status to trigger auto-sync.[/dim]")
             raise SystemExit(1)
 
     chapter = parse_chapter_from_section(section)

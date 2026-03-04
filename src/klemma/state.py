@@ -689,6 +689,14 @@ class StateManager:
             )
             return [row["section"] for row in cur.fetchall()]
 
+    def get_available_section_types(self) -> list[str]:
+        """Return sorted list of distinct section types in the map."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT DISTINCT section_type FROM section_type_map ORDER BY section_type"
+            )
+            return [row["section_type"] for row in cur.fetchall()]
+
     # ── Section type sync ──────────────────────────────────────────────────
 
     def sync_section_types(self, config) -> dict:
