@@ -176,6 +176,15 @@ TEMPLATE_CONTEXTS = {
         "paper_citekey": "jones2024",
         "paper_title": "Test Paper",
     },
+    "introduction_draft.md": {
+        "dissertation_context": "Test context",
+        "chapters": {1: "Chapter 1", 2: "Chapter 2"},
+        "scientific_results": {"nr1": "Result 1"},
+        "fragments_by_type": {},
+        "ref_gaps": [],
+        "author_publications": "",
+        "target_section": "",
+    },
     "reconstruct.md": {
         "paper_title": "Test Paper",
         "abstract": "An abstract",
