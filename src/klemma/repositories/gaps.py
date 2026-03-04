@@ -202,9 +202,19 @@ class GapsRepository(BaseRepository):
         gaps.sort(key=lambda g: g["score"], reverse=True)
         return gaps
 
-    def get_section_sources(self, section: str) -> list[str]:
+    def get_section_sources(
+        self, section: str, section_type: str | None = None,
+    ) -> list[str]:
         """Get source IDs assigned to a section (via source_sections or primary_section)."""
         with self._conn() as conn:
+            if section_type:
+                cur = conn.execute(
+                    "SELECT DISTINCT source_id FROM source_sections "
+                    "WHERE section_type=?",
+                    (section_type,),
+                )
+                return [row["source_id"] for row in cur.fetchall()]
+
             cur = conn.execute(
                 "SELECT DISTINCT source_id FROM source_sections WHERE section LIKE ?",
                 (f"{section}%",),
@@ -305,7 +315,10 @@ class GapsRepository(BaseRepository):
 
     def get_coverage_stats(self) -> dict:
         with self._conn() as conn:
-            stats: dict = {"chapters": {}, "sections": {}, "nr1": {}, "nr2": {}}
+            stats: dict = {
+                "chapters": {}, "sections": {}, "nr1": {}, "nr2": {},
+                "section_types": {},
+            }
             cur = conn.execute(
                 """SELECT primary_chapter, COUNT(*) as cnt FROM sources
                    WHERE status=? AND primary_chapter IS NOT NULL
@@ -323,6 +336,36 @@ class GapsRepository(BaseRepository):
             )
             for row in cur.fetchall():
                 stats["sections"][row["primary_section"]] = row["cnt"]
+
+            # Per-type coverage: count distinct sources per section_type
+            cur = conn.execute(
+                """SELECT ss.section_type, COUNT(DISTINCT ss.source_id) as cnt
+                   FROM source_sections ss
+                   JOIN sources s ON s.id = ss.source_id
+                   WHERE s.status=? AND ss.section_type IS NOT NULL
+                   GROUP BY ss.section_type""",
+                ("completed",),
+            )
+            for row in cur.fetchall():
+                stats["section_types"][row["section_type"]] = row["cnt"]
+
+            # Section → type lookup for display (map table + source_sections)
+            lookup: dict[str, str] = {}
+            cur = conn.execute(
+                "SELECT section, section_type FROM section_type_map"
+            )
+            for row in cur.fetchall():
+                lookup[row["section"]] = row["section_type"]
+            # Fill gaps from actual source_sections assignments
+            cur = conn.execute(
+                """SELECT DISTINCT ss.section, ss.section_type
+                   FROM source_sections ss
+                   WHERE ss.section_type IS NOT NULL"""
+            )
+            for row in cur.fetchall():
+                if row["section"] not in lookup:
+                    lookup[row["section"]] = row["section_type"]
+            stats["section_type_lookup"] = lookup
 
             for level in range(1, 6):
                 cur = conn.execute(

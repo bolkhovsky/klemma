@@ -28,10 +28,11 @@ All repos receive `StateManager._conn` as their connection factory via `BaseRepo
 Base class providing shared `_conn` factory.
 - `BaseRepository` — all repos inherit from this
 
-### sources.py (~420 lines)
+### sources.py (~440 lines)
 Source lifecycle, sections, Zotero key management, vault sync.
 - `register_sources()`, `mark_completed()`, `get_source()`, `get_stats()`, `update_source_info()` (persist title/authors/year/abstract/doi)
 - `set_source_sections()` — replaces old `_set_sections_inline`
+- `get_by_section(section, section_type?)` — filter by numeric section or semantic type (#67)
 - `get_existing_source_ids()` — replaces old direct `_conn()` usage in cli.py
 - `get_sources_without_embeddings()` — replaces old direct `_conn()` usage in cli.py
 - `sync_source_sections()` — vault frontmatter bidirectional sync
@@ -39,7 +40,7 @@ Source lifecycle, sections, Zotero key management, vault sync.
 
 ### fragments.py (~250 lines)
 Fragment CRUD, citation intent coverage, and fragment-level embeddings.
-- `save_fragments()`, `get_fragments()`, `get_fragment_stats()`
+- `save_fragments()`, `get_fragments(section_type?)`, `get_fragment_stats()`
 - `get_intent_coverage()` — section x intent matrix
 - `save_fragment_embedding()` — store vector BLOB (struct.pack float32)
 - `get_fragment_embeddings(model?)` — return `{fragment_id: vector}`
@@ -52,12 +53,14 @@ Vector BLOB storage with model versioning.
 - `save_embedding()`, `get_embedding()`, `get_all_embeddings()`
 - `get_embedding_stats()` — coverage by model
 
-### gaps.py (~330 lines)
+### gaps.py (~350 lines)
 Reference gaps, coverage analysis, intent-weighted scoring.
 - `get_reference_gaps(section?, limit?, section_weights?)` — aggregated with intent-weighted scoring formula; `section_weights` dict maps section IDs to `w_s ∈ (0,1]` (unlisted→0.5, None→uniform 1.0)
+- `get_section_sources(section, section_type?)` — filter by numeric section or semantic type (#67)
 - `rerank_gaps_semantic()` — centroid-based semantic reranking (cross-repo via callables)
 - `resolve_gaps()` — auto-resolve against library entries
-- `get_coverage_stats()`, `get_gaps()`, `reset_non_completed()`
+- `get_coverage_stats()` — includes `section_types` dict with per-type source counts (#67)
+- `get_gaps()`, `reset_non_completed()`
 
 ### citations.py (~200 lines)
 Citation graph: links, stats, co-citation, author network.

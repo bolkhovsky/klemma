@@ -194,6 +194,21 @@ def resolve_orphan(old_ck: str, bbt_index: BBTIndex) -> tuple[str, str] | None:
     return None
 
 
+def _lookup_section_type(section: str, type_lookup: dict[str, str]) -> str:
+    """Find the best matching section type for a numeric section ID.
+
+    Tries exact match first, then prefix match (longest wins).
+    """
+    if section in type_lookup:
+        return type_lookup[section]
+    # Prefix match: "2.3.1" inherits type from "2.3" or "2"
+    best = ""
+    for mapped_sec, mapped_type in type_lookup.items():
+        if section.startswith(mapped_sec) and len(mapped_sec) > len(best):
+            best = mapped_sec
+    return type_lookup[best] if best else ""
+
+
 def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
     """Sync section assignments from vault frontmatter + discover new Zotero entries.
 
@@ -301,6 +316,13 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
         vault_data = [vd for vd in vault_data if vd["citekey"] in existing]
 
     result = state.sync_source_sections(vault_data, new_entries)
+
+    # Sync section type mappings (backfill section_type columns)
+    project = ctx.project
+    if project and (project.chapters or project.section_type_map):
+        st_result = state.sync_section_types(project)
+        result["section_types_updated"] = st_result["updated"]
+        result["section_types_unmapped"] = st_result["unmapped"]
 
     if not quiet:
         parts = []
@@ -1484,24 +1506,30 @@ def status(ctx, verbose, chapter):
         # Sections (verbose or filtered by chapter)
         if (verbose or chapter) and cov["sections"]:
             console.print()
+            type_lookup = cov.get("section_type_lookup", {})
             sec_table = Table(title="Coverage by Section", show_edge=False, pad_edge=False)
             sec_table.add_column("Section", style="cyan")
+            sec_table.add_column("Type", style="dim")
             sec_table.add_column("Sources", justify="right", width=8)
             for sec, count in sorted(cov["sections"].items()):
                 if chapter and not sec.startswith(f"{chapter}."):
                     continue
                 style = "green" if count >= 3 else "yellow" if count >= 1 else "red"
-                sec_table.add_row(sec, f"[{style}]{count}[/{style}]")
+                stype = _lookup_section_type(sec, type_lookup)
+                sec_table.add_row(sec, stype, f"[{style}]{count}[/{style}]")
             console.print(sec_table)
     elif not project or project.type == "paper":
         # Paper: show section coverage if any, no chapter structure
         if cov["sections"]:
+            type_lookup = cov.get("section_type_lookup", {})
             sec_table = Table(title="Coverage by Section", show_edge=False, pad_edge=False)
             sec_table.add_column("Section", style="cyan")
+            sec_table.add_column("Type", style="dim")
             sec_table.add_column("Sources", justify="right", width=8)
             for sec, count in sorted(cov["sections"].items()):
                 style = "green" if count >= 3 else "yellow" if count >= 1 else "red"
-                sec_table.add_row(sec, f"[{style}]{count}[/{style}]")
+                stype = _lookup_section_type(sec, type_lookup)
+                sec_table.add_row(sec, stype, f"[{style}]{count}[/{style}]")
             console.print(sec_table)
     else:
         # Fallback: legacy dissertation config
@@ -1515,6 +1543,16 @@ def status(ctx, verbose, chapter):
             name = cfg.dissertation.chapters.get(ch, "")
             table.add_row(f"Ch {ch}: {name}", f"[{style}]{count}[/{style}]")
         console.print(table)
+
+    # --- Coverage by semantic type ---
+    section_types = cov.get("section_types", {})
+    if section_types:
+        console.print()
+        type_parts = []
+        for st_name, st_count in sorted(section_types.items()):
+            style = "green" if st_count >= 10 else "yellow" if st_count >= 5 else "dim"
+            type_parts.append(f"[{style}]{st_name} {st_count}[/{style}]")
+        console.print(f"[bold]By type:[/bold] {' | '.join(type_parts)}")
 
     # --- Top gaps ---
     min_sources = (project.min_sources_per_section if project
@@ -1660,7 +1698,8 @@ def gaps(ctx, min_sources):
 
 
 @main.command()
-@click.option("--section", "-s", required=True, help="Идентификатор раздела, например 1.3.2")
+@click.option("--section", "-s", required=True,
+              help="Section ID (e.g. 1.3.2) or semantic type (e.g. methodology)")
 @click.option("--no-save", is_flag=True, help="Не сохранять в vault")
 @click.option("--force", is_flag=True, help="Переизвлечь фрагменты даже если уже есть")
 @click.option("--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)")
@@ -1672,6 +1711,7 @@ def research(ctx, section, no_save, force, model):
     Use --force to re-extract all fragments.
 
     Example: klemma research --section 1.3.2
+    Example: klemma research -s methodology
     """
     kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
@@ -1681,7 +1721,30 @@ def research(ctx, section, no_save, force, model):
     ai = _init_ai(cfg)
 
     from .config import parse_chapter_from_section
+    from .section_types import resolve_section_identifier
     from .skills.researcher import pre_extract_sources, research_section
+
+    # Resolve semantic type → numeric section if possible
+    resolved_section, section_type = resolve_section_identifier(section, kctx.project)
+    if section_type and resolved_section:
+        console.print(f"[dim]Resolved {section} → section {resolved_section} ({section_type.value})[/dim]")
+        section = resolved_section
+    elif section_type and not resolved_section:
+        # Fallback: check DB section_type_map (populated by sync_section_types)
+        db_sections = state.get_sections_for_type(section_type.value)
+        if db_sections:
+            section = db_sections[0]
+            console.print(f"[dim]Resolved {section_type.value} → section {section}[/dim]")
+        else:
+            # Show available types so the user can pick the right one
+            all_types = state.get_available_section_types()
+            console.print(f"[yellow]No sections mapped to '{section_type.value}' in this project.[/yellow]")
+            if all_types:
+                type_list = ", ".join(all_types)
+                console.print(f"[dim]Available types: {type_list}[/dim]")
+            else:
+                console.print("[dim]No section types mapped yet. Run klemma status to trigger auto-sync.[/dim]")
+            raise SystemExit(1)
 
     chapter = parse_chapter_from_section(section)
 

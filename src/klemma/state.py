@@ -206,7 +206,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 6  # bump this when adding new migrations
+        target = 7  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -306,6 +306,43 @@ class StateManager:
                         f"ALTER TABLE sources ADD COLUMN {col} {col_type}"
                     )
 
+        if version < 7:
+            # Add section_type columns to existing tables
+            existing_ss = {
+                row[1] for row in conn.execute("PRAGMA table_info(source_sections)")
+            }
+            if "section_type" not in existing_ss:
+                conn.execute(
+                    "ALTER TABLE source_sections ADD COLUMN section_type TEXT"
+                )
+
+            existing_frag = {
+                row[1] for row in conn.execute("PRAGMA table_info(fragments)")
+            }
+            if "section_type" not in existing_frag:
+                conn.execute(
+                    "ALTER TABLE fragments ADD COLUMN section_type TEXT"
+                )
+
+            existing_gaps = {
+                row[1] for row in conn.execute("PRAGMA table_info(reference_gaps)")
+            }
+            if "section_type" not in existing_gaps:
+                conn.execute(
+                    "ALTER TABLE reference_gaps ADD COLUMN section_type TEXT"
+                )
+
+            # Lookup table: numeric section → semantic type
+            conn.execute("""CREATE TABLE IF NOT EXISTS section_type_map (
+                section TEXT PRIMARY KEY,
+                section_type TEXT NOT NULL,
+                chapter INTEGER
+            )""")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_stm_type "
+                "ON section_type_map(section_type)"
+            )
+
         conn.execute(f"PRAGMA user_version = {target}")
 
     # ── Source delegation ─────────────────────────────────────────────────
@@ -384,11 +421,13 @@ class StateManager:
         parent = self.parent_state.sources.get_by_chapter(chapter)
         return self._merge_by_id(child, parent, key="id")
 
-    def get_by_section(self, section: str) -> list[dict]:
-        child = self.sources.get_by_section(section)
+    def get_by_section(
+        self, section: str, section_type: str | None = None,
+    ) -> list[dict]:
+        child = self.sources.get_by_section(section, section_type)
         if not self.parent_state:
             return child
-        parent = self.parent_state.sources.get_by_section(section)
+        parent = self.parent_state.sources.get_by_section(section, section_type)
         return self._merge_by_id(child, parent, key="id")
 
     def get_zotero_key_map(self) -> dict[str, str]:
@@ -413,12 +452,14 @@ class StateManager:
 
     def get_fragments(self, source_id: Optional[str] = None, chapter: Optional[int] = None,
                       section: Optional[str] = None, fragment_type: Optional[str] = None,
-                      limit: int = 50) -> list[dict]:
-        child = self.fragments.get_fragments(source_id, chapter, section, fragment_type, limit)
+                      limit: int = 50, section_type: str | None = None) -> list[dict]:
+        child = self.fragments.get_fragments(
+            source_id, chapter, section, fragment_type, limit, section_type,
+        )
         if not self.parent_state:
             return child
         parent = self.parent_state.fragments.get_fragments(
-            source_id, chapter, section, fragment_type, limit,
+            source_id, chapter, section, fragment_type, limit, section_type,
         )
         merged = self._merge_by_id(child, parent, key="id")
         return merged[:limit]
@@ -515,8 +556,10 @@ class StateManager:
             get_section_sources=self.gaps.get_section_sources,
         )
 
-    def get_section_sources(self, section: str) -> list[str]:
-        return self.gaps.get_section_sources(section)
+    def get_section_sources(
+        self, section: str, section_type: str | None = None,
+    ) -> list[str]:
+        return self.gaps.get_section_sources(section, section_type)
 
     def get_gap_summary(self) -> dict:
         return self.gaps.get_gap_summary()
@@ -529,9 +572,12 @@ class StateManager:
         if not self.parent_state:
             return child
         parent = self.parent_state.gaps.get_coverage_stats()
-        merged: dict = {"chapters": {}, "sections": {}, "nr1": {}, "nr2": {}}
-        # Sum chapter/section counts
-        for key in ("chapters", "sections"):
+        merged: dict = {
+            "chapters": {}, "sections": {}, "nr1": {}, "nr2": {},
+            "section_types": {},
+        }
+        # Sum chapter/section/section_types counts
+        for key in ("chapters", "sections", "section_types"):
             all_keys = set(child.get(key, {})) | set(parent.get(key, {}))
             for k in all_keys:
                 merged[key][k] = child.get(key, {}).get(k, 0) + parent.get(key, {}).get(k, 0)
@@ -607,8 +653,9 @@ class StateManager:
     def get_prune_summary(self) -> dict:
         return self.prune.get_prune_summary()
 
-    def get_prune_verdicts(self, chapter: Optional[int] = None, verdict: Optional[str] = None) -> list[dict]:
-        return self.prune.get_prune_verdicts(chapter, verdict)
+    def get_prune_verdicts(self, chapter: Optional[int] = None, verdict: Optional[str] = None,
+                           section_type: str | None = None) -> list[dict]:
+        return self.prune.get_prune_verdicts(chapter, verdict, section_type)
 
     def clear_prune_verdict(self, source_id: str):
         return self.prune.clear_prune_verdict(source_id)
@@ -632,6 +679,93 @@ class StateManager:
 
     def get_benchmarked_citekeys(self) -> set[str]:
         return self.benchmarks.get_benchmarked_citekeys()
+
+    def get_sections_for_type(self, section_type: str) -> list[str]:
+        """Return numeric section IDs mapped to a semantic type."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT section FROM section_type_map WHERE section_type = ? ORDER BY section",
+                (section_type,),
+            )
+            return [row["section"] for row in cur.fetchall()]
+
+    def get_available_section_types(self) -> list[str]:
+        """Return sorted list of distinct section types in the map."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT DISTINCT section_type FROM section_type_map ORDER BY section_type"
+            )
+            return [row["section_type"] for row in cur.fetchall()]
+
+    # ── Section type sync ──────────────────────────────────────────────────
+
+    def sync_section_types(self, config) -> dict:
+        """Populate section_type_map table and backfill section_type columns.
+
+        1. Read config.section_type_map (explicit) + infer from config.chapters
+        2. Populate section_type_map table
+        3. Backfill section_type on source_sections, fragments, reference_gaps
+        4. Return stats: {updated: N, unmapped: [sections]}
+
+        config: ProjectConfig instance.
+        """
+        from .section_types import infer_section_type
+
+        # Build complete mapping: explicit config + heuristic from chapter names
+        mapping: dict[str, str] = {}
+        if config.section_type_map:
+            mapping.update(config.section_type_map)
+
+        if config.chapters:
+            for ch_num, ch_name in config.chapters.items():
+                key = str(ch_num)
+                if key not in mapping:
+                    inferred = infer_section_type(ch_name)
+                    if inferred:
+                        mapping[key] = inferred.value
+
+        updated = 0
+        unmapped: list[str] = []
+
+        with self._conn() as conn:
+            # Populate section_type_map table
+            for section, section_type in mapping.items():
+                ch = int(section.split(".")[0]) if section[0].isdigit() else None
+                conn.execute(
+                    "INSERT OR REPLACE INTO section_type_map "
+                    "(section, section_type, chapter) VALUES (?, ?, ?)",
+                    (section, section_type, ch),
+                )
+
+            # Backfill source_sections.section_type
+            cur = conn.execute(
+                """UPDATE source_sections SET section_type = (
+                    SELECT stm.section_type FROM section_type_map stm
+                    WHERE source_sections.section LIKE stm.section || '%'
+                    ORDER BY LENGTH(stm.section) DESC LIMIT 1
+                ) WHERE section_type IS NULL"""
+            )
+            updated += cur.rowcount
+
+            # Backfill fragments.section_type
+            cur = conn.execute(
+                """UPDATE fragments SET section_type = (
+                    SELECT stm.section_type FROM section_type_map stm
+                    WHERE fragments.section LIKE stm.section || '%'
+                    ORDER BY LENGTH(stm.section) DESC LIMIT 1
+                ) WHERE section_type IS NULL AND section IS NOT NULL"""
+            )
+            updated += cur.rowcount
+
+            # Backfill reference_gaps.section_type — uses dissertation_sections JSON
+            # For gaps, match against the first section in the JSON array
+            cur = conn.execute(
+                "SELECT DISTINCT section FROM source_sections "
+                "WHERE section_type IS NULL"
+            )
+            unmapped = [row["section"] for row in cur.fetchall()]
+
+        return {"updated": updated, "unmapped": unmapped}
 
     # ── Aggregation (cross-repo) ──────────────────────────────────────────
 
