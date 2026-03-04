@@ -8,7 +8,7 @@ Two modes:
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import yaml
 
@@ -34,6 +34,7 @@ class InitValues:
     ai_model: str = ""         # model name for project config (e.g. "sonnet", "openai/gpt-4.1")
     openai_api_key: str = ""   # OpenAI key to save in ~/.klemmarc.yaml
     embeddings_backend: str = ""  # "openai" | "s2" | "" (derive from openai_api_key)
+    plan_data: Any = None         # PlanData from plan_parser (transient, not serialized)
 
     def __post_init__(self):
         if self.keywords is None:

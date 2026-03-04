@@ -652,16 +652,25 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
 
     values = None
     if plan_data and not no_input:
-        # Plan mode: run wizard but pre-fill from plan
+        # --plan mode: run wizard but pre-fill from plan, pass plan_data through
         prefill = prefill or {}
         prefill["title"] = plan_data.title
         prefill["description"] = plan_data.description[:200]
         prefill["project_type"] = "dissertation"
+        prefill["_plan_data"] = plan_data
         values = _interactive_init(project_type, prefill=prefill)
         values.project_type = "dissertation"
+        if not values.plan_data:
+            values.plan_data = plan_data
     elif not no_input:
         values = _interactive_init(project_type, prefill=prefill)
         project_type = values.project_type
+        # Plan may have been provided interactively
+        if values.plan_data:
+            plan_data = values.plan_data
+            project_type = "dissertation"
+            values.project_type = "dissertation"
+            outline = True
     elif has_value_flags:
         # Build InitValues from CLI flags
         kw_list = [k.strip() for k in keywords.split(",") if k.strip()] if keywords else []
@@ -686,11 +695,12 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
 
     result = init_project(project_dir, project_type=project_type, values=values)
 
-    # Overwrite KLEMMA.md with rich plan content if --plan was used
-    if plan_data:
-        from .plan_parser import to_klemma_md as plan_to_klemma_md  # noqa: F811
+    # Overwrite KLEMMA.md with rich plan content if plan was provided
+    effective_plan = plan_data or (values.plan_data if values else None)
+    if effective_plan:
+        from .plan_parser import to_klemma_md as plan_to_klemma_md
         klemma_md_path = project_dir / "KLEMMA.md"
-        klemma_md_path.write_text(plan_to_klemma_md(plan_data), encoding="utf-8")
+        klemma_md_path.write_text(plan_to_klemma_md(effective_plan), encoding="utf-8")
         console.print("  [green]+ KLEMMA.md (from plan-prospect)[/green]")
 
     # Update klemmarc with AI backend/keys from wizard
@@ -896,22 +906,53 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
 
     click.echo("\nKlemma project setup\n")
 
-    # --- Project basics ---
-    project_type = click.prompt(
-        "  Project type",
-        type=click.Choice(["dissertation", "paper", "thesis"], case_sensitive=False),
-        default=pf.get("project_type", project_type),
-    )
-    title = click.prompt(
-        "  Project title",
-        default=pf.get("title", ""),
-        show_default=bool(pf.get("title")),
-    )
+    # --- Plan-prospect (first question) ---
+    plan_data = pf.get("_plan_data")  # set when --plan was passed
+    if not plan_data:
+        plan_path_str = click.prompt(
+            "  Dissertation plan (.docx) — path or empty to skip",
+            default="",
+            show_default=False,
+        )
+        if plan_path_str:
+            plan_file = Path(plan_path_str.strip())
+            if plan_file.exists():
+                try:
+                    from .plan_parser import parse as parse_plan
+                    plan_data = parse_plan(plan_file)
+                    click.echo(f"    Parsed: {plan_data.title[:70]}...")
+                    click.echo(f"    Chapters: {len(plan_data.chapters)}, "
+                               f"НР: {len(plan_data.results)}, "
+                               f"Tasks: {len(plan_data.tasks)}")
+                except ImportError:
+                    click.echo("    [warning] python-docx not installed: pip install python-docx")
+                except Exception as e:
+                    click.echo(f"    [warning] Could not parse: {e}")
+            else:
+                click.echo(f"    [warning] File not found: {plan_file}")
+
+    # --- Project basics (pre-filled from plan if available) ---
+    if plan_data:
+        project_type = "dissertation"
+        title = plan_data.title
+        click.echo(f"\n  Project type: {project_type}")
+        click.echo(f"  Title: {title[:80]}...")
+    else:
+        project_type = click.prompt(
+            "  Project type",
+            type=click.Choice(["dissertation", "paper", "thesis"], case_sensitive=False),
+            default=pf.get("project_type", project_type),
+        )
+        title = click.prompt(
+            "  Project title",
+            default=pf.get("title", ""),
+            show_default=bool(pf.get("title")),
+        )
 
     # Paper-specific: description and keywords are essential for source discovery
     description = ""
     keywords: list[str] = []
-    if project_type == "paper":
+    if project_type == "paper" and not plan_data:
         description = click.prompt(
             "  Research description (1-2 sentences)",
             default=pf.get("description", ""),
@@ -987,6 +1028,7 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
         ai_model=ai_model,
         openai_api_key=openai_api_key,
         embeddings_backend=embeddings_backend,
+        plan_data=plan_data,
     )
 
     # Obsidian vault
