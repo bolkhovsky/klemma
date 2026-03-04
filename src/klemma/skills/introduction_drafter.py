@@ -80,7 +80,7 @@ def generate_introduction(
 
     # Render prompt
     prompt_text = ai.render_prompt(
-        resolve_prompt("introduction_draft", klemma_home, project_chain=project_chain),
+        resolve_prompt("introduction_draft.md", klemma_home, project_chain=project_chain),
         dissertation_context=dissertation_context,
         chapters=chapters,
         scientific_results=scientific_results,
@@ -90,8 +90,14 @@ def generate_introduction(
         target_section=target_section or "",
     )
 
+    system = (
+        "Ты — научный консультант по написанию кандидатских диссертаций. "
+        "Генерируй черновик секций введения по ГОСТ Р 7.0.11-2011. "
+        "Формат: markdown, русский академический стиль."
+    )
+
     logger.info("Generating introduction draft (section=%s)", target_section or "all")
-    text = ai.call(prompt_text) or ""
+    text = ai.call(system, prompt_text) or ""
 
     # Count sections in output
     section_count = text.count("\n## ")

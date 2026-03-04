@@ -116,7 +116,7 @@ def test_prompt_template_renders(tmp_path):
         dissertation_context="Test dissertation",
         chapters={1: "Chapter 1", 2: "Chapter 2"},
         scientific_results={"nr1": "Result 1"},
-        fragments_by_type={"methodology": [{"citekey": "@test", "text": "fragment text"}]},
+        fragments_by_type={"methodology": [{"citekey": "@test", "fragment_text": "fragment text"}]},
         ref_gaps=[{"ref_authors": "Smith", "ref_year": "2024", "why_relevant": "important"}],
         author_publications="Основные результаты изложены в 5 печатных изданиях.",
         target_section="",

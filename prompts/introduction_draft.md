@@ -26,7 +26,7 @@
 {% for section_type, frags in fragments_by_type.items() %}
 ### {{ section_type }}
 {% for f in frags[:5] %}
-- [{{ f.citekey }}] {{ f.text[:200] }}
+- [{{ f.citekey }}] {{ f.fragment_text[:200] }}
 {% endfor %}
 {% endfor %}
 {% endif %}
