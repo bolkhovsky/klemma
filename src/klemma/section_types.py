@@ -22,6 +22,7 @@ class SectionType(str, Enum):
     LITERATURE_REVIEW = "literature_review"
     THEORETICAL_FRAMEWORK = "theoretical_framework"
     METHODOLOGY = "methodology"
+    IMPLEMENTATION = "implementation"
     DATA_DESCRIPTION = "data_description"
     EXPERIMENTS = "experiments"
     RESULTS = "results"
@@ -51,8 +52,15 @@ SECTION_TYPE_KEYWORDS: dict[SectionType, list[str]] = {
         "теоретическ", "теория", "theoretical", "framework",
         "формальная модель", "formal model", "математическая модель",
     ],
+    SectionType.IMPLEMENTATION: [
+        "реализация", "имплементация", "алгоритм", "программн",
+        "архитектура системы", "архитектура решения",
+        "implementation", "algorithm", "software", "system design",
+        "proposed system", "proposed approach",
+    ],
     SectionType.METHODOLOGY: [
-        "методолог", "методик", "метод", "подход",
+        "методолог", "методик", "метод валид", "метод исслед",
+        "метод оценк", "подход",
         "methodology", "methods", "approach", "method",
     ],
     SectionType.DATA_DESCRIPTION: [

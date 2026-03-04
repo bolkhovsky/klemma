@@ -30,9 +30,9 @@ class TestSectionTypeEnum:
     def test_expected_members(self):
         expected = {
             "introduction", "background", "literature_review",
-            "theoretical_framework", "methodology", "data_description",
-            "experiments", "results", "discussion", "conclusion",
-            "appendix", "custom",
+            "theoretical_framework", "methodology", "implementation",
+            "data_description", "experiments", "results", "discussion",
+            "conclusion", "appendix", "custom",
         }
         assert {st.value for st in SectionType} == expected
 
