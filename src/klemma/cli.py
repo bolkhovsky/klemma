@@ -1867,6 +1867,19 @@ def status(ctx, verbose, chapter):
                         f"  [green]x{ref['cite_count']}[/green]  @{ref['target_citekey']}"
                     )
 
+    # --- Author publications (ГОСТ Р 7.0.11-2011) ---
+    author_counts = state.get_author_publication_counts()
+    if author_counts:
+        from .source_role import ROLE_LABELS, format_gost_phrase
+        console.print()
+        console.print("[bold]Публикации автора[/bold]")
+        for role, cnt in sorted(author_counts.items()):
+            label = ROLE_LABELS.get(role, role)
+            console.print(f"  {label}: [green]{cnt}[/green]")
+        gost = format_gost_phrase(author_counts)
+        if gost:
+            console.print(f"\n  [dim italic]{gost}[/dim italic]")
+
     # --- Recommended actions ---
     _emb = state.get_embedding_stats()
     _prune = state.get_prune_summary()
@@ -1895,6 +1908,37 @@ def coverage(ctx):
 def gaps(ctx, min_sources):
     """[alias] → status --verbose"""
     ctx.invoke(status, verbose=True)
+
+
+@main.group(invoke_without_command=True)
+@click.pass_context
+def source(ctx):
+    """Manage individual sources."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+main.add_command(source)
+
+
+@source.command()
+@click.argument("citekey")
+@click.argument("role", type=click.Choice([
+    "external", "author_vak", "author_scopus", "author_wos",
+    "author_conf", "author_patent", "author_program", "author_other",
+]))
+@click.pass_context
+def role(ctx, citekey, role):
+    """Assign a source_role to a source (e.g. author_vak, author_conf)."""
+    kctx = _get_context(ctx)
+    src = kctx.state.get_source(citekey)
+    if not src:
+        console.print(f"[red]Source '{citekey}' not found.[/red]")
+        raise SystemExit(1)
+    kctx.state.set_source_role(citekey, role)
+    from .source_role import ROLE_LABELS
+    label = ROLE_LABELS.get(role, role)
+    console.print(f"[green]@{citekey}[/green] → {label}")
 
 
 @main.command()

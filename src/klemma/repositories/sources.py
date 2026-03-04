@@ -446,3 +446,21 @@ class SourceRepository(BaseRepository):
             "new_registered": new_registered,
             "unchanged": unchanged,
         }
+
+    def set_source_role(self, source_id: str, role: str):
+        """Set the source_role for a source."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE sources SET source_role = ? WHERE id = ?",
+                (role, source_id),
+            )
+
+    def get_author_publication_counts(self) -> dict[str, int]:
+        """Count sources by author role (excluding 'external')."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT source_role, COUNT(*) as cnt FROM sources "
+                "WHERE source_role != 'external' AND source_role IS NOT NULL "
+                "GROUP BY source_role"
+            )
+            return {row["source_role"]: row["cnt"] for row in cur.fetchall()}
