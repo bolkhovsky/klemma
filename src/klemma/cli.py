@@ -555,9 +555,13 @@ def main(ctx, config):
 @click.option("--description", "-d", default=None, help="Project description (non-interactive)")
 @click.option("--keywords", "-k", default=None, help="Comma-separated keywords (non-interactive)")
 @click.option("--language", "-l", default=None, help="AI language: ru or en (non-interactive)")
+@click.option("--backend", "-b", default=None,
+              type=click.Choice(["claude", "litellm"], case_sensitive=False),
+              help="AI backend: claude (Claude Code Max) or litellm (non-interactive)")
+@click.option("--api-key", "api_key", default=None, help="OpenAI API key for litellm backend")
 @click.pass_context
 def init(ctx, project_type, global_only, no_input, non_interactive, force, outline,
-         project_name, description, keywords, language):
+         project_name, description, keywords, language, backend, api_key):
     """Initialize a new klemma project in current directory.
 
     Creates .klemma/ and KLEMMA.md in the current directory.
@@ -569,12 +573,12 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
 
     \b
     Examples:
-      klemma init                    # interactive setup
-      klemma init --type paper       # paper project
-      klemma init --no-input         # skip prompts, use defaults
-      klemma init --force            # re-run wizard, prefill from existing config
-      klemma init --global-only      # only create system config
-      klemma init --type paper --name "My Paper" --language en
+      klemma init                                  # interactive setup
+      klemma init --type paper                     # paper project
+      klemma init --backend claude                 # Claude Code Max, S2 embeddings
+      klemma init --backend litellm --api-key sk-  # OpenAI LLM + embeddings
+      klemma init --force                          # re-run wizard
+      klemma init --global-only                    # only create system config
     """
     from .setup import InitValues, init_project, init_system
 
@@ -583,7 +587,7 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
         no_input = True
 
     # If any value flags provided, auto-imply non-interactive mode
-    has_value_flags = any(v is not None for v in [project_name, description, keywords, language])
+    has_value_flags = any(v is not None for v in [project_name, description, keywords, language, backend, api_key])
     if has_value_flags:
         no_input = True
 
@@ -599,7 +603,7 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
             console.print(f"[dim]System config already exists at {system_home}/[/dim]")
         return
 
-    # Ensure system config exists
+    # Ensure system directory exists (klemmarc updated after wizard collects values)
     init_system(system_home)
 
     project_dir = Path.cwd()
@@ -626,15 +630,32 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
     elif has_value_flags:
         # Build InitValues from CLI flags
         kw_list = [k.strip() for k in keywords.split(",") if k.strip()] if keywords else []
+        # Derive model and embeddings from backend + api_key
+        _ai_model = ""
+        if backend == "claude":
+            _ai_model = "sonnet"
+        elif backend == "litellm":
+            _ai_model = "openai/gpt-4.1"
+        _emb = "openai" if api_key else ("s2" if backend == "claude" else "")
         values = InitValues(
             project_type=project_type,
             title=project_name or "",
             description=description or "",
             keywords=kw_list,
             language=language or "ru",
+            backend=backend or "",
+            ai_model=_ai_model,
+            openai_api_key=api_key or "",
+            embeddings_backend=_emb,
         )
 
     result = init_project(project_dir, project_type=project_type, values=values)
+
+    # Update klemmarc with AI backend/keys from wizard
+    if values and (values.backend or values.openai_api_key):
+        sys_result = init_system(system_home, values=values)
+        for name in sys_result.get("created", []):
+            result.setdefault("created", []).append(name)
 
     if result["created"]:
         console.print(f"\n[green]Initialized klemma {project_type} project in {project_dir}/[/green]")
@@ -733,6 +754,19 @@ def _load_prefill(config_path: Path) -> dict:
     ai = raw.get("ai", {}) if isinstance(raw.get("ai"), dict) else {}
     obsidian = raw.get("obsidian", {}) if isinstance(raw.get("obsidian"), dict) else {}
     zotero = raw.get("zotero", {}) if isinstance(raw.get("zotero"), dict) else {}
+    embeddings = raw.get("embeddings", {}) if isinstance(raw.get("embeddings"), dict) else {}
+
+    # Check klemmarc for existing OpenAI key (for prefilling "do you have a key?" default)
+    has_klemmarc_openai_key = False
+    try:
+        from .setup import _find_klemmarc
+        klemmarc = _find_klemmarc(Path.home())
+        if klemmarc:
+            import yaml as _y2
+            krc = _y2.safe_load(klemmarc.read_text(encoding="utf-8")) or {}
+            has_klemmarc_openai_key = bool(krc.get("api_keys", {}).get("openai"))
+    except Exception:
+        pass
 
     return {
         "project_type": project.get("type", "dissertation"),
@@ -740,6 +774,9 @@ def _load_prefill(config_path: Path) -> dict:
         "description": project.get("description", ""),
         "keywords": project.get("priority_terms", []),
         "language": ai.get("language", "ru"),
+        "backend": ai.get("backend", ""),
+        "openai_api_key": has_klemmarc_openai_key,  # bool for default, not the actual key
+        "embeddings_backend": embeddings.get("backend", ""),
         "vault_path": obsidian.get("vault_path", ""),
         "notes_folder": obsidian.get("notes_folder", "References"),
         "tags_folder": obsidian.get("tags_folder", "Tags"),
@@ -851,6 +888,50 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
         default=pf.get("language", detect_language()),
     )
 
+    # --- AI setup ---
+    # Step 1: OpenAI key (needed for embeddings; optionally for LLM too)
+    click.echo("\n  AI setup")
+    openai_api_key = ""
+    has_openai = click.confirm(
+        "  Do you have an OpenAI API key? (needed for embeddings)",
+        default=bool(pf.get("openai_api_key")),
+    )
+    if has_openai:
+        openai_api_key = click.prompt("  OpenAI API key", hide_input=True)
+        if not openai_api_key.startswith("sk-"):
+            click.echo("    [warning] Key doesn't start with sk- — saving anyway")
+
+    # Step 2: LLM backend
+    backend = ""
+    ai_model = ""
+    if has_openai:
+        click.echo("\n  LLM backend")
+        click.echo("    1. Claude Code Max (free — uses claude CLI)")
+        click.echo("    2. OpenAI (uses the key above)")
+
+        prefill_backend = pf.get("backend", "")
+        llm_default = "2" if prefill_backend == "litellm" else "1"
+
+        llm_choice = click.prompt(
+            "  Choose",
+            type=click.Choice(["1", "2"]),
+            default=llm_default,
+        )
+        if llm_choice == "1":
+            backend = "claude"
+            ai_model = "sonnet"
+            click.echo("    LLM: Claude Code Max  |  Embeddings: OpenAI")
+        else:
+            backend = "litellm"
+            ai_model = "openai/gpt-4.1"
+            click.echo("    LLM: OpenAI gpt-4.1  |  Embeddings: OpenAI")
+    else:
+        backend = "claude"
+        ai_model = "sonnet"
+        click.echo("    LLM: Claude Code Max  |  Embeddings: Semantic Scholar (free)")
+
+    embeddings_backend = "openai" if has_openai else "s2"
+
     # --- Auto-discovery (prefill overrides discovery) ---
     click.echo("\n  Detecting paths...")
 
@@ -860,6 +941,10 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
         description=description,
         keywords=keywords,
         language=language,
+        backend=backend,
+        ai_model=ai_model,
+        openai_api_key=openai_api_key,
+        embeddings_backend=embeddings_backend,
     )
 
     # Obsidian vault
@@ -907,7 +992,11 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
 
     if effective_bbt:
         click.echo(f"  + BBT JSON export: {effective_bbt}")
-        values.zotero_library_json = effective_bbt
+        if not click.confirm("    Use this path?", default=True):
+            bbt_str = click.prompt("    BBT JSON export path", default="")
+            values.zotero_library_json = bbt_str
+        else:
+            values.zotero_library_json = effective_bbt
     else:
         bbt_str = click.prompt(
             "  ? BBT JSON export not found. Path (empty to skip)",

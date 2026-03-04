@@ -78,6 +78,9 @@ def _find_bbt_in_dir(directory: Path, max_depth: int = 2) -> Optional[Path]:
         for f in directory.glob(pattern):
             if f.name.startswith("."):
                 continue
+            # Skip BBT internal cache files (e.g. cache.itemToExportFormat.json)
+            if f.name.startswith("cache."):
+                continue
             # Limit depth
             rel = f.relative_to(directory)
             if len(rel.parts) > max_depth:
@@ -97,7 +100,10 @@ def _is_bbt_json(path: Path) -> bool:
     """Quick check if a JSON file looks like a BBT export."""
     try:
         with open(path, encoding="utf-8") as fh:
-            head = fh.read(500)
+            head = fh.read(4000)
+        # BBT JSON export header contains this label
+        if '"BetterBibTeX JSON"' in head:
+            return True
         return '"citationKey"' in head or '"citekey"' in head or '"itemType"' in head
     except (OSError, UnicodeDecodeError):
         return False

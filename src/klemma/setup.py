@@ -30,6 +30,11 @@ class InitValues:
     tags_folder: str = "Tags"
     zotero_storage: str = ""
     zotero_library_json: str = ""
+    backend: str = ""          # "claude" | "litellm" | "" (use klemmarc default)
+    ai_model: str = ""         # model name for project config (e.g. "sonnet", "openai/gpt-4.1")
+    openai_api_key: str = ""   # OpenAI key to save in ~/.klemmarc.yaml
+    embeddings_backend: str = ""  # "openai" | "s2" | "" (derive from openai_api_key)
+
     def __post_init__(self):
         if self.keywords is None:
             self.keywords = []
@@ -57,8 +62,20 @@ def _build_project_config(values: InitValues) -> dict:
             obsidian["tags_folder"] = values.tags_folder
         cfg["obsidian"] = obsidian
 
-    # AI
-    cfg["ai"] = {"model": "sonnet", "language": values.language}
+    # AI — backend-aware model naming
+    ai_cfg: dict = {"language": values.language}
+    if values.backend:
+        ai_cfg["backend"] = values.backend
+    if values.ai_model:
+        ai_cfg["model"] = values.ai_model
+    elif values.backend == "claude":
+        ai_cfg["model"] = "sonnet"
+    elif values.backend == "litellm":
+        ai_cfg["model"] = "anthropic/claude-sonnet-4-6"
+    else:
+        # No backend chosen — use shorthand, klemmarc will define backend
+        ai_cfg["model"] = "sonnet"
+    cfg["ai"] = ai_cfg
 
     # Project
     project: dict = {"type": values.project_type}
@@ -69,6 +86,15 @@ def _build_project_config(values: InitValues) -> dict:
     if values.keywords:
         project["priority_terms"] = values.keywords
     cfg["project"] = project
+
+    # Embeddings — derived from whether OpenAI key is available
+    emb_backend = values.embeddings_backend
+    if not emb_backend:
+        emb_backend = "openai" if values.openai_api_key else "s2"
+    if emb_backend == "openai":
+        cfg["embeddings"] = {"backend": "openai", "model": "text-embedding-3-small"}
+    elif emb_backend == "s2":
+        cfg["embeddings"] = {"backend": "s2"}
 
     # State
     cfg["state"] = {"db_path": "./data/klemma.db"}
@@ -287,8 +313,149 @@ ai:
 _KLEMMARC_NAMES = (".klemmarc.yaml", ".klemmarc.yml", ".klemmarc")
 
 
-def init_system(system_home: Path) -> dict:
+def _build_klemmarc(values: Optional["InitValues"] = None) -> str:
+    """Build ~/.klemmarc.yaml content, optionally pre-configured from wizard values."""
+    if not values or not values.backend:
+        return _KLEMMARC_TEMPLATE
+
+    lines = [
+        "# =============================================================================",
+        "# KLEMMA GLOBAL CONFIG — ~/.klemmarc.yaml",
+        "# =============================================================================",
+        "# Single config file for all klemma projects. Overridden by project configs.",
+        "# This file has 0600 permissions because it may contain API keys.",
+        "",
+    ]
+
+    if values.backend == "claude":
+        lines += [
+            "ai:",
+            '  backend: "claude"                    # Claude Code Max (no API key needed)',
+            '  model: "sonnet"                      # claude shorthand: sonnet, opus',
+            f'  language: "{values.language}"',
+            "  timeout: 300",
+            "  retries: 2",
+        ]
+    elif values.backend == "litellm":
+        model = values.ai_model or "openai/gpt-4.1"
+        lines += [
+            "ai:",
+            '  backend: "litellm"                   # recommended: litellm (100+ providers)',
+            f'  model: "{model}"',
+            f'  language: "{values.language}"',
+            "  timeout: 300",
+            "  retries: 2",
+        ]
+    else:
+        lines += [
+            "ai:",
+            f'  backend: "{values.backend}"',
+            f'  model: "{values.ai_model or "sonnet"}"',
+            f'  language: "{values.language}"',
+            "  timeout: 300",
+            "  retries: 2",
+        ]
+
+    lines.append("")
+
+    # API keys
+    if values.openai_api_key:
+        lines += [
+            "api_keys:",
+            f'  openai: "{values.openai_api_key}"',
+            "#   anthropic: \"sk-ant-...\"",
+            "#   google: \"AIza...\"",
+        ]
+    else:
+        lines += [
+            "# Direct API keys — no more env var juggling.",
+            "# Uncomment and fill in the keys you need:",
+            "# api_keys:",
+            '#   openai: "sk-..."',
+            '#   anthropic: "sk-ant-..."',
+            '#   google: "AIza..."',
+        ]
+
+    lines.append("")
+
+    # Embeddings — active if OpenAI key provided, commented out otherwise
+    if values.openai_api_key:
+        lines += [
+            "embeddings:",
+            '  backend: "openai"',
+            '  model: "text-embedding-3-small"',
+        ]
+    else:
+        lines += [
+            "# Embeddings (requires OpenAI key):",
+            "# embeddings:",
+            '#   backend: "openai"',
+            '#   model: "text-embedding-3-small"',
+            "#",
+            "# Free alternative (no key needed, slower):",
+            "# embeddings:",
+            '#   backend: "s2"',
+        ]
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _inject_klemmarc_api_key(home: Path, provider: str, key: str) -> None:
+    """Add or update an API key in existing ~/.klemmarc.yaml."""
+    klemmarc_path = _find_klemmarc(home)
+    if not klemmarc_path:
+        return
+
+    raw = yaml.safe_load(klemmarc_path.read_text(encoding="utf-8")) or {}
+    raw.setdefault("api_keys", {})[provider] = key
+    klemmarc_path.write_text(
+        yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _update_klemmarc_backend(home: Path, values: "InitValues") -> None:
+    """Update backend, model, and embeddings in existing ~/.klemmarc.yaml."""
+    klemmarc_path = _find_klemmarc(home)
+    if not klemmarc_path:
+        return
+
+    raw = yaml.safe_load(klemmarc_path.read_text(encoding="utf-8")) or {}
+    ai = raw.setdefault("ai", {})
+    ai["backend"] = values.backend
+    if values.backend == "claude":
+        ai["model"] = values.ai_model or "sonnet"
+    elif values.ai_model:
+        ai["model"] = values.ai_model
+
+    # Embeddings: enable OpenAI if key provided, otherwise leave as-is
+    if values.openai_api_key and "embeddings" not in raw:
+        raw["embeddings"] = {"backend": "openai", "model": "text-embedding-3-small"}
+
+    klemmarc_path.write_text(
+        yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _find_klemmarc(home: Path) -> Optional[Path]:
+    """Find the active klemmarc file."""
+    for name in _KLEMMARC_NAMES:
+        p = home / name
+        if p.exists():
+            return p
+    return None
+
+
+def init_system(
+    system_home: Path,
+    values: Optional["InitValues"] = None,
+) -> dict:
     """Create ~/.klemma/ system directory with global config + ~/.klemmarc.yaml.
+
+    If values is provided and contains backend/api_key info, writes them into
+    the klemmarc template. Updates existing klemmarc if only api_keys change.
 
     Returns dict with keys: created, skipped.
     """
@@ -301,10 +468,21 @@ def init_system(system_home: Path) -> dict:
     home = Path.home()
     has_klemmarc = any((home / name).exists() for name in _KLEMMARC_NAMES)
     if has_klemmarc:
-        skipped.append("~/.klemmarc.yaml")
+        # If user provided an API key, inject it into existing klemmarc
+        if values and values.openai_api_key:
+            _inject_klemmarc_api_key(home, "openai", values.openai_api_key)
+            created.append("~/.klemmarc.yaml (updated api_keys)")
+        # If user chose a backend, update it
+        if values and values.backend:
+            _update_klemmarc_backend(home, values)
+            if "~/.klemmarc.yaml (updated api_keys)" not in created:
+                created.append("~/.klemmarc.yaml (updated backend)")
+        if not created:
+            skipped.append("~/.klemmarc.yaml")
     else:
         klemmarc_path = home / ".klemmarc.yaml"
-        klemmarc_path.write_text(_KLEMMARC_TEMPLATE, encoding="utf-8")
+        content = _build_klemmarc(values)
+        klemmarc_path.write_text(content, encoding="utf-8")
         klemmarc_path.chmod(0o600)
         created.append("~/.klemmarc.yaml")
 
