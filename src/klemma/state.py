@@ -680,6 +680,15 @@ class StateManager:
     def get_benchmarked_citekeys(self) -> set[str]:
         return self.benchmarks.get_benchmarked_citekeys()
 
+    def get_sections_for_type(self, section_type: str) -> list[str]:
+        """Return numeric section IDs mapped to a semantic type."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT section FROM section_type_map WHERE section_type = ? ORDER BY section",
+                (section_type,),
+            )
+            return [row["section"] for row in cur.fetchall()]
+
     # ── Section type sync ──────────────────────────────────────────────────
 
     def sync_section_types(self, config) -> dict:

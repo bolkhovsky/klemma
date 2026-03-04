@@ -194,6 +194,21 @@ def resolve_orphan(old_ck: str, bbt_index: BBTIndex) -> tuple[str, str] | None:
     return None
 
 
+def _lookup_section_type(section: str, type_lookup: dict[str, str]) -> str:
+    """Find the best matching section type for a numeric section ID.
+
+    Tries exact match first, then prefix match (longest wins).
+    """
+    if section in type_lookup:
+        return type_lookup[section]
+    # Prefix match: "2.3.1" inherits type from "2.3" or "2"
+    best = ""
+    for mapped_sec, mapped_type in type_lookup.items():
+        if section.startswith(mapped_sec) and len(mapped_sec) > len(best):
+            best = mapped_sec
+    return type_lookup[best] if best else ""
+
+
 def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
     """Sync section assignments from vault frontmatter + discover new Zotero entries.
 
@@ -1491,24 +1506,30 @@ def status(ctx, verbose, chapter):
         # Sections (verbose or filtered by chapter)
         if (verbose or chapter) and cov["sections"]:
             console.print()
+            type_lookup = cov.get("section_type_lookup", {})
             sec_table = Table(title="Coverage by Section", show_edge=False, pad_edge=False)
             sec_table.add_column("Section", style="cyan")
+            sec_table.add_column("Type", style="dim")
             sec_table.add_column("Sources", justify="right", width=8)
             for sec, count in sorted(cov["sections"].items()):
                 if chapter and not sec.startswith(f"{chapter}."):
                     continue
                 style = "green" if count >= 3 else "yellow" if count >= 1 else "red"
-                sec_table.add_row(sec, f"[{style}]{count}[/{style}]")
+                stype = _lookup_section_type(sec, type_lookup)
+                sec_table.add_row(sec, stype, f"[{style}]{count}[/{style}]")
             console.print(sec_table)
     elif not project or project.type == "paper":
         # Paper: show section coverage if any, no chapter structure
         if cov["sections"]:
+            type_lookup = cov.get("section_type_lookup", {})
             sec_table = Table(title="Coverage by Section", show_edge=False, pad_edge=False)
             sec_table.add_column("Section", style="cyan")
+            sec_table.add_column("Type", style="dim")
             sec_table.add_column("Sources", justify="right", width=8)
             for sec, count in sorted(cov["sections"].items()):
                 style = "green" if count >= 3 else "yellow" if count >= 1 else "red"
-                sec_table.add_row(sec, f"[{style}]{count}[/{style}]")
+                stype = _lookup_section_type(sec, type_lookup)
+                sec_table.add_row(sec, stype, f"[{style}]{count}[/{style}]")
             console.print(sec_table)
     else:
         # Fallback: legacy dissertation config
@@ -1709,9 +1730,15 @@ def research(ctx, section, no_save, force, model):
         console.print(f"[dim]Resolved {section} → section {resolved_section} ({section_type.value})[/dim]")
         section = resolved_section
     elif section_type and not resolved_section:
-        console.print(f"[yellow]Semantic type '{section_type.value}' has no mapped numeric section.[/yellow]")
-        console.print("[yellow]Add section_type_map to config or use a numeric section ID.[/yellow]")
-        raise SystemExit(1)
+        # Fallback: check DB section_type_map (populated by sync_section_types)
+        db_sections = state.get_sections_for_type(section_type.value)
+        if db_sections:
+            section = db_sections[0]
+            console.print(f"[dim]Resolved {section_type.value} → section {section}[/dim]")
+        else:
+            console.print(f"[yellow]Semantic type '{section_type.value}' has no mapped numeric section.[/yellow]")
+            console.print("[yellow]Add section_type_map to config or run klemma status to trigger auto-sync.[/yellow]")
+            raise SystemExit(1)
 
     chapter = parse_chapter_from_section(section)
 

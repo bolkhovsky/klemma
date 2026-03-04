@@ -349,6 +349,24 @@ class GapsRepository(BaseRepository):
             for row in cur.fetchall():
                 stats["section_types"][row["section_type"]] = row["cnt"]
 
+            # Section → type lookup for display (map table + source_sections)
+            lookup: dict[str, str] = {}
+            cur = conn.execute(
+                "SELECT section, section_type FROM section_type_map"
+            )
+            for row in cur.fetchall():
+                lookup[row["section"]] = row["section_type"]
+            # Fill gaps from actual source_sections assignments
+            cur = conn.execute(
+                """SELECT DISTINCT ss.section, ss.section_type
+                   FROM source_sections ss
+                   WHERE ss.section_type IS NOT NULL"""
+            )
+            for row in cur.fetchall():
+                if row["section"] not in lookup:
+                    lookup[row["section"]] = row["section_type"]
+            stats["section_type_lookup"] = lookup
+
             for level in range(1, 6):
                 cur = conn.execute(
                     "SELECT COUNT(*) as cnt FROM sources WHERE status=? AND relevance_nr1>=?",

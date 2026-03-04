@@ -313,3 +313,19 @@ class TestRepositoryQueriesWithSectionType:
         self._seed(state)
         ids = state.get_section_sources("", section_type="methodology")
         assert "method-src" in ids
+
+    def test_get_sections_for_type(self, state):
+        self._seed(state)
+        sections = state.get_sections_for_type("methodology")
+        assert "3" in sections
+
+    def test_get_sections_for_type_empty(self, state):
+        self._seed(state)
+        assert state.get_sections_for_type("appendix") == []
+
+    def test_coverage_stats_include_type_lookup(self, state):
+        self._seed(state)
+        cov = state.get_coverage_stats()
+        lookup = cov.get("section_type_lookup", {})
+        assert lookup.get("3") == "methodology"
+        assert lookup.get("2") == "literature_review"
