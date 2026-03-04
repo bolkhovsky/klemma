@@ -282,7 +282,7 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
                     renames.append((old_ck, citekey))
                     continue
             if auto_register and citekey not in vault_citekeys:
-                classification = auto_classify(entry, cfg)
+                classification = auto_classify(entry, cfg, project=project)
                 new_entries.append((citekey, classification))
 
         # Fuzzy orphan cleanup: DB sources not in BBT JSON (pre-existing renames)
