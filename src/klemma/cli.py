@@ -19,7 +19,7 @@ from .config import (
     resolve_effective_config,
 )
 from .context import KlemmaContext
-from .embeddings import create_embeddings
+from .embeddings import SemanticScholarEmbeddings, create_embeddings
 from .library_provider import create_library
 from .state import StateManager
 from .vault import VaultAdapter
@@ -1453,26 +1453,29 @@ def embed(ctx, citekeys, dry_run, backend, fragments):
         console.print("[green]All sources already have embeddings.[/green]")
         return
 
+    # S2 backend can embed by title alone (API search); others need abstract
+    needs_abstract = not isinstance(emb, SemanticScholarEmbeddings) if emb else True
+
     # For dry-run, check which have abstracts via library
-    if kctx.library:
-        entries = kctx.library.entries
+    entries = kctx.library.entries if kctx.library else {}
+    if needs_abstract:
         with_abstract = [c for c in candidates if entries.get(c) and entries[c].abstract]
-        without_abstract = len(candidates) - len(with_abstract)
+        no_abstract = len(candidates) - len(with_abstract)
     else:
         with_abstract = candidates
-        without_abstract = 0
+        no_abstract = 0
 
     if dry_run:
         console.print(f"[blue]Would embed {len(with_abstract)} sources[/blue]")
-        if without_abstract:
-            console.print(f"[dim]{without_abstract} sources have no abstract (will be skipped)[/dim]")
+        if no_abstract:
+            console.print(f"[dim]{no_abstract} sources have no abstract (will be skipped)[/dim]")
         return
 
     # Embed
     embedded = 0
-    skipped = 0
+    no_abstract_count = 0
+    api_miss = 0
     failed = 0
-    entries = kctx.library.entries if kctx.library else {}
 
     from rich.progress import Progress
     with Progress(console=console) as progress:
@@ -1481,8 +1484,8 @@ def embed(ctx, citekeys, dry_run, backend, fragments):
             entry = entries.get(ck)
             title = entry.title if entry else ck
             abstract = entry.abstract if entry else ""
-            if not abstract:
-                skipped += 1
+            if not abstract and needs_abstract:
+                no_abstract_count += 1
                 progress.advance(task)
                 continue
             try:
@@ -1491,18 +1494,23 @@ def embed(ctx, citekeys, dry_run, backend, fragments):
                     state.save_embedding(ck, vec, emb.model_name)
                     embedded += 1
                 else:
-                    skipped += 1
+                    api_miss += 1
             except Exception as e:
                 console.print(f"  [red]{ck}: {e}[/red]")
                 failed += 1
             progress.advance(task)
 
-    console.print(f"\n[green]Embedded: {embedded}[/green]", end="")
-    if skipped:
-        console.print(f" | [yellow]Skipped: {skipped}[/yellow]", end="")
+    # Summary with full breakdown
+    emb_stats = state.get_embedding_stats()
+    parts = [f"[green]Embedded: {embedded}[/green]"]
+    if no_abstract_count:
+        parts.append(f"[yellow]No abstract: {no_abstract_count}[/yellow]")
+    if api_miss:
+        parts.append(f"[yellow]Not found: {api_miss}[/yellow]")
     if failed:
-        console.print(f" | [red]Failed: {failed}[/red]", end="")
-    console.print()
+        parts.append(f"[red]Failed: {failed}[/red]")
+    parts.append(f"[dim]Total: {emb_stats['embedded']}/{emb_stats['total']}[/dim]")
+    console.print("\n" + " | ".join(parts))
 
 
 @main.command()
