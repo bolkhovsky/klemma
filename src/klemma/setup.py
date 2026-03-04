@@ -97,10 +97,58 @@ def _build_project_config(values: InitValues) -> dict:
     elif emb_backend == "s2":
         cfg["embeddings"] = {"backend": "s2"}
 
+    # Dissertation structure from plan-prospect
+    if values.plan_data and values.project_type == "dissertation":
+        cfg["dissertation"] = _build_dissertation_config(values.plan_data)
+
     # State
     cfg["state"] = {"db_path": "./data/klemma.db"}
 
     return cfg
+
+
+def _build_dissertation_config(plan_data) -> dict:
+    """Build dissertation config section from parsed PlanData."""
+    from .section_types import infer_section_type
+
+    diss: dict = {}
+
+    # Title
+    if plan_data.title:
+        diss["title"] = plan_data.title
+
+    # Chapters: {1: "Chapter name", 2: "Chapter name", ...}
+    if plan_data.chapters:
+        chapters = {}
+        for ch in plan_data.chapters:
+            chapters[ch.number] = ch.title
+        diss["chapters"] = chapters
+
+        # Section type map: infer from chapter names
+        section_type_map = {}
+        for ch in plan_data.chapters:
+            inferred = infer_section_type(ch.title)
+            if inferred:
+                section_type_map[str(ch.number)] = inferred.value
+        if section_type_map:
+            diss["section_type_map"] = section_type_map
+
+        # Current chapter defaults to 1
+        diss["current_chapter"] = 1
+        if plan_data.chapters[0].sections:
+            diss["current_section"] = plan_data.chapters[0].sections[0].number
+
+    # Scientific results: {nr1: "title", nr2: "title", ...}
+    if plan_data.results:
+        nr_map = {}
+        for nr in plan_data.results:
+            nr_map[f"nr{nr.number}"] = nr.title
+        diss["scientific_results"] = nr_map
+
+    # Min sources per section
+    diss["min_sources_per_section"] = 3
+
+    return diss
 
 
 def _build_klemma_md(values: InitValues) -> str:

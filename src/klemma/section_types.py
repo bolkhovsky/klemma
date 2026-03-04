@@ -47,10 +47,13 @@ SECTION_TYPE_KEYWORDS: dict[SectionType, list[str]] = {
         "обзор существующих", "состояние вопроса", "related work",
         "literature review", "survey", "state of the art",
         "анализ литературы", "обзор литературы",
+        "анализ предметной", "анализ проблем",
     ],
     SectionType.THEORETICAL_FRAMEWORK: [
         "теоретическ", "теория", "theoretical", "framework",
         "формальная модель", "formal model", "математическая модель",
+        "разработка модели", "разработка геоинформационной модели",
+        "концептуальная модель",
     ],
     SectionType.IMPLEMENTATION: [
         "реализация", "имплементация", "алгоритм", "программн",
