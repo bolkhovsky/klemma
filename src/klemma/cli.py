@@ -1941,6 +1941,64 @@ def role(ctx, citekey, role):
     console.print(f"[green]@{citekey}[/green] → {label}")
 
 
+@main.group(invoke_without_command=True)
+@click.pass_context
+def draft(ctx):
+    """Generate dissertation section drafts."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+main.add_command(draft)
+
+
+@draft.command()
+@click.option("--section", "-s", default=None,
+              help="Single section (e.g. актуальность, цель, задачи)")
+@click.option("--output", "-o", default=None, help="Output file path")
+@click.option("--model", default=None, help="Override AI model")
+@click.pass_context
+def introduction(ctx, section, output, model):
+    """Generate introduction draft — 12 mandatory ГОСТ sections."""
+    kctx = _get_context(ctx)
+    cfg = kctx.config
+    if model:
+        cfg.ai.model = model
+    ai = _init_ai(cfg)
+
+    from .skills.introduction_drafter import GOST_SECTIONS, generate_introduction
+
+    if section and section not in GOST_SECTIONS:
+        console.print(f"[red]Unknown section '{section}'. Choose from:[/red]")
+        for s in GOST_SECTIONS:
+            console.print(f"  - {s}")
+        raise SystemExit(1)
+
+    with console.status("Генерация черновика введения...", spinner="dots"):
+        result = generate_introduction(
+            cfg, kctx.state, ai,
+            project=kctx.project,
+            dissertation_context=kctx.dissertation_context,
+            klemma_home=kctx.klemma_home,
+            project_chain=kctx.project_chain,
+            target_section=section,
+        )
+
+    if not result.text:
+        console.print("[red]AI returned empty result.[/red]")
+        raise SystemExit(1)
+
+    # Save output
+    if output:
+        out_path = Path(output)
+    else:
+        suffix = f"_{section}" if section else ""
+        out_path = kctx.project_root / f"Введение{suffix}.md"
+
+    out_path.write_text(result.text, encoding="utf-8")
+    console.print(f"[green]Saved to {out_path}[/green] ({result.section_count} sections)")
+
+
 @main.command()
 @click.option("--section", "-s", required=True,
               help="Section ID (e.g. 1.3.2) or semantic type (e.g. methodology)")
