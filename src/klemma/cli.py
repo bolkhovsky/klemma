@@ -965,7 +965,10 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
         )
         keywords = [k.strip() for k in kw_str.split(",") if k.strip()] if kw_str else []
 
-    language = pf.get("language", "ru")
+    language = click.prompt(
+        "  AI language",
+        default=pf.get("language", "ru"),
+    )
 
     # --- AI setup ---
     # Step 1: OpenAI key (needed for embeddings; optionally for LLM too)
