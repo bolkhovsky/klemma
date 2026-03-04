@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from ..ai import AIProvider
-from ..config import KlemmaConfig, resolve_prompt
+from ..config import KlemmaConfig, ProjectConfig, resolve_prompt
 from ..state import StateManager
 from ..vault import VaultAdapter
 from .models import ZoteroEntry
@@ -21,10 +21,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def auto_classify(entry: ZoteroEntry, config: KlemmaConfig) -> dict:
+def auto_classify(
+    entry: ZoteroEntry,
+    config: KlemmaConfig,
+    project: Optional[ProjectConfig] = None,
+) -> dict:
     """Determine chapter/section/tags from title+abstract via regex patterns.
 
-    Uses config.dissertation.chapter_mapping and config.tags.auto_mapping.
+    Uses project.chapter_mapping (preferred) or config.dissertation.chapter_mapping,
+    plus config.tags.auto_mapping.
     Returns {"chapter": int|None, "section": str|None, "chapters": [], "sections": [], "tags": []}.
     """
     text = " ".join(filter(None, [entry.title, entry.abstract])).lower()
@@ -34,8 +39,12 @@ def auto_classify(entry: ZoteroEntry, config: KlemmaConfig) -> dict:
     sections: set[str] = set()
     tags: list[str] = []
 
-    # Chapter/section mapping
-    for mapping in config.dissertation.chapter_mapping:
+    # Chapter/section mapping — prefer project config, fall back to dissertation
+    chapter_mapping = (
+        project.chapter_mapping if project and project.chapter_mapping
+        else config.dissertation.chapter_mapping
+    )
+    for mapping in chapter_mapping:
         if re.search(mapping.pattern, text, re.IGNORECASE):
             if chapter is None:
                 chapter = mapping.chapter
@@ -385,6 +394,7 @@ def create_vault_note(
     available_tags: list[str] | None = None,
     klemma_home: Optional[Path] = None,
     project_type: str = "dissertation",
+    project: Optional[ProjectConfig] = None,
 ) -> Path:
     """Create @citekey.md vault note from BetterBibTeX metadata.
 
@@ -420,7 +430,7 @@ def create_vault_note(
         nr1 = dr.get("relevance_nr1", 0)
         nr2 = dr.get("relevance_nr2", 0)
     else:
-        classification = auto_classify(entry, config)
+        classification = auto_classify(entry, config, project=project)
         quality = 3
         priority = "medium"
         nr1 = 0

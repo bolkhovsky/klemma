@@ -618,6 +618,48 @@ def load_config(config_path: str | Path | None = None) -> KlemmaConfig:
     return KlemmaConfig.model_validate(raw)
 
 
+def _merge_dissertation_into_project(project: ProjectConfig, diss: DissertationConfig) -> None:
+    """Merge legacy dissertation fields into project (fills empty fields only).
+
+    Covers all 11 shared fields between DissertationConfig and ProjectConfig.
+    Called when both `project:` and `dissertation:` sections exist in config.
+    """
+    if not project.title and diss.title:
+        project.title = diss.title
+    if not project.current_focus and (diss.current_section or diss.current_chapter):
+        project.current_focus = diss.current_section or str(diss.current_chapter)
+    if not project.chapters and diss.chapters:
+        project.chapters = diss.chapters
+    if not project.scientific_results and diss.scientific_results:
+        project.scientific_results = diss.scientific_results
+    if not project.priority_terms and diss.priority_terms:
+        project.priority_terms = diss.priority_terms
+    if not project.chapter_mapping and diss.chapter_mapping:
+        project.chapter_mapping = diss.chapter_mapping
+    if not project.deadlines and diss.deadlines:
+        project.deadlines = diss.deadlines
+    if not project.section_weights and diss.section_weights:
+        project.section_weights = diss.section_weights
+    if not project.section_type_map and diss.section_type_map:
+        project.section_type_map = diss.section_type_map
+    if project.min_sources_per_section == 3 and diss.min_sources_per_section != 3:
+        project.min_sources_per_section = diss.min_sources_per_section
+    if not project.writing_constraints and diss.writing_constraints:
+        project.writing_constraints = diss.writing_constraints
+    if project.chapter_plan_pattern == "План_Глава{chapter}" and diss.chapter_plan_pattern != "План_Глава{chapter}":
+        project.chapter_plan_pattern = diss.chapter_plan_pattern
+    if project.chapter_draft_pattern == "Глава_{chapter}" and diss.chapter_draft_pattern != "Глава_{chapter}":
+        project.chapter_draft_pattern = diss.chapter_draft_pattern
+
+    # Auto-infer section types from chapter names if still empty
+    if not project.section_type_map and project.chapters:
+        from .section_types import infer_section_type
+        for ch_num, ch_name in project.chapters.items():
+            inferred = infer_section_type(ch_name)
+            if inferred:
+                project.section_type_map[str(ch_num)] = inferred.value
+
+
 def resolve_effective_config(
     project_chain: list[Path],
     config_override: Optional[str | Path] = None,
@@ -697,6 +739,10 @@ def resolve_effective_config(
     # Extract ProjectConfig
     if cfg.project:
         project = cfg.project
+        # Merge dissertation data into project if project is missing key fields
+        # (backward compat: old configs put chapters/section_type_map under dissertation:)
+        if cfg.dissertation and cfg.dissertation.title:
+            _merge_dissertation_into_project(project, cfg.dissertation)
     elif cfg.dissertation and cfg.dissertation.title:
         project = ProjectConfig.from_dissertation(cfg.dissertation)
     else:
