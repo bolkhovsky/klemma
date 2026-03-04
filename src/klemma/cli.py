@@ -90,6 +90,12 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
             state.set_parent(parent_db)
 
     vault = VaultAdapter(cfg.obsidian.vault_path, use_cli=cfg.obsidian.use_cli)
+    if cfg.obsidian.vault_path and cfg.obsidian.notes_folder:
+        if not vault.check_folder(cfg.obsidian.notes_folder):
+            console.print(
+                f"[yellow]Warning: notes_folder '{cfg.obsidian.notes_folder}' "
+                f"not found in vault. Sync and note creation will not work.[/yellow]"
+            )
     library = create_library(cfg)
 
     # Embeddings: create provider if configured
@@ -1051,6 +1057,14 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
             show_default=False,
         )
         values.vault_path = vault_str
+
+    if values.vault_path and values.notes_folder:
+        notes_dir = Path(values.vault_path) / values.notes_folder
+        if not notes_dir.is_dir():
+            console.print(
+                f"[yellow]  Warning: '{values.notes_folder}' not found in vault.[/yellow]"
+            )
+            console.print("[dim]  Fix notes_folder in .klemma/config.yaml after init.[/dim]")
 
     # Zotero storage
     prefill_storage = pf.get("zotero_storage", "")
@@ -2748,6 +2762,30 @@ def info(ctx):
         for ch_num in sorted(project.chapters.keys()):
             table.add_row(str(ch_num), project.chapters[ch_num])
         console.print(table)
+
+    # File conventions
+    draft_pattern = (project.chapter_draft_pattern if project
+                     else kctx.config.dissertation.chapter_draft_pattern)
+    conv_parts = [
+        f"[bold]Chapter drafts[/bold]: {draft_pattern.format(chapter='N')}.md / .tex",
+        f"  Location: [cyan]{project_root}/[/cyan] (vault as fallback)",
+        f"[bold]Research notes[/bold]: {project_root}/notes/research/",
+        f"[bold]Library reports[/bold]: {project_root}/notes/library/",
+    ]
+    if kctx.config.obsidian.vault_path:
+        nf = kctx.config.obsidian.notes_folder
+        tf = kctx.config.obsidian.tags_folder
+        nf_ok = kctx.vault.check_folder(nf)
+        tf_ok = kctx.vault.check_folder(tf)
+        nf_s = "[green]✓[/green]" if nf_ok else "[red]✗ not found[/red]"
+        tf_s = "[green]✓[/green]" if tf_ok else "[red]✗ not found[/red]"
+        conv_parts.append(f"[bold]Reference notes[/bold]: vault {nf}/ {nf_s}")
+        conv_parts.append(f"[bold]Tags[/bold]: vault {tf}/ {tf_s}")
+    console.print(Panel(
+        "\n".join(conv_parts),
+        title="File Conventions",
+        border_style="dim",
+    ))
 
 
 @main.command()
