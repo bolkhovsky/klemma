@@ -895,7 +895,6 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
     If prefill is provided (from --force), uses those values as defaults.
     """
     from .discovery import (
-        detect_language,
         discover_bbt_json,
         discover_obsidian_vault,
         discover_zotero_storage,
@@ -966,10 +965,7 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
         )
         keywords = [k.strip() for k in kw_str.split(",") if k.strip()] if kw_str else []
 
-    language = click.prompt(
-        "  AI language",
-        default=pf.get("language", detect_language()),
-    )
+    language = pf.get("language", "ru")
 
     # --- AI setup ---
     # Step 1: OpenAI key (needed for embeddings; optionally for LLM too)
