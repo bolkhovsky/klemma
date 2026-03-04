@@ -1491,8 +1491,10 @@ def status(ctx, verbose, chapter):
 
     if has_chapters:
         chapter_numbers = project.chapter_numbers
+        type_lookup = cov.get("section_type_lookup", {})
         table = Table(title="Coverage by Chapter", show_edge=False, pad_edge=False)
         table.add_column("Chapter", style="cyan")
+        table.add_column("Type", style="dim")
         table.add_column("Sources", justify="right", width=8)
         for ch in chapter_numbers:
             if chapter and ch != chapter:
@@ -1500,7 +1502,8 @@ def status(ctx, verbose, chapter):
             count = cov["chapters"].get(ch, 0)
             style = "green" if count >= 10 else "yellow" if count >= 5 else "red"
             name = project.chapters.get(ch, "")
-            table.add_row(f"Ch {ch}: {name}", f"[{style}]{count}[/{style}]")
+            stype = type_lookup.get(str(ch), "")
+            table.add_row(f"Ch {ch}: {name}", stype, f"[{style}]{count}[/{style}]")
         console.print(table)
 
         # Sections (verbose or filtered by chapter)
@@ -1534,14 +1537,17 @@ def status(ctx, verbose, chapter):
     else:
         # Fallback: legacy dissertation config
         chapter_numbers = list(range(1, 5))
+        type_lookup = cov.get("section_type_lookup", {})
         table = Table(title="Coverage by Chapter", show_edge=False, pad_edge=False)
         table.add_column("Chapter", style="cyan")
+        table.add_column("Type", style="dim")
         table.add_column("Sources", justify="right", width=8)
         for ch in chapter_numbers:
             count = cov["chapters"].get(ch, 0)
             style = "green" if count >= 10 else "yellow" if count >= 5 else "red"
             name = cfg.dissertation.chapters.get(ch, "")
-            table.add_row(f"Ch {ch}: {name}", f"[{style}]{count}[/{style}]")
+            stype = type_lookup.get(str(ch), "")
+            table.add_row(f"Ch {ch}: {name}", stype, f"[{style}]{count}[/{style}]")
         console.print(table)
 
     # --- Coverage by semantic type ---
