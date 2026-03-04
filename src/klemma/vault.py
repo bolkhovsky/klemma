@@ -33,6 +33,10 @@ class VaultAdapter:
             return self.vault_path
         return self._ensure_within_vault(self.vault_path / folder)
 
+    def check_folder(self, folder: str) -> bool:
+        """Check if a subfolder exists in the vault."""
+        return self._resolve_folder(folder).is_dir()
+
     def search(self, query: str, limit: int = 20) -> list[dict]:
         """Search vault for notes matching query."""
         if self.use_cli:
