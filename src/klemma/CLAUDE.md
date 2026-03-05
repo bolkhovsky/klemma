@@ -4,7 +4,7 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 
 ## Modules
 
-### cli.py (3082 lines)
+### cli.py (3860 lines)
 Click CLI entry point. Defines 16 commands + hidden aliases.
 - `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery; attaches parent DB for inheritance when `inherit_db=True` and project chain > 1
 - `_resolve_parent_db(parent_root)` — reads parent's `.klemma/config.yaml` to locate its DB path
@@ -14,7 +14,8 @@ Click CLI entry point. Defines 16 commands + hidden aliases.
 - Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`
 - `init --outline` generates an outline after project setup (requires AI backend)
 - `init` non-interactive mode: `--name`, `--description`, `--keywords`, `--language` flags auto-skip wizard; `--non-interactive` is alias for `--no-input`
-- `--model` override available on: `research`, `ask`, `library`, `process` — overrides `cfg.ai.model` per invocation
+- `--model` override available on: `research`, `ask`, `library`, `process`, `draft -s` — overrides `cfg.ai.model` per invocation
+- `draft` group: `draft introduction` (ГОСТ intro), `draft -s X.X` (standalone section draft → `notes/drafts/Draft_{section}.md`)
 
 ### context.py (41 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.

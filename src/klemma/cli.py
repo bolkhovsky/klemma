@@ -1942,11 +1942,159 @@ def role(ctx, citekey, role):
 
 
 @main.group(invoke_without_command=True)
+@click.option("--section", "-s", default=None,
+              help="Section ID (e.g. 1.3.2) — standalone section draft mode")
+@click.option("--model", default=None, help="Override AI model")
+@click.option("--no-save", is_flag=True, help="Print draft without saving to file")
 @click.pass_context
-def draft(ctx):
-    """Generate dissertation section drafts."""
-    if ctx.invoked_subcommand is None:
+def draft(ctx, section, model, no_save):
+    """Generate dissertation section drafts.
+
+    Standalone mode: klemma draft -s 1.3.2
+    Subcommand mode: klemma draft introduction
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    if not section:
         click.echo(ctx.get_help())
+        return
+
+    # Standalone section draft mode
+
+    from .config import parse_chapter_from_section
+    from .skills.context_loader import (
+        extract_section,
+        fit_prompt_budget,
+        load_chapter_draft,
+        load_research_report,
+        load_section_sources,
+    )
+    from .skills.drafter import generate_draft
+
+    kctx = _get_context(ctx)
+    cfg = kctx.config
+    _sync_sections(kctx)
+    if model:
+        cfg.ai.model = model
+    ai = _init_ai(cfg)
+
+    chapter = parse_chapter_from_section(section)
+    if chapter is None:
+        console.print(f"[red]Cannot determine chapter from section '{section}'[/red]")
+        raise SystemExit(1)
+
+    # 1. Load research report
+    research_report_content = ""
+    if kctx.project_root:
+        research_report_content = load_research_report(section, kctx.project_root) or ""
+    if research_report_content:
+        console.print(f"[dim]Research report found for {section}[/dim]")
+
+    # 2. Load chapter draft + extract section
+    existing_draft = ""
+    draft_content = load_chapter_draft(
+        chapter, cfg, kctx.vault,
+        project=kctx.project, project_root=kctx.project_root,
+    )
+    if draft_content:
+        existing_draft = extract_section(draft_content, section) or ""
+    if existing_draft:
+        console.print(f"[dim]Existing draft found ({len(existing_draft.split())} words)[/dim]")
+
+    # 3. Load source summaries
+    source_summaries = load_section_sources(section, chapter, kctx.state, kctx.vault)
+
+    # 4. RAG fragments
+    fragments_raw = []
+    if kctx.embeddings and existing_draft:
+        try:
+            query_vec = kctx.embeddings.embed(existing_draft[:500])
+            if query_vec:
+                fragments_raw = kctx.state.retrieve_similar_fragments(
+                    query_vec, top_k=30, model=kctx.embeddings.model_name,
+                )
+        except Exception:
+            pass
+    if len(fragments_raw) < 10:
+        fallback = kctx.state.get_fragments(section=section, limit=30)
+        seen_ids = {f["id"] for f in fragments_raw}
+        for ff in fallback:
+            if ff["id"] not in seen_ids:
+                fragments_raw.append(ff)
+                seen_ids.add(ff["id"])
+
+    # Format fragments for prompt
+    formatted_fragments = [
+        {
+            "source": f.get("citekey", f.get("source_id", "?")),
+            "text": f.get("fragment_text", "")[:300],
+            "type": f.get("fragment_type", "?"),
+            "relevance": f.get("relevance_score", 3),
+        }
+        for f in fragments_raw[:30]
+    ]
+
+    # Format sources for prompt
+    formatted_sources = [
+        {
+            "citekey": src["id"],
+            "quality": src.get("quality_score", 0),
+            "priority": src.get("citation_priority", "medium"),
+            "summary": src.get("vault_summary", ""),
+        }
+        for src in source_summaries
+    ]
+
+    # 5. Budget control
+    draft_for_budget = draft_content[:30_000] if draft_content else ""
+    draft_for_budget, formatted_sources, formatted_fragments = fit_prompt_budget(
+        draft_for_budget, formatted_sources, formatted_fragments,
+    )
+
+    # 6. Valid citekeys for hallucination filter
+    valid_citekeys = kctx.state.get_existing_source_ids()
+
+    # 7. Generate draft
+    with console.status(f"Генерация черновика раздела {section}...", spinner="dots"):
+        result = generate_draft(
+            section, chapter, cfg, ai,
+            dissertation_context=kctx.dissertation_context,
+            klemma_home=kctx.klemma_home,
+            project_chain=kctx.project_chain,
+            research_report_content=research_report_content,
+            existing_draft=existing_draft,
+            source_summaries=formatted_sources,
+            fragments=formatted_fragments,
+            valid_citekeys=valid_citekeys,
+        )
+
+    if not result.text:
+        console.print("[red]AI returned empty result.[/red]")
+        raise SystemExit(1)
+
+    # 8. Save to notes/drafts/
+    if not no_save and kctx.project_root:
+        drafts_dir = kctx.project_root / "notes" / "drafts"
+        drafts_dir.mkdir(parents=True, exist_ok=True)
+        out_path = drafts_dir / f"Draft_{section}.md"
+        out_path.write_text(result.text, encoding="utf-8")
+        console.print(f"[green]Saved to {out_path}[/green]")
+    elif no_save:
+        console.print(result.text)
+
+    # 9. Summary
+    console.print(
+        f"[bold]{result.word_count}[/bold] words, "
+        f"[bold]{len(result.citations_used)}[/bold] citations"
+    )
+    if result.research_report_used:
+        console.print("[dim]Based on research report[/dim]")
+    if result.filtered_citekeys:
+        console.print(
+            f"[yellow]Filtered {len(result.filtered_citekeys)} hallucinated "
+            f"citekeys: {', '.join(result.filtered_citekeys)}[/yellow]"
+        )
 
 
 main.add_command(draft)

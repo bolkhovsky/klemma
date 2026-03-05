@@ -7,16 +7,25 @@ When asked to "walk me through", "explain", "check", or "review" a feature — a
 
 Only after reviewing GH context should you explore code or files.
 
+## Automatic PM & CTO reviews
+
+Before creating a PR or GitHub issue for any feature/epic, **automatically** run both reviews without being asked:
+1. `/pm-review` — product fit, scope, priority, core loop alignment
+2. `/cto-review` — architecture, red lines, dependency direction, SaaS readiness
+
+Present both reviews to the user and wait for their decision before proceeding. This applies to all features and epics — skip only for trivial bugfixes and typo-level changes.
+
 ## Feature development workflow
 
 Every epic/feature follows this sequence. Do not skip or reorder steps. Skip this workflow for minors/bugfixes/refactoring.
 
 1. **Spec** — read the epic issue and acceptance criteria on GitHub (`gh issue view <N>`)
-2. **Plan** — invoke the architect skill for detailed design; wait for approval before coding
-3. **Code** — implement the feature
-4. **Verify** — `ruff check src/ tests/` then `python -m pytest tests/ -q`; fix until both pass
-5. **Docs** — update all affected `CLAUDE.md` files, `README.md`, and user guide in `docs/`
-6. **Commit & PR** — atomic commit, then `gh pr create`. Link the PR to its epic by including `Part of #N` in the PR body. After creating the PR, tick off the completed task checkboxes in the epic issue body (`gh issue edit <N> --body "..."` with updated `- [x]` items). The PR body must also include a **Release Note** mini-article (~300 words) with four sections:
+2. **Review** — run `/pm-review` and `/cto-review` on the spec; wait for user decision
+3. **Plan** — invoke the architect skill for detailed design; wait for approval before coding
+4. **Code** — implement the feature
+5. **Verify** — `ruff check src/ tests/` then `python -m pytest tests/ -q`; fix until both pass
+6. **Docs** — update all affected `CLAUDE.md` files, `README.md`, and user guide in `docs/`
+7. **Commit & PR** — atomic commit, then `gh pr create`. Link the PR to its epic by including `Part of #N` in the PR body. After creating the PR, tick off the completed task checkboxes in the epic issue body (`gh issue edit <N> --body "..."` with updated `- [x]` items). The PR body must also include a **Release Note** mini-article (~300 words) with four sections:
    ```
    ## Release Note
 
@@ -34,12 +43,12 @@ Every epic/feature follows this sequence. Do not skip or reorder steps. Skip thi
    ### Results
    Quantitative outcomes: test counts, LOC, lint status, measurable improvements.
    ```
-6a. **Version bump** — after merging a PR, trigger the `Bump version` GitHub Actions
+7a. **Version bump** — after merging a PR, trigger the `Bump version` GitHub Actions
     workflow (Actions → Bump version → Run workflow). Pick `patch` for bug fixes,
     `minor` for new features, `major` for breaking changes.
     Both `pyproject.toml` and `src/klemma/__init__.py` are updated automatically.
     Never edit version numbers by hand.
-7. **Paper draft** — export the Release Note into `~/research/klemma-paper/sections/` as a section draft. Russian academic style, `[@citekey]` references, matching existing sections format. File name: `section_N_<topic>.md` where N maps to the paper outline section. Add any missing BibTeX entries to `~/research/klemma-paper/references.bib`. Also create a results file in `~/research/klemma-paper/results/` with frontmatter `step`, `date`, `paper_sections` and sections: Baseline / Implementation / Results / Delta / Paper Section.
+8. **Paper draft** — export the Release Note into `~/research/klemma-paper/sections/` as a section draft. Russian academic style, `[@citekey]` references, matching existing sections format. File name: `section_N_<topic>.md` where N maps to the paper outline section. Add any missing BibTeX entries to `~/research/klemma-paper/references.bib`. Also create a results file in `~/research/klemma-paper/results/` with frontmatter `step`, `date`, `paper_sections` and sections: Baseline / Implementation / Results / Delta / Paper Section.
 
 ## Maintaining CLAUDE.md documentation
 

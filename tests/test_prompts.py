@@ -185,6 +185,17 @@ TEMPLATE_CONTEXTS = {
         "author_publications": "",
         "target_section": "",
     },
+    "section_draft.md": {
+        "dissertation_context": "Test context",
+        "section": "1.3.2",
+        "chapter_num": 1,
+        "chapter_name": "Introduction",
+        "research_report": "",
+        "existing_draft": "",
+        "fragments": [],
+        "source_summaries": [],
+        "language": "ru",
+    },
     "reconstruct.md": {
         "paper_title": "Test Paper",
         "abstract": "An abstract",

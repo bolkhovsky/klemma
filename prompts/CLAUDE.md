@@ -16,6 +16,7 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 | `agent.md` | `skills/agent.py` | System prompt for interactive agent |
 | `outline.md` | `skills/outliner.py` | Project outline generation |
 | `outline_incremental.md` | `skills/outliner.py` | Incremental outline update |
+| `section_draft.md` | `skills/drafter.py` | Section draft generation from research context |
 | `analyst.md` | `evaluation/reconstruction.py` | Extract ground truth citation map from paper PDF |
 | `reconstruct.md` | `evaluation/reconstruction.py` | AI citation recommendation (blind to paper text) |
 
@@ -47,6 +48,9 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 
 ### outline_incremental.md
 `project_type`, `dissertation_context`, `project_files`, `library_summary`, `previous_outline`, `user_notes`, `previous_date`, `custom_prompt`, `language`
+
+### section_draft.md
+`dissertation_context`, `section`, `chapter_num`, `chapter_name`, `research_report` (full research briefing text), `existing_draft` (current section text — expand, don't rewrite), `fragments` (list of relevant fragment dicts), `source_summaries` (list of source metadata dicts with citekey, quality, priority, summary), `language`
 
 ### analyst.md
 `pdf_text`, `library_entries`, `paper_citekey`, `paper_title`

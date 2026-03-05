@@ -6,6 +6,22 @@ Dissertation context and tags are loaded from `~/.klemma/` at CLI startup and pa
 
 ## Modules
 
+### context_loader.py (230 lines)
+Shared context-loading helpers (ADR-008). Extracted from researcher.py for reuse across skills.
+- `load_chapter_draft(chapter, config, vault, project?, project_root?)` — project_root first (md > tex > bare), vault fallback
+- `extract_section(content, section_id)` — extract section text from markdown by heading number
+- `load_section_sources(section, chapter, state, vault)` — enrich sources with vault AI summaries
+- `fit_prompt_budget(chapter_draft, sources, fragments, max_chars?)` — progressive prompt reduction
+- `validate_citekeys(data, valid_citekeys)` — strip hallucinated citekeys from AI JSON response
+- `load_research_report(section, project_root)` — read research report from `notes/research/`
+
+### drafter.py (135 lines)
+Section draft generation — general prose from research context.
+- `DraftResult` — dataclass: section, chapter, text, word_count, citations_used, filtered_citekeys, research_report_used
+- `generate_draft(section, chapter, config, ai, ...)` — pure skill: renders `prompts/section_draft.md` → AI → parse citations → filter hallucinated → `DraftResult`
+- `_extract_citations(text)` — regex `[@citekey]` parsing
+- `_filter_hallucinated_citations(text, valid_ids)` — remove invalid `[@citekey]` from prose, return cleaned text + removed list
+
 ### planner.py (248 lines)
 Morning briefing generation. Gathers: deadline, streak, yesterday's plan, chapter plan, library digest, coverage stats, ref-gaps.
 - `generate_morning_plan(config, state, vault, ai, dissertation_context, klemma_home)` — full context → `prompts/morning.md` → Claude → `DailyPlan` → state + vault
@@ -19,8 +35,8 @@ Fragment extraction from PDFs with citation intent classification.
 - `extract_from_citekey()` — full pipeline (find PDF → extract text → analyze → save citation_links to graph)
 - `save_fragments_to_vault(citekey, fragments, vault, ..., dissertation_context, available_tags, klemma_home)` — appends to `@citekey.md`; auto-creates note if missing
 
-### researcher.py (~830 lines — largest skill)
-Section research briefings. Two modes:
+### researcher.py (~620 lines)
+Section research briefings. Shared helpers extracted to `context_loader.py` — backward-compat aliases `_load_chapter_draft`, `_extract_section`, `_load_section_sources`, `_fit_prompt_budget`, `_validate_citekeys` re-exported via imports. Two modes:
 - **Initial**: auto-extract fragments → collect context → `prompts/research.md` → `ResearchResult` → `project_root/Research_{section}.md`
 - **Incremental**: reads existing research note from project_root `## ✏️ Что нового` (user annotations), computes delta (new sources, fragment count), `prompts/research_incremental.md` → merged result. User notes archived to `## 📋 История изменений` with timestamp.
 - `research_section(project_root=..., embeddings=?)` — main entry point; optional `embeddings` param enables RAG-first fragment retrieval (semantic search via `retrieve_similar_fragments`), falls back to section-based lookup when RAG yields <10 results or is unavailable
@@ -94,6 +110,9 @@ On repeat: reads previous outline → incremental update. With `--fresh`: full r
 
 ### Agent context
 `klemma ask "query"` → pre-creates `notes/agents/` → `agent.build_agent_context(project_root=...)` → scans project_root for outline/reports/files + `notes/{research,library,agents}/` → system prompt → interactive Claude or `ai.call()`. Agent saves to `project_root/notes/agents/Agent_*.md` → `update_agents_index()` regenerates `notes/AGENTS.md`.
+
+### Section draft generation
+`klemma draft -s X.X` → `_sync_sections()` → load research report (`context_loader.load_research_report`) → load chapter draft + extract section → load source summaries → RAG fragments → `fit_prompt_budget()` → `drafter.generate_draft()` → `DraftResult` → `project_root/notes/drafts/Draft_{section}.md`.
 
 ### Agent Skills (Claude Code)
 Agent uses Claude Code Skills from `.claude/skills/` instead of reading source code:
