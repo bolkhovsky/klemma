@@ -515,6 +515,9 @@ class StateManager:
         merged.update(child)
         return merged
 
+    def get_embedded_fragment_metadata(self, model: Optional[str] = None) -> list[dict]:
+        return self.fragments.get_embedded_fragment_metadata(model)
+
     def get_fragment_embedding_stats(self) -> dict:
         return self.fragments.get_fragment_embedding_stats()
 

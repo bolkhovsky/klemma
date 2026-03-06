@@ -140,6 +140,31 @@ class FragmentRepository(BaseRepository):
                     result[sec]["total"] += row["cnt"]
             return result
 
+    def get_embedded_fragment_metadata(
+        self, model: Optional[str] = None,
+    ) -> list[dict]:
+        """Get metadata for fragments that have embeddings.
+
+        Returns list of {id, source_id, section, fragment_text (truncated)}.
+        """
+        with self._conn() as conn:
+            if model:
+                cur = conn.execute(
+                    """SELECT f.id, f.source_id, f.section, f.chapter,
+                              substr(f.fragment_text, 1, 80) as text_preview
+                       FROM fragments f
+                       WHERE f.embedding IS NOT NULL AND f.embedding_model=?""",
+                    (model,),
+                )
+            else:
+                cur = conn.execute(
+                    """SELECT f.id, f.source_id, f.section, f.chapter,
+                              substr(f.fragment_text, 1, 80) as text_preview
+                       FROM fragments f
+                       WHERE f.embedding IS NOT NULL""",
+                )
+            return [dict(row) for row in cur.fetchall()]
+
     def save_fragment_embedding(
         self, fragment_id: int, embedding: list[float], model: str
     ):
