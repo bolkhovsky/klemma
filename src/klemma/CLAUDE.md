@@ -5,13 +5,15 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 ## Modules
 
 ### cli.py (3860 lines)
-Click CLI entry point. Defines 16 commands + hidden aliases.
+Click CLI entry point. Defines 17 commands + hidden aliases.
 - `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery; attaches parent DB for inheritance when `inherit_db=True` and project chain > 1
 - `_resolve_parent_db(parent_root)` — reads parent's `.klemma/config.yaml` to locate its DB path
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
-- Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`
+- Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `suggest`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`
+- Hidden aliases: `gaps suggest` → `suggest`, `coverage` → `status --verbose`
+- Deprecation warnings: bare `klemma gaps` → use `klemma status --verbose`; `klemma library -s` → use `klemma research -s`
 - `init --outline` generates an outline after project setup (requires AI backend)
 - `init` non-interactive mode: `--name`, `--description`, `--keywords`, `--language` flags auto-skip wizard; `--non-interactive` is alias for `--no-input`
 - `embed --sections` computes section centroid embeddings from source vectors (mean of assigned source embeddings per section)
@@ -24,7 +26,8 @@ Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `li
 
 ### config.py (~800 lines)
 Pydantic config models + Git-style project discovery + klemmarc loading.
-Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `_resolved_api_keys` PrivateAttr), `EmbeddingsConfig`, `SearchConfig` (`backend`, `throttle`), `SuggestConfig` (`max_age_years=10`, `classic_min_score=15.0`), `StateConfig` (`db_path`, `inherit_db`), `DissertationConfig`, `SystemConfig`, `ProjectConfig`.
+Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `_resolved_api_keys` PrivateAttr), `EmbeddingsConfig`, `SearchConfig` (`backend`, `throttle`), `SuggestConfig` (`max_age_years=10`, `classic_min_score=15.0`), `StateConfig` (`db_path`, `inherit_db`), `DissertationConfig`, `SystemConfig`, `ProjectConfig` (`auto_register: "mapped"|"all"` — filter new sources by chapter_mapping match).
+- `generate_chapter_mapping(chapters, sections?)` — auto-generate `ChapterMapping` regex patterns from chapter titles (keyword extraction, stopword filtering)
 - `_load_klemmarc()` — load `~/.klemmarc.yaml` (or `.yml` / `.klemmarc`) global config
 - `_derive_provider(backend, model)` — extract provider name for api_keys lookup (e.g. `litellm` + `anthropic/claude-sonnet` → `"anthropic"`)
 - `_check_klemmarc_permissions()` — fix permissions on `~/.klemmarc*` if world-readable
@@ -156,6 +159,7 @@ MCP tool infrastructure for embedding and citation analysis.
 Triggered on every `research`, `library`, `status` command from `cli.py._sync_sections()`.
 Reads all vault `@citekey.md` frontmatter (~60ms), compares with DB, updates section assignments.
 Also discovers new Zotero entries not in DB (auto-classified via config regex patterns, registered as `pending`).
+When `auto_register: "mapped"` (default), entries that don't match any `chapter_mapping` pattern are skipped with a visible CLI warning.
 
 ### Multi-section sources
 Frontmatter `sections: [1.1, 1.4.1, 3.2.2]` → `source_sections` table → `get_by_section()` uses JOIN.

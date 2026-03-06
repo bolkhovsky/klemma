@@ -268,15 +268,21 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
         })
 
     # 2. Discover new Zotero entries not in DB + detect renames
-    # Papers: explicit-only model — skip auto-registration from BBT JSON or vault
+    # Determine auto-register mode: "none" (paper), "mapped" (filter by chapter_mapping), "all"
     project = ctx.project
-    auto_register = not project or project.type != "paper"
+    if project and project.type == "paper":
+        auto_register_mode = "none"
+    elif project and project.auto_register == "mapped":
+        auto_register_mode = "mapped"
+    else:
+        auto_register_mode = "all"
 
     # Load existing DB source IDs (needed for paper filtering + new entry detection)
     existing = state.get_existing_source_ids()
 
     new_entries = []
     renames = []
+    skipped_irrelevant = 0
     if ctx.library:
         entry_lookup = ctx.library.entries
         vault_citekeys = {vd["citekey"] for vd in vault_data}
@@ -294,8 +300,11 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
                     existing.add(citekey)
                     renames.append((old_ck, citekey))
                     continue
-            if auto_register and citekey not in vault_citekeys:
+            if auto_register_mode != "none" and citekey not in vault_citekeys:
                 classification = auto_classify(entry, cfg, project=project)
+                if auto_register_mode == "mapped" and not classification.get("matched"):
+                    skipped_irrelevant += 1
+                    continue
                 new_entries.append((citekey, classification))
 
         # Fuzzy orphan cleanup: DB sources not in BBT JSON (pre-existing renames)
@@ -325,7 +334,7 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
 
     # 3. Sync to DB
     # Papers: only sync vault notes for sources already registered in DB
-    if not auto_register:
+    if auto_register_mode == "none":
         vault_data = [vd for vd in vault_data if vd["citekey"] in existing]
 
     result = state.sync_source_sections(vault_data, new_entries)
@@ -347,6 +356,8 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
             parts.append(f"[green]{result['vault_updated']} updated from vault[/green]")
         if result["new_registered"]:
             parts.append(f"[blue]{result['new_registered']} new from Zotero[/blue]")
+        if skipped_irrelevant:
+            parts.append(f"[yellow]{skipped_irrelevant} skipped (no chapter_mapping match)[/yellow]")
         if parts:
             console.print("[dim]Sync:[/dim] " + " | ".join(parts))
 
@@ -2022,14 +2033,14 @@ def coverage(ctx):
 def gaps(ctx):
     """Reference gaps and acquisition suggestions."""
     if ctx.invoked_subcommand is None:
-        # Backward compat: bare `klemma gaps` = status --verbose
+        console.print("[yellow]Warning: `klemma gaps` is deprecated. Use `klemma status --verbose`.[/yellow]")
         ctx.invoke(status, verbose=True)
 
 
 main.add_command(gaps)
 
 
-@gaps.command()
+@main.command()
 @click.option("--limit", "-n", type=int, default=10, help="Number of suggestions")
 @click.option("--section", "-s", default=None, help="Filter by section (e.g. 1.3)")
 @click.pass_context
@@ -2120,6 +2131,16 @@ def suggest(ctx, limit, section):
     if filtered_old:
         console.print(f"  [dim]{filtered_old} older papers filtered (>{suggest_cfg.max_age_years}y, score<{suggest_cfg.classic_min_score})[/dim]")
     console.print()
+
+
+# Keep options in sync with top-level suggest
+@gaps.command(name="suggest", hidden=True)
+@click.option("--limit", "-n", type=int, default=10)
+@click.option("--section", "-s", default=None)
+@click.pass_context
+def gaps_suggest(ctx, limit, section):
+    """[alias] → suggest"""
+    ctx.invoke(suggest, limit=limit, section=section)
 
 
 @main.group(invoke_without_command=True)
@@ -2685,6 +2706,21 @@ def outline(ctx, no_save, scan_only, prompt, fresh):
     saved_path = save_outline(result, project_name, kctx.project_root)
     console.print(f"\n[dim]Saved: {saved_path}[/dim]")
 
+    # 6. Auto-generate chapter_mapping from outline chapters
+    if result.chapters:
+        from .config import generate_chapter_mapping, update_project_config
+        mapping = generate_chapter_mapping(result.chapters, result.sections)
+        if mapping:
+            updates: dict = {
+                "chapters": {str(k): v for k, v in result.chapters.items()},
+                "chapter_mapping": [
+                    {"pattern": m.pattern, "chapter": m.chapter, "section": m.section}
+                    for m in mapping
+                ],
+            }
+            update_project_config(kctx.project_root, updates)
+            console.print(f"[green]Updated chapter_mapping ({len(mapping)} patterns) in config[/green]")
+
 
 @main.command(name="import", hidden=True)
 @click.option("--with-queue", is_flag=True, help="Also populate reading queue from high-priority sources")
@@ -2863,6 +2899,8 @@ def library(ctx, section, audit, model):
     entry_lookup = kctx.library.entries if kctx.library else {}
 
     mode = "audit" if audit else "recommend" if section else "status"
+    if mode == "recommend":
+        console.print(f"[yellow]Warning: `klemma library -s` is deprecated. Use `klemma research -s {section}`.[/yellow]")
 
     with console.status(f"Analyzing library ({mode})", spinner="dots"):
         report = analyze_library(

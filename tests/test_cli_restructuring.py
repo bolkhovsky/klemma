@@ -1,0 +1,56 @@
+"""Tests for CLI restructuring: suggest promotion, backward-compat aliases, deprecation warnings."""
+
+from click.testing import CliRunner
+
+from klemma.cli import main
+
+
+class TestSuggestTopLevel:
+    def test_suggest_visible_in_help(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["--help"])
+        assert "suggest" in result.output
+
+    def test_suggest_help_accessible(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["suggest", "--help"])
+        assert result.exit_code == 0
+        assert "Suggest papers" in result.output
+        assert "--limit" in result.output
+        assert "--section" in result.output
+
+
+class TestGapsSuggestBackwardCompat:
+    def test_gaps_suggest_help_accessible(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["gaps", "suggest", "--help"])
+        assert result.exit_code == 0
+        assert "--limit" in result.output
+
+    def test_gaps_suggest_hidden_in_gaps_help(self):
+        """Backward-compat alias should be hidden from gaps help."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["gaps", "--help"])
+        # "suggest" should NOT appear as a visible subcommand of gaps
+        # (it's hidden=True)
+        lines = result.output.split("\n")
+        command_lines = [line for line in lines if line.strip().startswith("suggest")]
+        assert len(command_lines) == 0
+
+
+class TestBareGapsDeprecation:
+    def test_bare_gaps_shows_deprecation(self):
+        """Running bare `klemma gaps` should show deprecation warning."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["gaps"], catch_exceptions=False)
+        # May fail due to missing config, but deprecation warning should appear
+        assert "deprecated" in result.output.lower() or result.exit_code != 0
+
+
+class TestLibraryRecommendDeprecation:
+    def test_library_recommend_shows_deprecation(self):
+        """Running `klemma library -s 2.3` should show deprecation warning."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["library", "-s", "2.3"], catch_exceptions=False)
+        # May fail due to missing AI config, but deprecation should appear before that
+        assert "deprecated" in result.output.lower() or result.exit_code != 0

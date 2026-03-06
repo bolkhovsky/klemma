@@ -246,7 +246,7 @@ class SourceRepository(BaseRepository):
             cur = conn.execute(
                 """SELECT id, note_path, quality_score, primary_chapter,
                           primary_section, relevance_nr1, relevance_nr2,
-                          citation_priority, fragment_count
+                          citation_priority, fragment_count, year
                    FROM sources WHERE status=?
                    ORDER BY primary_chapter, citation_priority DESC, quality_score DESC""",
                 (ProcessingStatus.COMPLETED,),
