@@ -8,6 +8,7 @@ Supports Git/NPM-style per-directory projects:
 
 import logging
 import os
+import re
 import stat
 import warnings
 from pathlib import Path
@@ -372,6 +373,41 @@ class ChapterDeadline(BaseModel):
     label: str = ""
 
 
+# Russian stopwords for chapter title keyword extraction
+_RU_STOPWORDS = frozenset({
+    "и", "в", "на", "для", "по", "из", "с", "к", "о", "от", "при", "до",
+    "без", "через", "между", "его", "её", "их", "основе", "зоны", "зоне",
+    "акватории", "российской", "федерации",
+})
+
+
+def generate_chapter_mapping(
+    chapters: dict[int, str],
+    sections: Optional[dict[str, str]] = None,
+) -> list[ChapterMapping]:
+    """Auto-generate chapter_mapping regex patterns from chapter titles.
+
+    Extracts meaningful keywords (3+ chars, not stopwords) from each chapter title,
+    creates a regex pattern joined by '|'. Each chapter maps to its first section.
+    """
+    mappings = []
+    for num, title in sorted(chapters.items()):
+        words = re.findall(r"[a-zA-Zа-яА-ЯёЁ]+", title.lower())
+        keywords = [w for w in words if len(w) >= 3 and w not in _RU_STOPWORDS]
+        if not keywords:
+            continue
+        # Find first section for this chapter
+        first_section = str(num)
+        if sections:
+            for sec_id in sorted(sections.keys()):
+                if sec_id.startswith(f"{num}."):
+                    first_section = sec_id
+                    break
+        pattern = "|".join(keywords)
+        mappings.append(ChapterMapping(pattern=pattern, chapter=num, section=first_section))
+    return mappings
+
+
 class DissertationConfig(BaseModel):
     """Legacy dissertation config — kept for migration from old ~/.klemma/ format."""
 
@@ -412,6 +448,7 @@ class ProjectConfig(BaseModel):
     # Maps numeric section → semantic type: {"2": "literature_review", "3": "methodology"}
     section_type_weights: dict[str, float] = Field(default_factory=dict)
     # Optional weights by semantic type for gap scoring: {"methodology": 1.0, "appendix": 0.3}
+    auto_register: str = "mapped"  # "mapped" | "all" — filter new sources by chapter_mapping match
 
     @property
     def current_chapter(self) -> int:
@@ -460,6 +497,8 @@ class ProjectConfig(BaseModel):
             writing_constraints=d.writing_constraints,
             chapter_draft_pattern=d.chapter_draft_pattern,
             section_type_map=section_type_map,
+            # Backward compat: legacy DissertationConfig has no relevance gate
+            auto_register="all",
         )
 
 

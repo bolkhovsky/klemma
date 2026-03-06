@@ -30,7 +30,7 @@ def auto_classify(
 
     Uses project.chapter_mapping (preferred) or config.dissertation.chapter_mapping,
     plus config.tags.auto_mapping.
-    Returns {"chapter": int|None, "section": str|None, "chapters": [], "sections": [], "tags": []}.
+    Returns {"chapter": int, "section": str, "chapters": [], "sections": [], "tags": [], "matched": bool}.
     """
     text = " ".join(filter(None, [entry.title, entry.abstract])).lower()
     chapter = None
@@ -60,12 +60,15 @@ def auto_classify(
                 tags.append(mapping.tag)
                 seen_tags.add(mapping.tag)
 
+    matched = chapter is not None  # True if any chapter_mapping pattern matched
+
     return {
         "chapter": chapter or 1,
         "section": section or "1.1",
         "chapters": sorted(chapters) if chapters else [chapter or 1],
         "sections": sorted(sections) if sections else [section or "1.1"],
         "tags": tags,
+        "matched": matched,
     }
 
 

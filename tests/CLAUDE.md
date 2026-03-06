@@ -1,6 +1,6 @@
 # Tests
 
-## Current test suite (746 tests)
+## Current test suite (775 tests)
 - `test_errors.py` (33 lines) — `KlemmaAIError` hierarchy, `retryable` classification, cause chaining
 - `test_ai.py` (170 lines) — `extract_json()`, `AIProviderBase`, `AICallResult` dataclass, `call_with_meta()` base + Claude, `create_ai()` factory
 - `test_ai_litellm.py` (265 lines) — `LiteLLMClient` with mocked litellm: call, json_mode, base_url, api_key, reasoning model detection, retry, `call_with_meta()` with structured error mapping + token extraction
@@ -29,6 +29,9 @@
 - `test_metadata.py` (~350 lines) — 18 tests: extract_pdf_metadata (title+author/empty/first-page fallback), lookup_s2 (success/no match/API error), resolve_metadata (CLI wins/PDF+S2/no sources), citekey from real metadata, DB update_source_info (persist/partial), migration v6 column check, Zotero API (is_running true/false, create_item success, parse_authors, get_bbt_citekey)
 - `test_auto_pipeline.py` (199 lines) — 8 tests: run_analyst_from_source (success/missing source/no pdf), run_auto_benchmark (explicit paper/analyst failure/auto-select/no candidates/comparison)
 - `test_suggester.py` (~190 lines) — 16 tests: `suggest_acquisitions` (empty, basic resolution, search None, DOI-only, limit, sort by score, search error), recency filter (on/off/no-year), `_parse_sections` (empty, single, group_concat, dedup, plain CSV fallback)
+- `test_relevance_gate.py` (~130 lines) — 14 tests: auto_classify `matched` field (pattern match/no match/project config/empty mapping/abstract), `generate_chapter_mapping` (basic/sections/defaults/empty/stopwords/short words), `ProjectConfig.auto_register` default + `from_dissertation` backward compat
+- `test_librarian_recency.py` (~100 lines) — 7 tests: library recency filter (old filtered/classic kept/no year kept/disabled/defaults/boundary)
+- `test_cli_restructuring.py` (~55 lines) — 5 tests: suggest top-level (visible in help, help accessible), gaps suggest backward compat (help, hidden), bare gaps deprecation, library recommend deprecation
 - `test_context_loader.py` (~50 lines) — `load_research_report()`: notes/research/ path, legacy fallback, missing, empty, preference
 - `test_drafter.py` (~190 lines) — `DraftResult` defaults, `_extract_citations` regex, `_filter_hallucinated_citations` (valid/invalid/empty/dedup), `generate_draft` pipeline (with/without research, filtering, empty response), `section_draft.md` template rendering
 - `test_prompts.py` (~280 lines) — 25 tests: all 12 prompt templates render without Jinja2 errors, coverage check (all shipped templates have test contexts), reconstruct.md ablation variants (default/max_recs/fewshot/combined), prompt hash determinism + uniqueness, AblationParams defaults + to_snapshot + with_fewshot factory

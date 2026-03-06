@@ -38,7 +38,7 @@ All Pydantic models for the data layer:
 
 ### note_factory.py (470 lines)
 Vault note creation pipeline — largest module in the package:
-1. `auto_classify()` — regex-based chapter/section/tag assignment from title+abstract
+1. `auto_classify()` — regex-based chapter/section/tag assignment from title+abstract; returns `matched: bool` (True when any chapter_mapping pattern matched)
 2. `annotate_source()` — AI annotation via `prompts/annotate.md` → JSON
 3. `build_frontmatter()` — YAML frontmatter matching zobsidian format
 4. `create_vault_note()` — renders structured note with frontmatter + sections

@@ -163,6 +163,23 @@ def _build_dissertation_config(plan_data) -> dict:
     # Min sources per section
     diss["min_sources_per_section"] = 3
 
+    # Auto-generate chapter_mapping from chapter titles
+    if diss.get("chapters"):
+        from .config import generate_chapter_mapping
+        sections_dict: dict[str, str] = {}
+        for ch in plan_data.chapters:
+            for sec in ch.sections:
+                sections_dict[sec.number] = sec.title
+        mapping = generate_chapter_mapping(
+            {int(k): v for k, v in diss["chapters"].items()},
+            sections_dict or None,
+        )
+        if mapping:
+            diss["chapter_mapping"] = [
+                {"pattern": m.pattern, "chapter": m.chapter, "section": m.section}
+                for m in mapping
+            ]
+
     return diss
 
 

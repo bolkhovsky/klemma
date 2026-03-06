@@ -212,16 +212,18 @@ klemma acquire --batch papers.json             # массовый импорт
 klemma acquire <url> --no-process              # не извлекать фрагменты
 ```
 
-### `klemma gaps suggest`
+### `klemma suggest`
 Поиск и рекомендация papers для заполнения reference gaps. Резолвит метаданные через CrossRef → S2 (chain), генерирует `klemma acquire` команды.
 
 ```bash
-klemma gaps suggest                    # top-10 gap suggestions
-klemma gaps suggest -n 20              # больше результатов
-klemma gaps suggest -s 2.3             # только для раздела 2.3
+klemma suggest                         # top-10 gap suggestions
+klemma suggest -n 20                   # больше результатов
+klemma suggest -s 2.3                  # только для раздела 2.3
 ```
 
 Фильтрация: публикации старше `suggest.max_age_years` (по умолчанию 10 лет) скрываются, кроме фундаментальных работ с высоким score (≥ `suggest.classic_min_score`). Настраивается в конфиге.
+
+> **Backward compat**: `klemma gaps suggest` по-прежнему работает как скрытый alias.
 
 ### `klemma info`
 Текущий проект: корневая директория, цепочка проектов, конфигурация, путь к БД.
@@ -317,10 +319,11 @@ project:
     1: "Литературный обзор"
     2: "Методология"
     3: "Результаты"
-  chapter_mapping:             # regex → глава/раздел
+  chapter_mapping:             # regex → глава/раздел (auto-generated from chapter titles by `klemma outline`)
     - pattern: "icenet|ice.?net"
       chapter: 2
       section: "2.3.1"
+  auto_register: mapped         # "mapped" = skip Zotero entries not matching chapter_mapping; "all" = ingest everything
   min_sources_per_section: 3
 
 suggest:

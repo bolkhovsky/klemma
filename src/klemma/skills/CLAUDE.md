@@ -49,7 +49,7 @@ Section research briefings. Shared helpers extracted to `context_loader.py` — 
 ### librarian.py (522 lines)
 Library health analysis. Three modes: `status` (health), `recommend` (section-focused), `audit` (deep quality check + citation graph + prune).
 - `analyze_library(project_root=...)` — gathers context → `prompts/librarian.md` → `LibraryReport` → `project_root/notes/library/Library_{mode}_{date}.md`
-- `_gather_library_context()` — summary, quality tiers, ref-gaps, sources compact list, citation graph stats
+- `_gather_library_context(suggest_config?)` — summary, quality tiers, ref-gaps, sources compact list, citation graph stats; optional recency filter via `SuggestConfig` (skip old sources unless high-quality classics)
 - `_format_sources_compact()` — compact list for prompt (citekey, author, year, title, q, ch, s, f, intent)
 - `_get_citation_graph_stats()` — co-citation analysis, author network, hub scores from `citation_links`
 - Prune mode: `prompts/librarian_prune.md` → AI generates drop/maybe verdicts → `state.save_prune_verdicts()`

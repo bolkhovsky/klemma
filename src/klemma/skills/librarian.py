@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..ai import AIProvider
-from ..config import AIConfig, KlemmaConfig, ProjectConfig, resolve_prompt
+from ..config import AIConfig, KlemmaConfig, ProjectConfig, SuggestConfig, resolve_prompt
 from ..literature.models import LibraryReport
 from ..state import StateManager
 from ..vault import VaultAdapter
@@ -46,6 +46,7 @@ def analyze_library(
     context = _gather_library_context(
         config, state, vault, entry_lookup, active_sources, mode, focus_section,
         project=project, dissertation_context=dissertation_context,
+        suggest_config=config.suggest,
     )
 
     prompt_path = resolve_prompt("librarian.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "librarian.md"
@@ -225,6 +226,7 @@ def _gather_library_context(
     focus_section: Optional[str],
     project: Optional[ProjectConfig] = None,
     dissertation_context: str = "",
+    suggest_config: Optional[SuggestConfig] = None,
 ) -> dict:
     """Collect all data needed for the librarian prompt."""
     deadline, days_remaining = _get_current_deadline(config, project=project)
@@ -235,6 +237,21 @@ def _gather_library_context(
 
     # Mode-aware source filtering
     selected, omit_info = _select_sources_for_mode(active_sources, mode, focus_section)
+
+    # Recency filter: skip old sources unless they're high-quality classics
+    if suggest_config and suggest_config.max_age_years:
+        current_year = date.today().year
+        before = len(selected)
+        selected = [
+            s for s in selected
+            if not s.get("year")
+            or (current_year - s["year"]) <= suggest_config.max_age_years
+            or (s.get("quality_score") or 0) >= suggest_config.classic_min_score
+        ]
+        recency_filtered = before - len(selected)
+        if recency_filtered:
+            omit_info["recency_filtered"] = recency_filtered
+
     sources_compact = _format_sources_compact(selected, entry_lookup)
 
     if project:
