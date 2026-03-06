@@ -27,8 +27,9 @@ def _mock_search(resolve_return=None, pdf_url_return=None):
 class TestSuggestAcquisitions:
     def test_empty_gaps(self):
         search = _mock_search()
-        result = suggest_acquisitions([], search, limit=5)
-        assert result == []
+        candidates, filtered = suggest_acquisitions([], search, limit=5)
+        assert candidates == []
+        assert filtered == 0
 
     def test_basic_resolution(self):
         gaps = [_make_gap(score=8.0)]
@@ -41,7 +42,7 @@ class TestSuggestAcquisitions:
             pdf_url_return="https://arxiv.org/pdf/2022.00001",
         )
 
-        candidates = suggest_acquisitions(gaps, search, limit=5)
+        candidates, _ = suggest_acquisitions(gaps, search, limit=5)
 
         assert len(candidates) == 1
         c = candidates[0]
@@ -58,7 +59,7 @@ class TestSuggestAcquisitions:
         gaps = [_make_gap()]
         search = _mock_search(resolve_return=None)
 
-        candidates = suggest_acquisitions(gaps, search)
+        candidates, _ = suggest_acquisitions(gaps, search)
         assert len(candidates) == 1
         c = candidates[0]
         assert c.search_result is None
@@ -74,7 +75,7 @@ class TestSuggestAcquisitions:
         )
         search = _mock_search(resolve_return=sr, pdf_url_return=None)
 
-        candidates = suggest_acquisitions(gaps, search)
+        candidates, _ = suggest_acquisitions(gaps, search)
         assert len(candidates) == 1
         c = candidates[0]
         assert c.doi == "10.1234/a"
@@ -84,7 +85,7 @@ class TestSuggestAcquisitions:
         gaps = [_make_gap(title=f"Paper {i}", score=10 - i) for i in range(10)]
         search = _mock_search(resolve_return=None)
 
-        candidates = suggest_acquisitions(gaps, search, limit=3)
+        candidates, _ = suggest_acquisitions(gaps, search, limit=3)
         assert len(candidates) == 3
 
     def test_sorted_by_score(self):
@@ -95,7 +96,7 @@ class TestSuggestAcquisitions:
         ]
         search = _mock_search(resolve_return=None)
 
-        candidates = suggest_acquisitions(gaps, search, limit=3)
+        candidates, _ = suggest_acquisitions(gaps, search, limit=3)
         assert candidates[0].ref_title == "High"
         assert candidates[1].ref_title == "Mid"
         assert candidates[2].ref_title == "Low"
@@ -106,7 +107,7 @@ class TestSuggestAcquisitions:
         search = _mock_search()
         search.resolve.side_effect = Exception("API timeout")
 
-        candidates = suggest_acquisitions(gaps, search)
+        candidates, _ = suggest_acquisitions(gaps, search)
         assert len(candidates) == 1
         assert candidates[0].search_result is None
 
@@ -116,7 +117,7 @@ class TestSuggestAcquisitions:
         sr = SearchResult(title="Paper A", doi="10.1234/a", source_api="s2")
         search = _mock_search(resolve_return=sr, pdf_url_return=None)
 
-        candidates = suggest_acquisitions(gaps, search)
+        candidates, _ = suggest_acquisitions(gaps, search)
         c = candidates[0]
         assert c.sections == ["1.3", "2.3"]
         assert "-s 1.3" in c.acquire_cmd
@@ -127,8 +128,48 @@ class TestSuggestAcquisitions:
         gaps = [_make_gap(sections='["1.3", "2.3"],["1.4"]')]
         search = _mock_search(resolve_return=None)
 
-        candidates = suggest_acquisitions(gaps, search)
+        candidates, _ = suggest_acquisitions(gaps, search)
         assert candidates[0].sections == ["1.3", "2.3", "1.4"]
+
+    def test_recency_filter(self):
+        """Old low-score papers are filtered out."""
+        gaps = [
+            _make_gap(title="Old", year=2005, score=3.0),
+            _make_gap(title="Recent", year=2024, score=3.0),
+            _make_gap(title="Classic", year=2000, score=20.0),
+        ]
+        search = _mock_search(resolve_return=None)
+
+        candidates, filtered = suggest_acquisitions(
+            gaps, search, max_age_years=10, classic_min_score=15.0,
+        )
+        titles = [c.ref_title for c in candidates]
+        assert "Recent" in titles
+        assert "Classic" in titles  # high score exempts from filter
+        assert "Old" not in titles
+        assert filtered == 1
+
+    def test_recency_filter_disabled(self):
+        """max_age_years=0 disables the filter."""
+        gaps = [_make_gap(title="Old", year=1990, score=1.0)]
+        search = _mock_search(resolve_return=None)
+
+        candidates, filtered = suggest_acquisitions(
+            gaps, search, max_age_years=0,
+        )
+        assert len(candidates) == 1
+        assert filtered == 0
+
+    def test_recency_filter_no_year(self):
+        """Papers without year are never filtered."""
+        gaps = [_make_gap(title="NoYear", year=None, score=1.0)]
+        search = _mock_search(resolve_return=None)
+
+        candidates, filtered = suggest_acquisitions(
+            gaps, search, max_age_years=10,
+        )
+        assert len(candidates) == 1
+        assert filtered == 0
 
 
 class TestParseSections:

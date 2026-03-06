@@ -34,19 +34,27 @@ def suggest_acquisitions(
     gaps: list[dict],
     search: SearchProvider,
     limit: int = 10,
-) -> list[SuggestCandidate]:
+    max_age_years: int = 0,
+    classic_min_score: float = 15.0,
+) -> tuple[list[SuggestCandidate], int]:
     """Resolve top gaps via search provider.
 
     For each gap (sorted by score desc, limited):
-    1. Call search.resolve(title, authors, year) for metadata
-    2. If found, call search.resolve_pdf_url() for open-access PDF
-    3. Build acquire_cmd string for CLI usage
+    1. Apply recency filter (skip old papers unless high-score classics)
+    2. Call search.resolve(title, authors, year) for metadata
+    3. If found, call search.resolve_pdf_url() for open-access PDF
+    4. Build acquire_cmd string for CLI usage
 
-    Returns list of SuggestCandidate, longest first.
+    Returns (candidates, filtered_count).
     """
+    from datetime import date
+
     sorted_gaps = sorted(gaps, key=lambda g: g.get("score", 0), reverse=True)
 
+    current_year = date.today().year
     candidates: list[SuggestCandidate] = []
+    filtered_old = 0
+
     for gap in sorted_gaps:
         if len(candidates) >= limit:
             break
@@ -55,6 +63,12 @@ def suggest_acquisitions(
         authors = gap.get("ref_authors", "")
         year = gap.get("ref_year")
         score = gap.get("score", 0)
+
+        # Recency filter: skip old papers unless they're high-score classics
+        if max_age_years and year and (current_year - year) > max_age_years:
+            if score < classic_min_score:
+                filtered_old += 1
+                continue
 
         # Parse sections — DB stores JSON arrays, GROUP_CONCAT joins them
         sections_raw = gap.get("dissertation_sections", "")
@@ -99,7 +113,7 @@ def suggest_acquisitions(
 
         candidates.append(candidate)
 
-    return candidates
+    return candidates, filtered_old
 
 
 def _parse_sections(raw: str) -> list[str]:

@@ -2001,10 +2001,18 @@ def suggest(ctx, limit, section):
 
     console.print(f"\n[bold]Resolving top gaps via {search.backend_name}...[/bold]\n")
 
-    candidates = suggest_acquisitions(gaps_list, search, limit=limit)
+    suggest_cfg = kctx.config.suggest
+    candidates, filtered_old = suggest_acquisitions(
+        gaps_list, search, limit=limit,
+        max_age_years=suggest_cfg.max_age_years,
+        classic_min_score=suggest_cfg.classic_min_score,
+    )
 
     if not candidates:
-        console.print("[yellow]No gaps could be resolved.[/yellow]")
+        msg = "[yellow]No gaps could be resolved.[/yellow]"
+        if filtered_old:
+            msg += f"\n[dim]{filtered_old} older papers filtered (>{suggest_cfg.max_age_years}y)[/dim]"
+        console.print(msg)
         return
 
     total_open = len(gaps_list)
@@ -2049,6 +2057,8 @@ def suggest(ctx, limit, section):
             console.print(
                 f"  [dim]{i}.[/dim] [dim]⚠ Not found in search API[/dim]"
             )
+    if filtered_old:
+        console.print(f"  [dim]{filtered_old} older papers filtered (>{suggest_cfg.max_age_years}y, score<{suggest_cfg.classic_min_score})[/dim]")
     console.print()
 
 
