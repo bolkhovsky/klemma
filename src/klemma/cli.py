@@ -1422,14 +1422,16 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
 @click.option("--dry-run", is_flag=True, help="Show how many would be embedded without calling API")
 @click.option("--backend", type=click.Choice(["s2", "local", "openai"]), help="Override embedding backend")
 @click.option("--fragments", is_flag=True, help="Embed fragments instead of sources")
+@click.option("--sections", is_flag=True, help="Compute section centroid embeddings")
 @click.option("--backfill", is_flag=True, help="Fetch missing abstracts from S2 before embedding")
 @click.pass_context
-def embed(ctx, citekeys, dry_run, backend, fragments, backfill):
+def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
     """Backfill embeddings for sources with abstracts.
 
     Without CITEKEYS: embed all sources missing embeddings.
     With CITEKEYS: embed specific sources.
     Use --fragments to embed fragment text instead of source title+abstract.
+    Use --sections to compute section centroid embeddings from source vectors.
     Use --dry-run to preview without API calls.
     """
     kctx = _get_context(ctx)
@@ -1482,6 +1484,47 @@ def embed(ctx, citekeys, dry_run, backend, fragments, backfill):
         if failed:
             console.print(f" | [red]Failed: {failed}[/red]", end="")
         console.print()
+        return
+
+    if sections:
+        # Section centroid embedding mode
+        model_name = emb.model_name if emb else None
+        all_emb = state.get_all_embeddings(model=model_name)
+        if not all_emb:
+            console.print("[yellow]No source embeddings found. Run `klemma embed` first.[/yellow]")
+            return
+
+        # Get distinct sections from source_sections
+        with state._conn() as conn:
+            cur = conn.execute("SELECT DISTINCT section FROM source_sections ORDER BY section")
+            all_sections = [row["section"] for row in cur.fetchall()]
+
+        embedded = 0
+        skipped = 0
+        for sec in all_sections:
+            source_ids = state.get_section_sources(sec)
+            vecs = [all_emb[sid] for sid in source_ids if sid in all_emb]
+            if not vecs:
+                skipped += 1
+                continue
+            # Compute centroid (mean of source vectors)
+            dim = len(vecs[0])
+            centroid = [sum(v[i] for v in vecs) / len(vecs) for i in range(dim)]
+
+            if dry_run:
+                embedded += 1
+                continue
+
+            state.save_section_embedding(sec, centroid, model_name or "unknown", len(vecs))
+            embedded += 1
+
+        if dry_run:
+            console.print(f"[blue]Would embed {embedded} sections ({skipped} have no source embeddings)[/blue]")
+        else:
+            console.print(f"[green]Section embeddings: {embedded} computed[/green]", end="")
+            if skipped:
+                console.print(f" | [yellow]{skipped} skipped (no source embeddings)[/yellow]", end="")
+            console.print()
         return
 
     # Get candidates: sources with abstract but no embedding

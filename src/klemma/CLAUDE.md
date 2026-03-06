@@ -14,6 +14,7 @@ Click CLI entry point. Defines 16 commands + hidden aliases.
 - Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`
 - `init --outline` generates an outline after project setup (requires AI backend)
 - `init` non-interactive mode: `--name`, `--description`, `--keywords`, `--language` flags auto-skip wizard; `--non-interactive` is alias for `--no-input`
+- `embed --sections` computes section centroid embeddings from source vectors (mean of assigned source embeddings per section)
 - `--model` override available on: `research`, `ask`, `library`, `process`, `draft -s` — overrides `cfg.ai.model` per invocation
 - `draft` group: `draft introduction` (ГОСТ intro), `draft -s X.X` (standalone section draft → `notes/drafts/Draft_{section}.md`)
 
@@ -55,8 +56,8 @@ Semantic section vocabulary — cross-project labels for dissertation/paper sect
 - `infer_section_type(chapter_name)` — keyword matching → `SectionType | None`
 - `resolve_section_identifier(input, config?)` — parse CLI input: numeric `"2.3"` → `(section, None)`, semantic `"methodology"` → `(section?, SectionType)`
 
-### state.py (~700 lines)
-SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v7), auto-migrates via `_migrate_schema()`. All 65+ public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
+### state.py (~870 lines)
+SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v9), auto-migrates via `_migrate_schema()`. All 70+ public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
 
 **DB inheritance (#55):** `set_parent(db_path)` attaches a read-only parent `StateManager`. Nine read methods merge parent data: `get_all_sources`, `get_by_chapter`, `get_by_section`, `get_fragments`, `get_coverage_stats`, `retrieve_similar_fragments`, `get_fragment_embeddings`, `get_all_embeddings`, `get_reference_gaps`. Child wins on key collision. Writes go only to child DB. Controlled by `StateConfig.inherit_db` (default `True`).
 
@@ -73,8 +74,9 @@ Tables:
 - `reading_queue` — prioritized reading list
 - `prune_verdicts` — librarian audit results (drop/maybe with reason)
 - `benchmark_runs` — benchmark run history (run_id, timestamp, metrics JSON, paper_citekey, git_commit, klemma_version, config_snapshot, duration)
+- `section_embeddings` — section centroid embeddings (section × embedding_model composite PK, BLOB float32, source_count, updated_at)
 
-Key methods: `register_sources()`, `update_source_info()`, `get_by_section(section, section_type?)` (JOIN on `source_sections`), `get_coverage_stats()` (includes `section_types` dict), `get_gap_summary()`, `save_plan()`, `save_citation_links()`, `get_citation_graph()`, `save_embedding()`, `get_embeddings()`, `save_prune_verdicts()`, `get_prune_verdicts()`, `save_benchmark_run()`, `get_benchmark_runs()`, `compare_benchmark_runs()`, `sync_section_types(config)`.
+Key methods: `register_sources()`, `update_source_info()`, `get_by_section(section, section_type?)` (JOIN on `source_sections`), `get_coverage_stats()` (includes `section_types` dict), `get_gap_summary()`, `save_plan()`, `save_citation_links()`, `get_citation_graph()`, `save_embedding()`, `get_embeddings()`, `save_section_embedding()`, `get_section_embedding()`, `get_all_section_embeddings()`, `get_section_embedding_stats()`, `save_prune_verdicts()`, `get_prune_verdicts()`, `save_benchmark_run()`, `get_benchmark_runs()`, `compare_benchmark_runs()`, `sync_section_types(config)`.
 
 ### errors.py (32 lines)
 Klemma error taxonomy for AI backends.

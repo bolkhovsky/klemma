@@ -137,6 +137,7 @@ klemma process --serial                        # последовательно 
 ```bash
 klemma embed                                   # все без embeddings
 klemma embed smithMachineLearning2020          # один источник
+klemma embed --sections                        # centroid embeddings по разделам
 klemma embed --dry-run                         # сколько будет обработано
 klemma embed --backend local                   # override бэкенда
 ```
@@ -393,7 +394,7 @@ klemma (CLI, v0.4.1)
 ├── Zotero storage ─── PDF файлы
 ├── PyMuPDF ────────── извлечение текста из PDF
 ├── Config ────────── ~/.klemmarc.yaml → ~/.klemma/ → .klemma/ (3-level merge)
-└── SQLite (schema v5)
+└── SQLite (schema v9)
     ├── sources ─────────── записи Zotero (+ embedding BLOB, embedding_model)
     ├── source_sections ─── source × section (multi-section)
     ├── fragments ───────── фрагменты для цитирования (+ citation_intent, embedding, embedding_model)
@@ -402,5 +403,6 @@ klemma (CLI, v0.4.1)
     ├── daily_plans ─────── сгенерированные планы
     ├── reading_queue ───── очередь чтения
     ├── prune_verdicts ──── результаты аудита (drop/maybe)
-    └── benchmark_runs ──── история бенчмарков (metrics, config_snapshot, git_commit)
+    ├── benchmark_runs ──── история бенчмарков (metrics, config_snapshot, git_commit)
+    └── section_embeddings ─ centroid embeddings разделов (section × model)
 ```

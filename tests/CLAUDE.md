@@ -1,6 +1,6 @@
 # Tests
 
-## Current test suite (650 tests)
+## Current test suite (746 tests)
 - `test_errors.py` (33 lines) — `KlemmaAIError` hierarchy, `retryable` classification, cause chaining
 - `test_ai.py` (170 lines) — `extract_json()`, `AIProviderBase`, `AICallResult` dataclass, `call_with_meta()` base + Claude, `create_ai()` factory
 - `test_ai_litellm.py` (265 lines) — `LiteLLMClient` with mocked litellm: call, json_mode, base_url, api_key, reasoning model detection, retry, `call_with_meta()` with structured error mapping + token extraction
@@ -15,7 +15,7 @@
 - `test_interactive_init.py` (347 lines) — interactive `klemma init` wizard, auto-discovery, config generation
 - `test_cli_init_outline.py` (37 lines) — `klemma init --outline` CLI behavior, AI-missing skip, no-outline no AI call
 - `test_cli_init_non_interactive.py` (~100 lines) — 6 tests: `klemma init` non-interactive mode (#54) — --name creates project, CLI flags populate config.yaml, KLEMMA.md content, --non-interactive alias, minimal init, no wizard prompts
-- `test_cli_embed.py` (~70 lines) — `klemma embed` multi-citekey CLI behavior, missing-key warnings, `--fragments` flag (embed + dry-run)
+- `test_cli_embed.py` (~190 lines) — `klemma embed` multi-citekey CLI behavior, missing-key warnings, `--fragments` flag (embed + dry-run), `--sections` flag (section centroid computation, dry-run, roundtrip CRUD)
 - `test_cli_model_override.py` (~96 lines) — `--model` CLI override: verifies override reaches `create_ai()`, default model preserved without flag
 - `test_db_inheritance.py` (~195 lines) — 15 tests: DB inheritance (#55) — parent sources/fragments/embeddings/gaps visible through child, child wins on duplicate, write isolation, coverage stats aggregation, RAG across both DBs, disabled/absent parent
 - `test_repositories.py` (~240 lines) — repository composition, facade delegation, per-repo CRUD roundtrips, new public methods (`get_existing_source_ids`, `get_sources_without_embeddings`), fragment embedding save/retrieve roundtrip, embedding stats, unembedded fragments, top-K cosine retrieval

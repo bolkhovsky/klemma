@@ -48,10 +48,14 @@ Fragment CRUD, citation intent coverage, and fragment-level embeddings.
 - `get_unembedded_fragments()` — fragments missing embeddings
 - `retrieve_similar_fragments(query_embedding, top_k, model?)` — top-K cosine retrieval
 
-### embeddings_store.py (~100 lines)
+### embeddings_store.py (~180 lines)
 Vector BLOB storage with model versioning.
 - `save_embedding()`, `get_embedding()`, `get_all_embeddings()`
 - `get_embedding_stats()` — coverage by model
+- `save_section_embedding(section, embedding, model, source_count)` — UPSERT section centroid BLOB
+- `get_section_embedding(section, model?)` — returns `(vector, model, source_count)` or None
+- `get_all_section_embeddings(model?)` — returns `{section: vector}` dict
+- `get_section_embedding_stats()` — `{total_sections, embedded_sections, models}`
 
 ### gaps.py (~350 lines)
 Reference gaps, coverage analysis, intent-weighted scoring.
