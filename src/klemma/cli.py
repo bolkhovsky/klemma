@@ -2050,6 +2050,7 @@ def suggest(ctx, limit, section):
     from .skills.suggester import suggest_acquisitions
 
     kctx = _get_context(ctx)
+    _sync_sections(kctx, quiet=True)
 
     # Fetch more gaps than needed (some won't resolve)
     gaps_list = kctx.state.get_reference_gaps(section=section, limit=limit * 3)
