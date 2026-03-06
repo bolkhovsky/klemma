@@ -3040,11 +3040,37 @@ def library(ctx, section, audit, model):
 @click.option("-c", "--chapter", type=int, help="Filter by chapter number")
 @click.option("-v", "--verdict", type=click.Choice(["drop", "maybe"]), help="Filter by verdict")
 @click.option("--clear", "clear_key", help="Clear verdict for a citekey")
+@click.option("--apply", is_flag=True, help="Delete all 'drop' sources from DB")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt (use with --apply)")
 @click.pass_context
-def prune(ctx, chapter, verdict, clear_key):
+def prune(ctx, chapter, verdict, clear_key, apply, yes):
     """Browse and manage prune verdicts from library analysis."""
     kctx = _get_context(ctx)
     state = kctx.state
+
+    if apply:
+        drop_ids = state.get_prune_drop_ids()
+        if not drop_ids:
+            console.print("[dim]No 'drop' verdicts to apply.[/dim]")
+            return
+        # Show what will be deleted
+        console.print(f"\n[bold]Sources to remove ({len(drop_ids)}):[/bold]")
+        for citekey in sorted(drop_ids):
+            src = state.get_source(citekey)
+            title = (src.get("title") or "untitled")[:60] if src else "unknown"
+            console.print(f"  [red]×[/red] @{citekey}  [dim]{title}[/dim]")
+        console.print(f"\n[yellow]This will delete {len(drop_ids)} sources and their fragments from DB.[/yellow]")
+        console.print("[dim]Vault notes are preserved.[/dim]")
+        if not yes:
+            if not click.confirm("Proceed?"):
+                console.print("[dim]Aborted.[/dim]")
+                return
+        deleted = 0
+        for citekey in sorted(drop_ids):
+            state.delete_source(citekey)
+            deleted += 1
+        console.print(f"\n[green]Removed {deleted} sources from DB (vault notes preserved).[/green]")
+        return
 
     if clear_key and (chapter is not None or verdict is not None):
         console.print("[red]--clear cannot be combined with -c/-v[/red]")
