@@ -439,6 +439,13 @@ class StateManager:
         parent = self.parent_state.sources.get_all_sources()
         return self._merge_by_id(child, parent, key="id")
 
+    def get_all_sources_metadata(self) -> list[dict]:
+        child = self.sources.get_all_sources_metadata()
+        if not self.parent_state:
+            return child
+        parent = self.parent_state.sources.get_all_sources_metadata()
+        return self._merge_by_id(child, parent, key="id")
+
     def get_by_chapter(self, chapter: int) -> list[dict]:
         child = self.sources.get_by_chapter(chapter)
         if not self.parent_state:

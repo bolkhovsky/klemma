@@ -32,6 +32,7 @@ Base class providing shared `_conn` factory.
 Source lifecycle, sections, Zotero key management, vault sync.
 - `register_sources()`, `mark_completed()`, `get_source()`, `get_stats()`, `update_source_info()` (persist title/authors/year/abstract/doi)
 - `get_all_sources()` — includes `year` column for recency filtering
+- `get_all_sources_metadata()` — full metadata (title, authors, year, doi) for dedup checks
 - `set_source_sections()` — replaces old `_set_sections_inline`
 - `get_by_section(section, section_type?)` — filter by numeric section or semantic type (#67)
 - `get_existing_source_ids()` — replaces old direct `_conn()` usage in cli.py
