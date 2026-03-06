@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 _SHIPPED_PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
 # Config keys inherited from parent project (shared resources)
-_INHERITED_KEYS = {"obsidian", "zotero", "ai", "embeddings"}
+_INHERITED_KEYS = {"obsidian", "zotero", "ai", "embeddings", "search"}
 
 # Claude model shorthands → litellm model IDs (for bare-name detection)
 _CLAUDE_SHORTHANDS: dict[str, str] = {
@@ -47,6 +47,7 @@ def _get_known_fields() -> dict[str, set[str]]:
     _KNOWN_FIELDS["zotero"] = set(ZoteroConfig.model_fields.keys())
     _KNOWN_FIELDS["obsidian"] = set(ObsidianConfig.model_fields.keys())
     _KNOWN_FIELDS["embeddings"] = set(EmbeddingsConfig.model_fields.keys())
+    _KNOWN_FIELDS["search"] = set(SearchConfig.model_fields.keys())
     _KNOWN_FIELDS["state"] = set(StateConfig.model_fields.keys())
     _KNOWN_FIELDS["instance"] = set(InstanceConfig.model_fields.keys())
     _KNOWN_FIELDS["project"] = set(ProjectConfig.model_fields.keys())
@@ -78,7 +79,7 @@ def _warn_config_issues(raw: dict, source: str) -> None:
     # --- 1. Misplaced keys: known sub-section fields placed at root ---
     # Map: child field → list of sections it belongs to
     child_fields: dict[str, list[str]] = {}
-    for section in ("ai", "zotero", "obsidian", "embeddings", "state",
+    for section in ("ai", "zotero", "obsidian", "embeddings", "search", "state",
                     "instance", "project", "dissertation", "planning",
                     "reading", "processing", "tags", "export"):
         for field in fields.get(section, set()):
@@ -344,6 +345,11 @@ class EmbeddingsConfig(BaseModel):
     throttle: float = 3.1  # seconds between S2 API requests
 
 
+class SearchConfig(BaseModel):
+    backend: str = ""  # "s2" | "" (disabled; gaps suggest defaults to s2 on-demand)
+    throttle: float = 3.1  # seconds between API requests
+
+
 class StateConfig(BaseModel):
     db_path: str = "./data/klemma.db"
     inherit_db: bool = True  # inherit parent project's DB (read-only)
@@ -520,6 +526,7 @@ class KlemmaConfig(BaseModel):
     obsidian: ObsidianConfig = Field(default_factory=ObsidianConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
     embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
+    search: SearchConfig = Field(default_factory=SearchConfig)
     state: StateConfig = Field(default_factory=StateConfig)
     dissertation: DissertationConfig = Field(default_factory=DissertationConfig)
     planning: PlanningConfig = Field(default_factory=PlanningConfig)

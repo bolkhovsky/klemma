@@ -107,12 +107,19 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
             api_keys=cfg.ai._resolved_api_keys or None,
         )
 
+    # Search: create provider if configured (lazy init in `gaps suggest` otherwise)
+    search_provider = None
+    if cfg.search.backend:
+        from .search import create_search
+        search_provider = create_search(cfg.search.model_dump())
+
     dissertation_context = load_project_context(project_chain, cfg)
     available_tags = load_available_tags(klemma_home, cfg, project_chain=project_chain)
 
     return KlemmaContext(
         config=cfg, state=state, vault=vault, library=library,
         embeddings=emb_provider,
+        search=search_provider,
         project=project, project_name=project_root.name,
         klemma_home=klemma_home,
         dissertation_context=dissertation_context,
@@ -1301,8 +1308,21 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
 
     entry = library.entries.get(citekey)
     if not entry:
-        from .literature.models import ZoteroEntry
-        entry = ZoteroEntry(id=citekey, title=citekey)
+        from .literature.models import Author, ZoteroEntry
+        # Fall back to DB metadata from acquire (title, authors, year)
+        db_title = source.get("title", "") if source else ""
+        db_authors = source.get("authors", "") if source else ""
+        db_year = source.get("year") if source else None
+        db_abstract = source.get("abstract", "") if source else ""
+        issued = {"date-parts": [[db_year]]} if db_year else None
+        authors = [Author(literal=a.strip()) for a in db_authors.split(",") if a.strip()] if db_authors else []
+        entry = ZoteroEntry(
+            id=citekey,
+            title=db_title or citekey,
+            abstractNote=db_abstract,
+            author=authors,
+            issued=issued,
+        )
 
     if not quiet:
         console.print(f"[blue]Processing: {entry.authors_str} ({entry.year or '?'})[/blue] [dim]@{citekey}[/dim]")
@@ -1364,10 +1384,24 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
         else:
             console.print(" [dim](DB only)[/dim]")
 
-    # Auto-embed if provider available and entry has abstract
-    if embeddings and entry.abstract:
+    # Backfill abstract from S2 if missing (e.g. acquire hit rate limit)
+    abstract = entry.abstract or ""
+    if not abstract and entry.title:
         try:
-            vec = embeddings.embed(entry.title or citekey, entry.abstract)
+            from .literature.metadata import lookup_s2
+            hit = lookup_s2(entry.title)
+            if hit and hit.get("abstract"):
+                abstract = hit["abstract"]
+                state.update_source_info(citekey, abstract=abstract)
+                if not quiet:
+                    console.print("  [dim]abstract backfilled from S2[/dim]")
+        except Exception:
+            pass
+
+    # Auto-embed if provider available and entry has abstract
+    if embeddings and abstract:
+        try:
+            vec = embeddings.embed(entry.title or citekey, abstract)
             if vec:
                 state.save_embedding(citekey, vec, embeddings.model_name)
                 if not quiet:
@@ -1498,6 +1532,16 @@ def embed(ctx, citekeys, dry_run, backend, fragments):
             entry = entries.get(ck)
             title = entry.title if entry else ck
             abstract = entry.abstract if entry else ""
+            # Backfill abstract from S2 if missing
+            if not abstract and needs_abstract and title and title != ck:
+                try:
+                    from .literature.metadata import lookup_s2
+                    hit = lookup_s2(title)
+                    if hit and hit.get("abstract"):
+                        abstract = hit["abstract"]
+                        state.update_source_info(ck, abstract=abstract)
+                except Exception:
+                    pass
             if not abstract and needs_abstract:
                 no_abstract_count += 1
                 progress.advance(task)
@@ -1902,12 +1946,99 @@ def coverage(ctx):
     ctx.invoke(status, verbose=True)
 
 
-@main.command(hidden=True)
-@click.option("--min-sources", "-m", type=int, default=3)
+@main.group(invoke_without_command=True)
 @click.pass_context
-def gaps(ctx, min_sources):
-    """[alias] → status --verbose"""
-    ctx.invoke(status, verbose=True)
+def gaps(ctx):
+    """Reference gaps and acquisition suggestions."""
+    if ctx.invoked_subcommand is None:
+        # Backward compat: bare `klemma gaps` = status --verbose
+        ctx.invoke(status, verbose=True)
+
+
+main.add_command(gaps)
+
+
+@gaps.command()
+@click.option("--limit", "-n", type=int, default=10, help="Number of suggestions")
+@click.option("--section", "-s", default=None, help="Filter by section (e.g. 1.3)")
+@click.pass_context
+def suggest(ctx, limit, section):
+    """Suggest papers to fill reference gaps."""
+    from .search import ChainSearchProvider, CrossRefSearchProvider, S2SearchProvider, create_search
+    from .skills.suggester import suggest_acquisitions
+
+    kctx = _get_context(ctx)
+
+    # Fetch more gaps than needed (some won't resolve)
+    gaps_list = kctx.state.get_reference_gaps(section=section, limit=limit * 3)
+
+    if not gaps_list:
+        console.print("[yellow]No open reference gaps found.[/yellow]")
+        return
+
+    # Initialize search: configured provider, or default S2 → CrossRef chain
+    search = kctx.search
+    if search is None:
+        search_cfg = kctx.config.search
+        if search_cfg.backend:
+            search = create_search(search_cfg.model_dump())
+        else:
+            search = ChainSearchProvider([
+                S2SearchProvider(),
+                CrossRefSearchProvider(),
+            ])
+
+    console.print(f"\n[bold]Resolving top gaps via {search.backend_name}...[/bold]\n")
+
+    candidates = suggest_acquisitions(gaps_list, search, limit=limit)
+
+    if not candidates:
+        console.print("[yellow]No gaps could be resolved.[/yellow]")
+        return
+
+    total_open = len(gaps_list)
+    table = Table(
+        title=f"Gap Suggestions ({len(candidates)} of {total_open} open gaps)",
+        show_lines=True,
+    )
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Score", justify="right", width=6)
+    table.add_column("Authors", width=20)
+    table.add_column("Year", width=5)
+    table.add_column("Title", width=35)
+    table.add_column("Sections", width=12)
+
+    for i, c in enumerate(candidates, 1):
+        year_str = str(c.ref_year) if c.ref_year else "—"
+        sections_str = ", ".join(c.sections) if c.sections else "—"
+        title_display = c.ref_title[:60] + "..." if len(c.ref_title) > 60 else c.ref_title
+
+        table.add_row(
+            str(i),
+            f"{c.score:.1f}",
+            c.ref_authors[:25] if c.ref_authors else "—",
+            year_str,
+            title_display,
+            sections_str,
+        )
+
+    console.print(table)
+
+    # Print acquire commands below the table
+    console.print()
+    for i, c in enumerate(candidates, 1):
+        if c.acquire_cmd:
+            console.print(f"  [dim]{i}.[/dim] [green]→ {c.acquire_cmd}[/green]")
+        elif c.doi:
+            console.print(
+                f"  [dim]{i}.[/dim] [yellow]⚠ No open-access PDF found"
+                f" (DOI: {c.doi})[/yellow]"
+            )
+        else:
+            console.print(
+                f"  [dim]{i}.[/dim] [dim]⚠ Not found in search API[/dim]"
+            )
+    console.print()
 
 
 @main.group(invoke_without_command=True)
@@ -2854,13 +2985,15 @@ def prune(ctx, chapter, verdict, clear_key):
 @click.option("--volume", help="Volume")
 @click.option("--issue", help="Issue")
 @click.option("--section", "-s", multiple=True, help="Dissertation section(s) to assign")
+@click.option("--pdf", "pdf_url", help="Direct PDF URL (bypass DOI resolution, e.g. for WAF-protected publishers)")
 @click.option("--batch", "batch_path", type=click.Path(exists=True), help="JSON file with papers list")
 @click.option("--no-process", is_flag=True, help="Skip fragment extraction after adding")
 @click.pass_context
-def acquire(ctx, url, title, authors, year, journal, volume, issue, section, batch_path, no_process):
+def acquire(ctx, url, title, authors, year, journal, volume, issue, section, pdf_url, batch_path, no_process):
     """Download PDF, add to Zotero, register in klemma.
 
     Single paper: klemma acquire <pdf_url> --title "..." --authors "..." --year 2022 --section 1.2
+    With DOI + direct PDF: klemma acquire <doi_url> --pdf <direct_pdf_url> --section 1.3
     Batch: klemma acquire --batch papers.json
     """
     from .skills.acquirer import PaperMetadata, acquire_paper_local, load_batch
@@ -2881,6 +3014,7 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
             journal=journal or "",
             volume=volume or "",
             issue=issue or "",
+            pdf_override=pdf_url or "",
             sections=list(section),
         )]
     else:
@@ -2897,7 +3031,7 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
             meta, storage_path=cfg.zotero.storage_path, state=state,
         )
 
-        if result.status == "ok":
+        if result.status in ("ok", "ok_no_pdf"):
             console.print(f"  [green]@{result.citekey}[/green]")
             if meta.title:
                 auto = " [dim](auto-extracted)[/dim]" if not title else ""
@@ -2908,10 +3042,14 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, bat
                 console.print(f"  Year: {meta.year}")
             if result.zotero_added:
                 console.print("  [blue]Added to Zotero (BBT citekey)[/blue]")
+            if result.status == "ok_no_pdf":
+                console.print("  [yellow]No open-access PDF found (metadata-only)[/yellow]")
+                if result.zotero_added:
+                    console.print("  [dim]Tip: use Zotero → Right-click → Find Available PDF[/dim]")
             if meta.sections:
                 console.print(f"  [dim]sections: {', '.join(meta.sections)}[/dim]")
 
-            if not no_process:
+            if not no_process and result.status == "ok":
                 try:
                     ai = _init_ai(cfg)
                 except Exception as e:
