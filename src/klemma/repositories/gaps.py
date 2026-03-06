@@ -383,14 +383,16 @@ class GapsRepository(BaseRepository):
     def get_gaps(self, min_sources: int = 3) -> list[dict]:
         with self._conn() as conn:
             cur = conn.execute(
-                """SELECT primary_section, COUNT(*) as cnt FROM sources
-                   WHERE status=? AND primary_section IS NOT NULL
-                   GROUP BY primary_section HAVING cnt < ?
+                """SELECT ss.section, COUNT(DISTINCT ss.source_id) as cnt
+                   FROM source_sections ss
+                   JOIN sources s ON s.id = ss.source_id
+                   WHERE s.status = ?
+                   GROUP BY ss.section HAVING cnt < ?
                    ORDER BY cnt ASC""",
                 ("completed", min_sources),
             )
             return [
-                {"section": row["primary_section"], "count": row["cnt"]}
+                {"section": row["section"], "count": row["cnt"]}
                 for row in cur.fetchall()
             ]
 

@@ -89,34 +89,42 @@ class SemanticScholarEmbeddings:
         """Fetch SPECTER embedding from S2 API by paper title search."""
         import requests
 
-        self._wait_throttle()
         headers = {}
         if self._api_key:
             headers["x-api-key"] = self._api_key
 
-        try:
-            resp = requests.get(
-                "https://api.semanticscholar.org/graph/v1/paper/search",
-                params={"query": title, "fields": "embedding", "limit": 1},
-                headers=headers,
-                timeout=15,
-            )
-            self._last_request = time.time()
-            resp.raise_for_status()
-            data = resp.json()
-            papers = data.get("data", [])
-            if not papers:
-                logger.debug("S2: no results for '%s'", title[:60])
+        for attempt in range(4):
+            self._wait_throttle()
+            try:
+                resp = requests.get(
+                    "https://api.semanticscholar.org/graph/v1/paper/search",
+                    params={"query": title, "fields": "embedding", "limit": 1},
+                    headers=headers,
+                    timeout=15,
+                )
+                self._last_request = time.time()
+                if resp.status_code == 429:
+                    wait = 15 * (2 ** attempt)  # 15, 30, 60, 120s
+                    logger.debug("S2 rate-limited, retrying in %ds", wait)
+                    time.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                papers = data.get("data", [])
+                if not papers:
+                    logger.debug("S2: no results for '%s'", title[:60])
+                    return None
+                emb = papers[0].get("embedding", {})
+                vector = emb.get("vector")
+                if vector and len(vector) == self.dim:
+                    return vector
+                logger.debug("S2: no embedding for '%s'", title[:60])
                 return None
-            emb = papers[0].get("embedding", {})
-            vector = emb.get("vector")
-            if vector and len(vector) == self.dim:
-                return vector
-            logger.debug("S2: no embedding for '%s'", title[:60])
-            return None
-        except Exception as e:
-            logger.warning("S2 API error for '%s': %s", title[:60], e)
-            return None
+            except Exception as e:
+                logger.warning("S2 API error for '%s': %s", title[:60], e)
+                return None
+        logger.warning("S2 rate-limited for '%s' after retries", title[:60])
+        return None
 
 
 # ---------------------------------------------------------------------------

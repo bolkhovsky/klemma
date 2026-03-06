@@ -1,6 +1,7 @@
 """Auto-extract paper metadata from PDF properties + Semantic Scholar API."""
 
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -85,39 +86,52 @@ def lookup_s2(title: str) -> Optional[dict]:
     if not title:
         return None
 
-    # Rate limiting
-    elapsed = time.time() - _s2_last_request
-    if elapsed < _S2_THROTTLE:
-        time.sleep(_S2_THROTTLE - elapsed)
+    for attempt in range(4):
+        # Rate limiting (applied before every attempt)
+        elapsed = time.time() - _s2_last_request
+        if elapsed < _S2_THROTTLE:
+            time.sleep(_S2_THROTTLE - elapsed)
 
-    try:
-        resp = requests.get(
-            "https://api.semanticscholar.org/graph/v1/paper/search",
-            params={
-                "query": title,
-                "fields": "title,authors,year,abstract,externalIds",
-                "limit": 3,
-            },
-            timeout=15,
-        )
-        _s2_last_request = time.time()
-        resp.raise_for_status()
+        try:
+            headers = {}
+            api_key = os.environ.get("S2_API_KEY")
+            if api_key:
+                headers["x-api-key"] = api_key
+            resp = requests.get(
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                params={
+                    "query": title,
+                    "fields": "title,authors,year,abstract,externalIds",
+                    "limit": 3,
+                },
+                headers=headers,
+                timeout=15,
+            )
+            _s2_last_request = time.time()
+            if resp.status_code == 429:
+                wait = 15 * (2 ** attempt)  # 15, 30, 60, 120s
+                logger.debug("S2 rate-limited, retrying in %ds", wait)
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
 
-        papers = resp.json().get("data", [])
-        for paper in papers:
-            if _titles_match(title, paper.get("title", "")):
-                author_names = [a.get("name", "") for a in paper.get("authors", [])]
-                return {
-                    "title": paper.get("title", ""),
-                    "authors": ", ".join(author_names),
-                    "year": paper.get("year"),
-                    "abstract": paper.get("abstract") or "",
-                    "doi": (paper.get("externalIds") or {}).get("DOI", ""),
-                }
-        return None
-    except Exception as e:
-        logger.warning("S2 lookup failed for '%s': %s", title[:60], e)
-        return None
+            papers = resp.json().get("data", [])
+            for paper in papers:
+                if _titles_match(title, paper.get("title", "")):
+                    author_names = [a.get("name", "") for a in paper.get("authors", [])]
+                    return {
+                        "title": paper.get("title", ""),
+                        "authors": ", ".join(author_names),
+                        "year": paper.get("year"),
+                        "abstract": paper.get("abstract") or "",
+                        "doi": (paper.get("externalIds") or {}).get("DOI", ""),
+                    }
+            return None
+        except Exception as e:
+            logger.warning("S2 lookup failed for '%s': %s", title[:60], e)
+            return None
+    logger.warning("S2 rate-limited for '%s' after retries", title[:60])
+    return None
 
 
 def _titles_match(query: str, candidate: str) -> bool:

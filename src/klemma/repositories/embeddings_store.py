@@ -68,7 +68,7 @@ class EmbeddingsStoreRepository(BaseRepository):
                 "SELECT COUNT(*) as cnt FROM sources WHERE status='completed'"
             ).fetchone()["cnt"]
             embedded = conn.execute(
-                "SELECT COUNT(*) as cnt FROM sources WHERE embedding IS NOT NULL"
+                "SELECT COUNT(*) as cnt FROM sources WHERE status='completed' AND embedding IS NOT NULL"
             ).fetchone()["cnt"]
             models = {}
             cur = conn.execute(

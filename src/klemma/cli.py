@@ -1250,6 +1250,7 @@ def process(ctx, citekeys, serial, force, model):
 
         elapsed = time.monotonic() - t0
         ok = 0
+        newly_skipped = 0
         for idx, ck in enumerate(keys, 1):
             n_frags, status = results.get(ck, (0, "unknown"))
             if n_frags > 0:
@@ -1257,13 +1258,17 @@ def process(ctx, citekeys, serial, force, model):
                 ok += 1
             else:
                 console.print(f"  [{idx}/{len(keys)}] @{ck} — [red]{status}[/red]")
-        console.print(f"\n[green]Done: {ok}/{len(keys)} processed (parallel, {elapsed:.0f}s).[/green]")
+                if status in ("PDF not found", "text too short", "no fragments"):
+                    newly_skipped += 1
+        skip_msg = f" {newly_skipped} skipped (no PDF / text too short)." if newly_skipped else ""
+        console.print(f"\n[green]Done: {ok}/{len(keys)} processed (parallel, {elapsed:.0f}s).[/green]{skip_msg}")
     else:
         processed = 0
+        newly_skipped = 0
         for idx, ck in enumerate(keys, 1):
             if len(keys) > 1:
                 console.print(f"\n[bold][{idx}/{len(keys)}] {ck}[/bold]")
-            n_frags, _ = _process_single(ck, cfg, state, vault, ai, pdf_extractor, kctx.library,
+            n_frags, reason = _process_single(ck, cfg, state, vault, ai, pdf_extractor, kctx.library,
                                          dissertation_context=kctx.dissertation_context,
                                          available_tags=kctx.available_tags,
                                          klemma_home=kctx.klemma_home,
@@ -1271,8 +1276,11 @@ def process(ctx, citekeys, serial, force, model):
                                          embeddings=kctx.embeddings, force=force)
             if n_frags > 0:
                 processed += 1
+            elif reason in ("PDF not found", "text too short", "no fragments"):
+                newly_skipped += 1
         if len(keys) > 1:
-            console.print(f"\n[green]Done: {processed}/{len(keys)} processed.[/green]")
+            skip_msg = f" {newly_skipped} skipped (no PDF / text too short)." if newly_skipped else ""
+            console.print(f"\n[green]Done: {processed}/{len(keys)} processed.[/green]{skip_msg}")
 
     # DEV mode: show benchmark candidate hints
     if kctx.config.instance.dev_mode:
@@ -1332,6 +1340,7 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
     if not pdf_path:
         if not quiet:
             console.print("  [red]PDF not found[/red]")
+        state.sources.mark_skipped(citekey, "PDF not found")
         return (0, "PDF not found")
 
     # Extract text
@@ -1339,6 +1348,7 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
     if not pdf_text or len(pdf_text) < cfg.processing.min_pdf_length:
         if not quiet:
             console.print("  [red]PDF extraction failed or text too short[/red]")
+        state.sources.mark_skipped(citekey, "text too short")
         return (0, "text too short")
 
     # If reprocessing, clear old fragments before extracting fresh ones
@@ -1357,6 +1367,7 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
     if not result or not result.fragments:
         if not quiet:
             console.print("  [red]No fragments extracted[/red]")
+        state.sources.mark_skipped(citekey, "no fragments")
         return (0, "no fragments")
 
     if not quiet:
@@ -1411,8 +1422,9 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
 @click.option("--dry-run", is_flag=True, help="Show how many would be embedded without calling API")
 @click.option("--backend", type=click.Choice(["s2", "local", "openai"]), help="Override embedding backend")
 @click.option("--fragments", is_flag=True, help="Embed fragments instead of sources")
+@click.option("--backfill", is_flag=True, help="Fetch missing abstracts from S2 before embedding")
 @click.pass_context
-def embed(ctx, citekeys, dry_run, backend, fragments):
+def embed(ctx, citekeys, dry_run, backend, fragments, backfill):
     """Backfill embeddings for sources with abstracts.
 
     Without CITEKEYS: embed all sources missing embeddings.
@@ -1494,27 +1506,41 @@ def embed(ctx, citekeys, dry_run, backend, fragments):
         console.print("[green]All sources already have embeddings.[/green]")
         return
 
-    # S2 backend can embed by title alone (API search); others need abstract
-    needs_abstract = not isinstance(emb, SemanticScholarEmbeddings) if emb else True
+    # S2 backend can embed by title alone (API search); others need text
+    is_s2 = isinstance(emb, SemanticScholarEmbeddings) if emb else False
 
     # For dry-run, check which have abstracts via library
     entries = kctx.library.entries if kctx.library else {}
-    if needs_abstract:
-        with_abstract = [c for c in candidates if entries.get(c) and entries[c].abstract]
-        no_abstract = len(candidates) - len(with_abstract)
-    else:
-        with_abstract = candidates
-        no_abstract = 0
+
+    # --backfill: fetch missing abstracts from S2 before embedding
+    if backfill and not is_s2:
+        from .literature.metadata import lookup_s2
+        no_abs = [c for c in candidates if not (entries.get(c) and entries[c].abstract)]
+        if no_abs:
+            from rich.progress import Progress
+            filled = 0
+            with Progress(console=console) as progress:
+                btask = progress.add_task("Backfilling abstracts from S2...", total=len(no_abs))
+                for ck in no_abs:
+                    entry = entries.get(ck)
+                    title = entry.title if entry else ck
+                    if title and title != ck:
+                        hit = lookup_s2(title)
+                        if hit and hit.get("abstract"):
+                            state.update_source_info(ck, abstract=hit["abstract"])
+                            if entry:
+                                entry.abstract = hit["abstract"]
+                            filled += 1
+                    progress.advance(btask)
+            if filled:
+                console.print(f"[green]Backfilled {filled}/{len(no_abs)} abstracts.[/green]")
 
     if dry_run:
-        console.print(f"[blue]Would embed {len(with_abstract)} sources[/blue]")
-        if no_abstract:
-            console.print(f"[dim]{no_abstract} sources have no abstract (will be skipped)[/dim]")
+        console.print(f"[blue]Would embed {len(candidates)} sources[/blue]")
         return
 
     # Embed
     embedded = 0
-    no_abstract_count = 0
     api_miss = 0
     failed = 0
 
@@ -1525,20 +1551,11 @@ def embed(ctx, citekeys, dry_run, backend, fragments):
             entry = entries.get(ck)
             title = entry.title if entry else ck
             abstract = entry.abstract if entry else ""
-            # Backfill abstract from S2 if missing
-            if not abstract and needs_abstract and title and title != ck:
-                try:
-                    from .literature.metadata import lookup_s2
-                    hit = lookup_s2(title)
-                    if hit and hit.get("abstract"):
-                        abstract = hit["abstract"]
-                        state.update_source_info(ck, abstract=abstract)
-                except Exception:
-                    pass
-            if not abstract and needs_abstract:
-                no_abstract_count += 1
-                progress.advance(task)
-                continue
+            # For non-S2 backends: build embed text from title + abstract or fragments
+            if not is_s2 and not abstract:
+                frags = state.get_fragments(source_id=ck, limit=10)
+                frag_text = " ".join(f["fragment_text"] for f in frags if f.get("fragment_text"))
+                abstract = frag_text[:2000] if frag_text else ""
             try:
                 vec = emb.embed(title, abstract)
                 if vec:
@@ -1554,8 +1571,6 @@ def embed(ctx, citekeys, dry_run, backend, fragments):
     # Summary with full breakdown
     emb_stats = state.get_embedding_stats()
     parts = [f"[green]Embedded: {embedded}[/green]"]
-    if no_abstract_count:
-        parts.append(f"[yellow]No abstract: {no_abstract_count}[/yellow]")
     if api_miss:
         parts.append(f"[yellow]Not found: {api_miss}[/yellow]")
     if failed:
@@ -1708,8 +1723,11 @@ def status(ctx, verbose, chapter):
     completed = proc_stats.get("completed", 0)
     pending = proc_stats.get("pending", 0)
     failed = proc_stats.get("failed", 0)
+    skipped = proc_stats.get("skipped", 0)
     total = proc_stats.get("total", 0)
     parts = [f"[green]{completed} completed[/green]"]
+    if skipped:
+        parts.append(f"[dim]{skipped} skipped[/dim]")
     if pending:
         parts.append(f"[yellow]{pending} pending[/yellow]")
     if failed:

@@ -22,8 +22,7 @@ def test_embed_accepts_multiple_citekeys_and_warns_missing(tmp_path, monkeypatch
 
     assert result.exit_code == 0
     assert "Missing citekeys: missing1" in result.output
-    assert "Would embed 0 sources" in result.output
-    assert "sources have no abstract" in result.output
+    assert "Would embed 1 sources" in result.output
 
 
 def test_embed_fragments_flag(tmp_path):
