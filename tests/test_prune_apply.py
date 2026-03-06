@@ -1,6 +1,5 @@
 """Tests for `klemma library prune --apply` — execute prune verdicts."""
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -42,7 +41,7 @@ def prune_state(tmp_path):
 
 
 @pytest.fixture()
-def mock_ctx(prune_state):
+def mock_ctx(prune_state, tmp_path):
     """Mock KlemmaContext with the prune_state."""
     ctx = MagicMock()
     ctx.state = prune_state
@@ -50,13 +49,24 @@ def mock_ctx(prune_state):
     ctx.library = None
     ctx.vault = None
     ctx.embeddings = None
+    ctx.project_root = tmp_path
     return ctx
 
 
+def _patch_cli(mock_ctx, tmp_path):
+    """Context manager to patch CLI context resolution for subcommand tests."""
+    return (
+        patch("klemma.cli.discover_project_root", return_value=tmp_path),
+        patch("klemma.cli._init_components", return_value=mock_ctx),
+        patch("klemma.cli._get_context", return_value=mock_ctx),
+    )
+
+
 class TestPruneApply:
-    def test_apply_deletes_drop_sources(self, mock_ctx, prune_state):
+    def test_apply_deletes_drop_sources(self, mock_ctx, prune_state, tmp_path):
         runner = CliRunner()
-        with patch("klemma.cli._get_context", return_value=mock_ctx):
+        p1, p2, p3 = _patch_cli(mock_ctx, tmp_path)
+        with p1, p2, p3:
             result = runner.invoke(klemma_cli, ["library", "prune", "--apply", "--yes"])
 
         assert result.exit_code == 0, result.output
@@ -72,22 +82,24 @@ class TestPruneApply:
         drop_frags = [f for f in frags if f.get("source_id") == "dropMe2020"]
         assert len(drop_frags) == 0
 
-    def test_apply_no_targets(self, mock_ctx, prune_state):
+    def test_apply_no_targets(self, mock_ctx, prune_state, tmp_path):
         """--apply with no drop verdicts prints info message."""
         # Clear all drop verdicts
         prune_state.clear_prune_verdict("dropMe2020")
 
         runner = CliRunner()
-        with patch("klemma.cli._get_context", return_value=mock_ctx):
+        p1, p2, p3 = _patch_cli(mock_ctx, tmp_path)
+        with p1, p2, p3:
             result = runner.invoke(klemma_cli, ["library", "prune", "--apply", "--yes"])
 
         assert result.exit_code == 0, result.output
         assert "No 'drop' verdicts" in result.output
 
-    def test_apply_without_yes_aborts(self, mock_ctx, prune_state):
+    def test_apply_without_yes_aborts(self, mock_ctx, prune_state, tmp_path):
         """--apply without --yes prompts and aborts on 'n'."""
         runner = CliRunner()
-        with patch("klemma.cli._get_context", return_value=mock_ctx):
+        p1, p2, p3 = _patch_cli(mock_ctx, tmp_path)
+        with p1, p2, p3:
             result = runner.invoke(
                 klemma_cli, ["library", "prune", "--apply"], input="n\n"
             )
@@ -98,10 +110,11 @@ class TestPruneApply:
         # Source should still exist
         assert prune_state.get_source("dropMe2020") is not None
 
-    def test_apply_shows_targets_before_confirm(self, mock_ctx):
+    def test_apply_shows_targets_before_confirm(self, mock_ctx, tmp_path):
         """--apply lists targets before asking for confirmation."""
         runner = CliRunner()
-        with patch("klemma.cli._get_context", return_value=mock_ctx):
+        p1, p2, p3 = _patch_cli(mock_ctx, tmp_path)
+        with p1, p2, p3:
             result = runner.invoke(
                 klemma_cli, ["library", "prune", "--apply"], input="n\n"
             )
