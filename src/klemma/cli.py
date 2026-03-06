@@ -1933,6 +1933,23 @@ def status(ctx, verbose, chapter):
             for model, cnt in emb_stats["models"].items():
                 console.print(f"  [dim]{model}: {cnt}[/dim]")
 
+            # Section embeddings
+            sec_stats = state.get_section_embedding_stats()
+            if sec_stats["total_sections"] > 0:
+                sec_emb = sec_stats["embedded_sections"]
+                sec_total = sec_stats["total_sections"]
+                sec_pct = sec_emb / sec_total * 100
+                missing = sec_total - sec_emb
+                line = (
+                    f"[bold]Section embeddings[/bold]: {sec_emb}/{sec_total} "
+                    f"sections ({sec_pct:.0f}%)"
+                )
+                if missing:
+                    line += f"  [yellow]{missing} missing[/yellow]"
+                console.print(line)
+                for model, cnt in sec_stats["models"].items():
+                    console.print(f"  [dim]{model}: {cnt}[/dim]")
+
     # --- Verbose: citation graph stats ---
     if verbose:
         graph = state.get_citation_graph_stats()
