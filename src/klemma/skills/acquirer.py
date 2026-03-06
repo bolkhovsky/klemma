@@ -32,6 +32,7 @@ class PaperMetadata:
     issue: str = ""
     pages: str = ""
     doi: str = ""
+    pdf_override: str = ""  # direct PDF URL (bypass DOI resolution)
     sections: list[str] = field(default_factory=list)
 
 
@@ -84,6 +85,16 @@ def download_pdf(
             headers={"User-Agent": _USER_AGENT},
         )
         resp.raise_for_status()
+
+        # Detect WAF/anti-bot challenges (202 with text/html = JS challenge page)
+        if resp.status_code == 202:
+            ct = resp.headers.get("content-type", "")
+            if "html" in ct.lower():
+                logger.warning(
+                    "Publisher uses anti-bot protection (WAF); "
+                    "download manually or use Zotero → Find Available PDF"
+                )
+                return None
 
         content_length = resp.headers.get("content-length")
         if content_length and int(content_length) > max_bytes:
@@ -196,16 +207,296 @@ def _extract_doi(url: str) -> str:
 
 
 def _resolve_doi_to_pdf(doi: str) -> Optional[str]:
-    """Try to find a downloadable PDF URL for a DOI via Unpaywall."""
+    """Try to find a downloadable PDF URL for a DOI.
+
+    Resolution chain:
+    1. Unpaywall (open-access database)
+    2. Follow DOI redirect → apply publisher URL patterns (.xml→.pdf, etc.)
+    """
+    # 1. Unpaywall
     try:
         from ..evaluation.resolvers import resolve_unpaywall
         pdf_url = resolve_unpaywall(doi)
         if pdf_url:
-            logger.info("Resolved DOI %s → %s", doi, pdf_url)
+            logger.info("Resolved DOI %s → %s (Unpaywall)", doi, pdf_url)
             return pdf_url
     except Exception as e:
-        logger.debug("DOI resolution failed: %s", e)
+        logger.debug("Unpaywall resolution failed: %s", e)
+
+    # 2. Follow DOI redirect → publisher URL patterns
+    pdf_url = _resolve_publisher_pdf(doi)
+    if pdf_url:
+        logger.info("Resolved DOI %s → %s (publisher pattern)", doi, pdf_url)
+        return pdf_url
+
     return None
+
+
+# Publisher URL patterns: (suffix_to_match, replacement)
+# Applied to the final URL after following the DOI redirect.
+_PUBLISHER_PATTERNS: list[tuple[str, str]] = [
+    # Atypon/Silverchair publishers (AMS, AIP, etc.): /doi/DOI → /doi/pdf/DOI
+    ("/doi/10.", "/doi/pdf/10."),
+    # AMS journals: .xml → .pdf
+    (".xml", ".pdf"),
+    # Many publishers: /abstract → /pdf, /full → /pdf
+    ("/abstract", "/pdf"),
+    ("/full", "/pdf"),
+    # Springer/Nature: .html → .pdf
+    (".html", ".pdf"),
+]
+
+
+def _resolve_publisher_pdf(doi: str) -> Optional[str]:
+    """Follow DOI redirect, then try publisher URL patterns or page scrape.
+
+    Strategy:
+    1. Follow DOI redirect to get the landing page URL
+    2. Try URL suffix patterns (.xml→.pdf, /abstract→/pdf, etc.)
+    3. Scrape landing page for PDF download links
+    """
+    doi_url = f"https://doi.org/{doi}"
+    try:
+        # Use GET with stream=True — some publishers don't redirect on HEAD
+        resp = requests.get(
+            doi_url, allow_redirects=True, timeout=15, stream=True,
+            headers={"User-Agent": _USER_AGENT},
+        )
+        final_url = resp.url
+        # Read content only if we need it for scraping (step 3)
+        page_content = None
+    except Exception as e:
+        logger.debug("DOI redirect failed: %s", e)
+        return None
+
+    # Step 2: Try URL suffix patterns
+    # Trust pattern-derived .pdf URLs without verification — many publishers
+    # (AMS, Springer) return 202/403 for programmatic HEAD/GET but serve
+    # the PDF fine in practice (anti-bot measures).
+    for suffix, replacement in _PUBLISHER_PATTERNS:
+        if suffix in final_url:
+            candidate = final_url.replace(suffix, replacement, 1)
+            logger.info("Publisher pattern %s→%s: %s", suffix, replacement, candidate)
+            resp.close()
+            return candidate
+
+    # Step 3: Scrape landing page for PDF links
+    try:
+        page_content = resp.text
+        resp.close()
+    except Exception:
+        resp.close()
+        return None
+
+    pdf_url = _scrape_pdf_link(page_content, final_url)
+    if pdf_url and _check_pdf_url(pdf_url):
+        return pdf_url
+
+    return None
+
+
+def _scrape_pdf_link(html: str, page_url: str) -> Optional[str]:
+    """Extract the most likely full-text PDF link from a publisher landing page."""
+    import re as _re
+    from urllib.parse import urljoin
+
+    # Find all href="...*.pdf..." links
+    pdf_hrefs = _re.findall(r'href="([^"]*\.pdf[^"]*)"', html)
+    if not pdf_hrefs:
+        return None
+
+    # Prefer links that look like the main article PDF (not supplements/tables)
+    # Filter out supplement/table PDFs (common suffixes: -t01, -supplement, -si)
+    main_pdfs = [
+        h for h in pdf_hrefs
+        if not _re.search(r'-(t\d+|supplement|si|supp)\b', h, _re.IGNORECASE)
+    ]
+    candidates = main_pdfs or pdf_hrefs
+
+    # Deduplicate preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for href in candidates:
+        full = urljoin(page_url, href)
+        if full not in seen:
+            seen.add(full)
+            unique.append(full)
+
+    return unique[0] if unique else None
+
+
+def _check_pdf_url(url: str) -> bool:
+    """Verify a URL points to a PDF via GET with streaming (more reliable than HEAD)."""
+    try:
+        resp = requests.get(
+            url, allow_redirects=True, timeout=10, stream=True,
+            headers={"User-Agent": _USER_AGENT},
+        )
+        if resp.status_code not in (200, 206):
+            resp.close()
+            return False
+        ct = resp.headers.get("content-type", "")
+        if "pdf" in ct.lower():
+            resp.close()
+            return True
+        # Some servers lie about content-type — check magic bytes
+        chunk = resp.raw.read(5)
+        resp.close()
+        return chunk == b"%PDF-"
+    except Exception:
+        return False
+
+
+def _try_zotero(
+    meta: PaperMetadata,
+    resolved: dict,
+    pdf_path: Optional[Path],
+) -> Optional[str]:
+    """Try to add paper to Zotero, return BBT citekey or None."""
+    try:
+        from ..literature.zotero_api import create_zotero_item, get_bbt_citekey, is_zotero_running
+        if is_zotero_running():
+            ok = create_zotero_item(
+                meta.title, meta.authors, meta.year, meta.doi,
+                resolved.get("abstract", ""), pdf_path,
+            )
+            if ok:
+                return get_bbt_citekey(meta.title)
+    except Exception as e:
+        logger.warning("Zotero integration failed: %s", e)
+    return None
+
+
+def _enrich_metadata(meta: PaperMetadata) -> dict:
+    """Fill missing metadata from CrossRef (by DOI) or S2 (by title).
+
+    CrossRef is tried first when we have a DOI (common for DOI-only acquires).
+    S2 is tried when we have a title but no DOI.
+    Mutates meta in-place, returns resolved dict for abstract etc.
+    """
+    resolved: dict = {}
+
+    # 1. CrossRef by DOI — best for DOI-only acquires (no title needed)
+    if meta.doi and (not meta.title or not meta.authors):
+        try:
+            cr = _lookup_crossref_by_doi(meta.doi)
+            if cr:
+                resolved = cr
+                if not meta.title and cr.get("title"):
+                    meta.title = cr["title"]
+                if not meta.authors and cr.get("authors"):
+                    meta.authors = cr["authors"]
+                if meta.year is None and cr.get("year"):
+                    meta.year = cr["year"]
+        except Exception as e:
+            logger.debug("CrossRef DOI lookup failed: %s", e)
+
+    # 2. S2 by title — fills abstract (CrossRef doesn't have it)
+    if meta.title:
+        try:
+            from ..literature.metadata import lookup_s2
+            hit = lookup_s2(meta.title)
+            if hit:
+                if not resolved:
+                    resolved = hit
+                if not meta.title and hit.get("title"):
+                    meta.title = hit["title"]
+                if not meta.authors and hit.get("authors"):
+                    meta.authors = hit["authors"]
+                if meta.year is None and hit.get("year"):
+                    meta.year = hit["year"]
+                if not meta.doi and hit.get("doi"):
+                    meta.doi = hit["doi"]
+                # S2 has abstracts, CrossRef usually doesn't
+                if hit.get("abstract") and not resolved.get("abstract"):
+                    resolved["abstract"] = hit["abstract"]
+        except Exception as e:
+            logger.debug("S2 metadata lookup failed: %s", e)
+
+    return resolved
+
+
+def _lookup_crossref_by_doi(doi: str) -> Optional[dict]:
+    """Look up paper metadata on CrossRef by DOI (direct, no search needed)."""
+    url = f"https://api.crossref.org/works/{doi}"
+    try:
+        resp = requests.get(
+            url, timeout=10,
+            headers={"User-Agent": "klemma/0.4 (mailto:klemma@example.com)"},
+        )
+        resp.raise_for_status()
+        item = resp.json().get("message", {})
+    except Exception as e:
+        logger.debug("CrossRef works/%s failed: %s", doi, e)
+        return None
+
+    title = " ".join(item.get("title", []))
+    if not title:
+        return None
+
+    authors = ", ".join(
+        f"{a.get('family', '')} {a.get('given', '')}".strip()
+        for a in item.get("author", [])
+    )
+
+    year = None
+    for date_field in ("published-print", "issued", "published-online"):
+        parts = item.get(date_field, {}).get("date-parts", [[]])
+        if parts and parts[0] and parts[0][0]:
+            year = int(parts[0][0])
+            break
+
+    return {
+        "title": title,
+        "authors": authors,
+        "year": year,
+        "doi": doi,
+        "abstract": "",  # CrossRef rarely has abstracts
+    }
+
+
+def _acquire_metadata_only(
+    meta: PaperMetadata,
+    storage_path: str,
+    state=None,
+) -> AcquireResult:
+    """Acquire paper without a PDF — DOI-only registration.
+
+    Creates Zotero item (which can later "Find Available PDF"),
+    registers in klemma DB with metadata from S2/CrossRef.
+    """
+    logger.info("Metadata-only acquire for DOI %s (no PDF available)", meta.doi)
+
+    # Enrich metadata from CrossRef (by DOI) / S2 (by title)
+    resolved = _enrich_metadata(meta)
+
+    # Add to Zotero (without PDF — Zotero can find it via "Find Available PDF")
+    zotero_citekey = _try_zotero(meta, resolved, pdf_path=None)
+
+    # Generate citekey
+    citekey = zotero_citekey or _generate_citekey(meta)
+
+    # Register in klemma DB
+    if state:
+        state.register_sources([citekey])
+        if meta.sections:
+            chapters = list({int(s.split(".")[0]) for s in meta.sections if "." in s})
+            state.set_source_sections(citekey, meta.sections, chapters)
+        state.update_source_info(
+            citekey,
+            title=meta.title or resolved.get("title", ""),
+            authors=meta.authors or resolved.get("authors", ""),
+            year=meta.year or resolved.get("year"),
+            abstract=resolved.get("abstract", ""),
+            doi=meta.doi or resolved.get("doi", ""),
+        )
+
+    return AcquireResult(
+        citekey=citekey,
+        pdf_path="",
+        status="ok_no_pdf",
+        zotero_added=zotero_citekey is not None,
+    )
 
 
 def acquire_paper_local(
@@ -214,34 +505,41 @@ def acquire_paper_local(
     state=None,
 ) -> AcquireResult:
     """Local acquire: download PDF → auto-extract metadata → generate citekey → store → register in DB."""
-    # 0. Handle local file:// URLs directly
+    # 0a. Extract DOI from URL before any URL rewriting
+    doi_from_url = _extract_doi(meta.url)
+    if doi_from_url and not meta.doi:
+        meta.doi = doi_from_url
+
+    # 0b. Resolve effective download URL
+    # Priority: --pdf override > arXiv resolve > DOI resolve > original URL
+    arxiv_pdf = _resolve_arxiv_pdf_url(meta.url)
+    if meta.pdf_override:
+        meta.url = meta.pdf_override
+    elif arxiv_pdf:
+        meta.url = arxiv_pdf
+    elif doi_from_url:
+        pdf_url = _resolve_doi_to_pdf(doi_from_url)
+        if pdf_url:
+            meta.url = pdf_url
+        else:
+            logger.warning("Could not resolve DOI %s to a PDF URL", doi_from_url)
+
+    # 0c. Handle local file:// URLs directly
     parsed_url = urlparse(meta.url)
     if parsed_url.scheme == "file":
-        local_file = Path(parsed_url.path)
+        from urllib.parse import unquote
+        local_file = Path(unquote(parsed_url.path))
         if not local_file.is_file():
             logger.error("Local file not found: %s", local_file)
             return AcquireResult(status="download_failed")
         pdf_path = local_file
     else:
-        # 0a. If URL is an arXiv abstract page, resolve to PDF URL
-        arxiv_pdf = _resolve_arxiv_pdf_url(meta.url)
-        if arxiv_pdf:
-            meta.url = arxiv_pdf
-
-        # 0b. If URL is a DOI link, extract DOI and resolve to actual PDF URL
-        doi_from_url = _extract_doi(meta.url)
-        if doi_from_url:
-            if not meta.doi:
-                meta.doi = doi_from_url
-            pdf_url = _resolve_doi_to_pdf(doi_from_url)
-            if pdf_url:
-                meta.url = pdf_url
-            else:
-                logger.warning("Could not resolve DOI %s to a PDF URL", doi_from_url)
-
         # 1. Download PDF
         pdf_path = download_pdf(meta.url)
         if not pdf_path:
+            # No PDF available — but if we have a DOI, do metadata-only acquire
+            if meta.doi:
+                return _acquire_metadata_only(meta, storage_path, state)
             return AcquireResult(status="download_failed")
 
     is_local_file = parsed_url.scheme == "file"
@@ -270,19 +568,28 @@ def acquire_paper_local(
         logger.warning("Metadata extraction failed, continuing: %s", e)
         resolved = {}
 
-    # 2a. Add to Zotero if running
-    zotero_citekey = None
-    try:
-        from ..literature.zotero_api import create_zotero_item, get_bbt_citekey, is_zotero_running
-        if is_zotero_running():
-            ok = create_zotero_item(
-                meta.title, meta.authors, meta.year, meta.doi,
-                resolved.get("abstract", ""), pdf_path,
-            )
-            if ok:
-                zotero_citekey = get_bbt_citekey(meta.title)
-    except Exception as e:
-        logger.warning("Zotero integration failed: %s", e)
+    # 2a. CrossRef fallback — when S2 is unavailable (429) and key fields missing
+    if meta.doi and (not meta.authors or meta.year is None):
+        try:
+            cr = _lookup_crossref_by_doi(meta.doi)
+            if cr:
+                # CrossRef title is authoritative — prefer over PDF-extracted
+                if cr.get("title"):
+                    meta.title = cr["title"]
+                    resolved["title"] = cr["title"]
+                if not meta.authors and cr.get("authors"):
+                    meta.authors = cr["authors"]
+                if meta.year is None and cr.get("year"):
+                    meta.year = cr["year"]
+                if not resolved.get("authors") and cr.get("authors"):
+                    resolved["authors"] = cr["authors"]
+                if not resolved.get("year") and cr.get("year"):
+                    resolved["year"] = cr["year"]
+        except Exception as e:
+            logger.debug("CrossRef fallback failed: %s", e)
+
+    # 2b. Add to Zotero if running
+    zotero_citekey = _try_zotero(meta, resolved, pdf_path)
 
     # 3. Generate citekey — prefer BBT, fallback to local
     citekey = zotero_citekey or _generate_citekey(meta)

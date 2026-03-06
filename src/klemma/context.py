@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from .config import KlemmaConfig, ProjectConfig
     from .embeddings import EmbeddingProvider
     from .library_provider import LibraryProvider
+    from .search import SearchProvider
     from .state import StateManager
     from .vault import VaultAdapter
 
@@ -28,6 +29,7 @@ class KlemmaContext:
     vault: VaultAdapter
     ai: Optional[AIProvider] = None
     embeddings: Optional[EmbeddingProvider] = None
+    search: Optional[SearchProvider] = None
     library: Optional[LibraryProvider] = None
     project: Optional[ProjectConfig] = None
     project_name: str = "default"
