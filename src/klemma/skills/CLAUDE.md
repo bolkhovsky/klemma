@@ -83,6 +83,12 @@ Local-only paper acquisition pipeline: download → auto-extract metadata → Zo
 - `load_batch()` — parse JSON batch file
 - Dataclasses: `PaperMetadata`, `AcquireResult` (with `zotero_added` bool)
 
+### suggester.py (162 lines)
+Suggest papers to acquire for filling reference gaps. Pure skill — no file I/O, no CLI.
+- `SuggestCandidate` — dataclass: ref_title, ref_authors, ref_year, score, sections, search_result, pdf_url, doi, acquire_cmd
+- `suggest_acquisitions(gaps, search, limit, max_age_years, classic_min_score)` → `(list[SuggestCandidate], filtered_count)` — resolve top gaps via SearchProvider, build acquire commands, apply recency filter (skip old papers unless high-score classics)
+- `_parse_sections(raw)` — parse DB `dissertation_sections` field (JSON arrays, GROUP_CONCAT joins, plain CSV fallback)
+
 ### work_context.py (93 lines)
 Dynamic work context builder — replaces hardcoded DISSERTATION_CONTEXT constant.
 - `build_work_context(project, language)` — generates context string from ProjectConfig fields (title, chapters, deadlines, priority terms); supports any project type (dissertation/paper/thesis)
