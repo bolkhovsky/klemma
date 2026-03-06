@@ -23,7 +23,7 @@ Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `li
 
 ### config.py (~800 lines)
 Pydantic config models + Git-style project discovery + klemmarc loading.
-Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `_resolved_api_keys` PrivateAttr), `EmbeddingsConfig`, `StateConfig` (`db_path`, `inherit_db`), `DissertationConfig`, `SystemConfig`, `ProjectConfig`.
+Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `_resolved_api_keys` PrivateAttr), `EmbeddingsConfig`, `SearchConfig` (`backend`, `throttle`), `SuggestConfig` (`max_age_years=10`, `classic_min_score=15.0`), `StateConfig` (`db_path`, `inherit_db`), `DissertationConfig`, `SystemConfig`, `ProjectConfig`.
 - `_load_klemmarc()` — load `~/.klemmarc.yaml` (or `.yml` / `.klemmarc`) global config
 - `_derive_provider(backend, model)` — extract provider name for api_keys lookup (e.g. `litellm` + `anthropic/claude-sonnet` → `"anthropic"`)
 - `_check_klemmarc_permissions()` — fix permissions on `~/.klemmarc*` if world-readable
@@ -112,6 +112,15 @@ Klemma error taxonomy for AI backends.
 `LibraryProvider` protocol with LocalLibrary backend:
 - `LocalLibrary` — wraps `PDFExtractor.load_entry_lookup()` (BBT JSON)
 - `create_library(config)` — factory, creates LocalLibrary from config
+
+### search.py (266 lines)
+Provider-agnostic paper search — resolve reference gaps to acquisition targets.
+- `SearchResult` — dataclass: title, authors, year, abstract, doi, pdf_url, source_api
+- `SearchProvider` — runtime-checkable protocol: `resolve()`, `resolve_pdf_url()`, `backend_name`
+- `S2SearchProvider` — Semantic Scholar (wraps `literature.metadata.lookup_s2()`, rate-limited ~1 req/3s)
+- `CrossRefSearchProvider` — CrossRef API (free, no auth, generous rate limits, broader coverage)
+- `ChainSearchProvider` — try providers in sequence, first hit wins. Default chain: CrossRef → S2
+- `create_search(config)` — factory: `"s2"`, `"crossref"`, `"auto"` (chain), `""` (disabled)
 
 ### embeddings.py (268 lines)
 `EmbeddingProvider` runtime-checkable protocol + 3 backends + utilities.

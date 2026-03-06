@@ -350,6 +350,11 @@ class SearchConfig(BaseModel):
     throttle: float = 3.1  # seconds between API requests
 
 
+class SuggestConfig(BaseModel):
+    max_age_years: int = 10  # filter out papers older than this
+    classic_min_score: float = 15.0  # exempt high-score "classic" papers from age filter
+
+
 class StateConfig(BaseModel):
     db_path: str = "./data/klemma.db"
     inherit_db: bool = True  # inherit parent project's DB (read-only)
@@ -527,6 +532,7 @@ class KlemmaConfig(BaseModel):
     ai: AIConfig = Field(default_factory=AIConfig)
     embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    suggest: SuggestConfig = Field(default_factory=SuggestConfig)
     state: StateConfig = Field(default_factory=StateConfig)
     dissertation: DissertationConfig = Field(default_factory=DissertationConfig)
     planning: PlanningConfig = Field(default_factory=PlanningConfig)

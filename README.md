@@ -88,7 +88,7 @@ klemma outline -p "Фокус на методологии"       # с дирек
 
 Логика: при падении workflow `CI` Codex пытается сделать минимальный фикс, повторно запускает `ruff` и `pytest`, и открывает PR с исправлением.
 
-## Команды (16)
+## Команды (17)
 
 ### `klemma init`
 Инициализация проекта в текущей директории. Создаёт `.klemma/` (config, tags, DB) и `KLEMMA.md` (контекст для AI). Интерактивный мастер обнаруживает Obsidian vault и Zotero автоматически.
@@ -211,6 +211,17 @@ klemma acquire --batch papers.json             # массовый импорт
 klemma acquire <url> --no-process              # не извлекать фрагменты
 ```
 
+### `klemma gaps suggest`
+Поиск и рекомендация papers для заполнения reference gaps. Резолвит метаданные через CrossRef → S2 (chain), генерирует `klemma acquire` команды.
+
+```bash
+klemma gaps suggest                    # top-10 gap suggestions
+klemma gaps suggest -n 20              # больше результатов
+klemma gaps suggest -s 2.3             # только для раздела 2.3
+```
+
+Фильтрация: публикации старше `suggest.max_age_years` (по умолчанию 10 лет) скрываются, кроме фундаментальных работ с высоким score (≥ `suggest.classic_min_score`). Настраивается в конфиге.
+
 ### `klemma info`
 Текущий проект: корневая директория, цепочка проектов, конфигурация, путь к БД.
 
@@ -310,6 +321,10 @@ project:
       chapter: 2
       section: "2.3.1"
   min_sources_per_section: 3
+
+suggest:
+  max_age_years: 10              # фильтровать papers старше N лет (0 = отключить)
+  classic_min_score: 15.0        # не фильтровать фундаментальные работы с высоким score
 
 state:
   db_path: "./data/klemma.db"
