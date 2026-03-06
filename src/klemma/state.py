@@ -206,7 +206,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 8  # bump this when adding new migrations
+        target = 9  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -351,6 +351,16 @@ class StateManager:
                 conn.execute(
                     "ALTER TABLE sources ADD COLUMN source_role TEXT DEFAULT 'external'"
                 )
+
+        if version < 9:
+            conn.execute("""CREATE TABLE IF NOT EXISTS section_embeddings (
+                section TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                embedding_model TEXT NOT NULL,
+                source_count INTEGER DEFAULT 0,
+                updated_at TEXT,
+                PRIMARY KEY (section, embedding_model)
+            )""")
 
         conn.execute(f"PRAGMA user_version = {target}")
 
@@ -537,6 +547,19 @@ class StateManager:
 
     def get_embedding_stats(self) -> dict:
         return self.embeddings_store.get_embedding_stats()
+
+    def save_section_embedding(self, section: str, embedding: list[float],
+                               model: str, source_count: int):
+        return self.embeddings_store.save_section_embedding(section, embedding, model, source_count)
+
+    def get_section_embedding(self, section: str, model: Optional[str] = None):
+        return self.embeddings_store.get_section_embedding(section, model)
+
+    def get_all_section_embeddings(self, model: Optional[str] = None):
+        return self.embeddings_store.get_all_section_embeddings(model)
+
+    def get_section_embedding_stats(self):
+        return self.embeddings_store.get_section_embedding_stats()
 
     # ── Gaps delegation ───────────────────────────────────────────────────
 
