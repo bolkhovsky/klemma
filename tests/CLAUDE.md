@@ -1,6 +1,6 @@
 # Tests
 
-## Current test suite (798 tests)
+## Current test suite (807 tests)
 - `test_errors.py` (33 lines) — `KlemmaAIError` hierarchy, `retryable` classification, cause chaining
 - `test_ai.py` (170 lines) — `extract_json()`, `AIProviderBase`, `AICallResult` dataclass, `call_with_meta()` base + Claude, `create_ai()` factory
 - `test_ai_litellm.py` (265 lines) — `LiteLLMClient` with mocked litellm: call, json_mode, base_url, api_key, reasoning model detection, retry, `call_with_meta()` with structured error mapping + token extraction
@@ -35,6 +35,7 @@
 - `test_context_loader.py` (~50 lines) — `load_research_report()`: notes/research/ path, legacy fallback, missing, empty, preference
 - `test_drafter.py` (~190 lines) — `DraftResult` defaults, `_extract_citations` regex, `_filter_hallucinated_citations` (valid/invalid/empty/dedup), `generate_draft` pipeline (with/without research, filtering, empty response), `section_draft.md` template rendering
 - `test_duplicate_checker.py` (~170 lines) — 23 tests: `_normalize`, DOI dedup (same/different/empty/3-way), author+year+title (match/different year/author/missing/and-separator), title prefix (match/short skipped/case insensitive), `find_duplicates` (empty/single/none/dedup across strategies/sorted/dataclass/None fields)
+- `test_reassign.py` (~150 lines) — 9 tests: cosine similarity (identical/different), best section match, suggestion filtering (different section/same section/below threshold), fragment metadata repo (returns embedded/empty/model filter)
 - `test_prompts.py` (~280 lines) — 25 tests: all 12 prompt templates render without Jinja2 errors, coverage check (all shipped templates have test contexts), reconstruct.md ablation variants (default/max_recs/fewshot/combined), prompt hash determinism + uniqueness, AblationParams defaults + to_snapshot + with_fewshot factory
 - `test_notes_subdirs.py` (~190 lines) — 10 tests: `notes/` subdirectory layout (#34) — researcher save/load (new path, legacy fallback, preference), librarian save to `notes/library/`, agent scanner finds `notes/{research,library,agents}/`, backward compat for flat reports, `update_agents_index` (generation, no-dir, empty-dir, reverse sort)
 - `test_task_model_routing.py` (~166 lines) — 13 tests: `resolve_task_model()` routing (no classes, not in classes, claude returns class, class_model_map priority, litellm with/without map, openai with map), model_override forwarding (ClaudeClient subprocess args, LiteLLMClient completion kwargs), AIConfig task_classes/class_model_map parsing

@@ -44,6 +44,7 @@ Source lifecycle, sections, Zotero key management, vault sync.
 Fragment CRUD, citation intent coverage, and fragment-level embeddings.
 - `save_fragments()`, `get_fragments(section_type?)`, `get_fragment_stats()`
 - `get_intent_coverage()` — section x intent matrix
+- `get_embedded_fragment_metadata(model?)` — id, source_id, section, chapter, text_preview for fragments with embeddings
 - `save_fragment_embedding()` — store vector BLOB (struct.pack float32)
 - `get_fragment_embeddings(model?)` — return `{fragment_id: vector}`
 - `get_fragment_embedding_stats()` — coverage stats (total, embedded, by model)

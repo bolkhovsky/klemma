@@ -3040,11 +3040,37 @@ def library(ctx, section, audit, model):
 @click.option("-c", "--chapter", type=int, help="Filter by chapter number")
 @click.option("-v", "--verdict", type=click.Choice(["drop", "maybe"]), help="Filter by verdict")
 @click.option("--clear", "clear_key", help="Clear verdict for a citekey")
+@click.option("--apply", is_flag=True, help="Delete all 'drop' sources from DB")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt (use with --apply)")
 @click.pass_context
-def prune(ctx, chapter, verdict, clear_key):
+def prune(ctx, chapter, verdict, clear_key, apply, yes):
     """Browse and manage prune verdicts from library analysis."""
     kctx = _get_context(ctx)
     state = kctx.state
+
+    if apply:
+        drop_ids = state.get_prune_drop_ids()
+        if not drop_ids:
+            console.print("[dim]No 'drop' verdicts to apply.[/dim]")
+            return
+        # Show what will be deleted
+        console.print(f"\n[bold]Sources to remove ({len(drop_ids)}):[/bold]")
+        for citekey in sorted(drop_ids):
+            src = state.get_source(citekey)
+            title = (src.get("title") or "untitled")[:60] if src else "unknown"
+            console.print(f"  [red]×[/red] @{citekey}  [dim]{title}[/dim]")
+        console.print(f"\n[yellow]This will delete {len(drop_ids)} sources and their fragments from DB.[/yellow]")
+        console.print("[dim]Vault notes are preserved.[/dim]")
+        if not yes:
+            if not click.confirm("Proceed?"):
+                console.print("[dim]Aborted.[/dim]")
+                return
+        deleted = 0
+        for citekey in sorted(drop_ids):
+            state.delete_source(citekey)
+            deleted += 1
+        console.print(f"\n[green]Removed {deleted} sources from DB (vault notes preserved).[/green]")
+        return
 
     if clear_key and (chapter is not None or verdict is not None):
         console.print("[red]--clear cannot be combined with -c/-v[/red]")
@@ -3145,6 +3171,120 @@ def duplicates(ctx):
         f"among {len(sources)} sources.[/yellow]"
     )
     console.print("[dim]Review and manually remove duplicates from Zotero.[/dim]")
+
+
+# --- Reassign: semantic fragment-to-section suggestion ---
+
+@main.command()
+@click.option("--threshold", "-t", type=float, default=0.5,
+              help="Minimum cosine similarity for suggestion (default: 0.5)")
+@click.option("--limit", "-n", type=int, default=20,
+              help="Max suggestions to show (default: 20)")
+@click.pass_context
+def reassign(ctx, threshold, limit):
+    """Suggest fragment-to-section reassignments based on embedding similarity."""
+    from .embeddings import cosine_similarity
+
+    kctx = _get_context(ctx)
+    state = kctx.state
+    _sync_sections(kctx)
+
+    # 1. Load section embeddings
+    section_embeddings = state.get_all_section_embeddings()
+    if not section_embeddings:
+        console.print(
+            "[red]No section embeddings found. "
+            "Run 'klemma embed --sections' first.[/red]"
+        )
+        raise SystemExit(1)
+
+    # 2. Load fragment embeddings + metadata
+    frag_embeddings = state.get_fragment_embeddings()
+    if not frag_embeddings:
+        console.print(
+            "[red]No fragment embeddings found. "
+            "Run 'klemma embed --fragments' first.[/red]"
+        )
+        raise SystemExit(1)
+
+    frag_meta = state.get_embedded_fragment_metadata()
+    meta_by_id = {m["id"]: m for m in frag_meta}
+
+    # 3. Compute best section match for each fragment
+    section_ids = sorted(section_embeddings.keys())
+    suggestions = []
+
+    with console.status(
+        f"Computing affinity for {len(frag_embeddings)} fragments "
+        f"× {len(section_ids)} sections...",
+        spinner="dots",
+    ):
+        for frag_id, frag_vec in frag_embeddings.items():
+            meta = meta_by_id.get(frag_id)
+            if not meta:
+                continue
+            current_section = meta.get("section") or ""
+
+            best_section = ""
+            best_score = -1.0
+            for sec_id, sec_vec in section_embeddings.items():
+                score = cosine_similarity(frag_vec, sec_vec)
+                if score > best_score:
+                    best_score = score
+                    best_section = sec_id
+
+            # Only suggest if different from current and above threshold
+            if (best_section and best_section != current_section
+                    and best_score >= threshold):
+                suggestions.append({
+                    "frag_id": frag_id,
+                    "citekey": meta.get("source_id", "?"),
+                    "current": current_section or "(none)",
+                    "suggested": best_section,
+                    "score": best_score,
+                    "preview": (meta.get("text_preview") or "")[:60],
+                })
+
+    if not suggestions:
+        console.print(
+            f"[green]No reassignment suggestions above threshold {threshold:.2f} "
+            f"among {len(frag_embeddings)} fragments.[/green]"
+        )
+        return
+
+    # 4. Sort by score desc, limit
+    suggestions.sort(key=lambda s: -s["score"])
+    total = len(suggestions)
+    suggestions = suggestions[:limit]
+
+    table = Table(
+        title=f"Reassignment Suggestions ({len(suggestions)}/{total})",
+        show_edge=False, pad_edge=False,
+    )
+    table.add_column("#", width=4, style="dim")
+    table.add_column("Source", max_width=25)
+    table.add_column("Current", width=8)
+    table.add_column("Suggested", width=10)
+    table.add_column("Score", width=6, justify="right")
+    table.add_column("Fragment", max_width=50)
+
+    for i, s in enumerate(suggestions, 1):
+        score_style = "green" if s["score"] >= 0.7 else "yellow"
+        table.add_row(
+            str(i),
+            f"@{s['citekey']}",
+            s["current"],
+            f"[bold]{s['suggested']}[/bold]",
+            f"[{score_style}]{s['score']:.3f}[/{score_style}]",
+            s["preview"],
+        )
+
+    console.print(table)
+    console.print(
+        f"\n[dim]{total} suggestions total (showing top {len(suggestions)}). "
+        f"Edit vault frontmatter 'sections:' to reassign, "
+        f"then run any command to sync.[/dim]"
+    )
 
 
 # --- Acquire: download + add to Zotero + register ---
