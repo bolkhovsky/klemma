@@ -83,6 +83,12 @@ Local-only paper acquisition pipeline: download → auto-extract metadata → Zo
 - `load_batch()` — parse JSON batch file
 - Dataclasses: `PaperMetadata`, `AcquireResult` (with `zotero_added` bool)
 
+### duplicate_checker.py (120 lines)
+Duplicate source detection by metadata. Pure skill — receives source list, returns duplicate pairs.
+- `DuplicatePair` — dataclass: citekey_a, citekey_b, strategy, confidence, detail
+- `find_duplicates(sources)` — runs 3 strategies, deduplicates pairs, returns sorted by confidence
+- Strategies: DOI match (1.0), author+year+title prefix (0.9), title prefix 50 chars (0.7)
+
 ### suggester.py (162 lines)
 Suggest papers to acquire for filling reference gaps. Pure skill — no file I/O, no CLI.
 - `SuggestCandidate` — dataclass: ref_title, ref_authors, ref_year, score, sections, search_result, pdf_url, doi, acquire_cmd

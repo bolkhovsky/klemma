@@ -253,6 +253,17 @@ class SourceRepository(BaseRepository):
             )
             return [dict(row) for row in cur.fetchall()]
 
+    def get_all_sources_metadata(self) -> list[dict]:
+        """Get completed sources with full metadata for dedup checks."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                """SELECT id, title, authors, year, doi
+                   FROM sources WHERE status=?
+                   ORDER BY id""",
+                (ProcessingStatus.COMPLETED,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
     def get_by_chapter(self, chapter: int) -> list[dict]:
         with self._conn() as conn:
             cur = conn.execute(

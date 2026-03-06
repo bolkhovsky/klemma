@@ -3098,6 +3098,55 @@ def prune(ctx, chapter, verdict, clear_key):
     console.print(f"\n[dim]Total: {summary['drop']} drop, {summary['maybe']} maybe[/dim]")
 
 
+@library.command()
+@click.pass_context
+def duplicates(ctx):
+    """Detect duplicate sources by metadata (DOI, author+year+title, title prefix)."""
+    from .skills.duplicate_checker import find_duplicates
+
+    kctx = _get_context(ctx)
+    sources = kctx.state.get_all_sources_metadata()
+
+    if not sources:
+        console.print("[dim]No sources in library.[/dim]")
+        return
+
+    pairs = find_duplicates(sources)
+
+    if not pairs:
+        console.print(f"[green]No duplicates found among {len(sources)} sources.[/green]")
+        return
+
+    table = Table(
+        title=f"Potential Duplicates ({len(pairs)} pairs)",
+        show_edge=False, pad_edge=False,
+    )
+    table.add_column("#", width=4, style="dim")
+    table.add_column("Source A", max_width=30)
+    table.add_column("Source B", max_width=30)
+    table.add_column("Strategy", width=18)
+    table.add_column("Conf", width=5, justify="right")
+    table.add_column("Detail", max_width=50)
+
+    for i, pair in enumerate(pairs, 1):
+        conf_style = "red" if pair.confidence >= 0.9 else "yellow"
+        table.add_row(
+            str(i),
+            f"@{pair.citekey_a}",
+            f"@{pair.citekey_b}",
+            pair.strategy,
+            f"[{conf_style}]{pair.confidence:.1f}[/{conf_style}]",
+            pair.detail,
+        )
+
+    console.print(table)
+    console.print(
+        f"\n[yellow]{len(pairs)} potential duplicate pair(s) found "
+        f"among {len(sources)} sources.[/yellow]"
+    )
+    console.print("[dim]Review and manually remove duplicates from Zotero.[/dim]")
+
+
 # --- Acquire: download + add to Zotero + register ---
 
 @main.command()
