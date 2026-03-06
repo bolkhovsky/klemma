@@ -226,6 +226,10 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
     """Sync section assignments from vault frontmatter + discover new Zotero entries.
 
     Fast (~60ms for 138 notes). Safe to call on every command.
+
+    IMPORTANT: Every command that reads source/gap/coverage data MUST call this
+    before reading.  Otherwise users see stale gaps (e.g. already-acquired papers
+    still listed as missing).  See ADR-009 in architecture-decisions.md.
     """
     cfg, state, vault = ctx.config, ctx.state, ctx.vault
     from .literature.note_factory import auto_classify
@@ -3705,6 +3709,7 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
     from .repositories.benchmarks import compute_dataset_hash
 
     kctx = _get_context(ctx)
+    _sync_sections(kctx, quiet=True)
 
     # --- History mode ---
     if history:
