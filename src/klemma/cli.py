@@ -1995,8 +1995,8 @@ def suggest(ctx, limit, section):
             search = create_search(search_cfg.model_dump())
         else:
             search = ChainSearchProvider([
-                S2SearchProvider(),
                 CrossRefSearchProvider(),
+                S2SearchProvider(),
             ])
 
     console.print(f"\n[bold]Resolving top gaps via {search.backend_name}...[/bold]\n")

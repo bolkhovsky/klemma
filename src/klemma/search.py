@@ -176,8 +176,8 @@ class CrossRefSearchProvider:
 class ChainSearchProvider:
     """Try multiple search providers in sequence — first hit wins.
 
-    Default chain: S2 → CrossRef. If S2 rate-limits (429) or fails,
-    CrossRef picks up the slack.
+    Default chain: CrossRef → S2. CrossRef has generous rate limits
+    and broad coverage; S2 is last-resort fallback for CS/ML papers.
     """
 
     def __init__(self, providers: list) -> None:
@@ -235,8 +235,8 @@ def create_search(
         throttle: seconds between S2 API requests (default: 3.1)
 
     "auto" (and the on-demand default in `gaps suggest`) creates a
-    ChainSearchProvider: S2 → CrossRef, so rate-limited S2 calls
-    fall through to CrossRef automatically.
+    ChainSearchProvider: CrossRef → S2, so CrossRef handles most
+    lookups and S2 is only tried as last-resort fallback.
 
     Returns None if backend is empty or unknown.
     """
@@ -257,8 +257,8 @@ def create_search(
 
     if backend == "auto":
         return ChainSearchProvider([
-            S2SearchProvider(throttle=throttle),
             CrossRefSearchProvider(),
+            S2SearchProvider(throttle=throttle),
         ])
 
     logger.warning("Unknown search backend: %s", backend)
