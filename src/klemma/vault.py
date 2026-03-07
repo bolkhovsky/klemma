@@ -252,6 +252,42 @@ class VaultAdapter:
         d.mkdir(exist_ok=True)
         return d
 
+    def update_frontmatter_sections(
+        self, name: str, sections: list[str], folder: Optional[str] = None,
+    ) -> bool:
+        """Update the 'sections' list in a note's YAML frontmatter.
+
+        Rewrites the frontmatter block with the new sections list.
+        Returns True if the file was modified, False if not found.
+        """
+        import yaml
+
+        # Find the file
+        if folder:
+            target = self._resolve_folder(folder) / f"{name}.md"
+            if not target.exists():
+                return False
+        else:
+            found = list(self.vault_path.rglob(f"{name}.md"))
+            if not found:
+                return False
+            target = found[0]
+
+        text = target.read_text(encoding="utf-8")
+        if not text.startswith("---"):
+            return False
+        end = text.find("---", 3)
+        if end == -1:
+            return False
+
+        fm = yaml.safe_load(text[3:end]) or {}
+        fm["sections"] = sorted(sections, key=lambda s: [int(x) for x in s.split(".")])
+
+        new_fm = yaml.dump(fm, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        new_text = f"---\n{new_fm}---{text[end + 3:]}"
+        target.write_text(new_text, encoding="utf-8")
+        return True
+
     @staticmethod
     def _parse_frontmatter(text: str) -> dict:
         """Extract YAML frontmatter from markdown text."""
