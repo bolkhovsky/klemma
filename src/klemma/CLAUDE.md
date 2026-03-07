@@ -59,7 +59,7 @@ Semantic section vocabulary — cross-project labels for dissertation/paper sect
 - `infer_section_type(chapter_name)` — keyword matching → `SectionType | None`
 - `resolve_section_identifier(input, config?)` — parse CLI input: numeric `"2.3"` → `(section, None)`, semantic `"methodology"` → `(section?, SectionType)`
 
-### state.py (~870 lines)
+### state.py (~965 lines)
 SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v10), auto-migrates via `_migrate_schema()`. All 70+ public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
 
 **DB inheritance (#55):** `set_parent(db_path)` attaches a read-only parent `StateManager`. Nine read methods merge parent data: `get_all_sources`, `get_by_chapter`, `get_by_section`, `get_fragments`, `get_coverage_stats`, `retrieve_similar_fragments`, `get_fragment_embeddings`, `get_all_embeddings`, `get_reference_gaps`. Child wins on key collision. Writes go only to child DB. Controlled by `StateConfig.inherit_db` (default `True`).
