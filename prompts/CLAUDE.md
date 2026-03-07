@@ -50,7 +50,7 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 `project_type`, `dissertation_context`, `project_files`, `library_summary`, `previous_outline`, `user_notes`, `previous_date`, `custom_prompt`, `language`
 
 ### section_draft.md
-`dissertation_context`, `section`, `chapter_num`, `chapter_name`, `research_report` (full research briefing text), `existing_draft` (current section text — expand, don't rewrite), `fragments` (list of relevant fragment dicts), `source_summaries` (list of source metadata dicts with citekey, quality, priority, summary), `language`
+`dissertation_context`, `section`, `chapter_num`, `chapter_name`, `research_report` (full research briefing text), `existing_draft` (current section text — expand, don't rewrite), `fragments` (list of section-level fragment dicts — fallback/supplementary), `rag_fragments` (list of per-block RAG fragment groups — each with `block_order`, `block_title`, `fragments` with `source`, `text`, `type`, `similarity`; He et al. 2010 context-aware retrieval), `source_summaries` (list of source metadata dicts with citekey, quality, priority, summary), `language`
 
 ### analyst.md
 `pdf_text`, `library_entries`, `paper_citekey`, `paper_title`

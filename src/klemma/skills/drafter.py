@@ -31,7 +31,8 @@ def _extract_citations(text: str) -> list[str]:
 
 
 def _filter_hallucinated_citations(
-    text: str, valid_ids: set[str],
+    text: str,
+    valid_ids: set[str],
 ) -> tuple[str, list[str]]:
     """Remove [@citekey] where citekey is not in valid set.
 
@@ -65,6 +66,7 @@ def generate_draft(
     existing_draft: str = "",
     source_summaries: Optional[list[dict]] = None,
     fragments: Optional[list[dict]] = None,
+    rag_fragments: Optional[list[dict]] = None,
     valid_citekeys: Optional[set[str]] = None,
 ) -> DraftResult:
     """Generate a section draft using AI.
@@ -76,6 +78,8 @@ def generate_draft(
         source_summaries = []
     if fragments is None:
         fragments = []
+    if rag_fragments is None:
+        rag_fragments = []
 
     # Determine chapter name and section type from config
     chapter_name = ""
@@ -84,7 +88,9 @@ def generate_draft(
 
     # Render prompt
     prompt_path = resolve_prompt(
-        "section_draft.md", klemma_home, project_chain=project_chain,
+        "section_draft.md",
+        klemma_home,
+        project_chain=project_chain,
     )
     prompt_text = ai.render_prompt(
         prompt_path,
@@ -95,6 +101,7 @@ def generate_draft(
         research_report=research_report_content,
         existing_draft=existing_draft,
         fragments=fragments,
+        rag_fragments=rag_fragments,
         source_summaries=source_summaries,
         language=config.ai.language,
     )
@@ -107,10 +114,14 @@ def generate_draft(
     )
 
     logger.info("Generating section draft for %s (chapter %d)", section, chapter)
-    text = ai.call(
-        system, prompt_text,
-        model_override=resolve_task_model("draft", config.ai),
-    ) or ""
+    text = (
+        ai.call(
+            system,
+            prompt_text,
+            model_override=resolve_task_model("draft", config.ai),
+        )
+        or ""
+    )
 
     if not text:
         return DraftResult(section=section, chapter=chapter)
@@ -125,7 +136,8 @@ def generate_draft(
     if filtered:
         logger.warning(
             "Removed %d hallucinated citekeys from draft: %s",
-            len(filtered), filtered,
+            len(filtered),
+            filtered,
         )
 
     word_count = len(text.split())

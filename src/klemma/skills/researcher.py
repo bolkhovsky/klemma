@@ -9,7 +9,12 @@ from typing import Callable, Optional
 
 from ..ai import AIProvider
 from ..config import KlemmaConfig, ProjectConfig, resolve_prompt
-from ..literature.models import ArgumentBlock, CitationEntry, ResearchResult, ZoteroEntry
+from ..literature.models import (
+    ArgumentBlock,
+    CitationEntry,
+    ResearchResult,
+    ZoteroEntry,
+)
 from ..literature.pdf import PDFExtractor
 from ..state import StateManager
 from ..vault import VaultAdapter
@@ -80,9 +85,7 @@ def _format_research(section: str, data: dict) -> str:
             lines.append(f"### {order}. {title}")
             lines.append(desc)
             if citations:
-                lines.append(
-                    f"**Источники:** {', '.join(f'@{c}' for c in citations)}"
-                )
+                lines.append(f"**Источники:** {', '.join(f'@{c}' for c in citations)}")
             if words:
                 lines.append(f"*~{words} слов*")
             lines.append("")
@@ -203,7 +206,9 @@ def _load_previous_research(
     previous_fragment_count = int(frag_match.group(1)) if frag_match else 0
 
     # Извлечь дату предыдущего запуска
-    date_match = re.search(r"\*Сгенерировано:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\*", text)
+    date_match = re.search(
+        r"\*Сгенерировано:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\*", text
+    )
     previous_date = date_match.group(1) if date_match else ""
 
     return {
@@ -285,7 +290,8 @@ def pre_extract_sources(
         source = state.get_source(ck)
         entry = entry_lookup.get(ck) or ZoteroEntry(id=ck, title=ck)
         pdf_path = pdf_extractor.find_pdf(
-            ck, search_paths,
+            ck,
+            search_paths,
             entry_title=entry.title or "",
             direct_path=source.get("pdf_path") if source else entry.pdf_path,
             pdf_lookup=pdf_lookup,
@@ -307,7 +313,11 @@ def pre_extract_sources(
 
         # Claude анализ
         result = extract_fragments(
-            entry, pdf_text, config, state, ai,
+            entry,
+            pdf_text,
+            config,
+            state,
+            ai,
             dissertation_context=dissertation_context,
             available_tags=available_tags,
             klemma_home=klemma_home,
@@ -315,16 +325,27 @@ def pre_extract_sources(
 
         if result and result.fragments:
             save_fragments_to_vault(
-                ck, result.fragments, vault,
-                entry=entry, config=config, state=state,
-                pdf_text=pdf_text, ai=ai, entry_lookup=entry_lookup,
+                ck,
+                result.fragments,
+                vault,
+                entry=entry,
+                config=config,
+                state=state,
+                pdf_text=pdf_text,
+                ai=ai,
+                entry_lookup=entry_lookup,
                 dissertation_context=dissertation_context,
                 available_tags=available_tags,
                 klemma_home=klemma_home,
             )
             extracted += 1
             if on_progress:
-                on_progress(ck, f"извлечено {len(result.fragments)} фрагментов", i, len(to_extract))
+                on_progress(
+                    ck,
+                    f"извлечено {len(result.fragments)} фрагментов",
+                    i,
+                    len(to_extract),
+                )
         else:
             failed.append(ck)
             if on_progress:
@@ -339,7 +360,9 @@ def pre_extract_sources(
 
 
 def _save_report(
-    section: str, content: str, project_root: Path,
+    section: str,
+    content: str,
+    project_root: Path,
 ) -> Path:
     """Сохранить исследовательский брифинг в project_root/notes/research/."""
     notes_dir = project_root / "notes" / "research"
@@ -349,9 +372,7 @@ def _save_report(
     return path
 
 
-def _format_research_with_history(
-    section: str, data: dict, history: str = ""
-) -> str:
+def _format_research_with_history(section: str, data: dict, history: str = "") -> str:
     """Форматировать JSON-ответ Claude в markdown, сохраняя историю изменений."""
     base = _format_research(section, data)
 
@@ -401,8 +422,11 @@ def research_section(
 
     chapter = parse_chapter_from_section(section)
     if chapter:
-        chapter_name = (project.chapters.get(chapter, f"Chapter {chapter}") if project
-                        else config.dissertation.chapters.get(chapter, f"Chapter {chapter}"))
+        chapter_name = (
+            project.chapters.get(chapter, f"Chapter {chapter}")
+            if project
+            else config.dissertation.chapters.get(chapter, f"Chapter {chapter}")
+        )
     else:
         chapter_name = section  # topic-based section for papers
 
@@ -419,8 +443,11 @@ def research_section(
         section_text = _extract_section(draft_content, section)
 
     # 2. План сессий из vault
-    plan_pattern = (project.chapter_plan_pattern if project
-                    else config.dissertation.chapter_plan_pattern)
+    plan_pattern = (
+        project.chapter_plan_pattern
+        if project
+        else config.dissertation.chapter_plan_pattern
+    )
     plan_name = plan_pattern.format(chapter=chapter)
     chapter_plan = vault.read_note(plan_name)
 
@@ -454,10 +481,14 @@ def research_section(
                 )
                 logger.debug(
                     "RAG: retrieved %d fragments for section '%s' (query: %s...)",
-                    len(section_fragments), section, rag_query[:60],
+                    len(section_fragments),
+                    section,
+                    rag_query[:60],
                 )
         except Exception:
-            logger.debug("Fragment RAG failed, falling back to section-based", exc_info=True)
+            logger.debug(
+                "Fragment RAG failed, falling back to section-based", exc_info=True
+            )
 
     # Fallback: section-based lookup if RAG yielded <10 results or unavailable
     if len(section_fragments) < 10:
@@ -479,15 +510,19 @@ def research_section(
     rag_citekeys = {f.get("citekey", f.get("source_id")) for f in section_fragments}
     if rag_citekeys and len(rag_citekeys) > 3:
         # RAG gave us good sources — load summaries for those specifically
-        source_summaries = _load_section_sources(section, chapter, state, vault,
-                                                  citekey_filter=rag_citekeys)
+        source_summaries = _load_section_sources(
+            section, chapter, state, vault, citekey_filter=rag_citekeys
+        )
     else:
         source_summaries = _load_section_sources(section, chapter, state, vault)
 
     # 5. Покрытие и пробелы
     coverage = state.get_coverage_stats()
-    min_sources = (project.min_sources_per_section if project
-                   else config.dissertation.min_sources_per_section)
+    min_sources = (
+        project.min_sources_per_section
+        if project
+        else config.dissertation.min_sources_per_section
+    )
     gaps = state.get_gaps(min_sources=min_sources)
     fragment_stats = state.get_fragment_stats()
 
@@ -521,10 +556,12 @@ def research_section(
 
     # 7b. Budget-aware prompt reduction
     chapter_draft_trimmed = draft_content[:30000] if draft_content else ""
-    chapter_draft_trimmed, formatted_sources, formatted_fragments = _fit_prompt_budget(
-        chapter_draft_trimmed,
-        formatted_sources,
-        formatted_fragments,
+    chapter_draft_trimmed, formatted_sources, formatted_fragments, _ = (
+        _fit_prompt_budget(
+            chapter_draft_trimmed,
+            formatted_sources,
+            formatted_fragments,
+        )
     )
 
     # 8. Рендер промпта (полный или инкрементальный)
@@ -533,12 +570,19 @@ def research_section(
         current_citekeys = {src["id"] for src in source_summaries}
         new_citekeys = sorted(current_citekeys - prev["previous_citekeys"])
 
-        prompt_path = resolve_prompt("research_incremental.md", klemma_home) if klemma_home else (
-            Path(__file__).parent.parent.parent.parent / "prompts" / "research_incremental.md"
+        prompt_path = (
+            resolve_prompt("research_incremental.md", klemma_home)
+            if klemma_home
+            else (
+                Path(__file__).parent.parent.parent.parent
+                / "prompts"
+                / "research_incremental.md"
+            )
         )
         user_prompt = ai.render_prompt(
             prompt_path,
-            dissertation_context=dissertation_context or _get_dissertation_context(config, project),
+            dissertation_context=dissertation_context
+            or _get_dissertation_context(config, project),
             target_section=section,
             chapter_num=chapter,
             chapter_name=chapter_name,
@@ -549,13 +593,8 @@ def research_section(
             previous_fragment_count=prev["previous_fragment_count"],
             current_fragment_count=len(section_fragments),
             section_text=section_text or "Section not written yet.",
-            full_chapter_draft=(
-                chapter_draft_trimmed
-                or "Chapter draft not found."
-            ),
-            fragments=json.dumps(
-                formatted_fragments, ensure_ascii=False, indent=2
-            ),
+            full_chapter_draft=(chapter_draft_trimmed or "Chapter draft not found."),
+            fragments=json.dumps(formatted_fragments, ensure_ascii=False, indent=2),
             source_summaries=json.dumps(
                 formatted_sources, ensure_ascii=False, indent=2
             ),
@@ -584,24 +623,24 @@ def research_section(
             "да" if prev["user_notes"] else "нет",
         )
     else:
-        prompt_path = resolve_prompt("research.md", klemma_home) if klemma_home else (
-            Path(__file__).parent.parent.parent.parent / "prompts" / "research.md"
+        prompt_path = (
+            resolve_prompt("research.md", klemma_home)
+            if klemma_home
+            else (
+                Path(__file__).parent.parent.parent.parent / "prompts" / "research.md"
+            )
         )
         user_prompt = ai.render_prompt(
             prompt_path,
-            dissertation_context=dissertation_context or _get_dissertation_context(config, project),
+            dissertation_context=dissertation_context
+            or _get_dissertation_context(config, project),
             target_section=section,
             chapter_num=chapter,
             chapter_name=chapter_name,
             section_text=section_text or "Section not written yet.",
-            full_chapter_draft=(
-                chapter_draft_trimmed
-                or "Chapter draft not found."
-            ),
+            full_chapter_draft=(chapter_draft_trimmed or "Chapter draft not found."),
             chapter_plan=chapter_plan or "Session plan not found.",
-            fragments=json.dumps(
-                formatted_fragments, ensure_ascii=False, indent=2
-            ),
+            fragments=json.dumps(formatted_fragments, ensure_ascii=False, indent=2),
             source_summaries=json.dumps(
                 formatted_sources, ensure_ascii=False, indent=2
             ),
@@ -628,7 +667,9 @@ def research_section(
     from klemma.ai import resolve_task_model
 
     data = ai.call_json(
-        system, user_prompt, max_tokens=4096,
+        system,
+        user_prompt,
+        max_tokens=4096,
         model_override=resolve_task_model("research", config.ai),
     )
 
@@ -661,9 +702,7 @@ def research_section(
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
             new_entry = f"### {timestamp}\n\n{prev['user_notes']}"
             history = (
-                f"{new_entry}\n\n{prev['history']}"
-                if prev["history"]
-                else new_entry
+                f"{new_entry}\n\n{prev['history']}" if prev["history"] else new_entry
             )
         else:
             history = prev["history"]
@@ -681,12 +720,8 @@ def research_section(
         available_sources=len(source_summaries),
         available_fragments=len(section_fragments),
         fragment_distribution=data.get("fragment_distribution", {}),
-        argument_blocks=[
-            ArgumentBlock(**b) for b in data.get("argument_blocks", [])
-        ],
-        citation_plan=[
-            CitationEntry(**c) for c in data.get("citation_plan", [])
-        ],
+        argument_blocks=[ArgumentBlock(**b) for b in data.get("argument_blocks", [])],
+        citation_plan=[CitationEntry(**c) for c in data.get("citation_plan", [])],
         missing_coverage=data.get("missing_coverage", []),
         writing_suggestions=data.get("writing_suggestions", []),
         filtered_citekeys=filtered_citekeys,

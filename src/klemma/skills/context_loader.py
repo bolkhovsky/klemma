@@ -149,8 +149,7 @@ def load_section_sources(
                     findings_end = note_content.find("---", findings_start + 20)
                     if findings_end != -1:
                         vault_summary += (
-                            "\n\n"
-                            + note_content[findings_start:findings_end].strip()
+                            "\n\n" + note_content[findings_start:findings_end].strip()
                         )
 
             # If no AI Summary — try Methodology
@@ -176,78 +175,120 @@ def fit_prompt_budget(
     formatted_sources: list[dict],
     formatted_fragments: list[dict],
     max_chars: int = 80_000,
-) -> tuple[str, list[dict], list[dict]]:
+    rag_fragments: Optional[list[dict]] = None,
+) -> tuple[str, list[dict], list[dict], Optional[list[dict]]]:
     """Progressively reduce prompt content to fit within token budget.
 
     Budget of 80K chars ~ 20K tokens — leaves room for template
     overhead, system prompt, and 4K output tokens within 30K TPM.
 
+    RAG fragments (per-block) are prioritized over section-level
+    fragments.  When budget is tight, section-level fragments are
+    trimmed first; RAG fragments are trimmed only as a last resort.
+
     Reduction order (least to most aggressive):
     1. Trim chapter_draft to 12K chars
     2. Trim vault_summary per source to 400 chars
-    3. Trim fragment text to 150 chars
+    3. Trim section-level fragment text to 150 chars
     4. Reduce sources to 15
-    5. Reduce fragments to 20
+    5. Drop section-level fragments to 20
     6. Reduce sources to 10
-    7. Reduce fragments to 10
+    7. Drop section-level fragments to 10
+    8. Trim RAG fragment text to 150 chars
+    9. Reduce RAG fragments to 3 per block
     """
     overhead = 20_000
+
+    def _rag_size():
+        if not rag_fragments:
+            return 0
+        return sum(len(json.dumps(b, ensure_ascii=False)) for b in rag_fragments)
 
     def _estimate():
         return (
             len(chapter_draft)
             + sum(len(json.dumps(s, ensure_ascii=False)) for s in formatted_sources)
             + sum(len(json.dumps(f, ensure_ascii=False)) for f in formatted_fragments)
+            + _rag_size()
             + overhead
         )
 
     if _estimate() <= max_chars:
-        return chapter_draft, formatted_sources, formatted_fragments
+        return chapter_draft, formatted_sources, formatted_fragments, rag_fragments
 
-    logger.debug("Prompt budget exceeded (%d > %d), trimming chapter_draft", _estimate(), max_chars)
+    logger.debug(
+        "Prompt budget exceeded (%d > %d), trimming chapter_draft",
+        _estimate(),
+        max_chars,
+    )
     chapter_draft = chapter_draft[:12_000]
 
     if _estimate() <= max_chars:
-        return chapter_draft, formatted_sources, formatted_fragments
+        return chapter_draft, formatted_sources, formatted_fragments, rag_fragments
 
-    logger.debug("Still over budget (%d), trimming source summaries to 400 chars", _estimate())
+    logger.debug(
+        "Still over budget (%d), trimming source summaries to 400 chars", _estimate()
+    )
     for s in formatted_sources:
         if len(s.get("summary", "")) > 400:
             s["summary"] = s["summary"][:400]
 
     if _estimate() <= max_chars:
-        return chapter_draft, formatted_sources, formatted_fragments
+        return chapter_draft, formatted_sources, formatted_fragments, rag_fragments
 
-    logger.debug("Still over budget (%d), trimming fragment text to 150 chars", _estimate())
+    logger.debug(
+        "Still over budget (%d), trimming fragment text to 150 chars", _estimate()
+    )
     for f in formatted_fragments:
         if len(f.get("text", "")) > 150:
             f["text"] = f["text"][:150]
 
     if _estimate() <= max_chars:
-        return chapter_draft, formatted_sources, formatted_fragments
+        return chapter_draft, formatted_sources, formatted_fragments, rag_fragments
 
     logger.debug("Still over budget (%d), reducing sources to 15", _estimate())
     formatted_sources = formatted_sources[:15]
 
     if _estimate() <= max_chars:
-        return chapter_draft, formatted_sources, formatted_fragments
+        return chapter_draft, formatted_sources, formatted_fragments, rag_fragments
 
     logger.debug("Still over budget (%d), reducing fragments to 20", _estimate())
     formatted_fragments = formatted_fragments[:20]
 
     if _estimate() <= max_chars:
-        return chapter_draft, formatted_sources, formatted_fragments
+        return chapter_draft, formatted_sources, formatted_fragments, rag_fragments
 
     logger.debug("Still over budget (%d), reducing sources to 10", _estimate())
     formatted_sources = formatted_sources[:10]
 
     if _estimate() <= max_chars:
-        return chapter_draft, formatted_sources, formatted_fragments
+        return chapter_draft, formatted_sources, formatted_fragments, rag_fragments
 
     logger.debug("Still over budget (%d), reducing fragments to 10", _estimate())
     formatted_fragments = formatted_fragments[:10]
 
-    return chapter_draft, formatted_sources, formatted_fragments
+    if _estimate() <= max_chars:
+        return chapter_draft, formatted_sources, formatted_fragments, rag_fragments
+
+    # RAG fragments trimming (last resort — higher relevance signal)
+    if rag_fragments:
+        logger.debug(
+            "Still over budget (%d), trimming RAG fragment text to 150 chars",
+            _estimate(),
+        )
+        for block in rag_fragments:
+            for f in block.get("fragments", []):
+                if len(f.get("text", "")) > 150:
+                    f["text"] = f["text"][:150]
+
+        if _estimate() <= max_chars:
+            return chapter_draft, formatted_sources, formatted_fragments, rag_fragments
+
+        logger.debug("Still over budget (%d), reducing RAG to 3 per block", _estimate())
+        for block in rag_fragments:
+            block["fragments"] = block.get("fragments", [])[:3]
+
+    return chapter_draft, formatted_sources, formatted_fragments, rag_fragments
 
 
 def validate_citekeys(data: dict, valid_citekeys: set[str]) -> tuple[dict, list[str]]:
@@ -283,8 +324,157 @@ def validate_citekeys(data: dict, valid_citekeys: set[str]) -> tuple[dict, list[
     return data, filtered
 
 
+def parse_argument_blocks(research_text: str) -> list[dict]:
+    """Extract argument blocks from a formatted research report.
+
+    Parses the '## Структура аргументации' section produced by
+    ``researcher._format_research()``.  Each block has the format::
+
+        ### N. Title
+        Description text
+        **Источники:** @citekey1, @citekey2
+        *~300 слов*
+
+    Returns a list of dicts with keys: order, title, description, citations.
+    """
+    if not research_text:
+        return []
+
+    blocks: list[dict] = []
+    # Match ### N. Title headings inside the argumentation section
+    heading_re = re.compile(r"^###\s+(\d+)\.\s+(.+)$", re.MULTILINE)
+    section_start_re = re.compile(r"^##\s+Структура аргументации", re.MULTILINE)
+
+    start_match = section_start_re.search(research_text)
+    if not start_match:
+        return []
+
+    # Find the end of the argumentation section (next ## heading)
+    section_text = research_text[start_match.end() :]
+    next_section = re.search(r"^##\s+", section_text, re.MULTILINE)
+    if next_section:
+        section_text = section_text[: next_section.start()]
+
+    headings = list(heading_re.finditer(section_text))
+    for i, m in enumerate(headings):
+        order = int(m.group(1))
+        title = m.group(2).strip()
+
+        # Block body = text between this heading and the next (or section end)
+        body_start = m.end()
+        body_end = (
+            headings[i + 1].start() if i + 1 < len(headings) else len(section_text)
+        )
+        body = section_text[body_start:body_end].strip()
+
+        # Extract description (everything before **Источники:** or *~ line)
+        description_lines = []
+        citations: list[str] = []
+        for line in body.split("\n"):
+            line_stripped = line.strip()
+            if line_stripped.startswith("**Источники:**"):
+                # Parse @citekey references
+                cites_text = line_stripped.replace("**Источники:**", "").strip()
+                citations = [
+                    c.strip().lstrip("@") for c in cites_text.split(",") if c.strip()
+                ]
+            elif line_stripped.startswith("*~") and line_stripped.endswith("слов*"):
+                continue  # skip word estimate line
+            elif line_stripped:
+                description_lines.append(line_stripped)
+
+        description = " ".join(description_lines)
+        if description:
+            blocks.append(
+                {
+                    "order": order,
+                    "title": title,
+                    "description": description,
+                    "citations": citations,
+                }
+            )
+
+    return blocks
+
+
+def retrieve_rag_fragments_per_block(
+    blocks: list[dict],
+    embeddings: object,
+    state: StateManager,
+    top_k: int = 5,
+) -> list[dict]:
+    """Embed each argument block description and retrieve top-K fragments.
+
+    For each block, embeds the description text and calls
+    ``state.retrieve_similar_fragments()`` to find the most relevant
+    fragments.  Returns a list of block dicts enriched with a
+    ``fragments`` key containing the retrieved fragments (formatted
+    for the prompt template).
+
+    Gracefully handles embedding failures per block (skips that block).
+    """
+    if not blocks or not embeddings or not state:
+        return []
+
+    model_name = getattr(embeddings, "model_name", None)
+    rag_blocks: list[dict] = []
+    seen_fragment_ids: set[int] = set()
+
+    for block in blocks:
+        description = block.get("description", "")
+        if not description:
+            continue
+
+        try:
+            query_vec = embeddings.embed(description)
+            if not query_vec:
+                continue
+        except Exception:
+            logger.debug(
+                "Failed to embed block '%s', skipping RAG",
+                block.get("title", "?"),
+                exc_info=True,
+            )
+            continue
+
+        raw_fragments = state.retrieve_similar_fragments(
+            query_vec,
+            top_k=top_k,
+            model=model_name,
+        )
+
+        # Deduplicate across blocks
+        block_fragments = []
+        for f in raw_fragments:
+            fid = f.get("id")
+            if fid in seen_fragment_ids:
+                continue
+            seen_fragment_ids.add(fid)
+            block_fragments.append(
+                {
+                    "source": f.get("citekey", f.get("source_id", "?")),
+                    "text": f.get("fragment_text", "")[:300],
+                    "type": f.get("fragment_type", "?"),
+                    "relevance": f.get("relevance_score", 3),
+                    "similarity": f.get("similarity", 0),
+                }
+            )
+
+        if block_fragments:
+            rag_blocks.append(
+                {
+                    "block_order": block.get("order", 0),
+                    "block_title": block.get("title", ""),
+                    "fragments": block_fragments,
+                }
+            )
+
+    return rag_blocks
+
+
 def load_research_report(
-    section: str, project_root: Path,
+    section: str,
+    project_root: Path,
 ) -> Optional[str]:
     """Read research report for a section from project_root/notes/research/.
 
