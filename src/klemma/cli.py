@@ -3506,15 +3506,17 @@ def reassign(ctx, threshold, limit, apply, fresh):
 
     # Load full fragment texts for detailed display
     frag_texts: dict[int, str] = {}
-    all_frag_ids: set[int] = set()
+    all_frag_ids: list[int] = []
     for s in suggestions:
-        all_frag_ids.update(s.get("frag_ids", [s["frag_id"]]))
+        all_frag_ids.extend(s.get("frag_ids", [s["frag_id"]]))
     if all_frag_ids:
-        frags = state.get_fragments(limit=len(all_frag_ids) + 10)
-        frag_texts = {
-            f["id"]: f.get("fragment_text", "")
-            for f in frags if f["id"] in all_frag_ids
-        }
+        with state._conn() as conn:
+            placeholders = ",".join("?" * len(all_frag_ids))
+            cur = conn.execute(
+                f"SELECT id, fragment_text FROM fragments WHERE id IN ({placeholders})",
+                all_frag_ids,
+            )
+            frag_texts = {row["id"]: row["fragment_text"] for row in cur.fetchall()}
 
     # Build ReviewItems
     review_items = []
