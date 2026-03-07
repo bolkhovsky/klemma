@@ -87,6 +87,6 @@ Return a JSON object:
 3. **Scientific results** — identify concrete contributions. For papers: 2-3 results. For dissertations: 3-5
 4. **outline_text** — full markdown with `#`/`##`/`###` headings, brief description of each section (1-2 sentences), and estimated word count or page target if available
 5. **Preserve existing assignments** — if sources are already assigned to sections in the database, respect that structure
-6. **Language** — respond in the same language as the project materials
+6. **Language** — respond in {{ language }}. All output (titles, descriptions, outline_text) MUST be in {{ language }}, regardless of the language of source materials
 
 Respond with ONLY valid JSON. Respond in {{ language }}.
