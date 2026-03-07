@@ -3255,18 +3255,23 @@ def reassign(ctx, threshold, limit):
     frag_meta = state.get_embedded_fragment_metadata()
     meta_by_id = {m["id"]: m for m in frag_meta}
 
+    # Filter to active sources only (exclude orphaned fragments)
+    active_sources = state.get_existing_source_ids()
+
     # 3. Compute best section match for each fragment
-    section_ids = sorted(section_embeddings.keys())
-    suggestions = []
+    raw_suggestions = []
 
     with console.status(
         f"Computing affinity for {len(frag_embeddings)} fragments "
-        f"× {len(section_ids)} sections...",
+        f"× {len(section_embeddings)} sections...",
         spinner="dots",
     ):
         for frag_id, frag_vec in frag_embeddings.items():
             meta = meta_by_id.get(frag_id)
             if not meta:
+                continue
+            source_id = meta.get("source_id", "")
+            if source_id not in active_sources:
                 continue
             current_section = meta.get("section") or ""
 
@@ -3281,14 +3286,22 @@ def reassign(ctx, threshold, limit):
             # Only suggest if different from current and above threshold
             if (best_section and best_section != current_section
                     and best_score >= threshold):
-                suggestions.append({
+                raw_suggestions.append({
                     "frag_id": frag_id,
-                    "citekey": meta.get("source_id", "?"),
+                    "citekey": source_id,
                     "current": current_section or "(none)",
                     "suggested": best_section,
                     "score": best_score,
                     "preview": (meta.get("text_preview") or "")[:60],
                 })
+
+    # Deduplicate: keep best score per (source, suggested section)
+    seen: dict[tuple[str, str], dict] = {}
+    for s in raw_suggestions:
+        key = (s["citekey"], s["suggested"])
+        if key not in seen or s["score"] > seen[key]["score"]:
+            seen[key] = s
+    suggestions = list(seen.values())
 
     if not suggestions:
         console.print(
