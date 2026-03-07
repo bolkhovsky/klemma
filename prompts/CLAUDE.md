@@ -58,6 +58,21 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 ### reconstruct.md
 `paper_title`, `abstract`, `keywords`, `sections` (list of {section_id, title, description}), `sources` (list of {citekey, title, year, abstract, fragments: [{intent, text}]}), `max_recs_per_section` (int, optional — caps recommendations per section), `examples` (list of {section_id, section_title, citekey, intent, justification}, optional — few-shot golden examples for ablation)
 
+## Methodology grounding
+
+Templates encode domain-specific academic writing knowledge from peer-reviewed sources:
+
+| Methodology | Source | Used in templates |
+|-------------|--------|-------------------|
+| Results-first writing order | Kallestinova (2011) | `outline.md`, `outline_incremental.md`, `research.md`, `research_incremental.md` |
+| CARS model (3 moves) | Swales (1990) | `outline.md`, `outline_incremental.md`, `section_draft.md`, `research.md`, `research_incremental.md` |
+| Argument-grouped lit review | Turbek et al. (2016) | `outline.md`, `outline_incremental.md`, `section_draft.md`, `research.md`, `research_incremental.md` |
+| Iterative drafting | Shrestha (2018) | `section_draft.md` |
+| Citation function taxonomy | Teufel et al. (2006) | `extract.md`, `annotate.md`, `analyst.md`, `reconstruct.md` |
+
+### Citation intent types (6 values)
+`background`, `method`, `result_comparison`, `extends`, `contrasts`, `uses_data` — used across extraction, annotation, analysis, and recommendation prompts. Intent-weighted scoring in `gaps.py` assigns higher weights to `method` (3.0) and `extends` (2.5).
+
 ## Conventions
 - All templates in Russian (dissertation language) except `extract.md` (English for international papers)
 - `{{ variable }}` syntax with Jinja2 control flow (`{% for %}`, `{% if %}`)

@@ -97,6 +97,14 @@ Update the previous research briefing for section {{ target_section }}. Consider
 4. **Preserve what's still relevant** from the previous briefing — don't rewrite from scratch
 5. **Update gaps** — some may have been closed by new sources
 
+### Section-Type Methodology (Kallestinova 2011, Swales 1990, Turbek et al. 2016)
+
+When updating argument blocks, follow section-type conventions:
+- **Introductory sections**: CARS model — territory → gap → contribution (Swales 1990)
+- **Literature reviews**: argument-grouped blocks, each = one thesis + 2-3 sources (Turbek et al. 2016)
+- **Methods**: blocks mirror expected results order (Kallestinova 2011)
+- **Results/Discussion**: finding → comparison with literature → implication
+
 Return updated JSON in the same format:
 
 ```json

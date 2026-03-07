@@ -93,10 +93,13 @@ Create a JSON annotation with the following structure:
    - Find the References/Bibliography section in the full text
    - Select 5-15 references most important for the project topic
    - For each: authors (short form), year, title (exact from References), why_relevant, citation_intent, dissertation_sections
-   - **citation_intent**: how the paper being analyzed cites this reference:
+   - **citation_intent**: how the paper being analyzed cites this reference (Teufel et al. 2006):
      - `background` — cited for context, literature review, general knowledge
      - `method` — cited as a method, algorithm, or approach that is used or adapted
      - `result_comparison` — cited for comparing results, benchmarks, or metrics
+     - `extends` — cited as a foundation that the paper extends or improves upon
+     - `contrasts` — cited to highlight disagreement or limitations
+     - `uses_data` — cited for datasets, benchmarks, or empirical data used
    - **in_library**: true if the reference matches a source in "Our Library" above (match by author + year + title). Include citekey
    - **in_library**: false if the reference is not in our library. citekey = null
    - Priority: prefer references NOT in our library — these are gaps

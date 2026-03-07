@@ -31,10 +31,13 @@ For each section and subsection:
 For EACH in-text citation (author-year or numbered):
 - Which section it appears in
 - The cited work's title (from the References/Bibliography section)
-- Citation intent:
+- Citation intent (Teufel et al. 2006 citation function taxonomy):
   - `background` — context, general knowledge, literature review
   - `method` — a method, algorithm, or approach adopted or built upon
   - `result_comparison` — results or metrics cited for comparison
+  - `extends` — extends, builds upon, or improves the cited approach
+  - `contrasts` — disagrees with or shows limitations of the cited work
+  - `uses_data` — uses datasets, benchmarks, or empirical data from the cited work
 - Whether it matches a known library entry (by author + year + title substring)
 
 ### Matching rules

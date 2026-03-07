@@ -81,6 +81,17 @@ For a thesis, maintain 3-5 chapters with detailed subsections.
 For a dissertation, maintain 3-6 chapters with subsections and sub-subsections where needed.
 {% endif %}
 
+### Methodology: Results-First Outline (Kallestinova 2011, Turbek et al. 2016)
+
+When restructuring or adding sections, follow these principles:
+1. Build from **contributions and results** outward — new sections should connect to scientific_results
+2. Structure **introductions** using the CARS model (Swales 1990):
+   - Move 1: Establish territory (what is known)
+   - Move 2: Establish niche (what gap exists — use "Top Gaps" data if available)
+   - Move 3: Occupy niche (how this work fills the gap)
+3. Group **literature review** sections by argument, not chronologically — each subsection = one claim supported by 2-3 sources
+4. Ensure **methods** and **results** sections mirror each other in order
+
 Return a JSON object:
 
 ```json

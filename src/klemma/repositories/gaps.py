@@ -57,7 +57,10 @@ class GapsRepository(BaseRepository):
                     AVG(COALESCE(s.quality_score, 3)) as avg_quality,
                     AVG(CASE
                         WHEN rg.citation_intent = 'method' THEN 3.0
+                        WHEN rg.citation_intent = 'extends' THEN 2.5
                         WHEN rg.citation_intent = 'result_comparison' THEN 2.0
+                        WHEN rg.citation_intent = 'contrasts' THEN 2.0
+                        WHEN rg.citation_intent = 'uses_data' THEN 1.5
                         ELSE 1.0
                     END) as intent_weight,
                     GROUP_CONCAT(DISTINCT rg.source_id) as source_ids

@@ -2545,6 +2545,46 @@ def role(ctx, citekey, role):
     console.print(f"[green]@{citekey}[/green] → {label}")
 
 
+def _show_writing_order(kctx: KlemmaContext, current_section: str) -> None:
+    """Display results-first writing order with current section highlighted."""
+    from .section_types import get_writing_order
+
+    project = kctx.project
+    if not project or not project.sections:
+        return
+
+    # Build type map from config or DB
+    type_map: dict[str, str] = {}
+    if project.section_type_map:
+        type_map = dict(project.section_type_map)
+    else:
+        with kctx.state._conn() as conn:
+            cur = conn.execute(
+                "SELECT section, section_type FROM section_type_map"
+            )
+            type_map = {row["section"]: row["section_type"] for row in cur.fetchall()}
+
+    drafts_dir = (kctx.project_root / "notes" / "drafts") if kctx.project_root else None
+
+    items = get_writing_order(project.sections, type_map, drafts_dir)
+    if not items:
+        return
+
+    console.print("[dim]Writing order (results-first):[/dim]")
+    for item in items:
+        if item.section_id == current_section:
+            marker = "[bold cyan]→[/bold cyan]"
+            label = f"[bold cyan]{item.section_id} {item.title}[/bold cyan] [dim]← you are here[/dim]"
+        elif item.has_draft:
+            marker = "[green]✓[/green]"
+            label = f"[dim]{item.section_id} {item.title}[/dim]"
+        else:
+            marker = "[dim]○[/dim]"
+            label = f"{item.section_id} {item.title}"
+        console.print(f"  {marker} {label}")
+    console.print()
+
+
 @main.group(invoke_without_command=True)
 @click.option(
     "--section",
@@ -2598,6 +2638,9 @@ def draft(ctx, section, model, no_save, no_rag):
     if chapter is None:
         console.print(f"[red]Cannot determine chapter from section '{section}'[/red]")
         raise SystemExit(1)
+
+    # 0. Show writing order context (Kallestinova 2011 results-first)
+    _show_writing_order(kctx, section)
 
     # 1. Load research report
     research_report_content = ""
