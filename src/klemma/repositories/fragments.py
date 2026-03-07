@@ -11,9 +11,10 @@ class FragmentRepository(BaseRepository):
     def save_fragments(self, source_id: str, fragments: list[dict]) -> int:
         """Save extracted fragments and update source fragment count."""
         with self._conn() as conn:
+            inserted = 0
             for f in fragments:
-                conn.execute(
-                    """INSERT INTO fragments
+                cur = conn.execute(
+                    """INSERT OR IGNORE INTO fragments
                        (source_id, fragment_text, fragment_type, chapter, section,
                         relevance_score, usage_hint, page_number, citation_intent)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -29,11 +30,12 @@ class FragmentRepository(BaseRepository):
                         f.get("citation_intent"),
                     ),
                 )
+                inserted += cur.rowcount
             conn.execute(
                 "UPDATE sources SET fragment_count=? WHERE id=?",
-                (len(fragments), source_id),
+                (inserted, source_id),
             )
-            return len(fragments)
+            return inserted
 
     def get_fragments(
         self,
@@ -103,6 +105,15 @@ class FragmentRepository(BaseRepository):
             for row in cur.fetchall():
                 stats["by_section"][row["section"]] = row["cnt"]
             return stats
+
+    def update_fragment_section(self, fragment_id: int, section: str) -> bool:
+        """Update the section assignment for a single fragment. Returns True if modified."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE fragments SET section=? WHERE id=?",
+                (section, fragment_id),
+            )
+            return cur.rowcount > 0
 
     def delete_fragments(self, source_id: str) -> int:
         """Delete all fragments for a source. Returns number of deleted rows."""
@@ -230,6 +241,49 @@ class FragmentRepository(BaseRepository):
                 (limit,),
             )
             return [dict(row) for row in cur.fetchall()]
+
+    # ── Reassign skips ─────────────────────────────────────────────────
+
+    def save_reassign_skip(
+        self, source_id: str, from_section: str, to_section: str,
+    ) -> None:
+        """Record that the user skipped a reassign suggestion."""
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO reassign_skips "
+                "(source_id, from_section, to_section) VALUES (?, ?, ?)",
+                (source_id, from_section, to_section),
+            )
+
+    def save_reassign_skips_batch(
+        self, skips: list[tuple[str, str, str]],
+    ) -> int:
+        """Batch-save skip decisions. Each tuple: (source_id, from, to)."""
+        with self._conn() as conn:
+            for source_id, from_sec, to_sec in skips:
+                conn.execute(
+                    "INSERT OR REPLACE INTO reassign_skips "
+                    "(source_id, from_section, to_section) VALUES (?, ?, ?)",
+                    (source_id, from_sec, to_sec),
+                )
+            return len(skips)
+
+    def get_reassign_skips(self) -> set[tuple[str, str, str]]:
+        """Return all skip decisions as {(source_id, from_section, to_section)}."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT source_id, from_section, to_section FROM reassign_skips"
+            )
+            return {
+                (row["source_id"], row["from_section"], row["to_section"])
+                for row in cur.fetchall()
+            }
+
+    def clear_reassign_skips(self) -> int:
+        """Remove all skip decisions. Returns count removed."""
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM reassign_skips")
+            return cur.rowcount
 
     def retrieve_similar_fragments(
         self,

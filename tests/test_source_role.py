@@ -34,7 +34,7 @@ def test_migration_v8_adds_source_role(tmp_path):
     cols = {row[1] for row in conn.execute("PRAGMA table_info(sources)")}
     assert "source_role" in cols
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 9
+    assert version == 10
     conn.close()
 
 

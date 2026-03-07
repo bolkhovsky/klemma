@@ -206,7 +206,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 9  # bump this when adding new migrations
+        target = 10  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -360,6 +360,69 @@ class StateManager:
                 source_count INTEGER DEFAULT 0,
                 updated_at TEXT,
                 PRIMARY KEY (section, embedding_model)
+            )""")
+
+        if version < 10:
+            import logging
+            _log = logging.getLogger("klemma.state")
+
+            # 10a. Dedup fragments: keep lowest id per (source_id, fragment_text)
+            cur = conn.execute(
+                """DELETE FROM fragments WHERE id NOT IN (
+                    SELECT MIN(id) FROM fragments
+                    GROUP BY source_id, fragment_text
+                )"""
+            )
+            if cur.rowcount:
+                _log.info("v10 migration: removed %d duplicate fragments", cur.rowcount)
+
+            # 10b. Rebuild fragments table with UNIQUE(source_id, fragment_text)
+            conn.executescript("""
+                CREATE TABLE fragments_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id TEXT NOT NULL REFERENCES sources(id),
+                    fragment_text TEXT NOT NULL,
+                    fragment_type TEXT,
+                    chapter INTEGER,
+                    section TEXT,
+                    relevance_score INTEGER,
+                    usage_hint TEXT,
+                    page_number INTEGER,
+                    extracted_at TEXT DEFAULT (datetime('now')),
+                    used_in_draft BOOLEAN DEFAULT 0,
+                    citation_intent TEXT,
+                    embedding BLOB,
+                    embedding_model TEXT,
+                    section_type TEXT,
+                    UNIQUE(source_id, fragment_text)
+                );
+
+                INSERT OR IGNORE INTO fragments_new
+                    (id, source_id, fragment_text, fragment_type, chapter, section,
+                     relevance_score, usage_hint, page_number, extracted_at,
+                     used_in_draft, citation_intent, embedding, embedding_model,
+                     section_type)
+                SELECT id, source_id, fragment_text, fragment_type, chapter, section,
+                       relevance_score, usage_hint, page_number, extracted_at,
+                       used_in_draft, citation_intent, embedding, embedding_model,
+                       section_type
+                FROM fragments;
+
+                DROP TABLE fragments;
+                ALTER TABLE fragments_new RENAME TO fragments;
+
+                CREATE INDEX IF NOT EXISTS idx_fragments_source ON fragments(source_id);
+                CREATE INDEX IF NOT EXISTS idx_fragments_section ON fragments(section);
+                CREATE INDEX IF NOT EXISTS idx_fragments_type ON fragments(fragment_type);
+            """)
+
+            # 10c. Create reassign_skips table
+            conn.execute("""CREATE TABLE IF NOT EXISTS reassign_skips (
+                source_id TEXT NOT NULL,
+                from_section TEXT NOT NULL,
+                to_section TEXT NOT NULL,
+                skipped_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (source_id, from_section, to_section)
             )""")
 
         conn.execute(f"PRAGMA user_version = {target}")
@@ -521,11 +584,26 @@ class StateManager:
     def get_embedded_fragment_metadata(self, model: Optional[str] = None) -> list[dict]:
         return self.fragments.get_embedded_fragment_metadata(model)
 
+    def update_fragment_section(self, fragment_id: int, section: str) -> bool:
+        return self.fragments.update_fragment_section(fragment_id, section)
+
     def get_fragment_embedding_stats(self) -> dict:
         return self.fragments.get_fragment_embedding_stats()
 
     def get_unembedded_fragments(self, limit: int = 100000) -> list[dict]:
         return self.fragments.get_unembedded_fragments(limit)
+
+    def save_reassign_skip(self, source_id: str, from_section: str, to_section: str):
+        return self.fragments.save_reassign_skip(source_id, from_section, to_section)
+
+    def save_reassign_skips_batch(self, skips: list[tuple[str, str, str]]) -> int:
+        return self.fragments.save_reassign_skips_batch(skips)
+
+    def get_reassign_skips(self) -> set[tuple[str, str, str]]:
+        return self.fragments.get_reassign_skips()
+
+    def clear_reassign_skips(self) -> int:
+        return self.fragments.clear_reassign_skips()
 
     def retrieve_similar_fragments(
         self, query_embedding: list[float], top_k: int = 10, model: Optional[str] = None
