@@ -3515,7 +3515,6 @@ def reassign(ctx, threshold, limit, apply, fresh):
     for s in suggestions:
         frag_ids_list = s.get("frag_ids", [s["frag_id"]])
         frag_text = frag_texts.get(s["frag_id"], s["preview"])
-        display_text = frag_text[:200] + ("..." if len(frag_text) > 200 else "")
         cur_sec = s["current"]
         sug_sec = s["suggested"]
         cur_desc = _describe_section(cur_sec) if cur_sec != "(none)" else "unassigned"
@@ -3528,7 +3527,7 @@ def reassign(ctx, threshold, limit, apply, fresh):
             key=f"{s['citekey']}:{cur_sec}:{sug_sec}",
             header=f"@{s['citekey']}{count_note}",
             details=[
-                ("Fragment", display_text),
+                ("Fragment", frag_text),
                 ("Current", f"{cur_sec} — {cur_desc}  (sim={s['current_score']:.3f})"),
                 ("Suggested", f"[{score_style}]{sug_sec}[/{score_style}] — "
                               f"{sug_desc}  (sim={s['score']:.3f}, +{s['delta']:.3f})"),
