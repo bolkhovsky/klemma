@@ -31,8 +31,21 @@
 {% endfor %}
 {% endif %}
 
+{% if rag_fragments %}
+## Релевантные фрагменты по блокам аргументации
+
+Фрагменты ниже подобраны по семантической близости к описанию каждого блока аргументации (He et al. 2010). Используй их как приоритетные источники при написании соответствующих частей раздела.
+
+{% for block in rag_fragments %}
+### Блок {{ block.block_order }}: {{ block.block_title }}
+{% for f in block.fragments %}
+- [{{ f.source }}] ({{ f.type }}, сим. {{ f.get("similarity", 0)|round(2) }}): {{ f.text[:200] }}
+{% endfor %}
+{% endfor %}
+{% endif %}
+
 {% if fragments %}
-## Релевантные фрагменты из библиотеки
+## {% if rag_fragments %}Дополнительные фрагменты{% else %}Релевантные фрагменты из библиотеки{% endif %}
 
 {% for f in fragments %}
 - [{{ f.source }}] ({{ f.type }}, рел. {{ f.get("relevance", 3) }}): {{ f.text[:200] }}

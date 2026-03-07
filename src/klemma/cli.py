@@ -28,8 +28,12 @@ console = Console()
 
 # CLI command → task name for model routing (used in status line)
 _CMD_TASK_MAP = {
-    "plan": "planner", "process": "extract", "research": "research",
-    "library": "library_status", "ask": "ask", "outline": "outline_initial",
+    "plan": "planner",
+    "process": "extract",
+    "research": "research",
+    "library": "library_status",
+    "ask": "ask",
+    "outline": "outline_initial",
 }
 
 
@@ -59,13 +63,15 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     if project_chain:
         # Discovered project — merge config with system defaults and inheritance
         cfg, project, project_root = resolve_effective_config(
-            project_chain, config_override=config_path,
+            project_chain,
+            config_override=config_path,
         )
         klemma_home = project_root / ".klemma"
     elif config_path:
         # No project found, but explicit --config given — use it with system defaults
         cfg, project, project_root = resolve_effective_config(
-            [], config_override=config_path,
+            [],
+            config_override=config_path,
         )
         klemma_home = project_root / ".klemma"
         if not klemma_home.is_dir():
@@ -111,16 +117,21 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     search_provider = None
     if cfg.search.backend:
         from .search import create_search
+
         search_provider = create_search(cfg.search.model_dump())
 
     dissertation_context = load_project_context(project_chain, cfg)
     available_tags = load_available_tags(klemma_home, cfg, project_chain=project_chain)
 
     return KlemmaContext(
-        config=cfg, state=state, vault=vault, library=library,
+        config=cfg,
+        state=state,
+        vault=vault,
+        library=library,
         embeddings=emb_provider,
         search=search_provider,
-        project=project, project_name=project_root.name,
+        project=project,
+        project_name=project_root.name,
         klemma_home=klemma_home,
         dissertation_context=dissertation_context,
         available_tags=available_tags,
@@ -210,7 +221,9 @@ def resolve_orphan(old_ck: str, bbt_index: BBTIndex) -> tuple[str, str] | None:
     # Strategy 2: acquire-format "Author2020_Title_Slug"
     acq = re.match(r"([A-Z][a-z]+)(\d{4})", old_ck)
     if acq:
-        match = _unique_author_year_match(by_author_year, acq.group(1).lower(), acq.group(2))
+        match = _unique_author_year_match(
+            by_author_year, acq.group(1).lower(), acq.group(2)
+        )
         if match:
             return match
 
@@ -279,18 +292,28 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
         sections_list = props.get("sections", [])
         chapters_list = props.get("chapters", [])
 
-        vault_data.append({
-            "citekey": citekey,
-            "primary_section": str(props.get("section", "")) or None,
-            "primary_chapter": chapter,
-            "sections": [str(s) for s in sections_list] if isinstance(sections_list, list) else [],
-            "chapters": [int(c) for c in chapters_list] if isinstance(chapters_list, list) else [],
-            "quality": quality or 0,
-            "priority": props.get("priority", "medium"),
-            "nr1": props.get("relevance_nr1", 0) or 0,
-            "nr2": props.get("relevance_nr2", 0) or 0,
-            "note_path": f"{notes_folder}/{note_name}.md",
-        })
+        vault_data.append(
+            {
+                "citekey": citekey,
+                "primary_section": str(props.get("section", "")) or None,
+                "primary_chapter": chapter,
+                "sections": (
+                    [str(s) for s in sections_list]
+                    if isinstance(sections_list, list)
+                    else []
+                ),
+                "chapters": (
+                    [int(c) for c in chapters_list]
+                    if isinstance(chapters_list, list)
+                    else []
+                ),
+                "quality": quality or 0,
+                "priority": props.get("priority", "medium"),
+                "nr1": props.get("relevance_nr1", 0) or 0,
+                "nr2": props.get("relevance_nr2", 0) or 0,
+                "note_path": f"{notes_folder}/{note_name}.md",
+            }
+        )
 
     # 2. Discover new Zotero entries not in DB + detect renames
     # Determine auto-register mode: "none" (paper), "mapped" (filter by chapter_mapping), "all"
@@ -335,7 +358,9 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
         # Backfill zotero_key BEFORE orphan detection so itemKey-based
         # renames (first loop above) catch most cases on subsequent runs,
         # reducing reliance on fuzzy matching.
-        backfill = {ck: entry.item_key for ck, entry in entry_lookup.items() if entry.item_key}
+        backfill = {
+            ck: entry.item_key for ck, entry in entry_lookup.items() if entry.item_key
+        }
         if backfill:
             state.populate_zotero_keys(backfill)
 
@@ -410,14 +435,18 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
         if result["new_registered"]:
             parts.append(f"[blue]{result['new_registered']} new from Zotero[/blue]")
         if skipped_irrelevant:
-            parts.append(f"[yellow]{skipped_irrelevant} skipped (no chapter_mapping match)[/yellow]")
+            parts.append(
+                f"[yellow]{skipped_irrelevant} skipped (no chapter_mapping match)[/yellow]"
+            )
         if parts:
             console.print("[dim]Sync:[/dim] " + " | ".join(parts))
 
     return result
 
 
-def _print_status_line(state: StateManager, project_name: str = "default", model: str = ""):
+def _print_status_line(
+    state: StateManager, project_name: str = "default", model: str = ""
+):
     """Print a compact status line with key metrics."""
     try:
         stats = state.get_stats()
@@ -429,7 +458,9 @@ def _print_status_line(state: StateManager, project_name: str = "default", model
         if project_name != "default":
             parts.insert(0, f"[cyan]{project_name}[/cyan]")
         if model:
-            parts.insert(1 if project_name != "default" else 0, f"[magenta]{model}[/magenta]")
+            parts.insert(
+                1 if project_name != "default" else 0, f"[magenta]{model}[/magenta]"
+            )
         gap_summary = state.get_gap_summary()
         if gap_summary["open_count"] > 0:
             top = ""
@@ -438,7 +469,9 @@ def _print_status_line(state: StateManager, project_name: str = "default", model
             parts.append(f"[yellow]{gap_summary['open_count']} ref-gaps{top}[/yellow]")
         prune = state.get_prune_summary()
         if prune["total"] > 0:
-            parts.append(f"[yellow]{prune['total']} pruned ({prune['drop']} drop, {prune['maybe']} maybe)[/yellow]")
+            parts.append(
+                f"[yellow]{prune['total']} pruned ({prune['drop']} drop, {prune['maybe']} maybe)[/yellow]"
+            )
         console.print("[dim]|[/dim] " + " [dim]|[/dim] ".join(parts))
     except Exception:
         pass  # Don't crash on status line failure
@@ -458,15 +491,19 @@ def _print_recommended_actions(
     pending = proc_stats.get("pending", 0)
     failed = proc_stats.get("failed", 0)
     if pending > 0:
-        actions.append((
-            f"{pending} sources pending extraction",
-            "klemma process",
-        ))
+        actions.append(
+            (
+                f"{pending} sources pending extraction",
+                "klemma process",
+            )
+        )
     if failed > 0:
-        actions.append((
-            f"{failed} failed sources to retry",
-            "klemma process --retry",
-        ))
+        actions.append(
+            (
+                f"{failed} failed sources to retry",
+                "klemma process --retry",
+            )
+        )
 
     # 2. Embedding coverage < 100%
     if emb_stats:
@@ -474,18 +511,22 @@ def _print_recommended_actions(
         embedded = emb_stats.get("embedded", 0)
         remaining = total - embedded
         if remaining > 0:
-            actions.append((
-                f"{remaining} sources missing embeddings ({embedded}/{total})",
-                "klemma embed",
-            ))
+            actions.append(
+                (
+                    f"{remaining} sources missing embeddings ({embedded}/{total})",
+                    "klemma embed",
+                )
+            )
 
     # 3. Top coverage gaps → research
     if gaps_data:
         top_gap = gaps_data[0]
-        actions.append((
-            f"section {top_gap['section']} has only {top_gap['count']} sources",
-            f"klemma research -s {top_gap['section']}",
-        ))
+        actions.append(
+            (
+                f"section {top_gap['section']} has only {top_gap['count']} sources",
+                f"klemma research -s {top_gap['section']}",
+            )
+        )
 
     # 4. Top ref gaps → suggest acquisitions
     if ref_gaps:
@@ -493,19 +534,23 @@ def _print_recommended_actions(
         top_authors = (top.get("ref_authors") or "").strip()[:30]
         top_count = top.get("count", 0)
         n_gaps = len(ref_gaps)
-        actions.append((
-            f"{n_gaps} open ref gaps (top: {top_authors}, cited x{top_count})",
-            "klemma gaps suggest",
-        ))
+        actions.append(
+            (
+                f"{n_gaps} open ref gaps (top: {top_authors}, cited x{top_count})",
+                "klemma gaps suggest",
+            )
+        )
 
     # 5. Prune verdicts pending review
     if prune_summary.get("total", 0) > 0:
         drop = prune_summary.get("drop", 0)
         maybe = prune_summary.get("maybe", 0)
-        actions.append((
-            f"{drop} drop + {maybe} maybe prune verdicts pending",
-            "klemma library prune --list",
-        ))
+        actions.append(
+            (
+                f"{drop} drop + {maybe} maybe prune verdicts pending",
+                "klemma library prune --list",
+            )
+        )
 
     if not actions:
         return
@@ -517,8 +562,12 @@ def _print_recommended_actions(
         console.print(f"     [green]$ {cmd}[/green]")
 
 
-def _print_ref_gaps_table(state: StateManager, limit: int = 20, embeddings=None,
-                          section_weights: dict[str, float] | None = None):
+def _print_ref_gaps_table(
+    state: StateManager,
+    limit: int = 20,
+    embeddings=None,
+    section_weights: dict[str, float] | None = None,
+):
     """Print reference gaps as a Rich table.
 
     When embeddings is provided, applies semantic reranking via
@@ -533,7 +582,8 @@ def _print_ref_gaps_table(state: StateManager, limit: int = 20, embeddings=None,
     title_suffix = " [dim](semantically reranked)[/dim]" if embeddings else ""
     ref_table = Table(
         title=f"Reference Gaps — {gap_summary['open_count']} open (missing from library){title_suffix}",
-        show_edge=False, pad_edge=False,
+        show_edge=False,
+        pad_edge=False,
     )
     ref_table.add_column("#", justify="right", style="dim", width=3)
     ref_table.add_column("Score", justify="right", width=6)
@@ -544,7 +594,9 @@ def _print_ref_gaps_table(state: StateManager, limit: int = 20, embeddings=None,
     ref_table.add_column("Why", max_width=30, style="dim")
 
     for i, g in enumerate(ref_gaps, 1):
-        score_style = "red bold" if g["score"] >= 10 else "yellow" if g["score"] >= 5 else "dim"
+        score_style = (
+            "red bold" if g["score"] >= 10 else "yellow" if g["score"] >= 5 else "dim"
+        )
         ref_table.add_row(
             str(i),
             f"[{score_style}]{g['score']:.1f}[/{score_style}]",
@@ -560,7 +612,9 @@ def _print_ref_gaps_table(state: StateManager, limit: int = 20, embeddings=None,
 
 @click.group(invoke_without_command=True)
 @click.version_option(version=__version__)
-@click.option("--config", "-c", default=None, help="Config file path (override project config)")
+@click.option(
+    "--config", "-c", default=None, help="Config file path (override project config)"
+)
 @click.pass_context
 def main(ctx, config):
     """Klemma — AI academic assistant.
@@ -601,10 +655,13 @@ def main(ctx, config):
             task = _CMD_TASK_MAP.get(ctx.invoked_subcommand)
             if task:
                 from .ai import resolve_task_model
+
                 override = resolve_task_model(task, kctx.config.ai)
                 if override:
                     effective_model = override
-            _print_status_line(kctx.state, project_name=kctx.project_name, model=effective_model)
+            _print_status_line(
+                kctx.state, project_name=kctx.project_name, model=effective_model
+            )
         except Exception:
             pass
 
@@ -613,28 +670,73 @@ def main(ctx, config):
 
 
 @main.command()
-@click.option("--type", "-t", "project_type", default="dissertation",
-              type=click.Choice(["dissertation", "paper", "thesis"]),
-              help="Project type")
-@click.option("--global-only", is_flag=True, help="Only create/update ~/.klemma/ system config")
+@click.option(
+    "--type",
+    "-t",
+    "project_type",
+    default="dissertation",
+    type=click.Choice(["dissertation", "paper", "thesis"]),
+    help="Project type",
+)
+@click.option(
+    "--global-only", is_flag=True, help="Only create/update ~/.klemma/ system config"
+)
 @click.option("--no-input", is_flag=True, help="Skip interactive prompts, use defaults")
 @click.option("--non-interactive", is_flag=True, help="Alias for --no-input")
-@click.option("--force", is_flag=True, help="Re-run wizard even if project exists (prefills from current config)")
-@click.option("--outline", is_flag=True, help="Generate outline after init (requires AI)")
-@click.option("--plan", "plan_path", default=None,
-              type=click.Path(exists=True),
-              help="Path to dissertation plan-prospect .docx — auto-fills project from it")
-@click.option("--name", "project_name", default=None, help="Project title (non-interactive)")
-@click.option("--description", "-d", default=None, help="Project description (non-interactive)")
-@click.option("--keywords", "-k", default=None, help="Comma-separated keywords (non-interactive)")
-@click.option("--language", "-l", default=None, help="AI language: ru or en (non-interactive)")
-@click.option("--backend", "-b", default=None,
-              type=click.Choice(["claude", "litellm"], case_sensitive=False),
-              help="AI backend: claude (Claude Code Max) or litellm (non-interactive)")
-@click.option("--api-key", "api_key", default=None, help="OpenAI API key for litellm backend")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Re-run wizard even if project exists (prefills from current config)",
+)
+@click.option(
+    "--outline", is_flag=True, help="Generate outline after init (requires AI)"
+)
+@click.option(
+    "--plan",
+    "plan_path",
+    default=None,
+    type=click.Path(exists=True),
+    help="Path to dissertation plan-prospect .docx — auto-fills project from it",
+)
+@click.option(
+    "--name", "project_name", default=None, help="Project title (non-interactive)"
+)
+@click.option(
+    "--description", "-d", default=None, help="Project description (non-interactive)"
+)
+@click.option(
+    "--keywords", "-k", default=None, help="Comma-separated keywords (non-interactive)"
+)
+@click.option(
+    "--language", "-l", default=None, help="AI language: ru or en (non-interactive)"
+)
+@click.option(
+    "--backend",
+    "-b",
+    default=None,
+    type=click.Choice(["claude", "litellm"], case_sensitive=False),
+    help="AI backend: claude (Claude Code Max) or litellm (non-interactive)",
+)
+@click.option(
+    "--api-key", "api_key", default=None, help="OpenAI API key for litellm backend"
+)
 @click.pass_context
-def init(ctx, project_type, global_only, no_input, non_interactive, force, outline,
-         plan_path, project_name, description, keywords, language, backend, api_key):
+def init(
+    ctx,
+    project_type,
+    global_only,
+    no_input,
+    non_interactive,
+    force,
+    outline,
+    plan_path,
+    project_name,
+    description,
+    keywords,
+    language,
+    backend,
+    api_key,
+):
     """Initialize a new klemma project in current directory.
 
     Creates .klemma/ and KLEMMA.md in the current directory.
@@ -658,7 +760,10 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
         no_input = True
 
     # If any value flags provided, auto-imply non-interactive mode
-    has_value_flags = any(v is not None for v in [project_name, description, keywords, language, backend, api_key])
+    has_value_flags = any(
+        v is not None
+        for v in [project_name, description, keywords, language, backend, api_key]
+    )
     if has_value_flags:
         no_input = True
 
@@ -698,6 +803,7 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
     plan_data = None
     if plan_path:
         from .plan_parser import parse as parse_plan
+
         try:
             plan_data = parse_plan(plan_path)
         except ImportError as e:
@@ -743,7 +849,9 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
             outline = True
     elif has_value_flags:
         # Build InitValues from CLI flags
-        kw_list = [k.strip() for k in keywords.split(",") if k.strip()] if keywords else []
+        kw_list = (
+            [k.strip() for k in keywords.split(",") if k.strip()] if keywords else []
+        )
         # Derive model and embeddings from backend + api_key
         _ai_model = ""
         if backend == "claude":
@@ -767,13 +875,15 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
     pre_chain = discover_project_chain(project_dir.parent)
     _has_parent = len(pre_chain) > 0
 
-    result = init_project(project_dir, project_type=project_type, values=values,
-                          has_parent=_has_parent)
+    result = init_project(
+        project_dir, project_type=project_type, values=values, has_parent=_has_parent
+    )
 
     # Overwrite KLEMMA.md with rich plan content if plan was provided
     effective_plan = plan_data or (values.plan_data if values else None)
     if effective_plan:
         from .plan_parser import to_klemma_md as plan_to_klemma_md
+
         klemma_md_path = project_dir / "KLEMMA.md"
         klemma_md_path.write_text(plan_to_klemma_md(effective_plan), encoding="utf-8")
         console.print("  [green]+ KLEMMA.md (from plan-prospect)[/green]")
@@ -785,7 +895,9 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
             result.setdefault("created", []).append(name)
 
     if result["created"]:
-        console.print(f"\n[green]Initialized klemma {project_type} project in {project_dir}/[/green]")
+        console.print(
+            f"\n[green]Initialized klemma {project_type} project in {project_dir}/[/green]"
+        )
         for name in result["created"]:
             console.print(f"  + {name}")
     if result["skipped"]:
@@ -803,19 +915,27 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
             inherit = True
         if not inherit:
             from .config import update_project_config
+
             update_project_config(project_dir, {})  # ensure file exists
             # Write inherit_db: false to state section
             cfg_path = project_dir / ".klemma" / "config.yaml"
             raw = _load_yaml(cfg_path)
             raw.setdefault("state", {})["inherit_db"] = False
             import yaml
+
             cfg_path.write_text(
-                yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False),
+                yaml.dump(
+                    raw, default_flow_style=False, allow_unicode=True, sort_keys=False
+                ),
                 encoding="utf-8",
             )
-            console.print("[dim]  inherit_db: false (parent library not inherited)[/dim]")
+            console.print(
+                "[dim]  inherit_db: false (parent library not inherited)[/dim]"
+            )
         else:
-            console.print("[dim]  inherit_db: true (parent library will be inherited)[/dim]")
+            console.print(
+                "[dim]  inherit_db: true (parent library will be inherited)[/dim]"
+            )
 
     # Paper: discover relevant sources from vault + BBT JSON
     if (
@@ -839,12 +959,16 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
 
             project_files = scan_project_files(kctx.project_root)
             if not project_files:
-                console.print("[yellow]No files found in project directory; skipping outline.[/yellow]")
+                console.print(
+                    "[yellow]No files found in project directory; skipping outline.[/yellow]"
+                )
             else:
                 try:
                     ai = _init_ai(kctx.config)
                 except Exception as e:
-                    console.print("[yellow]Skipping outline: AI backend not configured.[/yellow]")
+                    console.print(
+                        "[yellow]Skipping outline: AI backend not configured.[/yellow]"
+                    )
                     console.print(f"[dim]{e}[/dim]")
                 else:
                     with console.status("Generating outline...", spinner="dots"):
@@ -861,7 +985,9 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
                     if not result.title:
                         console.print("[red]Failed to generate outline.[/red]")
                     else:
-                        saved_path = save_outline(result, kctx.project_root.name, kctx.project_root)
+                        saved_path = save_outline(
+                            result, kctx.project_root.name, kctx.project_root
+                        )
                         console.print(f"[dim]Outline saved: {saved_path}[/dim]")
 
     console.print()
@@ -881,15 +1007,19 @@ def _load_prefill(config_path: Path) -> dict:
     ai = raw.get("ai", {}) if isinstance(raw.get("ai"), dict) else {}
     obsidian = raw.get("obsidian", {}) if isinstance(raw.get("obsidian"), dict) else {}
     zotero = raw.get("zotero", {}) if isinstance(raw.get("zotero"), dict) else {}
-    embeddings = raw.get("embeddings", {}) if isinstance(raw.get("embeddings"), dict) else {}
+    embeddings = (
+        raw.get("embeddings", {}) if isinstance(raw.get("embeddings"), dict) else {}
+    )
 
     # Check klemmarc for existing OpenAI key (for prefilling "do you have a key?" default)
     has_klemmarc_openai_key = False
     try:
         from .setup import _find_klemmarc
+
         klemmarc = _find_klemmarc(Path.home())
         if klemmarc:
             import yaml as _y2
+
             krc = _y2.safe_load(klemmarc.read_text(encoding="utf-8")) or {}
             has_klemmarc_openai_key = bool(krc.get("api_keys", {}).get("openai"))
     except Exception:
@@ -940,7 +1070,9 @@ def _discover_paper_sources(project_dir: Path, values):
         total_in_vault = sum(1 for f in notes_dir.iterdir() if f.name.startswith("@"))
 
     click.echo("\n  Scanning vault for relevant sources...")
-    click.echo(f"  Found {len(matches)} matching sources (of {total_in_vault} in vault):")
+    click.echo(
+        f"  Found {len(matches)} matching sources (of {total_in_vault} in vault):"
+    )
 
     shown = matches[:10]
     for m in shown:
@@ -993,13 +1125,18 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
             if plan_file.exists():
                 try:
                     from .plan_parser import parse as parse_plan
+
                     plan_data = parse_plan(plan_file)
                     click.echo(f"    Parsed: {plan_data.title[:70]}...")
-                    click.echo(f"    Chapters: {len(plan_data.chapters)}, "
-                               f"НР: {len(plan_data.results)}, "
-                               f"Tasks: {len(plan_data.tasks)}")
+                    click.echo(
+                        f"    Chapters: {len(plan_data.chapters)}, "
+                        f"НР: {len(plan_data.results)}, "
+                        f"Tasks: {len(plan_data.tasks)}"
+                    )
                 except ImportError:
-                    click.echo("    [warning] python-docx not installed: pip install python-docx")
+                    click.echo(
+                        "    [warning] python-docx not installed: pip install python-docx"
+                    )
                 except Exception as e:
                     click.echo(f"    [warning] Could not parse: {e}")
             else:
@@ -1014,7 +1151,9 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
     else:
         project_type = click.prompt(
             "  Project type",
-            type=click.Choice(["dissertation", "paper", "thesis"], case_sensitive=False),
+            type=click.Choice(
+                ["dissertation", "paper", "thesis"], case_sensitive=False
+            ),
             default=pf.get("project_type", project_type),
         )
         title = click.prompt(
@@ -1133,7 +1272,9 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
             console.print(
                 f"[yellow]  Warning: '{values.notes_folder}' not found in vault.[/yellow]"
             )
-            console.print("[dim]  Fix notes_folder in .klemma/config.yaml after init.[/dim]")
+            console.print(
+                "[dim]  Fix notes_folder in .klemma/config.yaml after init.[/dim]"
+            )
 
     # Zotero storage
     prefill_storage = pf.get("zotero_storage", "")
@@ -1186,7 +1327,11 @@ def plan(ctx):
 
     with console.status("Генерация утреннего брифинга", spinner="dots"):
         plan = generate_morning_plan(
-            cfg, state, vault, ai, project=kctx.project,
+            cfg,
+            state,
+            vault,
+            ai,
+            project=kctx.project,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
         )
@@ -1209,12 +1354,13 @@ def plan(ctx):
         console.print(f"[{style}]{plan.intervention}[/{style}]")
 
     # Фокус
-    console.print(Panel(
-        f"[bold]{plan.focus}[/bold]\n\n"
-        f"[dim]Почему:[/dim] {plan.why}",
-        title="Фокус сегодня",
-        border_style="green",
-    ))
+    console.print(
+        Panel(
+            f"[bold]{plan.focus}[/bold]\n\n" f"[dim]Почему:[/dim] {plan.why}",
+            title="Фокус сегодня",
+            border_style="green",
+        )
+    )
 
     # Источники
     if plan.sources_needed:
@@ -1247,9 +1393,14 @@ def plan(ctx):
 @main.command()
 @click.argument("citekeys", nargs=-1)
 @click.option("--serial", is_flag=True, help="Disable parallel processing")
-@click.option("--force", is_flag=True,
-              help="Reprocess completed sources, replacing existing fragments")
-@click.option("--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Reprocess completed sources, replacing existing fragments",
+)
+@click.option(
+    "--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)"
+)
 @click.pass_context
 def process(ctx, citekeys, serial, force, model):
     """Process source(s): extract fragments, annotate, create vault note.
@@ -1282,7 +1433,9 @@ def process(ctx, citekeys, serial, force, model):
         if not keys:
             console.print("[green]No completed sources to reprocess.[/green]")
             return
-        console.print(f"[blue]Reprocessing {len(keys)} completed sources (replacing fragments)[/blue]")
+        console.print(
+            f"[blue]Reprocessing {len(keys)} completed sources (replacing fragments)[/blue]"
+        )
     else:
         proc_stats = state.get_stats()
         if proc_stats.get("pending", 0) == 0:
@@ -1305,9 +1458,22 @@ def process(ctx, citekeys, serial, force, model):
         ):
             with ThreadPoolExecutor(max_workers=3) as pool:
                 futures = {
-                    pool.submit(_process_single, ck, cfg, state, vault, ai, pdf_extractor, kctx.library, quiet=True,
-                               dissertation_context=kctx.dissertation_context, available_tags=kctx.available_tags,
-                               klemma_home=kctx.klemma_home, embeddings=kctx.embeddings, force=force): ck
+                    pool.submit(
+                        _process_single,
+                        ck,
+                        cfg,
+                        state,
+                        vault,
+                        ai,
+                        pdf_extractor,
+                        kctx.library,
+                        quiet=True,
+                        dissertation_context=kctx.dissertation_context,
+                        available_tags=kctx.available_tags,
+                        klemma_home=kctx.klemma_home,
+                        embeddings=kctx.embeddings,
+                        force=force,
+                    ): ck
                     for ck in keys
                 }
                 for future in as_completed(futures):
@@ -1323,46 +1489,83 @@ def process(ctx, citekeys, serial, force, model):
         for idx, ck in enumerate(keys, 1):
             n_frags, status = results.get(ck, (0, "unknown"))
             if n_frags > 0:
-                console.print(f"  [{idx}/{len(keys)}] @{ck} — [green]{n_frags} fragments[/green]")
+                console.print(
+                    f"  [{idx}/{len(keys)}] @{ck} — [green]{n_frags} fragments[/green]"
+                )
                 ok += 1
             else:
                 console.print(f"  [{idx}/{len(keys)}] @{ck} — [red]{status}[/red]")
                 if status in ("PDF not found", "text too short", "no fragments"):
                     newly_skipped += 1
-        skip_msg = f" {newly_skipped} skipped (no PDF / text too short)." if newly_skipped else ""
-        console.print(f"\n[green]Done: {ok}/{len(keys)} processed (parallel, {elapsed:.0f}s).[/green]{skip_msg}")
+        skip_msg = (
+            f" {newly_skipped} skipped (no PDF / text too short)."
+            if newly_skipped
+            else ""
+        )
+        console.print(
+            f"\n[green]Done: {ok}/{len(keys)} processed (parallel, {elapsed:.0f}s).[/green]{skip_msg}"
+        )
     else:
         processed = 0
         newly_skipped = 0
         for idx, ck in enumerate(keys, 1):
             if len(keys) > 1:
                 console.print(f"\n[bold][{idx}/{len(keys)}] {ck}[/bold]")
-            n_frags, reason = _process_single(ck, cfg, state, vault, ai, pdf_extractor, kctx.library,
-                                         dissertation_context=kctx.dissertation_context,
-                                         available_tags=kctx.available_tags,
-                                         klemma_home=kctx.klemma_home,
-                                         project_type=kctx.project.type if kctx.project else "dissertation",
-                                         embeddings=kctx.embeddings, force=force)
+            n_frags, reason = _process_single(
+                ck,
+                cfg,
+                state,
+                vault,
+                ai,
+                pdf_extractor,
+                kctx.library,
+                dissertation_context=kctx.dissertation_context,
+                available_tags=kctx.available_tags,
+                klemma_home=kctx.klemma_home,
+                project_type=kctx.project.type if kctx.project else "dissertation",
+                embeddings=kctx.embeddings,
+                force=force,
+            )
             if n_frags > 0:
                 processed += 1
             elif reason in ("PDF not found", "text too short", "no fragments"):
                 newly_skipped += 1
         if len(keys) > 1:
-            skip_msg = f" {newly_skipped} skipped (no PDF / text too short)." if newly_skipped else ""
-            console.print(f"\n[green]Done: {processed}/{len(keys)} processed.[/green]{skip_msg}")
+            skip_msg = (
+                f" {newly_skipped} skipped (no PDF / text too short)."
+                if newly_skipped
+                else ""
+            )
+            console.print(
+                f"\n[green]Done: {processed}/{len(keys)} processed.[/green]{skip_msg}"
+            )
 
     # DEV mode: show benchmark candidate hints
     if kctx.config.instance.dev_mode:
         from .evaluation.candidates import discover_candidates, format_candidate_hint
+
         candidates = discover_candidates(kctx.state, limit=3)
         hint = format_candidate_hint(candidates)
         if hint:
             console.print(hint)
 
 
-def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quiet=False,
-                    dissertation_context="", available_tags=None, klemma_home=None,
-                    project_type="dissertation", embeddings=None, force=False):
+def _process_single(
+    citekey,
+    cfg,
+    state,
+    vault,
+    ai,
+    pdf_extractor,
+    library,
+    quiet=False,
+    dissertation_context="",
+    available_tags=None,
+    klemma_home=None,
+    project_type="dissertation",
+    embeddings=None,
+    force=False,
+):
     """Process a single source: find PDF, extract fragments, save to vault.
 
     Returns (fragment_count, status_message). When quiet=True, suppresses console output
@@ -1379,13 +1582,18 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
     entry = library.entries.get(citekey)
     if not entry:
         from .literature.models import Author, ZoteroEntry
+
         # Fall back to DB metadata from acquire (title, authors, year)
         db_title = source.get("title", "") if source else ""
         db_authors = source.get("authors", "") if source else ""
         db_year = source.get("year") if source else None
         db_abstract = source.get("abstract", "") if source else ""
         issued = {"date-parts": [[db_year]]} if db_year else None
-        authors = [Author(literal=a.strip()) for a in db_authors.split(",") if a.strip()] if db_authors else []
+        authors = (
+            [Author(literal=a.strip()) for a in db_authors.split(",") if a.strip()]
+            if db_authors
+            else []
+        )
         entry = ZoteroEntry(
             id=citekey,
             title=db_title or citekey,
@@ -1395,12 +1603,15 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
         )
 
     if not quiet:
-        console.print(f"[blue]Processing: {entry.authors_str} ({entry.year or '?'})[/blue] [dim]@{citekey}[/dim]")
+        console.print(
+            f"[blue]Processing: {entry.authors_str} ({entry.year or '?'})[/blue] [dim]@{citekey}[/dim]"
+        )
 
     # Find PDF
     pdf_search_paths = [Path(cfg.zotero.storage_path)]
     pdf_path = pdf_extractor.find_pdf(
-        citekey, pdf_search_paths,
+        citekey,
+        pdf_search_paths,
         entry_title=entry.title or "",
         direct_path=source.get("pdf_path") if source else entry.pdf_path,
         pdf_lookup=library.pdf_paths,
@@ -1426,7 +1637,11 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
 
     # Extract fragments
     result = extract_fragments(
-        entry, pdf_text, cfg, state, ai,
+        entry,
+        pdf_text,
+        cfg,
+        state,
+        ai,
         dissertation_context=dissertation_context,
         available_tags=available_tags,
         klemma_home=klemma_home,
@@ -1444,9 +1659,15 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
 
     # Save to vault
     saved_path = save_fragments_to_vault(
-        citekey, result.fragments, vault,
-        entry=entry, config=cfg, state=state,
-        pdf_text=pdf_text, ai=ai, entry_lookup=library.entries,
+        citekey,
+        result.fragments,
+        vault,
+        entry=entry,
+        config=cfg,
+        state=state,
+        pdf_text=pdf_text,
+        ai=ai,
+        entry_lookup=library.entries,
         dissertation_context=dissertation_context,
         available_tags=available_tags,
         klemma_home=klemma_home,
@@ -1462,6 +1683,7 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
     if not abstract and entry.title:
         try:
             from .literature.metadata import lookup_s2
+
             hit = lookup_s2(entry.title)
             if hit and hit.get("abstract"):
                 abstract = hit["abstract"]
@@ -1488,11 +1710,21 @@ def _process_single(citekey, cfg, state, vault, ai, pdf_extractor, library, quie
 
 @main.command()
 @click.argument("citekeys", required=False, nargs=-1)
-@click.option("--dry-run", is_flag=True, help="Show how many would be embedded without calling API")
-@click.option("--backend", type=click.Choice(["s2", "local", "openai"]), help="Override embedding backend")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show how many would be embedded without calling API",
+)
+@click.option(
+    "--backend",
+    type=click.Choice(["s2", "local", "openai"]),
+    help="Override embedding backend",
+)
 @click.option("--fragments", is_flag=True, help="Embed fragments instead of sources")
 @click.option("--sections", is_flag=True, help="Compute section centroid embeddings")
-@click.option("--backfill", is_flag=True, help="Fetch missing abstracts from S2 before embedding")
+@click.option(
+    "--backfill", is_flag=True, help="Fetch missing abstracts from S2 before embedding"
+)
 @click.pass_context
 def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
     """Backfill embeddings for sources with abstracts.
@@ -1509,6 +1741,7 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
     # Determine embedding provider
     if backend:
         from .embeddings import create_embeddings as _create_emb
+
         emb = _create_emb({"backend": backend})
     else:
         emb = kctx.embeddings
@@ -1534,6 +1767,7 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
         embedded = 0
         failed = 0
         from rich.progress import Progress
+
         with Progress(console=console) as progress:
             task = progress.add_task("Embedding fragments...", total=len(candidates))
             for frag in candidates:
@@ -1560,12 +1794,16 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
         model_name = emb.model_name if emb else None
         all_emb = state.get_all_embeddings(model=model_name)
         if not all_emb:
-            console.print("[yellow]No source embeddings found. Run `klemma embed` first.[/yellow]")
+            console.print(
+                "[yellow]No source embeddings found. Run `klemma embed` first.[/yellow]"
+            )
             return
 
         # Get distinct sections from source_sections
         with state._conn() as conn:
-            cur = conn.execute("SELECT DISTINCT section FROM source_sections ORDER BY section")
+            cur = conn.execute(
+                "SELECT DISTINCT section FROM source_sections ORDER BY section"
+            )
             all_sections = [row["section"] for row in cur.fetchall()]
 
         embedded = 0
@@ -1584,15 +1822,24 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
                 embedded += 1
                 continue
 
-            state.save_section_embedding(sec, centroid, model_name or "unknown", len(vecs))
+            state.save_section_embedding(
+                sec, centroid, model_name or "unknown", len(vecs)
+            )
             embedded += 1
 
         if dry_run:
-            console.print(f"[blue]Would embed {embedded} sections ({skipped} have no source embeddings)[/blue]")
+            console.print(
+                f"[blue]Would embed {embedded} sections ({skipped} have no source embeddings)[/blue]"
+            )
         else:
-            console.print(f"[green]Section embeddings: {embedded} computed[/green]", end="")
+            console.print(
+                f"[green]Section embeddings: {embedded} computed[/green]", end=""
+            )
             if skipped:
-                console.print(f" | [yellow]{skipped} skipped (no source embeddings)[/yellow]", end="")
+                console.print(
+                    f" | [yellow]{skipped} skipped (no source embeddings)[/yellow]",
+                    end="",
+                )
             console.print()
         return
 
@@ -1627,12 +1874,16 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
     # --backfill: fetch missing abstracts from S2 before embedding
     if backfill and not is_s2:
         from .literature.metadata import lookup_s2
+
         no_abs = [c for c in candidates if not (entries.get(c) and entries[c].abstract)]
         if no_abs:
             from rich.progress import Progress
+
             filled = 0
             with Progress(console=console) as progress:
-                btask = progress.add_task("Backfilling abstracts from S2...", total=len(no_abs))
+                btask = progress.add_task(
+                    "Backfilling abstracts from S2...", total=len(no_abs)
+                )
                 for ck in no_abs:
                     entry = entries.get(ck)
                     title = entry.title if entry else ck
@@ -1645,7 +1896,9 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
                             filled += 1
                     progress.advance(btask)
             if filled:
-                console.print(f"[green]Backfilled {filled}/{len(no_abs)} abstracts.[/green]")
+                console.print(
+                    f"[green]Backfilled {filled}/{len(no_abs)} abstracts.[/green]"
+                )
 
     if dry_run:
         console.print(f"[blue]Would embed {len(candidates)} sources[/blue]")
@@ -1657,6 +1910,7 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
     failed = 0
 
     from rich.progress import Progress
+
     with Progress(console=console) as progress:
         task = progress.add_task("Embedding...", total=len(candidates))
         for ck in candidates:
@@ -1666,7 +1920,9 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
             # For non-S2 backends: build embed text from title + abstract or fragments
             if not is_s2 and not abstract:
                 frags = state.get_fragments(source_id=ck, limit=10)
-                frag_text = " ".join(f["fragment_text"] for f in frags if f.get("fragment_text"))
+                frag_text = " ".join(
+                    f["fragment_text"] for f in frags if f.get("fragment_text")
+                )
                 abstract = frag_text[:2000] if frag_text else ""
             try:
                 vec = emb.embed(title, abstract)
@@ -1714,18 +1970,14 @@ def similar(ctx, citekey_or_section, top_k):
         # Still try to use stored embeddings for comparison
         all_emb = state.get_all_embeddings()
         if not all_emb:
-            console.print(
-                "[red]No embeddings found. Run `klemma embed` first.[/red]"
-            )
+            console.print("[red]No embeddings found. Run `klemma embed` first.[/red]")
             return
         model_name = None
     else:
         model_name = emb.model_name
         all_emb = state.get_all_embeddings(model=model_name)
         if not all_emb:
-            console.print(
-                "[red]No embeddings found. Run `klemma embed` first.[/red]"
-            )
+            console.print("[red]No embeddings found. Run `klemma embed` first.[/red]")
             return
 
     # Determine if input is a citekey or section
@@ -1741,8 +1993,7 @@ def similar(ctx, citekey_or_section, top_k):
             return
         dim = len(section_vecs[0])
         query_vec = [
-            sum(v[i] for v in section_vecs) / len(section_vecs)
-            for i in range(dim)
+            sum(v[i] for v in section_vecs) / len(section_vecs) for i in range(dim)
         ]
         console.print(
             f"[bold]Sources similar to section {arg}[/bold] "
@@ -1767,10 +2018,14 @@ def similar(ctx, citekey_or_section, top_k):
                         console.print(f"[red]Could not embed @{arg}[/red]")
                         return
                 else:
-                    console.print(f"[red]No embedding for @{arg} and no abstract to embed[/red]")
+                    console.print(
+                        f"[red]No embedding for @{arg} and no abstract to embed[/red]"
+                    )
                     return
             else:
-                console.print(f"[red]No embedding for @{arg}. Run `klemma embed {arg}` first.[/red]")
+                console.print(
+                    f"[red]No embedding for @{arg}. Run `klemma embed {arg}` first.[/red]"
+                )
                 return
         else:
             query_vec = result[0]
@@ -1810,8 +2065,11 @@ def similar(ctx, citekey_or_section, top_k):
 
     if is_section:
         # Show cross-section discoveries
-        cross = [(sid, sim) for sid, sim in sims[:top_k]
-                 if not any(sid in state.get_section_sources(arg))]
+        cross = [
+            (sid, sim)
+            for sid, sim in sims[:top_k]
+            if not any(sid in state.get_section_sources(arg))
+        ]
         if cross:
             console.print(f"\n[dim]{len(cross)} sources from other sections[/dim]")
 
@@ -1844,7 +2102,9 @@ def status(ctx, verbose, chapter):
         parts.append(f"[yellow]{pending} pending[/yellow]")
     if failed:
         parts.append(f"[red]{failed} failed[/red]")
-    console.print(f"Processing: {' | '.join(parts)}  [dim]({total} total, {frag_stats.get('total', 0)} fragments)[/dim]")
+    console.print(
+        f"Processing: {' | '.join(parts)}  [dim]({total} total, {frag_stats.get('total', 0)} fragments)[/dim]"
+    )
     console.print()
 
     # --- Coverage (chapter-based for dissertation/thesis, simple for paper) ---
@@ -1871,7 +2131,9 @@ def status(ctx, verbose, chapter):
         if (verbose or chapter) and cov["sections"]:
             console.print()
             type_lookup = cov.get("section_type_lookup", {})
-            sec_table = Table(title="Coverage by Section", show_edge=False, pad_edge=False)
+            sec_table = Table(
+                title="Coverage by Section", show_edge=False, pad_edge=False
+            )
             sec_table.add_column("Section", style="cyan")
             sec_table.add_column("Type", style="dim")
             sec_table.add_column("Sources", justify="right", width=8)
@@ -1886,7 +2148,9 @@ def status(ctx, verbose, chapter):
         # Paper: show section coverage if any, no chapter structure
         if cov["sections"]:
             type_lookup = cov.get("section_type_lookup", {})
-            sec_table = Table(title="Coverage by Section", show_edge=False, pad_edge=False)
+            sec_table = Table(
+                title="Coverage by Section", show_edge=False, pad_edge=False
+            )
             sec_table.add_column("Section", style="cyan")
             sec_table.add_column("Type", style="dim")
             sec_table.add_column("Sources", justify="right", width=8)
@@ -1922,32 +2186,44 @@ def status(ctx, verbose, chapter):
         console.print(f"[bold]By type:[/bold] {' | '.join(type_parts)}")
 
     # --- Top gaps ---
-    min_sources = (project.min_sources_per_section if project
-                   else cfg.dissertation.min_sources_per_section)
+    min_sources = (
+        project.min_sources_per_section
+        if project
+        else cfg.dissertation.min_sources_per_section
+    )
     gaps_data = state.get_gaps(min_sources=min_sources)
     if gaps_data:
         if chapter:
             gaps_data = [g for g in gaps_data if g["section"].startswith(f"{chapter}.")]
         shown = gaps_data if verbose else gaps_data[:5]
         console.print()
-        console.print(f"[bold]Top Gaps[/bold] [dim](sections with < {min_sources} sources)[/dim]")
+        console.print(
+            f"[bold]Top Gaps[/bold] [dim](sections with < {min_sources} sources)[/dim]"
+        )
         for gap in shown:
             needed = min_sources - gap["count"]
-            console.print(f"  [red]{gap['section']}[/red] — {gap['count']} sources [dim](need {needed} more)[/dim]")
+            console.print(
+                f"  [red]{gap['section']}[/red] — {gap['count']} sources [dim](need {needed} more)[/dim]"
+            )
         if not verbose and len(gaps_data) > 5:
-            console.print(f"  [dim]... and {len(gaps_data) - 5} more (use --verbose)[/dim]")
+            console.print(
+                f"  [dim]... and {len(gaps_data) - 5} more (use --verbose)[/dim]"
+            )
 
     # --- Reference gaps ---
     _sw = kctx.project.section_weights if kctx.project else None
     if verbose:
-        _print_ref_gaps_table(state, limit=20, embeddings=kctx.embeddings,
-                              section_weights=_sw)
+        _print_ref_gaps_table(
+            state, limit=20, embeddings=kctx.embeddings, section_weights=_sw
+        )
     else:
         ref_gaps = state.get_reference_gaps(limit=5, section_weights=_sw)
         if ref_gaps:
             gap_summary = state.get_gap_summary()
             console.print()
-            console.print(f"[bold]Ref Gaps[/bold] [dim]({gap_summary['open_count']} open)[/dim]")
+            console.print(
+                f"[bold]Ref Gaps[/bold] [dim]({gap_summary['open_count']} open)[/dim]"
+            )
             for g in ref_gaps:
                 year = g.get("ref_year") or ""
                 console.print(
@@ -1984,7 +2260,11 @@ def status(ctx, verbose, chapter):
                     sec,
                     str(d["background"]) if d["background"] else "[dim]0[/dim]",
                     str(d["method"]) if d["method"] else "[dim]0[/dim]",
-                    str(d["result_comparison"]) if d["result_comparison"] else "[dim]0[/dim]",
+                    (
+                        str(d["result_comparison"])
+                        if d["result_comparison"]
+                        else "[dim]0[/dim]"
+                    ),
                     str(d["total"]),
                 )
             console.print(it)
@@ -1994,7 +2274,11 @@ def status(ctx, verbose, chapter):
         emb_stats = state.get_embedding_stats()
         if emb_stats["embedded"] > 0 or emb_stats["total"] > 0:
             console.print()
-            pct = (emb_stats["embedded"] / emb_stats["total"] * 100) if emb_stats["total"] else 0
+            pct = (
+                (emb_stats["embedded"] / emb_stats["total"] * 100)
+                if emb_stats["total"]
+                else 0
+            )
             console.print(
                 f"[bold]Embeddings[/bold]: {emb_stats['embedded']}/{emb_stats['total']} "
                 f"sources ({pct:.0f}%)"
@@ -2035,7 +2319,9 @@ def status(ctx, verbose, chapter):
             )
             if graph["most_cited_external"]:
                 console.print()
-                console.print("[bold]Most Cited External[/bold] [dim](bridging nodes)[/dim]")
+                console.print(
+                    "[bold]Most Cited External[/bold] [dim](bridging nodes)[/dim]"
+                )
                 for ref in graph["most_cited_external"][:5]:
                     authors = (ref["target_authors"] or "")[:25]
                     year = ref["target_year"] or ""
@@ -2055,6 +2341,7 @@ def status(ctx, verbose, chapter):
     author_counts = state.get_author_publication_counts()
     if author_counts:
         from .source_role import ROLE_LABELS, format_gost_phrase
+
         console.print()
         console.print("[bold]Публикации автора[/bold]")
         for role, cnt in sorted(author_counts.items()):
@@ -2091,7 +2378,9 @@ def coverage(ctx):
 def gaps(ctx):
     """Reference gaps and acquisition suggestions."""
     if ctx.invoked_subcommand is None:
-        console.print("[yellow]Warning: `klemma gaps` is deprecated. Use `klemma status --verbose`.[/yellow]")
+        console.print(
+            "[yellow]Warning: `klemma gaps` is deprecated. Use `klemma status --verbose`.[/yellow]"
+        )
         ctx.invoke(status, verbose=True)
 
 
@@ -2104,7 +2393,12 @@ main.add_command(gaps)
 @click.pass_context
 def suggest(ctx, limit, section):
     """Suggest papers to fill reference gaps."""
-    from .search import ChainSearchProvider, CrossRefSearchProvider, S2SearchProvider, create_search
+    from .search import (
+        ChainSearchProvider,
+        CrossRefSearchProvider,
+        S2SearchProvider,
+        create_search,
+    )
     from .skills.suggester import suggest_acquisitions
 
     kctx = _get_context(ctx)
@@ -2124,16 +2418,20 @@ def suggest(ctx, limit, section):
         if search_cfg.backend:
             search = create_search(search_cfg.model_dump())
         else:
-            search = ChainSearchProvider([
-                CrossRefSearchProvider(),
-                S2SearchProvider(),
-            ])
+            search = ChainSearchProvider(
+                [
+                    CrossRefSearchProvider(),
+                    S2SearchProvider(),
+                ]
+            )
 
     console.print(f"\n[bold]Resolving top gaps via {search.backend_name}...[/bold]\n")
 
     suggest_cfg = kctx.config.suggest
     candidates, filtered_old = suggest_acquisitions(
-        gaps_list, search, limit=limit,
+        gaps_list,
+        search,
+        limit=limit,
         max_age_years=suggest_cfg.max_age_years,
         classic_min_score=suggest_cfg.classic_min_score,
     )
@@ -2160,7 +2458,9 @@ def suggest(ctx, limit, section):
     for i, c in enumerate(candidates, 1):
         year_str = str(c.ref_year) if c.ref_year else "—"
         sections_str = ", ".join(c.sections) if c.sections else "—"
-        title_display = c.ref_title[:60] + "..." if len(c.ref_title) > 60 else c.ref_title
+        title_display = (
+            c.ref_title[:60] + "..." if len(c.ref_title) > 60 else c.ref_title
+        )
 
         table.add_row(
             str(i),
@@ -2184,11 +2484,11 @@ def suggest(ctx, limit, section):
                 f" (DOI: {c.doi})[/yellow]"
             )
         else:
-            console.print(
-                f"  [dim]{i}.[/dim] [dim]⚠ Not found in search API[/dim]"
-            )
+            console.print(f"  [dim]{i}.[/dim] [dim]⚠ Not found in search API[/dim]")
     if filtered_old:
-        console.print(f"  [dim]{filtered_old} older papers filtered (>{suggest_cfg.max_age_years}y, score<{suggest_cfg.classic_min_score})[/dim]")
+        console.print(
+            f"  [dim]{filtered_old} older papers filtered (>{suggest_cfg.max_age_years}y, score<{suggest_cfg.classic_min_score})[/dim]"
+        )
     console.print()
 
 
@@ -2215,10 +2515,21 @@ main.add_command(source)
 
 @source.command()
 @click.argument("citekey")
-@click.argument("role", type=click.Choice([
-    "external", "author_vak", "author_scopus", "author_wos",
-    "author_conf", "author_patent", "author_program", "author_other",
-]))
+@click.argument(
+    "role",
+    type=click.Choice(
+        [
+            "external",
+            "author_vak",
+            "author_scopus",
+            "author_wos",
+            "author_conf",
+            "author_patent",
+            "author_program",
+            "author_other",
+        ]
+    ),
+)
 @click.pass_context
 def role(ctx, citekey, role):
     """Assign a source_role to a source (e.g. author_vak, author_conf)."""
@@ -2229,17 +2540,27 @@ def role(ctx, citekey, role):
         raise SystemExit(1)
     kctx.state.set_source_role(citekey, role)
     from .source_role import ROLE_LABELS
+
     label = ROLE_LABELS.get(role, role)
     console.print(f"[green]@{citekey}[/green] → {label}")
 
 
 @main.group(invoke_without_command=True)
-@click.option("--section", "-s", default=None,
-              help="Section ID (e.g. 1.3.2) — standalone section draft mode")
+@click.option(
+    "--section",
+    "-s",
+    default=None,
+    help="Section ID (e.g. 1.3.2) — standalone section draft mode",
+)
 @click.option("--model", default=None, help="Override AI model")
 @click.option("--no-save", is_flag=True, help="Print draft without saving to file")
+@click.option(
+    "--no-rag",
+    is_flag=True,
+    help="Skip per-block RAG retrieval (use section-level fragments only)",
+)
 @click.pass_context
-def draft(ctx, section, model, no_save):
+def draft(ctx, section, model, no_save, no_rag):
     """Generate dissertation section drafts.
 
     Standalone mode: klemma draft -s 1.3.2
@@ -2261,6 +2582,8 @@ def draft(ctx, section, model, no_save):
         load_chapter_draft,
         load_research_report,
         load_section_sources,
+        parse_argument_blocks,
+        retrieve_rag_fragments_per_block,
     )
     from .skills.drafter import generate_draft
 
@@ -2286,25 +2609,59 @@ def draft(ctx, section, model, no_save):
     # 2. Load chapter draft + extract section
     existing_draft = ""
     draft_content = load_chapter_draft(
-        chapter, cfg, kctx.vault,
-        project=kctx.project, project_root=kctx.project_root,
+        chapter,
+        cfg,
+        kctx.vault,
+        project=kctx.project,
+        project_root=kctx.project_root,
     )
     if draft_content:
         existing_draft = extract_section(draft_content, section) or ""
     if existing_draft:
-        console.print(f"[dim]Existing draft found ({len(existing_draft.split())} words)[/dim]")
+        console.print(
+            f"[dim]Existing draft found ({len(existing_draft.split())} words)[/dim]"
+        )
 
     # 3. Load source summaries
     source_summaries = load_section_sources(section, chapter, kctx.state, kctx.vault)
 
-    # 4. RAG fragments
+    # 4. Per-block RAG fragments (He et al. 2010)
+    rag_fragments_for_prompt = None
+    if not no_rag and kctx.embeddings and research_report_content:
+        argument_blocks = parse_argument_blocks(research_report_content)
+        if argument_blocks:
+            rag_fragments_for_prompt = retrieve_rag_fragments_per_block(
+                argument_blocks,
+                kctx.embeddings,
+                kctx.state,
+                top_k=5,
+            )
+            if rag_fragments_for_prompt:
+                block_count = len(rag_fragments_for_prompt)
+                frag_count = sum(
+                    len(b.get("fragments", [])) for b in rag_fragments_for_prompt
+                )
+                console.print(
+                    f"[dim]RAG: {frag_count} fragments across {block_count} argument blocks[/dim]"
+                )
+
+    # 4b. Section-level fragments (fallback / supplementary)
     fragments_raw = []
+    # Collect RAG fragment IDs to avoid duplicates in section-level fallback
+    rag_frag_sources = set()
+    if rag_fragments_for_prompt:
+        for block in rag_fragments_for_prompt:
+            for f in block.get("fragments", []):
+                rag_frag_sources.add((f.get("source", ""), f.get("text", "")[:50]))
+
     if kctx.embeddings and existing_draft:
         try:
             query_vec = kctx.embeddings.embed(existing_draft[:500])
             if query_vec:
                 fragments_raw = kctx.state.retrieve_similar_fragments(
-                    query_vec, top_k=30, model=kctx.embeddings.model_name,
+                    query_vec,
+                    top_k=30,
+                    model=kctx.embeddings.model_name,
                 )
         except Exception:
             pass
@@ -2316,16 +2673,23 @@ def draft(ctx, section, model, no_save):
                 fragments_raw.append(ff)
                 seen_ids.add(ff["id"])
 
-    # Format fragments for prompt
-    formatted_fragments = [
-        {
-            "source": f.get("citekey", f.get("source_id", "?")),
-            "text": f.get("fragment_text", "")[:300],
-            "type": f.get("fragment_type", "?"),
-            "relevance": f.get("relevance_score", 3),
-        }
-        for f in fragments_raw[:30]
-    ]
+    # Format fragments for prompt (exclude those already in RAG blocks)
+    formatted_fragments = []
+    for f in fragments_raw[:30]:
+        source_key = (
+            f.get("citekey", f.get("source_id", "?")),
+            f.get("fragment_text", "")[:50],
+        )
+        if source_key in rag_frag_sources:
+            continue
+        formatted_fragments.append(
+            {
+                "source": f.get("citekey", f.get("source_id", "?")),
+                "text": f.get("fragment_text", "")[:300],
+                "type": f.get("fragment_type", "?"),
+                "relevance": f.get("relevance_score", 3),
+            }
+        )
 
     # Format sources for prompt
     formatted_sources = [
@@ -2340,8 +2704,16 @@ def draft(ctx, section, model, no_save):
 
     # 5. Budget control
     draft_for_budget = draft_content[:30_000] if draft_content else ""
-    draft_for_budget, formatted_sources, formatted_fragments = fit_prompt_budget(
-        draft_for_budget, formatted_sources, formatted_fragments,
+    (
+        draft_for_budget,
+        formatted_sources,
+        formatted_fragments,
+        rag_fragments_for_prompt,
+    ) = fit_prompt_budget(
+        draft_for_budget,
+        formatted_sources,
+        formatted_fragments,
+        rag_fragments=rag_fragments_for_prompt,
     )
 
     # 6. Valid citekeys for hallucination filter
@@ -2350,7 +2722,10 @@ def draft(ctx, section, model, no_save):
     # 7. Generate draft
     with console.status(f"Генерация черновика раздела {section}...", spinner="dots"):
         result = generate_draft(
-            section, chapter, cfg, ai,
+            section,
+            chapter,
+            cfg,
+            ai,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
             project_chain=kctx.project_chain,
@@ -2358,6 +2733,7 @@ def draft(ctx, section, model, no_save):
             existing_draft=existing_draft,
             source_summaries=formatted_sources,
             fragments=formatted_fragments,
+            rag_fragments=rag_fragments_for_prompt or [],
             valid_citekeys=valid_citekeys,
         )
 
@@ -2393,8 +2769,12 @@ main.add_command(draft)
 
 
 @draft.command()
-@click.option("--section", "-s", default=None,
-              help="Single section (e.g. актуальность, цель, задачи)")
+@click.option(
+    "--section",
+    "-s",
+    default=None,
+    help="Single section (e.g. актуальность, цель, задачи)",
+)
 @click.option("--output", "-o", default=None, help="Output file path")
 @click.option("--model", default=None, help="Override AI model")
 @click.pass_context
@@ -2416,7 +2796,9 @@ def introduction(ctx, section, output, model):
 
     with console.status("Генерация черновика введения...", spinner="dots"):
         result = generate_introduction(
-            cfg, kctx.state, ai,
+            cfg,
+            kctx.state,
+            ai,
             project=kctx.project,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
@@ -2436,15 +2818,23 @@ def introduction(ctx, section, output, model):
         out_path = kctx.project_root / f"Введение{suffix}.md"
 
     out_path.write_text(result.text, encoding="utf-8")
-    console.print(f"[green]Saved to {out_path}[/green] ({result.section_count} sections)")
+    console.print(
+        f"[green]Saved to {out_path}[/green] ({result.section_count} sections)"
+    )
 
 
 @main.command()
-@click.option("--section", "-s", required=True,
-              help="Section ID (e.g. 1.3.2) or semantic type (e.g. methodology)")
+@click.option(
+    "--section",
+    "-s",
+    required=True,
+    help="Section ID (e.g. 1.3.2) or semantic type (e.g. methodology)",
+)
 @click.option("--no-save", is_flag=True, help="Не сохранять в vault")
 @click.option("--force", is_flag=True, help="Переизвлечь фрагменты даже если уже есть")
-@click.option("--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)")
+@click.option(
+    "--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)"
+)
 @click.pass_context
 def research(ctx, section, no_save, force, model):
     """Deep section analysis — argument structure, citation plan, gaps.
@@ -2469,29 +2859,43 @@ def research(ctx, section, no_save, force, model):
     # Resolve semantic type → numeric section if possible
     resolved_section, section_type = resolve_section_identifier(section, kctx.project)
     if section_type and resolved_section:
-        console.print(f"[dim]Resolved {section} → section {resolved_section} ({section_type.value})[/dim]")
+        console.print(
+            f"[dim]Resolved {section} → section {resolved_section} ({section_type.value})[/dim]"
+        )
         section = resolved_section
     elif section_type and not resolved_section:
         # Fallback: check DB section_type_map (populated by sync_section_types)
         db_sections = state.get_sections_for_type(section_type.value)
         if db_sections:
             section = db_sections[0]
-            console.print(f"[dim]Resolved {section_type.value} → section {section}[/dim]")
+            console.print(
+                f"[dim]Resolved {section_type.value} → section {section}[/dim]"
+            )
         else:
             # Show available types so the user can pick the right one
             all_types = state.get_available_section_types()
-            console.print(f"[yellow]No sections mapped to '{section_type.value}' in this project.[/yellow]")
+            console.print(
+                f"[yellow]No sections mapped to '{section_type.value}' in this project.[/yellow]"
+            )
             if all_types:
                 type_list = ", ".join(all_types)
                 console.print(f"[dim]Available types: {type_list}[/dim]")
             else:
-                console.print("[dim]No section types mapped yet. Run klemma status to trigger auto-sync.[/dim]")
+                console.print(
+                    "[dim]No section types mapped yet. Run klemma status to trigger auto-sync.[/dim]"
+                )
             raise SystemExit(1)
 
     chapter = parse_chapter_from_section(section)
 
     # Auto-process unextracted sources
-    from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+    )
 
     progress = Progress(
         SpinnerColumn(),
@@ -2513,7 +2917,12 @@ def research(ctx, section, no_save, force, model):
 
     with progress:
         extract_result = pre_extract_sources(
-            section, chapter, cfg, state, vault, ai,
+            section,
+            chapter,
+            cfg,
+            state,
+            vault,
+            ai,
             force=force,
             library=kctx.library,
             on_progress=_on_extract_progress,
@@ -2539,6 +2948,7 @@ def research(ctx, section, no_save, force, model):
 
     # Проверить: первый запуск или обновление
     from .skills.researcher import _load_previous_research
+
     prev = _load_previous_research(section, chapter, state, kctx.project_root)
     if prev:
         mode_label = "Инкрементальное обновление"
@@ -2552,7 +2962,12 @@ def research(ctx, section, no_save, force, model):
 
     with console.status(spinner_text, spinner="dots"):
         result = research_section(
-            section, cfg, state, vault, ai, save_to_vault=not no_save,
+            section,
+            cfg,
+            state,
+            vault,
+            ai,
+            save_to_vault=not no_save,
             project=kctx.project,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
@@ -2625,13 +3040,19 @@ def research(ctx, section, no_save, force, model):
         table.add_column("Фрагмент", max_width=40, style="dim")
 
         for c in result.citation_plan:
-            rel_style = "green" if c.relevance >= 4 else "yellow" if c.relevance >= 3 else "dim"
+            rel_style = (
+                "green" if c.relevance >= 4 else "yellow" if c.relevance >= 3 else "dim"
+            )
             table.add_row(
                 f"@{c.citekey}",
                 c.usage,
                 f"[{rel_style}]{c.relevance}[/{rel_style}]",
                 c.position[:35] if c.position else "",
-                c.fragment_text[:40] + ("..." if len(c.fragment_text) > 40 else "") if c.fragment_text else "",
+                (
+                    c.fragment_text[:40] + ("..." if len(c.fragment_text) > 40 else "")
+                    if c.fragment_text
+                    else ""
+                ),
             )
         console.print(table)
 
@@ -2656,14 +3077,25 @@ def research(ctx, section, no_save, force, model):
 
     # Сохранение
     if not no_save:
-        console.print(f"\n[dim]Брифинг сохранён: notes/research/Research_{section}.md[/dim]")
+        console.print(
+            f"\n[dim]Брифинг сохранён: notes/research/Research_{section}.md[/dim]"
+        )
 
 
 @main.command()
 @click.option("--no-save", is_flag=True, help="Show outline without saving")
-@click.option("--scan-only", is_flag=True, help="Show found files without AI generation")
-@click.option("-p", "--prompt", default="", help="Custom directive for AI (e.g. 'Focus on knowledge graph')")
-@click.option("--fresh", is_flag=True, help="Force full regeneration, ignore previous outline")
+@click.option(
+    "--scan-only", is_flag=True, help="Show found files without AI generation"
+)
+@click.option(
+    "-p",
+    "--prompt",
+    default="",
+    help="Custom directive for AI (e.g. 'Focus on knowledge graph')",
+)
+@click.option(
+    "--fresh", is_flag=True, help="Force full regeneration, ignore previous outline"
+)
 @click.pass_context
 def outline(ctx, no_save, scan_only, prompt, fresh):
     """Generate project outline from directory contents + database context.
@@ -2698,7 +3130,9 @@ def outline(ctx, no_save, scan_only, prompt, fresh):
     table.add_column("File", style="cyan")
     table.add_column("Size", justify="right", width=8)
     for pf in project_files:
-        size_str = f"{pf['size']:,} B" if pf['size'] < 10000 else f"{pf['size'] // 1024} KB"
+        size_str = (
+            f"{pf['size']:,} B" if pf["size"] < 10000 else f"{pf['size'] // 1024} KB"
+        )
         table.add_row(pf["path"], size_str)
     console.print(table)
 
@@ -2715,7 +3149,10 @@ def outline(ctx, no_save, scan_only, prompt, fresh):
 
     with console.status(spinner_msg, spinner="dots"):
         result, mode = gen_outline(
-            cfg, state, ai, kctx.project_root,
+            cfg,
+            state,
+            ai,
+            kctx.project_root,
             project_name=project_name,
             project=kctx.project,
             dissertation_context=kctx.dissertation_context,
@@ -2744,11 +3181,13 @@ def outline(ctx, no_save, scan_only, prompt, fresh):
 
     # 4. Display outline
     console.print()
-    console.print(Panel(
-        f"[bold]{result.title}[/bold]\n\n{result.description}",
-        title="Outline",
-        border_style="blue",
-    ))
+    console.print(
+        Panel(
+            f"[bold]{result.title}[/bold]\n\n{result.description}",
+            title="Outline",
+            border_style="blue",
+        )
+    )
 
     # Chapters + sections
     if result.chapters:
@@ -2762,7 +3201,8 @@ def outline(ctx, no_save, scan_only, prompt, fresh):
             ch_title = result.chapters[ch_num]
             ch_prefix = f"{ch_num}."
             ch_secs = [
-                f"{k} {v}" for k, v in sorted(result.sections.items())
+                f"{k} {v}"
+                for k, v in sorted(result.sections.items())
                 if k.startswith(ch_prefix)
             ]
             table.add_row(
@@ -2788,6 +3228,7 @@ def outline(ctx, no_save, scan_only, prompt, fresh):
     # 6. Auto-generate chapter_mapping from outline chapters
     if result.chapters:
         from .config import generate_chapter_mapping, update_project_config
+
         mapping = generate_chapter_mapping(result.chapters, result.sections)
         if mapping:
             updates: dict = {
@@ -2798,11 +3239,17 @@ def outline(ctx, no_save, scan_only, prompt, fresh):
                 ],
             }
             update_project_config(kctx.project_root, updates)
-            console.print(f"[green]Updated chapter_mapping ({len(mapping)} patterns) in config[/green]")
+            console.print(
+                f"[green]Updated chapter_mapping ({len(mapping)} patterns) in config[/green]"
+            )
 
 
 @main.command(name="import", hidden=True)
-@click.option("--with-queue", is_flag=True, help="Also populate reading queue from high-priority sources")
+@click.option(
+    "--with-queue",
+    is_flag=True,
+    help="Also populate reading queue from high-priority sources",
+)
 @click.pass_context
 def import_vault(ctx, with_queue):
     """Import/sync vault notes into klemma database.
@@ -2831,8 +3278,11 @@ def import_vault(ctx, with_queue):
         table.add_column("Chapter", style="cyan")
         table.add_column("Sources", justify="right")
         for ch in sorted(chapters):
-            name = (project.chapters.get(ch, "") if project
-                    else cfg.dissertation.chapters.get(ch, ""))
+            name = (
+                project.chapters.get(ch, "")
+                if project
+                else cfg.dissertation.chapters.get(ch, "")
+            )
             table.add_row(f"Ch {ch}: {name}", str(chapters[ch]))
         console.print(table)
 
@@ -2850,14 +3300,18 @@ def import_vault(ctx, with_queue):
                 state.add_to_reading_queue(citekey, priority=80)
                 queue_added += 1
         if queue_added:
-            console.print(f"[blue]Reading queue: {queue_added} high-priority papers added.[/blue]")
+            console.print(
+                f"[blue]Reading queue: {queue_added} high-priority papers added.[/blue]"
+            )
 
 
 @main.command()
 @click.argument("query")
 @click.option("--section", "-s", help="Focus on a specific section")
 @click.option("--chapter", "-ch", type=int, help="Focus on a specific chapter")
-@click.option("--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)")
+@click.option(
+    "--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)"
+)
 @click.pass_context
 def ask(ctx, query, section, chapter, model):
     """Ask a research question with full dissertation context.
@@ -2874,7 +3328,11 @@ def ask(ctx, query, section, chapter, model):
 
     with console.status("Сборка контекста исследования", spinner="dots"):
         context = build_agent_context(
-            cfg, state, vault, section=section, chapter=chapter,
+            cfg,
+            state,
+            vault,
+            section=section,
+            chapter=chapter,
             project=kctx.project,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
@@ -2888,9 +3346,13 @@ def ask(ctx, query, section, chapter, model):
     if kctx.embeddings:
         frag_stats = state.get_fragment_embedding_stats()
         if frag_stats["embedded"] > 0:
-            console.print(f"[dim]RAG: {frag_stats['embedded']} fragment embeddings available[/dim]")
+            console.print(
+                f"[dim]RAG: {frag_stats['embedded']} fragment embeddings available[/dim]"
+            )
         else:
-            console.print("[dim]RAG: no fragment embeddings (run klemma embed --fragments)[/dim]")
+            console.print(
+                "[dim]RAG: no fragment embeddings (run klemma embed --fragments)[/dim]"
+            )
 
     console.print(f"[dim]Query: {query}[/dim]")
 
@@ -2899,8 +3361,18 @@ def ask(ctx, query, section, chapter, model):
         import subprocess as _sp
 
         result = _sp.run(
-            ["claude", "-p", "--model", cfg.ai.model, "--system-prompt", context, query],
-            capture_output=True, text=True, timeout=cfg.ai.timeout,
+            [
+                "claude",
+                "-p",
+                "--model",
+                cfg.ai.model,
+                "--system-prompt",
+                context,
+                query,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=cfg.ai.timeout,
         )
         response = result.stdout
         if response:
@@ -2915,7 +3387,9 @@ def ask(ctx, query, section, chapter, model):
             from .ai import resolve_task_model
 
             response = ai.call(
-                system=context, user=query, max_tokens=8192,
+                system=context,
+                user=query,
+                max_tokens=8192,
                 model_override=resolve_task_model("ask", cfg.ai),
             )
         if response:
@@ -2938,8 +3412,7 @@ def ask(ctx, query, section, chapter, model):
         save_path = agents_dir / filename
 
         frontmatter = (
-            f"---\ntype: agent\ndate: {today}\n"
-            f"query: \"{query[:200]}\"\n---\n\n"
+            f"---\ntype: agent\ndate: {today}\n" f'query: "{query[:200]}"\n---\n\n'
         )
         save_path.write_text(frontmatter + response, encoding="utf-8")
         console.print(f"\n[green]Saved: {save_path}[/green]")
@@ -2954,7 +3427,9 @@ def ask(ctx, query, section, chapter, model):
 @main.group(invoke_without_command=True)
 @click.option("--section", "-s", help="Focus on a specific section (recommend mode)")
 @click.option("--audit", is_flag=True, help="Deep quality audit")
-@click.option("--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)")
+@click.option(
+    "--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)"
+)
 @click.pass_context
 def library(ctx, section, audit, model):
     """AI-powered library analysis and recommendations.
@@ -2979,11 +3454,19 @@ def library(ctx, section, audit, model):
 
     mode = "audit" if audit else "recommend" if section else "status"
     if mode == "recommend":
-        console.print(f"[yellow]Warning: `klemma library -s` is deprecated. Use `klemma research -s {section}`.[/yellow]")
+        console.print(
+            f"[yellow]Warning: `klemma library -s` is deprecated. Use `klemma research -s {section}`.[/yellow]"
+        )
 
     with console.status(f"Analyzing library ({mode})", spinner="dots"):
         report = analyze_library(
-            cfg, state, vault, ai, entry_lookup, mode=mode, focus_section=section,
+            cfg,
+            state,
+            vault,
+            ai,
+            entry_lookup,
+            mode=mode,
+            focus_section=section,
             project=kctx.project,
             dissertation_context=kctx.dissertation_context,
             klemma_home=kctx.klemma_home,
@@ -2997,7 +3480,9 @@ def library(ctx, section, audit, model):
 
     # Overall health
     if report.overall_health:
-        console.print(Panel(report.overall_health, title="Library Health", border_style="blue"))
+        console.print(
+            Panel(report.overall_health, title="Library Health", border_style="blue")
+        )
 
     # Chapter assessments
     if report.chapter_assessments:
@@ -3026,8 +3511,12 @@ def library(ctx, section, audit, model):
         console.print("\n[bold green]Recommendations[/bold green]")
         for rec in report.recommendations:
             priority = rec.get("priority", "medium")
-            style = {"high": "red", "medium": "yellow", "low": "dim"}.get(priority, "white")
-            console.print(f"  [{style}]{priority.upper()}[/{style}] {rec.get('action', '')}")
+            style = {"high": "red", "medium": "yellow", "low": "dim"}.get(
+                priority, "white"
+            )
+            console.print(
+                f"  [{style}]{priority.upper()}[/{style}] {rec.get('action', '')}"
+            )
             if rec.get("reason"):
                 console.print(f"        [dim]{rec['reason']}[/dim]")
 
@@ -3035,25 +3524,35 @@ def library(ctx, section, audit, model):
     if report.section_detail:
         detail = report.section_detail
         if detail.get("current_sources_assessment"):
-            console.print(f"\n[bold]Section Assessment[/bold]\n{detail['current_sources_assessment']}")
+            console.print(
+                f"\n[bold]Section Assessment[/bold]\n{detail['current_sources_assessment']}"
+            )
         if detail.get("reading_order"):
             console.print("\n[bold]Reading Order[/bold]")
             for i, item in enumerate(detail["reading_order"], 1):
-                console.print(f"  {i}. {item.get('citekey_or_ref', '?')} — {item.get('reason', '')}")
+                console.print(
+                    f"  {i}. {item.get('citekey_or_ref', '?')} — {item.get('reason', '')}"
+                )
 
     # Audit findings
     if report.audit_findings:
         console.print("\n[bold]Audit Findings[/bold]")
         for finding in report.audit_findings:
             severity = finding.get("severity", "medium")
-            style = {"high": "red", "medium": "yellow", "low": "dim"}.get(severity, "white")
-            console.print(f"  [{style}]{severity.upper()}[/{style}] [{finding.get('type', '')}] {finding.get('details', '')}")
+            style = {"high": "red", "medium": "yellow", "low": "dim"}.get(
+                severity, "white"
+            )
+            console.print(
+                f"  [{style}]{severity.upper()}[/{style}] [{finding.get('type', '')}] {finding.get('details', '')}"
+            )
 
     # Author network (audit mode)
     if audit:
         author_groups = state.get_key_author_groups(min_papers=2)
         if author_groups:
-            console.print("\n[bold]Key Author Groups[/bold] [dim](2+ papers in citation graph)[/dim]")
+            console.print(
+                "\n[bold]Key Author Groups[/bold] [dim](2+ papers in citation graph)[/dim]"
+            )
             at = Table(show_edge=False, pad_edge=False)
             at.add_column("Author", style="cyan", max_width=20)
             at.add_column("Papers", justify="right", width=7)
@@ -3075,7 +3574,9 @@ def library(ctx, section, audit, model):
         after = total - len(drop)
         src_lookup = {s["id"]: s for s in state.get_all_sources()}
 
-        console.print(f"\n[bold yellow]Prune Analysis[/bold yellow] [dim]({total} → ~{after} sources)[/dim]")
+        console.print(
+            f"\n[bold yellow]Prune Analysis[/bold yellow] [dim]({total} → ~{after} sources)[/dim]"
+        )
 
         def _prune_table(items: list[dict], title: str, style: str) -> Table:
             t = Table(title=f"{title} ({len(items)})", show_edge=False, pad_edge=False)
@@ -3112,10 +3613,14 @@ def library(ctx, section, audit, model):
 
 @library.command()
 @click.option("-c", "--chapter", type=int, help="Filter by chapter number")
-@click.option("-v", "--verdict", type=click.Choice(["drop", "maybe"]), help="Filter by verdict")
+@click.option(
+    "-v", "--verdict", type=click.Choice(["drop", "maybe"]), help="Filter by verdict"
+)
 @click.option("--clear", "clear_key", help="Clear verdict for a citekey")
 @click.option("--apply", is_flag=True, help="Delete all 'drop' sources from DB")
-@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt (use with --apply)")
+@click.option(
+    "--yes", "-y", is_flag=True, help="Skip confirmation prompt (use with --apply)"
+)
 @click.pass_context
 def prune(ctx, chapter, verdict, clear_key, apply, yes):
     """Browse and manage prune verdicts from library analysis."""
@@ -3127,8 +3632,12 @@ def prune(ctx, chapter, verdict, clear_key, apply, yes):
         if not verdicts:
             console.print("[dim]No 'drop' verdicts to apply.[/dim]")
             return
-        console.print(f"\n[bold]Review {len(verdicts)} sources marked for removal[/bold]")
-        console.print("[dim]y = delete, n = skip, q = quit. Vault notes are preserved.[/dim]\n")
+        console.print(
+            f"\n[bold]Review {len(verdicts)} sources marked for removal[/bold]"
+        )
+        console.print(
+            "[dim]y = delete, n = skip, q = quit. Vault notes are preserved.[/dim]\n"
+        )
         deleted, skipped = 0, 0
         for i, item in enumerate(verdicts, 1):
             citekey = item["source_id"]
@@ -3142,21 +3651,29 @@ def prune(ctx, chapter, verdict, clear_key, apply, yes):
             frag_count = item.get("fragment_count") or 0
             sections = item.get("sections") or ""
             # Header
-            console.print(f"[bold red]── [{i}/{len(verdicts)}] @{citekey} ──[/bold red]")
+            console.print(
+                f"[bold red]── [{i}/{len(verdicts)}] @{citekey} ──[/bold red]"
+            )
             console.print(f"  [bold]{title}[/bold]")
             if authors:
                 console.print(f"  {authors}" + (f", {year}" if year else ""))
-            console.print(f"  [dim]Quality: {q_score or '?'} | Fragments: {frag_count} | Sections: {sections or 'none'}[/dim]")
+            console.print(
+                f"  [dim]Quality: {q_score or '?'} | Fragments: {frag_count} | Sections: {sections or 'none'}[/dim]"
+            )
             if reason:
                 console.print(f"  [yellow]Reason: {reason}[/yellow]")
             if abstract:
-                console.print(f"  [dim]{abstract[:200]}{'…' if len(abstract) > 200 else ''}[/dim]")
+                console.print(
+                    f"  [dim]{abstract[:200]}{'…' if len(abstract) > 200 else ''}[/dim]"
+                )
             if yes:
                 state.delete_source(citekey)
                 deleted += 1
                 console.print("  [red]Deleted[/red]")
             else:
-                choice = click.prompt("  Delete?", type=click.Choice(["y", "n", "q"]), default="n")
+                choice = click.prompt(
+                    "  Delete?", type=click.Choice(["y", "n", "q"]), default="n"
+                )
                 if choice == "q":
                     console.print("[dim]Quit.[/dim]")
                     break
@@ -3168,7 +3685,9 @@ def prune(ctx, chapter, verdict, clear_key, apply, yes):
                     skipped += 1
                     console.print("  [green]Kept[/green]")
             console.print()
-        console.print(f"[bold]Result: {deleted} deleted, {skipped} kept (vault notes preserved).[/bold]")
+        console.print(
+            f"[bold]Result: {deleted} deleted, {skipped} kept (vault notes preserved).[/bold]"
+        )
         return
 
     if clear_key and (chapter is not None or verdict is not None):
@@ -3195,7 +3714,8 @@ def prune(ctx, chapter, verdict, clear_key, apply, yes):
 
     table = Table(
         title=f"Prune Verdicts ({len(items)})",
-        show_edge=False, pad_edge=False,
+        show_edge=False,
+        pad_edge=False,
     )
     table.add_column("#", width=4, style="dim")
     table.add_column("Verdict", width=7)
@@ -3220,7 +3740,9 @@ def prune(ctx, chapter, verdict, clear_key, apply, yes):
 
     console.print(table)
     summary = state.get_prune_summary()
-    console.print(f"\n[dim]Total: {summary['drop']} drop, {summary['maybe']} maybe[/dim]")
+    console.print(
+        f"\n[dim]Total: {summary['drop']} drop, {summary['maybe']} maybe[/dim]"
+    )
 
 
 @library.command()
@@ -3239,12 +3761,15 @@ def duplicates(ctx):
     pairs = find_duplicates(sources)
 
     if not pairs:
-        console.print(f"[green]No duplicates found among {len(sources)} sources.[/green]")
+        console.print(
+            f"[green]No duplicates found among {len(sources)} sources.[/green]"
+        )
         return
 
     table = Table(
         title=f"Potential Duplicates ({len(pairs)} pairs)",
-        show_edge=False, pad_edge=False,
+        show_edge=False,
+        pad_edge=False,
     )
     table.add_column("#", width=4, style="dim")
     table.add_column("Source A", max_width=30)
@@ -3274,15 +3799,30 @@ def duplicates(ctx):
 
 # --- Reassign: semantic fragment-to-section suggestion ---
 
+
 @main.command()
-@click.option("--threshold", "-t", type=float, default=0.5,
-              help="Minimum cosine similarity for suggestion (default: 0.5)")
-@click.option("--limit", "-n", type=int, default=20,
-              help="Max suggestions to show (default: 20)")
-@click.option("--apply", is_flag=True, default=False,
-              help="Apply suggestions: add sections to vault frontmatter")
-@click.option("--fresh", is_flag=True, default=False,
-              help="Clear saved skip decisions and show all suggestions")
+@click.option(
+    "--threshold",
+    "-t",
+    type=float,
+    default=0.5,
+    help="Minimum cosine similarity for suggestion (default: 0.5)",
+)
+@click.option(
+    "--limit", "-n", type=int, default=20, help="Max suggestions to show (default: 20)"
+)
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Apply suggestions: add sections to vault frontmatter",
+)
+@click.option(
+    "--fresh",
+    is_flag=True,
+    default=False,
+    help="Clear saved skip decisions and show all suggestions",
+)
 @click.pass_context
 def reassign(ctx, threshold, limit, apply, fresh):
     """Suggest fragment-to-section reassignments based on embedding similarity."""
@@ -3360,19 +3900,24 @@ def reassign(ctx, threshold, limit, apply, fresh):
             current_score = scores.get(current_section, 0.0)
 
             # Only suggest if different from current and above threshold
-            if (best_section and best_section != current_section
-                    and best_score >= threshold):
-                raw_suggestions.append({
-                    "frag_id": frag_id,
-                    "citekey": source_id,
-                    "current": current_section or "(none)",
-                    "suggested": best_section,
-                    "score": best_score,
-                    "current_score": current_score,
-                    "delta": best_score - current_score,
-                    "runner_up": ranked[1] if len(ranked) > 1 else None,
-                    "preview": (meta.get("text_preview") or "")[:80],
-                })
+            if (
+                best_section
+                and best_section != current_section
+                and best_score >= threshold
+            ):
+                raw_suggestions.append(
+                    {
+                        "frag_id": frag_id,
+                        "citekey": source_id,
+                        "current": current_section or "(none)",
+                        "suggested": best_section,
+                        "score": best_score,
+                        "current_score": current_score,
+                        "delta": best_score - current_score,
+                        "runner_up": ranked[1] if len(ranked) > 1 else None,
+                        "preview": (meta.get("text_preview") or "")[:80],
+                    }
+                )
 
     # Group by (citekey, current, suggested) — collect all fragment IDs per group
     groups: dict[tuple[str, str, str], dict] = {}
@@ -3478,7 +4023,7 @@ def reassign(ctx, threshold, limit, apply, fresh):
         for sec_id, sec_type in type_map.items():
             section_type_labels[sec_id] = sec_type
         # Infer subsection types from parent: 1.4.1 → type of "1"
-        for ch_num in (project.chapters or {}):
+        for ch_num in project.chapters or {}:
             if str(ch_num) in type_map:
                 section_type_labels[str(ch_num)] = type_map[str(ch_num)]
 
@@ -3556,25 +4101,33 @@ def reassign(ctx, threshold, limit, apply, fresh):
         frag_count = len(frag_ids_list)
         count_note = f" ({frag_count} fragments)" if frag_count > 1 else ""
 
-        review_items.append(ReviewItem(
-            key=f"{s['citekey']}:{cur_sec}:{sug_sec}",
-            header=f"@{s['citekey']}{count_note}",
-            details=[
-                ("Fragment", frag_text),
-                ("Current", f"{cur_sec} — {cur_desc}  (sim={s['current_score']:.3f})"),
-                ("Suggested", f"[{score_style}]{sug_sec}[/{score_style}] — "
-                              f"{sug_desc}  (sim={s['score']:.3f}, +{s['delta']:.3f})"),
-            ],
-            action_label=(
-                f"Move {frag_count} fragment(s) from {cur_sec} → {sug_sec}"
-            ),
-            data={
-                "citekey": s["citekey"],
-                "frag_ids": frag_ids_list,
-                "section": sug_sec,
-                "from_section": cur_sec,
-            },
-        ))
+        review_items.append(
+            ReviewItem(
+                key=f"{s['citekey']}:{cur_sec}:{sug_sec}",
+                header=f"@{s['citekey']}{count_note}",
+                details=[
+                    ("Fragment", frag_text),
+                    (
+                        "Current",
+                        f"{cur_sec} — {cur_desc}  (sim={s['current_score']:.3f})",
+                    ),
+                    (
+                        "Suggested",
+                        f"[{score_style}]{sug_sec}[/{score_style}] — "
+                        f"{sug_desc}  (sim={s['score']:.3f}, +{s['delta']:.3f})",
+                    ),
+                ],
+                action_label=(
+                    f"Move {frag_count} fragment(s) from {cur_sec} → {sug_sec}"
+                ),
+                data={
+                    "citekey": s["citekey"],
+                    "frag_ids": frag_ids_list,
+                    "section": sug_sec,
+                    "from_section": cur_sec,
+                },
+            )
+        )
 
     result = interactive_review(
         review_items,
@@ -3587,11 +4140,13 @@ def reassign(ctx, threshold, limit, apply, fresh):
     accepted_keys = {item.key for item in result.accepted}
     for item in review_items:
         if item.key not in accepted_keys:
-            new_skips.append((
-                item.data["citekey"],
-                item.data["from_section"],
-                item.data["section"],
-            ))
+            new_skips.append(
+                (
+                    item.data["citekey"],
+                    item.data["from_section"],
+                    item.data["section"],
+                )
+            )
     if new_skips:
         state.save_reassign_skips_batch(new_skips)
 
@@ -3625,7 +4180,9 @@ def reassign(ctx, threshold, limit, apply, fresh):
             continue
 
         ok = vault.update_frontmatter_sections(
-            note_name, list(merged), folder=notes_folder,
+            note_name,
+            list(merged),
+            folder=notes_folder,
         )
         if ok:
             added = sorted(merged - current)
@@ -3637,11 +4194,16 @@ def reassign(ctx, threshold, limit, apply, fresh):
     console.print(
         f"\n[green]{moved} fragment(s) reassigned in DB, "
         f"{result.skipped} skipped.[/green]"
-        + (f" [dim]{vault_updates} vault note(s) updated.[/dim]" if vault_updates else "")
+        + (
+            f" [dim]{vault_updates} vault note(s) updated.[/dim]"
+            if vault_updates
+            else ""
+        )
     )
 
 
 # --- Acquire: download + add to Zotero + register ---
+
 
 @main.command()
 @click.argument("url", required=False)
@@ -3651,12 +4213,38 @@ def reassign(ctx, threshold, limit, apply, fresh):
 @click.option("--journal", "-j", help="Journal name")
 @click.option("--volume", help="Volume")
 @click.option("--issue", help="Issue")
-@click.option("--section", "-s", multiple=True, help="Dissertation section(s) to assign")
-@click.option("--pdf", "pdf_url", help="Direct PDF URL (bypass DOI resolution, e.g. for WAF-protected publishers)")
-@click.option("--batch", "batch_path", type=click.Path(exists=True), help="JSON file with papers list")
-@click.option("--no-process", is_flag=True, help="Skip fragment extraction after adding")
+@click.option(
+    "--section", "-s", multiple=True, help="Dissertation section(s) to assign"
+)
+@click.option(
+    "--pdf",
+    "pdf_url",
+    help="Direct PDF URL (bypass DOI resolution, e.g. for WAF-protected publishers)",
+)
+@click.option(
+    "--batch",
+    "batch_path",
+    type=click.Path(exists=True),
+    help="JSON file with papers list",
+)
+@click.option(
+    "--no-process", is_flag=True, help="Skip fragment extraction after adding"
+)
 @click.pass_context
-def acquire(ctx, url, title, authors, year, journal, volume, issue, section, pdf_url, batch_path, no_process):
+def acquire(
+    ctx,
+    url,
+    title,
+    authors,
+    year,
+    journal,
+    volume,
+    issue,
+    section,
+    pdf_url,
+    batch_path,
+    no_process,
+):
     """Download PDF, add to Zotero, register in klemma.
 
     Single paper: klemma acquire <pdf_url> --title "..." --authors "..." --year 2022 --section 1.2
@@ -3673,17 +4261,19 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, pdf
         papers = load_batch(batch_path)
         console.print(f"[blue]Loaded {len(papers)} papers from batch file[/blue]")
     elif url:
-        papers = [PaperMetadata(
-            url=url,
-            title=title or "",
-            authors=authors or "",
-            year=year,
-            journal=journal or "",
-            volume=volume or "",
-            issue=issue or "",
-            pdf_override=pdf_url or "",
-            sections=list(section),
-        )]
+        papers = [
+            PaperMetadata(
+                url=url,
+                title=title or "",
+                authors=authors or "",
+                year=year,
+                journal=journal or "",
+                volume=volume or "",
+                issue=issue or "",
+                pdf_override=pdf_url or "",
+                sections=list(section),
+            )
+        ]
     else:
         console.print("[red]Provide a URL or --batch file[/red]")
         return
@@ -3695,7 +4285,9 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, pdf
         console.print(f"\n[bold][{i}/{len(papers)}] {label}[/bold]")
 
         result = acquire_paper_local(
-            meta, storage_path=cfg.zotero.storage_path, state=state,
+            meta,
+            storage_path=cfg.zotero.storage_path,
+            state=state,
         )
 
         if result.status in ("ok", "ok_no_pdf"):
@@ -3710,9 +4302,13 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, pdf
             if result.zotero_added:
                 console.print("  [blue]Added to Zotero (BBT citekey)[/blue]")
             if result.status == "ok_no_pdf":
-                console.print("  [yellow]No open-access PDF found (metadata-only)[/yellow]")
+                console.print(
+                    "  [yellow]No open-access PDF found (metadata-only)[/yellow]"
+                )
                 if result.zotero_added:
-                    console.print("  [dim]Tip: use Zotero → Right-click → Find Available PDF[/dim]")
+                    console.print(
+                        "  [dim]Tip: use Zotero → Right-click → Find Available PDF[/dim]"
+                    )
             if meta.sections:
                 console.print(f"  [dim]sections: {', '.join(meta.sections)}[/dim]")
 
@@ -3720,19 +4316,36 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, pdf
                 try:
                     ai = _init_ai(cfg)
                 except Exception as e:
-                    console.print(f"  [yellow]Skipping auto-process (AI unavailable: {e})[/yellow]")
-                    console.print(f"  [dim]Run manually: klemma process {result.citekey}[/dim]")
+                    console.print(
+                        f"  [yellow]Skipping auto-process (AI unavailable: {e})[/yellow]"
+                    )
+                    console.print(
+                        f"  [dim]Run manually: klemma process {result.citekey}[/dim]"
+                    )
                     ai = None
 
                 if ai:
                     from .literature.pdf import PDFExtractor
+
                     pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
-                    with console.status(f"Extracting fragments from @{result.citekey}", spinner="arc"):
-                        _process_single(result.citekey, cfg, state, kctx.vault, ai, pdf_extractor, kctx.library,
-                                        dissertation_context=kctx.dissertation_context,
-                                        available_tags=kctx.available_tags,
-                                        klemma_home=kctx.klemma_home,
-                                        project_type=kctx.project.type if kctx.project else "dissertation")
+                    with console.status(
+                        f"Extracting fragments from @{result.citekey}", spinner="arc"
+                    ):
+                        _process_single(
+                            result.citekey,
+                            cfg,
+                            state,
+                            kctx.vault,
+                            ai,
+                            pdf_extractor,
+                            kctx.library,
+                            dissertation_context=kctx.dissertation_context,
+                            available_tags=kctx.available_tags,
+                            klemma_home=kctx.klemma_home,
+                            project_type=(
+                                kctx.project.type if kctx.project else "dissertation"
+                            ),
+                        )
 
             ok += 1
         else:
@@ -3743,14 +4356,15 @@ def acquire(ctx, url, title, authors, year, journal, volume, issue, section, pdf
     # DEV mode: show benchmark candidate hints
     if kctx.config.instance.dev_mode:
         from .evaluation.candidates import discover_candidates, format_candidate_hint
+
         candidates = discover_candidates(kctx.state, limit=3)
         hint = format_candidate_hint(candidates)
         if hint:
             console.print(hint)
 
 
-
 # --- Info & Tree: project introspection ---
+
 
 @main.command()
 @click.pass_context
@@ -3782,11 +4396,13 @@ def info(ctx):
     if kctx.config.obsidian.vault_path:
         info_parts.append(f"Vault: {kctx.config.obsidian.vault_path}")
 
-    console.print(Panel(
-        "\n".join(info_parts),
-        title=f"Project: {kctx.project_name}",
-        border_style="blue",
-    ))
+    console.print(
+        Panel(
+            "\n".join(info_parts),
+            title=f"Project: {kctx.project_name}",
+            border_style="blue",
+        )
+    )
 
     # Effective Zotero config (merged from system + parent + project)
     zot = kctx.config.zotero
@@ -3796,11 +4412,13 @@ def info(ctx):
     if zot.storage_path:
         zot_parts.append(f"Storage: {zot.storage_path}")
     if zot_parts:
-        console.print(Panel(
-            "\n".join(zot_parts),
-            title="Zotero (effective)",
-            border_style="dim",
-        ))
+        console.print(
+            Panel(
+                "\n".join(zot_parts),
+                title="Zotero (effective)",
+                border_style="dim",
+            )
+        )
 
     # Parent chain
     if len(kctx.project_chain) > 1:
@@ -3819,8 +4437,11 @@ def info(ctx):
         console.print(table)
 
     # File conventions
-    draft_pattern = (project.chapter_draft_pattern if project
-                     else kctx.config.dissertation.chapter_draft_pattern)
+    draft_pattern = (
+        project.chapter_draft_pattern
+        if project
+        else kctx.config.dissertation.chapter_draft_pattern
+    )
     conv_parts = [
         f"[bold]Chapter drafts[/bold]: {draft_pattern.format(chapter='N')}.md / .tex",
         f"  Location: [cyan]{project_root}/[/cyan] (vault as fallback)",
@@ -3836,11 +4457,13 @@ def info(ctx):
         tf_s = "[green]✓[/green]" if tf_ok else "[red]✗ not found[/red]"
         conv_parts.append(f"[bold]Reference notes[/bold]: vault {nf}/ {nf_s}")
         conv_parts.append(f"[bold]Tags[/bold]: vault {tf}/ {tf_s}")
-    console.print(Panel(
-        "\n".join(conv_parts),
-        title="File Conventions",
-        border_style="dim",
-    ))
+    console.print(
+        Panel(
+            "\n".join(conv_parts),
+            title="File Conventions",
+            border_style="dim",
+        )
+    )
 
 
 @main.command()
@@ -3884,7 +4507,11 @@ def _print_project_tree(root: Path, indent: int = 0, current: Path | None = None
     # Scan subdirectories for child projects
     try:
         for child in sorted(root.iterdir()):
-            if child.is_dir() and (child / ".klemma").is_dir() and child.name != ".klemma":
+            if (
+                child.is_dir()
+                and (child / ".klemma").is_dir()
+                and child.name != ".klemma"
+            ):
                 _print_project_tree(child, indent + 1, current)
     except PermissionError:
         pass
@@ -3908,14 +4535,17 @@ def _run_auto_mode(kctx, paper_citekey, skip_prepare, ablation=None):
 
     if ablation:
         params = ablation.to_snapshot()
-        non_default = {k: v for k, v in params.items()
-                       if v is not None and k != "prompt_variant"}
+        non_default = {
+            k: v for k, v in params.items() if v is not None and k != "prompt_variant"
+        }
         if non_default or params.get("prompt_variant") != "default":
             console.print(f"[dim]Ablation: {params}[/dim]")
 
     with console.status("Running autonomous benchmark pipeline...", spinner="arc"):
         result = run_auto_benchmark(
-            kctx.state, ai, kctx.config,
+            kctx.state,
+            ai,
+            kctx.config,
             klemma_home=kctx.klemma_home,
             paper_citekey=paper_citekey,
             skip_prepare=skip_prepare,
@@ -3959,7 +4589,8 @@ def _run_prepare_mode(kctx, citekey: str):
     # Always dry-run first
     console.print(f"Scanning references for {citekey}...")
     result = prepare_benchmark(
-        kctx.state, citekey,
+        kctx.state,
+        citekey,
         storage_path=kctx.config.zotero.storage_path,
         dry_run=True,
     )
@@ -3976,10 +4607,16 @@ def _run_prepare_mode(kctx, citekey: str):
     t.add_column("PDF")
     for ref in result.references:
         source_str = ref.resolved.source if ref.resolved else ""
-        pdf_str = "[green]yes[/green]" if ref.resolved and ref.resolved.pdf_url else "[red]no[/red]"
+        pdf_str = (
+            "[green]yes[/green]"
+            if ref.resolved and ref.resolved.pdf_url
+            else "[red]no[/red]"
+        )
         status_color = {
-            "in_library": "green", "resolved": "blue",
-            "no_pdf": "yellow", "failed": "red",
+            "in_library": "green",
+            "resolved": "blue",
+            "no_pdf": "yellow",
+            "failed": "red",
         }.get(ref.status, "dim")
         t.add_row(
             ref.title[:50],
@@ -4004,7 +4641,8 @@ def _run_prepare_mode(kctx, citekey: str):
 
     # Actual fetch
     result = prepare_benchmark(
-        kctx.state, citekey,
+        kctx.state,
+        citekey,
         storage_path=kctx.config.zotero.storage_path,
         dry_run=False,
     )
@@ -4029,7 +4667,11 @@ def _run_analyst_mode(kctx, citekey: str, json_output: bool):
 
     console.print(f"Analyzing {citekey}...")
     dataset = run_analyst_from_source(
-        kctx.state, ai, citekey, kctx.config, kctx.klemma_home,
+        kctx.state,
+        ai,
+        citekey,
+        kctx.config,
+        kctx.klemma_home,
     )
 
     if not dataset:
@@ -4046,7 +4688,9 @@ def _run_analyst_mode(kctx, citekey: str, json_output: bool):
             f"{gt.bibliography_size} references, "
             f"{len(dataset.samples)} in-library samples"
         )
-        console.print("Save as JSON and add to your benchmark dataset under 'reconstruction' key.")
+        console.print(
+            "Save as JSON and add to your benchmark dataset under 'reconstruction' key."
+        )
         click.echo(json.dumps(dataset.model_dump(), indent=2))
 
 
@@ -4054,23 +4698,27 @@ def _print_reconstruction_results(recon: dict):
     """Print reconstruction benchmark results as Rich panels."""
     # Ground truth summary
     gt = recon.get("ground_truth", {})
-    console.print(Panel(
-        f"Paper: {gt.get('paper', 'N/A')}\n"
-        f"Sections: {gt.get('sections', 0)}, "
-        f"Bibliography: {gt.get('bibliography_size', 0)}, "
-        f"In-library samples: {gt.get('samples', 0)}",
-        title="Reconstruction: Ground Truth",
-    ))
+    console.print(
+        Panel(
+            f"Paper: {gt.get('paper', 'N/A')}\n"
+            f"Sections: {gt.get('sections', 0)}, "
+            f"Bibliography: {gt.get('bibliography_size', 0)}, "
+            f"In-library samples: {gt.get('samples', 0)}",
+            title="Reconstruction: Ground Truth",
+        )
+    )
 
     # Baseline results (source-coverage)
     bl = recon.get("baseline", {})
     if bl:
-        console.print(Panel(
-            f"Source coverage: {bl.get('sources_covered', 0)}/{bl.get('sources_total', 0)} "
-            f"({bl.get('source_coverage', 0):.1%})\n"
-            f"Intent coverage: {bl.get('intent_coverage', 0):.1%}",
-            title="Reconstruction: Baseline (library coverage)",
-        ))
+        console.print(
+            Panel(
+                f"Source coverage: {bl.get('sources_covered', 0)}/{bl.get('sources_total', 0)} "
+                f"({bl.get('source_coverage', 0):.1%})\n"
+                f"Intent coverage: {bl.get('intent_coverage', 0):.1%}",
+                title="Reconstruction: Baseline (library coverage)",
+            )
+        )
 
     # AI reconstruction results
     rc = recon.get("reconstruction", {})
@@ -4078,15 +4726,17 @@ def _print_reconstruction_results(recon: dict):
         if rc.get("error"):
             console.print(f"[yellow]Reconstruction: {rc['error']}[/yellow]")
         else:
-            console.print(Panel(
-                f"Predictions: {rc.get('predictions_count', 0)}\n"
-                f"Macro-P: {rc.get('macro_precision', 0):.4f}  "
-                f"Macro-R: {rc.get('macro_recall', 0):.4f}  "
-                f"[bold]F1: {rc.get('f1', 0):.4f}[/bold]\n"
-                f"Intent accuracy: {rc.get('intent_accuracy', 0):.4f}  "
-                f"nDCG avg: {rc.get('ndcg_avg', 0):.4f}",
-                title="Reconstruction: AI-driven",
-            ))
+            console.print(
+                Panel(
+                    f"Predictions: {rc.get('predictions_count', 0)}\n"
+                    f"Macro-P: {rc.get('macro_precision', 0):.4f}  "
+                    f"Macro-R: {rc.get('macro_recall', 0):.4f}  "
+                    f"[bold]F1: {rc.get('f1', 0):.4f}[/bold]\n"
+                    f"Intent accuracy: {rc.get('intent_accuracy', 0):.4f}  "
+                    f"nDCG avg: {rc.get('ndcg_avg', 0):.4f}",
+                    title="Reconstruction: AI-driven",
+                )
+            )
 
     # Per-section table (from reconstruction only — baseline is section-agnostic)
     source = rc if rc and not rc.get("error") else None
@@ -4111,6 +4761,7 @@ def _print_reconstruction_results(recon: dict):
                 f"{vals.get('ndcg', 0):.4f}",
             )
         console.print(t)
+
 
 def _print_benchmark_history(state):
     """Print benchmark run history as Rich table."""
@@ -4172,54 +4823,147 @@ def _print_benchmark_compare(state, id_a: str, id_b: str):
 
 
 @main.command()
-@click.option("--dataset", "-d", type=click.Path(exists=True),
-              help="Path to annotated benchmark dataset JSON")
-@click.option("--metrics", "-m",
-              type=click.Choice(["all", "intent", "gaps", "embeddings", "reconstruct"]),
-              default="all", help="Which benchmarks to run (default: all)")
-@click.option("--export", "export_path", type=click.Path(),
-              help="Export current DB data as dataset template for annotation")
-@click.option("--json-output", is_flag=True,
-              help="Output results as JSON for reproducibility")
-@click.option("--semantic", is_flag=True,
-              help="Apply semantic reranking to gap benchmark (hybrid keyword × semantic mode)")
-@click.option("--analyst", "analyst_citekey", type=str, default=None,
-              help="Run analyst prompt on a paper PDF to extract ground truth citation map")
-@click.option("--reconstruct", "reconstruct", is_flag=True,
-              help="Run citation reconstruction benchmark (requires reconstruction field in dataset)")
-@click.option("--history", is_flag=True,
-              help="Show past benchmark run history")
-@click.option("--compare", nargs=2, type=str, default=None,
-              help="Compare two runs: --compare <id1> <id2>")
-@click.option("--export-history", "export_history_path", type=click.Path(),
-              help="Export benchmark run history as JSON for archival")
-@click.option("--candidates", is_flag=True,
-              help="Show benchmark candidate papers ranked by citation graph coverage")
-@click.option("-k", "candidates_limit", type=int, default=10,
-              help="Number of candidates to show (default: 10)")
-@click.option("--prepare", "prepare_citekey", type=str, default=None,
-              help="Fetch missing referenced papers for a citekey (dry-run first)")
-@click.option("--auto", "auto_mode", is_flag=True,
-              help="Run full autonomous pipeline: select → prepare → analyst → benchmark → persist")
-@click.option("--paper", "auto_paper", type=str, default=None,
-              help="Citekey for --auto mode (default: top candidate)")
-@click.option("--skip-prepare", is_flag=True,
-              help="Skip reference preparation in --auto mode")
-@click.option("--temperature", "ablation_temperature", type=float, default=None,
-              help="Override AI temperature for ablation (default: 0.2)")
-@click.option("--max-recs", "ablation_max_recs", type=int, default=None,
-              help="Max recommendations per section (default: uncapped)")
-@click.option("--fragments", "ablation_fragments", type=int, default=None,
-              help="Fragments per source for context (default: 5)")
-@click.option("--prompt-variant", "ablation_variant", type=click.Choice(["default", "fewshot"]),
-              default=None, help="Prompt variant for ablation (default: default)")
+@click.option(
+    "--dataset",
+    "-d",
+    type=click.Path(exists=True),
+    help="Path to annotated benchmark dataset JSON",
+)
+@click.option(
+    "--metrics",
+    "-m",
+    type=click.Choice(["all", "intent", "gaps", "embeddings", "reconstruct"]),
+    default="all",
+    help="Which benchmarks to run (default: all)",
+)
+@click.option(
+    "--export",
+    "export_path",
+    type=click.Path(),
+    help="Export current DB data as dataset template for annotation",
+)
+@click.option(
+    "--json-output", is_flag=True, help="Output results as JSON for reproducibility"
+)
+@click.option(
+    "--semantic",
+    is_flag=True,
+    help="Apply semantic reranking to gap benchmark (hybrid keyword × semantic mode)",
+)
+@click.option(
+    "--analyst",
+    "analyst_citekey",
+    type=str,
+    default=None,
+    help="Run analyst prompt on a paper PDF to extract ground truth citation map",
+)
+@click.option(
+    "--reconstruct",
+    "reconstruct",
+    is_flag=True,
+    help="Run citation reconstruction benchmark (requires reconstruction field in dataset)",
+)
+@click.option("--history", is_flag=True, help="Show past benchmark run history")
+@click.option(
+    "--compare",
+    nargs=2,
+    type=str,
+    default=None,
+    help="Compare two runs: --compare <id1> <id2>",
+)
+@click.option(
+    "--export-history",
+    "export_history_path",
+    type=click.Path(),
+    help="Export benchmark run history as JSON for archival",
+)
+@click.option(
+    "--candidates",
+    is_flag=True,
+    help="Show benchmark candidate papers ranked by citation graph coverage",
+)
+@click.option(
+    "-k",
+    "candidates_limit",
+    type=int,
+    default=10,
+    help="Number of candidates to show (default: 10)",
+)
+@click.option(
+    "--prepare",
+    "prepare_citekey",
+    type=str,
+    default=None,
+    help="Fetch missing referenced papers for a citekey (dry-run first)",
+)
+@click.option(
+    "--auto",
+    "auto_mode",
+    is_flag=True,
+    help="Run full autonomous pipeline: select → prepare → analyst → benchmark → persist",
+)
+@click.option(
+    "--paper",
+    "auto_paper",
+    type=str,
+    default=None,
+    help="Citekey for --auto mode (default: top candidate)",
+)
+@click.option(
+    "--skip-prepare", is_flag=True, help="Skip reference preparation in --auto mode"
+)
+@click.option(
+    "--temperature",
+    "ablation_temperature",
+    type=float,
+    default=None,
+    help="Override AI temperature for ablation (default: 0.2)",
+)
+@click.option(
+    "--max-recs",
+    "ablation_max_recs",
+    type=int,
+    default=None,
+    help="Max recommendations per section (default: uncapped)",
+)
+@click.option(
+    "--fragments",
+    "ablation_fragments",
+    type=int,
+    default=None,
+    help="Fragments per source for context (default: 5)",
+)
+@click.option(
+    "--prompt-variant",
+    "ablation_variant",
+    type=click.Choice(["default", "fewshot"]),
+    default=None,
+    help="Prompt variant for ablation (default: default)",
+)
 @click.pass_context
-def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
-              analyst_citekey, reconstruct, history, compare, export_history_path,
-              candidates, candidates_limit, prepare_citekey,
-              auto_mode, auto_paper, skip_prepare,
-              ablation_temperature, ablation_max_recs, ablation_fragments,
-              ablation_variant):
+def benchmark(
+    ctx,
+    dataset,
+    metrics,
+    export_path,
+    json_output,
+    semantic,
+    analyst_citekey,
+    reconstruct,
+    history,
+    compare,
+    export_history_path,
+    candidates,
+    candidates_limit,
+    prepare_citekey,
+    auto_mode,
+    auto_paper,
+    skip_prepare,
+    ablation_temperature,
+    ablation_max_recs,
+    ablation_fragments,
+    ablation_variant,
+):
     """Run evaluation benchmarks against annotated ground truth.
 
     Multi-format evaluation (Singh et al. 2023 — SciRepEval):
@@ -4269,15 +5013,20 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
         runs = kctx.state.get_benchmark_runs(limit=1000)
         with open(export_history_path, "w") as f:
             json.dump(runs, f, indent=2, default=str)
-        console.print(f"[green]Exported {len(runs)} runs to {export_history_path}[/green]")
+        console.print(
+            f"[green]Exported {len(runs)} runs to {export_history_path}[/green]"
+        )
         return
 
     # --- Candidates mode ---
     if candidates:
         from .evaluation.candidates import discover_candidates
+
         cands = discover_candidates(kctx.state, limit=candidates_limit)
         if not cands:
-            console.print("[yellow]No benchmark candidates found (need sources with ≥3 in-library citations)[/yellow]")
+            console.print(
+                "[yellow]No benchmark candidates found (need sources with ≥3 in-library citations)[/yellow]"
+            )
             return
         t = Table(title="Benchmark Candidates")
         t.add_column("Citekey")
@@ -4310,8 +5059,15 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
         from .evaluation.pipeline import AblationParams
 
         ablation = None
-        if any(v is not None for v in [ablation_temperature, ablation_max_recs,
-                                        ablation_fragments, ablation_variant]):
+        if any(
+            v is not None
+            for v in [
+                ablation_temperature,
+                ablation_max_recs,
+                ablation_fragments,
+                ablation_variant,
+            ]
+        ):
             kwargs = {}
             if ablation_temperature is not None:
                 kwargs["temperature"] = ablation_temperature
@@ -4334,9 +5090,7 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
 
     if export_path:
         count = export_dataset(kctx.state, Path(export_path))
-        console.print(
-            f"[green]Exported {count} items to {export_path}[/green]"
-        )
+        console.print(f"[green]Exported {count} items to {export_path}[/green]")
         console.print(
             "Review and correct ground_truth labels, then run: "
             f"klemma benchmark -d {export_path}"
@@ -4352,7 +5106,11 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
 
     t_start = time.monotonic()
     ds = load_dataset(Path(dataset))
-    recon_info = f", reconstruction: {len(ds.reconstruction.samples)} samples" if ds.reconstruction else ""
+    recon_info = (
+        f", reconstruction: {len(ds.reconstruction.samples)} samples"
+        if ds.reconstruction
+        else ""
+    )
     console.print(
         f"Dataset: {len(ds.fragments)} fragments, "
         f"{len(ds.gaps)} gaps, {len(ds.similar_pairs)} similarity pairs"
@@ -4365,7 +5123,9 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
         all_gaps = kctx.state.get_reference_gaps(limit=100, section_weights=_bsw)
         reranked_gaps = kctx.state.rerank_gaps_semantic(all_gaps, kctx.embeddings)
     elif semantic:
-        console.print("[yellow]--semantic requires embeddings to be configured[/yellow]")
+        console.print(
+            "[yellow]--semantic requires embeddings to be configured[/yellow]"
+        )
 
     # Determine effective metrics filter
     effective_metrics = "reconstruct" if reconstruct else metrics
@@ -4374,8 +5134,15 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
     from .evaluation.pipeline import AblationParams, compute_prompt_hash
 
     ablation = None
-    if any(v is not None for v in [ablation_temperature, ablation_max_recs,
-                                    ablation_fragments, ablation_variant]):
+    if any(
+        v is not None
+        for v in [
+            ablation_temperature,
+            ablation_max_recs,
+            ablation_fragments,
+            ablation_variant,
+        ]
+    ):
         kwargs = {}
         if ablation_temperature is not None:
             kwargs["temperature"] = ablation_temperature
@@ -4390,8 +5157,9 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
 
     if ablation:
         params = ablation.to_snapshot()
-        non_default = {k: v for k, v in params.items()
-                       if v is not None and k != "prompt_variant"}
+        non_default = {
+            k: v for k, v in params.items() if v is not None and k != "prompt_variant"
+        }
         if non_default or params.get("prompt_variant") != "default":
             console.print(f"[dim]Ablation: {params}[/dim]")
 
@@ -4401,11 +5169,17 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
         try:
             ai = _init_ai(kctx.config)
         except Exception:
-            console.print("[dim]AI not available — reconstruction will run baseline only[/dim]")
+            console.print(
+                "[dim]AI not available — reconstruction will run baseline only[/dim]"
+            )
 
     results = run_all(
-        kctx.state, ds, effective_metrics,
-        reranked_gaps=reranked_gaps, ai=ai, klemma_home=kctx.klemma_home,
+        kctx.state,
+        ds,
+        effective_metrics,
+        reranked_gaps=reranked_gaps,
+        ai=ai,
+        klemma_home=kctx.klemma_home,
         ablation=ablation,
     )
 
@@ -4415,10 +5189,15 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
     ds_hash = compute_dataset_hash(dataset)
     git_commit = ""
     try:
-        git_commit = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            stderr=subprocess.DEVNULL, timeout=5,
-        ).decode().strip()
+        git_commit = (
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            .decode()
+            .strip()
+        )
     except Exception:
         pass
 
@@ -4458,13 +5237,15 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
     if "intent" in results:
         ir = results["intent"]
         m = ir.get("metrics", {})
-        console.print(Panel(
-            f"Matched: {ir['matched']}/{ir['total']} "
-            f"(skipped: {ir.get('skipped', 0)})\n"
-            f"[bold]Macro-F1: {m.get('macro_f1', 0):.4f}[/bold]  "
-            f"Accuracy: {m.get('accuracy', 0):.4f}",
-            title="Intent Classification",
-        ))
+        console.print(
+            Panel(
+                f"Matched: {ir['matched']}/{ir['total']} "
+                f"(skipped: {ir.get('skipped', 0)})\n"
+                f"[bold]Macro-F1: {m.get('macro_f1', 0):.4f}[/bold]  "
+                f"Accuracy: {m.get('accuracy', 0):.4f}",
+                title="Intent Classification",
+            )
+        )
         if m.get("per_class"):
             t = Table(title="Per-class metrics")
             t.add_column("Intent")
@@ -4485,15 +5266,21 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
     if "gaps" in results:
         gr = results["gaps"]
         gm = gr.get("metrics", {})
-        gap_title = "Gap Ranking [dim](hybrid: keyword × semantic)[/dim]" if semantic else "Gap Ranking"
-        console.print(Panel(
-            f"Ground truth: {gr['total']} gaps, "
-            f"DB gaps: {gr.get('db_gaps_count', 0)}\n"
-            f"Precision@5: {gm.get('precision_at_5', 0):.4f}  "
-            f"Precision@10: {gm.get('precision_at_10', 0):.4f}  "
-            f"[bold]nDCG@10: {gm.get('ndcg_at_10', 0):.4f}[/bold]",
-            title=gap_title,
-        ))
+        gap_title = (
+            "Gap Ranking [dim](hybrid: keyword × semantic)[/dim]"
+            if semantic
+            else "Gap Ranking"
+        )
+        console.print(
+            Panel(
+                f"Ground truth: {gr['total']} gaps, "
+                f"DB gaps: {gr.get('db_gaps_count', 0)}\n"
+                f"Precision@5: {gm.get('precision_at_5', 0):.4f}  "
+                f"Precision@10: {gm.get('precision_at_10', 0):.4f}  "
+                f"[bold]nDCG@10: {gm.get('ndcg_at_10', 0):.4f}[/bold]",
+                title=gap_title,
+            )
+        )
 
     if "embeddings" in results:
         er = results["embeddings"]
@@ -4501,14 +5288,16 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
         if er.get("error"):
             console.print(f"[yellow]Embeddings: {er['error']}[/yellow]")
         else:
-            console.print(Panel(
-                f"Queries: {er.get('evaluated', 0)}/{er['total_queries']} "
-                f"(skipped: {er.get('skipped', 0)})\n"
-                f"Recall@5: {em.get('avg_recall_at_5', 0):.4f}  "
-                f"[bold]Recall@10: {em.get('avg_recall_at_10', 0):.4f}[/bold]  "
-                f"Precision@5: {em.get('avg_precision_at_5', 0):.4f}",
-                title="Embedding Retrieval",
-            ))
+            console.print(
+                Panel(
+                    f"Queries: {er.get('evaluated', 0)}/{er['total_queries']} "
+                    f"(skipped: {er.get('skipped', 0)})\n"
+                    f"Recall@5: {em.get('avg_recall_at_5', 0):.4f}  "
+                    f"[bold]Recall@10: {em.get('avg_recall_at_10', 0):.4f}[/bold]  "
+                    f"Precision@5: {em.get('avg_precision_at_5', 0):.4f}",
+                    title="Embedding Retrieval",
+                )
+            )
 
     if "reconstruction" in results:
         _print_reconstruction_results(results["reconstruction"])
@@ -4516,8 +5305,11 @@ def benchmark(ctx, dataset, metrics, export_path, json_output, semantic,
 
 # --- Migrate: convert old ~/.klemma/ to per-directory project ---
 
+
 @main.command()
-@click.option("--dry-run", is_flag=True, help="Preview changes without modifying anything")
+@click.option(
+    "--dry-run", is_flag=True, help="Preview changes without modifying anything"
+)
 @click.pass_context
 def migrate(ctx, dry_run):
     """Migrate from ~/.klemma/ centralized config to per-directory project.
@@ -4549,7 +5341,9 @@ def migrate(ctx, dry_run):
 
     # Check this looks like a full project config (has obsidian: section)
     if "obsidian" not in old_raw:
-        console.print("[dim]~/.klemma/config.yaml looks like a system config already (no obsidian: section).[/dim]")
+        console.print(
+            "[dim]~/.klemma/config.yaml looks like a system config already (no obsidian: section).[/dim]"
+        )
         console.print("[dim]Just run 'klemma init' to create a project.[/dim]")
         return
 
@@ -4628,6 +5422,7 @@ def migrate(ctx, dry_run):
 
 
 # --- Backward-compatible aliases ---
+
 
 @main.command(hidden=True)
 @click.pass_context

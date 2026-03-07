@@ -6,19 +6,21 @@ Dissertation context and tags are loaded from `~/.klemma/` at CLI startup and pa
 
 ## Modules
 
-### context_loader.py (230 lines)
+### context_loader.py (420 lines)
 Shared context-loading helpers (ADR-008). Extracted from researcher.py for reuse across skills.
 - `load_chapter_draft(chapter, config, vault, project?, project_root?)` — project_root first (md > tex > bare), vault fallback
 - `extract_section(content, section_id)` — extract section text from markdown by heading number
 - `load_section_sources(section, chapter, state, vault)` — enrich sources with vault AI summaries
-- `fit_prompt_budget(chapter_draft, sources, fragments, max_chars?)` — progressive prompt reduction
+- `fit_prompt_budget(chapter_draft, sources, fragments, max_chars?, rag_fragments?)` — progressive prompt reduction; RAG fragments prioritized over section-level, trimmed last; returns 4-tuple
 - `validate_citekeys(data, valid_citekeys)` — strip hallucinated citekeys from AI JSON response
+- `parse_argument_blocks(research_text)` — extract argument blocks (order, title, description, citations) from research report markdown `## Структура аргументации` section
+- `retrieve_rag_fragments_per_block(blocks, embeddings, state, top_k=5)` — embed each block description, retrieve top-K fragments per block via cosine similarity; deduplicates across blocks; graceful per-block failure handling
 - `load_research_report(section, project_root)` — read research report from `notes/research/`
 
-### drafter.py (135 lines)
+### drafter.py (145 lines)
 Section draft generation — general prose from research context.
 - `DraftResult` — dataclass: section, chapter, text, word_count, citations_used, filtered_citekeys, research_report_used
-- `generate_draft(section, chapter, config, ai, ...)` — pure skill: renders `prompts/section_draft.md` → AI → parse citations → filter hallucinated → `DraftResult`
+- `generate_draft(section, chapter, config, ai, ..., rag_fragments?)` — pure skill: renders `prompts/section_draft.md` → AI → parse citations → filter hallucinated → `DraftResult`; accepts optional `rag_fragments` (per-block RAG) passed to template
 - `_extract_citations(text)` — regex `[@citekey]` parsing
 - `_filter_hallucinated_citations(text, valid_ids)` — remove invalid `[@citekey]` from prose, return cleaned text + removed list
 
@@ -124,7 +126,7 @@ On repeat: reads previous outline → incremental update. With `--fresh`: full r
 `klemma ask "query"` → pre-creates `notes/agents/` → `agent.build_agent_context(project_root=...)` → scans project_root for outline/reports/files + `notes/{research,library,agents}/` → system prompt → interactive Claude or `ai.call()`. Agent saves to `project_root/notes/agents/Agent_*.md` → `update_agents_index()` regenerates `notes/AGENTS.md`.
 
 ### Section draft generation
-`klemma draft -s X.X` → `_sync_sections()` → load research report (`context_loader.load_research_report`) → load chapter draft + extract section → load source summaries → RAG fragments → `fit_prompt_budget()` → `drafter.generate_draft()` → `DraftResult` → `project_root/notes/drafts/Draft_{section}.md`.
+`klemma draft -s X.X` → `_sync_sections()` → load research report (`context_loader.load_research_report`) → load chapter draft + extract section → load source summaries → **per-block RAG** (parse argument blocks from research report → embed descriptions → retrieve top-K fragments per block via `retrieve_rag_fragments_per_block`) → section-level RAG fallback → `fit_prompt_budget()` (RAG prioritized over section-level) → `drafter.generate_draft(rag_fragments=...)` → `DraftResult` → `project_root/notes/drafts/Draft_{section}.md`. `--no-rag` flag skips per-block RAG (uses section-level fragments only).
 
 ### Agent Skills (Claude Code)
 Agent uses Claude Code Skills from `.claude/skills/` instead of reading source code:

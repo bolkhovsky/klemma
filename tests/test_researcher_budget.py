@@ -33,7 +33,7 @@ class TestFitPromptBudget:
         sources = self._make_sources(5)
         fragments = self._make_fragments(5)
 
-        rd, rs, rf = _fit_prompt_budget(draft, sources, fragments)
+        rd, rs, rf, _rr = _fit_prompt_budget(draft, sources, fragments)
 
         assert rd == draft
         assert rs == sources
@@ -45,7 +45,9 @@ class TestFitPromptBudget:
         sources = self._make_sources(3, summary_len=50)
         fragments = self._make_fragments(3, text_len=50)
 
-        rd, rs, rf = _fit_prompt_budget(draft, sources, fragments, max_chars=30_000)
+        rd, rs, rf, _rr = _fit_prompt_budget(
+            draft, sources, fragments, max_chars=30_000
+        )
 
         assert len(rd) == 12_000
         # Sources and fragments should be unchanged
@@ -60,7 +62,9 @@ class TestFitPromptBudget:
         sources = self._make_sources(20, summary_len=2000)
         fragments = self._make_fragments(5, text_len=50)
 
-        rd, rs, rf = _fit_prompt_budget(draft, sources, fragments, max_chars=40_000)
+        rd, rs, rf, _rr = _fit_prompt_budget(
+            draft, sources, fragments, max_chars=40_000
+        )
 
         assert len(rd) == 12_000  # draft trimmed first
         for s in rs:
@@ -72,7 +76,9 @@ class TestFitPromptBudget:
         sources = self._make_sources(20, summary_len=800)
         fragments = self._make_fragments(30, text_len=500)
 
-        rd, rs, rf = _fit_prompt_budget(draft, sources, fragments, max_chars=30_000)
+        rd, rs, rf, _rr = _fit_prompt_budget(
+            draft, sources, fragments, max_chars=30_000
+        )
 
         for f in rf:
             assert len(f["text"]) <= 150
@@ -83,7 +89,9 @@ class TestFitPromptBudget:
         sources = self._make_sources(40, summary_len=800)
         fragments = self._make_fragments(40, text_len=500)
 
-        rd, rs, rf = _fit_prompt_budget(draft, sources, fragments, max_chars=25_000)
+        rd, rs, rf, _rr = _fit_prompt_budget(
+            draft, sources, fragments, max_chars=25_000
+        )
 
         assert len(rs) <= 15
 
@@ -94,7 +102,9 @@ class TestFitPromptBudget:
         fragments = self._make_fragments(40, text_len=500)
 
         # Very tight budget forces all reductions
-        rd, rs, rf = _fit_prompt_budget(draft, sources, fragments, max_chars=15_000)
+        rd, rs, rf, _rr = _fit_prompt_budget(
+            draft, sources, fragments, max_chars=15_000
+        )
 
         assert len(rs) <= 15
         assert len(rf) <= 20
@@ -108,7 +118,9 @@ class TestFitPromptBudget:
         sources = self._make_sources(5, summary_len=100)
         fragments = self._make_fragments(5, text_len=100)
 
-        rd, rs, rf = _fit_prompt_budget(draft, sources, fragments, max_chars=20_000)
+        rd, rs, rf, _rr = _fit_prompt_budget(
+            draft, sources, fragments, max_chars=20_000
+        )
 
         assert len(rd) == 12_000
         # With 12K draft + 5 small sources + 5 small fragments + 8K overhead < 20K
@@ -129,7 +141,7 @@ class TestFitPromptBudget:
         sources = self._make_sources(85, summary_len=600)
         fragments = self._make_fragments(40, text_len=300)
 
-        rd, rs, rf = _fit_prompt_budget(draft, sources, fragments)
+        rd, rs, rf, _rr = _fit_prompt_budget(draft, sources, fragments)
 
         content_chars = (
             len(rd)
@@ -154,16 +166,14 @@ class TestFitPromptBudget:
         sources = self._make_sources(85, summary_len=1000)
         fragments = self._make_fragments(40, text_len=500)
 
-        rd, rs, rf = _fit_prompt_budget(draft, sources, fragments)
+        rd, rs, rf, _rr = _fit_prompt_budget(draft, sources, fragments)
 
         content_chars = (
             len(rd)
             + sum(len(json.dumps(s, ensure_ascii=False)) for s in rs)
             + sum(len(json.dumps(f, ensure_ascii=False)) for f in rf)
         )
-        assert content_chars <= 60_000, (
-            f"Content too large: {content_chars} chars"
-        )
+        assert content_chars <= 60_000, f"Content too large: {content_chars} chars"
 
 
 # ---------------------------------------------------------------------------
@@ -186,18 +196,39 @@ def _make_state(tmp_path, with_embeddings=True):
     sm.set_source_sections("paper2", ["1"], [1])
     sm.set_source_sections("paper3", ["2"], [2])
 
-    sm.save_fragments("paper1", [
-        {"text": "Semantic analysis of morphemes", "type": "method", "section": "1",
-         "citation_intent": "method"},
-    ])
-    sm.save_fragments("paper2", [
-        {"text": "Frequency-based lemmatization approach", "type": "result", "section": "1",
-         "citation_intent": "result_comparison"},
-    ])
-    sm.save_fragments("paper3", [
-        {"text": "Unrelated Arctic navigation data", "type": "result", "section": "2",
-         "citation_intent": "background"},
-    ])
+    sm.save_fragments(
+        "paper1",
+        [
+            {
+                "text": "Semantic analysis of morphemes",
+                "type": "method",
+                "section": "1",
+                "citation_intent": "method",
+            },
+        ],
+    )
+    sm.save_fragments(
+        "paper2",
+        [
+            {
+                "text": "Frequency-based lemmatization approach",
+                "type": "result",
+                "section": "1",
+                "citation_intent": "result_comparison",
+            },
+        ],
+    )
+    sm.save_fragments(
+        "paper3",
+        [
+            {
+                "text": "Unrelated Arctic navigation data",
+                "type": "result",
+                "section": "2",
+                "citation_intent": "background",
+            },
+        ],
+    )
 
     if with_embeddings:
         frags = sm.get_fragments(limit=100)
@@ -228,7 +259,10 @@ class TestRAGFragments:
 
         # Mock AI to return valid JSON
         mock_ai = MagicMock()
-        mock_ai.call_json.return_value = {"section_status": "draft", "argument_blocks": []}
+        mock_ai.call_json.return_value = {
+            "section_status": "draft",
+            "argument_blocks": [],
+        }
         mock_ai.render_prompt.return_value = "test prompt"
 
         from klemma.config import KlemmaConfig
@@ -236,16 +270,26 @@ class TestRAGFragments:
 
         config = KlemmaConfig()
 
-        with patch("klemma.skills.researcher._load_chapter_draft") as mock_draft, \
-             patch("klemma.skills.researcher._extract_section") as mock_extract, \
-             patch("klemma.skills.researcher.resolve_prompt") as mock_rp:
-            mock_draft.return_value = "# Chapter 1\n## 1. Morphological Analysis\nSome text."
-            mock_extract.return_value = "## 1. Morphological Analysis\nSome text about morphemes."
+        with (
+            patch("klemma.skills.researcher._load_chapter_draft") as mock_draft,
+            patch("klemma.skills.researcher._extract_section") as mock_extract,
+            patch("klemma.skills.researcher.resolve_prompt") as mock_rp,
+        ):
+            mock_draft.return_value = (
+                "# Chapter 1\n## 1. Morphological Analysis\nSome text."
+            )
+            mock_extract.return_value = (
+                "## 1. Morphological Analysis\nSome text about morphemes."
+            )
             mock_rp.return_value = tmp_path / "research.md"
             (tmp_path / "research.md").write_text("{{ section_text }}")
 
             research_section(
-                "1", config, sm, self._mock_vault(), mock_ai,
+                "1",
+                config,
+                sm,
+                self._mock_vault(),
+                mock_ai,
                 save_to_vault=False,
                 embeddings=mock_emb,
             )
@@ -265,7 +309,10 @@ class TestRAGFragments:
         mock_emb.embed.return_value = [1.0] + [0.0] * 9
 
         mock_ai = MagicMock()
-        mock_ai.call_json.return_value = {"section_status": "draft", "argument_blocks": []}
+        mock_ai.call_json.return_value = {
+            "section_status": "draft",
+            "argument_blocks": [],
+        }
         mock_ai.render_prompt.return_value = "test prompt"
 
         from klemma.config import KlemmaConfig
@@ -273,16 +320,22 @@ class TestRAGFragments:
 
         config = KlemmaConfig()
 
-        with patch("klemma.skills.researcher._load_chapter_draft") as mock_draft, \
-             patch("klemma.skills.researcher._extract_section") as mock_extract, \
-             patch("klemma.skills.researcher.resolve_prompt") as mock_rp:
+        with (
+            patch("klemma.skills.researcher._load_chapter_draft") as mock_draft,
+            patch("klemma.skills.researcher._extract_section") as mock_extract,
+            patch("klemma.skills.researcher.resolve_prompt") as mock_rp,
+        ):
             mock_draft.return_value = "# Chapter\n## 1. Test\nText."
             mock_extract.return_value = "## 1. Test section text"
             mock_rp.return_value = tmp_path / "research.md"
             (tmp_path / "research.md").write_text("{{ section_text }}")
 
             result = research_section(
-                "1", config, sm, self._mock_vault(), mock_ai,
+                "1",
+                config,
+                sm,
+                self._mock_vault(),
+                mock_ai,
                 save_to_vault=False,
                 embeddings=mock_emb,
             )
@@ -295,7 +348,10 @@ class TestRAGFragments:
         sm = _make_state(tmp_path, with_embeddings=False)
 
         mock_ai = MagicMock()
-        mock_ai.call_json.return_value = {"section_status": "draft", "argument_blocks": []}
+        mock_ai.call_json.return_value = {
+            "section_status": "draft",
+            "argument_blocks": [],
+        }
         mock_ai.render_prompt.return_value = "test prompt"
 
         from klemma.config import KlemmaConfig
@@ -303,16 +359,22 @@ class TestRAGFragments:
 
         config = KlemmaConfig()
 
-        with patch("klemma.skills.researcher._load_chapter_draft") as mock_draft, \
-             patch("klemma.skills.researcher._extract_section") as mock_extract, \
-             patch("klemma.skills.researcher.resolve_prompt") as mock_rp:
+        with (
+            patch("klemma.skills.researcher._load_chapter_draft") as mock_draft,
+            patch("klemma.skills.researcher._extract_section") as mock_extract,
+            patch("klemma.skills.researcher.resolve_prompt") as mock_rp,
+        ):
             mock_draft.return_value = "# Chapter\n## 1. Test\nText."
             mock_extract.return_value = "## 1. Test section text"
             mock_rp.return_value = tmp_path / "research.md"
             (tmp_path / "research.md").write_text("{{ section_text }}")
 
             result = research_section(
-                "1", config, sm, self._mock_vault(), mock_ai,
+                "1",
+                config,
+                sm,
+                self._mock_vault(),
+                mock_ai,
                 save_to_vault=False,
                 embeddings=None,
             )
@@ -329,7 +391,10 @@ class TestRAGFragments:
         mock_emb.embed.side_effect = RuntimeError("API down")
 
         mock_ai = MagicMock()
-        mock_ai.call_json.return_value = {"section_status": "draft", "argument_blocks": []}
+        mock_ai.call_json.return_value = {
+            "section_status": "draft",
+            "argument_blocks": [],
+        }
         mock_ai.render_prompt.return_value = "test prompt"
 
         from klemma.config import KlemmaConfig
@@ -337,9 +402,11 @@ class TestRAGFragments:
 
         config = KlemmaConfig()
 
-        with patch("klemma.skills.researcher._load_chapter_draft") as mock_draft, \
-             patch("klemma.skills.researcher._extract_section") as mock_extract, \
-             patch("klemma.skills.researcher.resolve_prompt") as mock_rp:
+        with (
+            patch("klemma.skills.researcher._load_chapter_draft") as mock_draft,
+            patch("klemma.skills.researcher._extract_section") as mock_extract,
+            patch("klemma.skills.researcher.resolve_prompt") as mock_rp,
+        ):
             mock_draft.return_value = "# Chapter\n## 1. Test\nText."
             mock_extract.return_value = "## 1. Test section text"
             mock_rp.return_value = tmp_path / "research.md"
@@ -347,7 +414,11 @@ class TestRAGFragments:
 
             # Should not crash
             result = research_section(
-                "1", config, sm, self._mock_vault(), mock_ai,
+                "1",
+                config,
+                sm,
+                self._mock_vault(),
+                mock_ai,
                 save_to_vault=False,
                 embeddings=mock_emb,
             )
@@ -364,7 +435,10 @@ class TestRAGFragments:
         mock_emb.embed.return_value = [1.0] + [0.0] * 9
 
         mock_ai = MagicMock()
-        mock_ai.call_json.return_value = {"section_status": "draft", "argument_blocks": []}
+        mock_ai.call_json.return_value = {
+            "section_status": "draft",
+            "argument_blocks": [],
+        }
         mock_ai.render_prompt.return_value = "test prompt"
 
         from klemma.config import KlemmaConfig
@@ -372,23 +446,31 @@ class TestRAGFragments:
 
         config = KlemmaConfig()
 
-        with patch("klemma.skills.researcher._load_chapter_draft") as mock_draft, \
-             patch("klemma.skills.researcher._extract_section") as mock_extract, \
-             patch("klemma.skills.researcher.resolve_prompt") as mock_rp:
+        with (
+            patch("klemma.skills.researcher._load_chapter_draft") as mock_draft,
+            patch("klemma.skills.researcher._extract_section") as mock_extract,
+            patch("klemma.skills.researcher.resolve_prompt") as mock_rp,
+        ):
             mock_draft.return_value = "# Chapter\n## 1. Test\nText."
             mock_extract.return_value = "## 1. Test section text"
             mock_rp.return_value = tmp_path / "research.md"
             (tmp_path / "research.md").write_text("{{ section_text }}")
 
             research_section(
-                "1", config, sm, self._mock_vault(), mock_ai,
+                "1",
+                config,
+                sm,
+                self._mock_vault(),
+                mock_ai,
                 save_to_vault=False,
                 embeddings=mock_emb,
             )
 
         # The render_prompt call should have received fragments JSON
         call_kwargs = mock_ai.render_prompt.call_args
-        fragments_json = call_kwargs.kwargs.get("fragments") or call_kwargs[1].get("fragments")
+        fragments_json = call_kwargs.kwargs.get("fragments") or call_kwargs[1].get(
+            "fragments"
+        )
         if fragments_json:
             frags = json.loads(fragments_json)
             # No exact duplicates (same source can appear if different fragments)
@@ -415,9 +497,13 @@ def test_section_vs_rag_fragment_quality():
     """
     from pathlib import Path
 
-    db_path = Path.home() / "research" / "klemma-paper" / ".klemma" / "data" / "klemma.db"
+    db_path = (
+        Path.home() / "research" / "klemma-paper" / ".klemma" / "data" / "klemma.db"
+    )
     if not db_path.exists():
-        pytest.skip("Benchmark DB not available at ~/research/klemma-paper/.klemma/data/klemma.db")
+        pytest.skip(
+            "Benchmark DB not available at ~/research/klemma-paper/.klemma/data/klemma.db"
+        )
 
     from klemma.config import _load_klemmarc
     from klemma.embeddings import create_embeddings
@@ -459,7 +545,9 @@ def test_section_vs_rag_fragment_quality():
         query_vec = emb.embed(sec_desc)
         if not query_vec:
             continue
-        rag_frags = sm.retrieve_similar_fragments(query_vec, top_k=40, model=emb.model_name)
+        rag_frags = sm.retrieve_similar_fragments(
+            query_vec, top_k=40, model=emb.model_name
+        )
         rag_ids = {f["id"] for f in rag_frags}
 
         # Jaccard overlap
@@ -470,7 +558,8 @@ def test_section_vs_rag_fragment_quality():
         # RAG avg similarity
         rag_avg_sim = (
             sum(f.get("similarity", 0) for f in rag_frags) / len(rag_frags)
-            if rag_frags else 0
+            if rag_frags
+            else 0
         )
 
         # Source coverage
@@ -489,7 +578,9 @@ def test_section_vs_rag_fragment_quality():
     # Print results for manual review
     for sec_id, r in results.items():
         print(f"\nSection {sec_id}:")
-        print(f"  Section-based: {r['section_count']} frags, {r['section_citekeys']} citekeys")
+        print(
+            f"  Section-based: {r['section_count']} frags, {r['section_citekeys']} citekeys"
+        )
         print(f"  RAG-based:     {r['rag_count']} frags, {r['rag_citekeys']} citekeys")
         print(f"  Overlap:       {r['overlap']}")
         print(f"  RAG avg sim:   {r['rag_avg_similarity']}")

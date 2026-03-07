@@ -105,8 +105,13 @@ TEMPLATE_CONTEXTS = {
         "days_remaining": 90,
         "mode": "status",
         "summary": {
-            "total": 10, "completed": 8, "pending": 2, "failed": 0,
-            "fragments_total": 100, "avg_quality": 3.5, "avg_fragments": 10.0,
+            "total": 10,
+            "completed": 8,
+            "pending": 2,
+            "failed": 0,
+            "fragments_total": 100,
+            "avg_quality": 3.5,
+            "avg_fragments": 10.0,
             "zero_sections": [],
         },
         "chapters": {"3": 5},
@@ -193,6 +198,7 @@ TEMPLATE_CONTEXTS = {
         "research_report": "",
         "existing_draft": "",
         "fragments": [],
+        "rag_fragments": [],
         "source_summaries": [],
         "language": "ru",
     },
@@ -236,11 +242,7 @@ class TestAllTemplatesRender:
 
     def test_all_shipped_templates_have_contexts(self):
         """Ensure we have test contexts for every .md file (except CLAUDE.md)."""
-        shipped = {
-            p.name
-            for p in PROMPTS_DIR.glob("*.md")
-            if p.name != "CLAUDE.md"
-        }
+        shipped = {p.name for p in PROMPTS_DIR.glob("*.md") if p.name != "CLAUDE.md"}
         tested = set(TEMPLATE_CONTEXTS.keys())
         missing = shipped - tested
         assert not missing, f"Templates without test contexts: {missing}"
