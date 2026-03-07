@@ -5,11 +5,9 @@ fit_prompt_budget with rag_fragments, section_draft.md template
 with rag_fragments.
 """
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 from jinja2 import Template
 
 from klemma.skills.context_loader import (
