@@ -41,8 +41,13 @@ class InitValues:
             self.keywords = []
 
 
-def _build_project_config(values: InitValues) -> dict:
-    """Build config dict from wizard values."""
+def _build_project_config(values: InitValues, *, has_parent: bool = False) -> dict:
+    """Build config dict from wizard values.
+
+    When has_parent=True, skip ai/embeddings defaults — child projects
+    inherit these from parent via config cascade (ADR-012).
+    Only write language override and explicitly provided values.
+    """
     cfg: dict = {}
 
     # Zotero (only if paths provided)
@@ -63,20 +68,30 @@ def _build_project_config(values: InitValues) -> dict:
             obsidian["tags_folder"] = values.tags_folder
         cfg["obsidian"] = obsidian
 
-    # AI — backend-aware model naming
-    ai_cfg: dict = {"language": values.language}
-    if values.backend:
-        ai_cfg["backend"] = values.backend
-    if values.ai_model:
-        ai_cfg["model"] = values.ai_model
-    elif values.backend == "claude":
-        ai_cfg["model"] = "sonnet"
-    elif values.backend == "litellm":
-        ai_cfg["model"] = "anthropic/claude-sonnet-4-6"
+    # AI — skip backend/model defaults for child projects (inherited from parent)
+    if has_parent:
+        ai_cfg: dict = {"language": values.language}
+        # Only write backend/model if explicitly provided by user
+        if values.backend:
+            ai_cfg["backend"] = values.backend
+        if values.ai_model:
+            ai_cfg["model"] = values.ai_model
+        cfg["ai"] = ai_cfg
     else:
-        # No backend chosen — use shorthand, klemmarc will define backend
-        ai_cfg["model"] = "sonnet"
-    cfg["ai"] = ai_cfg
+        # Root project — write full AI config
+        ai_cfg = {"language": values.language}
+        if values.backend:
+            ai_cfg["backend"] = values.backend
+        if values.ai_model:
+            ai_cfg["model"] = values.ai_model
+        elif values.backend == "claude":
+            ai_cfg["model"] = "sonnet"
+        elif values.backend == "litellm":
+            ai_cfg["model"] = "anthropic/claude-sonnet-4-6"
+        else:
+            # No backend chosen — use shorthand, klemmarc will define backend
+            ai_cfg["model"] = "sonnet"
+        cfg["ai"] = ai_cfg
 
     # Project
     project: dict = {"type": values.project_type}
@@ -269,11 +284,16 @@ def init_project(
     project_dir: Path,
     project_type: str = "dissertation",
     values: Optional[InitValues] = None,
+    *,
+    has_parent: bool = False,
 ) -> dict:
     """Create .klemma/ project in project_dir + KLEMMA.md.
 
     If values is provided (interactive mode), writes config from discovered/prompted
     values. Otherwise falls back to example template (--no-input / legacy).
+
+    When has_parent=True, child project config skips ai/embeddings defaults —
+    these are inherited from parent via config cascade (ADR-012).
 
     Returns dict with keys: created (list of file names), skipped (list).
     """
@@ -291,7 +311,7 @@ def init_project(
     else:
         if values:
             values.project_type = project_type
-            cfg = _build_project_config(values)
+            cfg = _build_project_config(values, has_parent=has_parent)
             text = yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False)
             config_target.write_text(text, encoding="utf-8")
         else:

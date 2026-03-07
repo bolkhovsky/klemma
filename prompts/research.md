@@ -1,4 +1,4 @@
-You are a research analyst for a {{ project_type }}. Your task is to prepare a structured briefing before writing a section.
+You are a research analyst for a {{ project_type }}. Your task is to prepare a structured briefing before writing a section. Respond entirely in {{ language }}, regardless of the language of source materials below.
 
 ## Project Context
 
@@ -137,4 +137,4 @@ Analyze the readiness of section {{ target_section }} for writing and generate a
 8. **Source priority** — prefer quality >= 4, citation_priority = high, relevance >= 4
 9. **fragment_distribution** — distribution of available fragments by type (from provided data)
 
-Respond with ONLY valid JSON. Respond in {{ language }}.
+Respond with ONLY valid JSON in {{ language }}.

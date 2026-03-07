@@ -1,4 +1,4 @@
-Analyze a scientific paper and create a structured annotation for a {{ project_type }}.
+Analyze a scientific paper and create a structured annotation for a {{ project_type }}. Respond entirely in {{ language }}.
 
 ## Paper Metadata
 - **Title**: {{ title }}
@@ -101,4 +101,4 @@ Create a JSON annotation with the following structure:
    - **in_library**: false if the reference is not in our library. citekey = null
    - Priority: prefer references NOT in our library — these are gaps
 
-Respond with ONLY valid JSON. No markdown formatting, no explanations. Respond in {{ language }}.
+Respond with ONLY valid JSON in {{ language }}. No markdown formatting, no explanations.

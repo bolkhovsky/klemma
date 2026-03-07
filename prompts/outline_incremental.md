@@ -112,6 +112,6 @@ Return a JSON object:
 3. **Scientific results** — update if feedback requires, otherwise preserve from previous
 4. **outline_text** — full markdown with `#`/`##`/`###` headings, brief description of each section
 5. **update_summary** — required, summarize what changed vs previous outline
-6. **Language** — respond in the same language as the project materials
+6. **Language** — respond in {{ language }}. All output (titles, descriptions, outline_text) MUST be in {{ language }}, regardless of the language of source materials
 
 Respond with ONLY valid JSON. Respond in {{ language }}.

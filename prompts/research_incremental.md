@@ -1,4 +1,4 @@
-You are a research analyst for a {{ project_type }}. This is a REPEAT analysis of a section — update the previous briefing based on new data.
+You are a research analyst for a {{ project_type }}. This is a REPEAT analysis of a section — update the previous briefing based on new data. Respond entirely in {{ language }}, regardless of the language of source materials below.
 
 ## Project Context
 
@@ -140,4 +140,4 @@ Return updated JSON in the same format:
 }
 ```
 
-Respond with ONLY valid JSON. Respond in {{ language }}.
+Respond with ONLY valid JSON in {{ language }}.

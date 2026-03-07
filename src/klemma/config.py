@@ -807,31 +807,32 @@ def resolve_effective_config(
 
 
 def load_project_context(project_chain: list[Path], config: Optional[KlemmaConfig] = None) -> str:
-    """Load and aggregate KLEMMA.md files from project chain.
+    """Load project context from KLEMMA.md.
 
-    project_chain is child-first. Result: parent context first, then child.
+    For nested projects (chain > 1), returns ONLY the child's context.
+    Child projects are independent — they reuse parent's library via
+    inherit_db, not parent's dissertation context (ADR-012).
+
+    For solo projects (chain == 1), returns that project's context.
     Falls back to .klemma/context.md (legacy) and then config fields.
     """
-    contexts: list[str] = []
+    # Child project = first in chain (child-first order)
+    target_root = project_chain[0] if project_chain else None
 
-    for root in reversed(project_chain):  # parent first
+    if target_root:
         # Try KLEMMA.md first
-        klemma_md = root / "KLEMMA.md"
+        klemma_md = target_root / "KLEMMA.md"
         if klemma_md.exists():
             text = klemma_md.read_text(encoding="utf-8").strip()
             if text:
-                contexts.append(text)
-                continue
+                return text
 
         # Legacy fallback: .klemma/context.md
-        context_md = root / ".klemma" / "context.md"
+        context_md = target_root / ".klemma" / "context.md"
         if context_md.exists():
             text = context_md.read_text(encoding="utf-8").strip()
             if text:
-                contexts.append(text)
-
-    if contexts:
-        return "\n\n---\n\n".join(contexts)
+                return text
 
     # Final fallback: build from config fields
     if config:
