@@ -23,7 +23,12 @@ def load_chapter_draft(
     project: Optional[ProjectConfig] = None,
     project_root: Optional[Path] = None,
 ) -> Optional[str]:
-    """Read chapter draft — project_root first (md > tex > bare), vault fallback."""
+    """Read chapter draft — project_root first (md > tex > bare), vault fallback.
+
+    When project_root is provided (child/standalone project), only look in
+    project_root. Vault fallback is used only for legacy projects without
+    project_root, to avoid loading parent's drafts from a shared vault.
+    """
     if project:
         pattern = project.chapter_draft_pattern
     else:
@@ -39,8 +44,12 @@ def load_chapter_draft(
                     return candidate.read_text(encoding="utf-8")
                 except OSError:
                     logger.warning("Cannot read %s", candidate)
+        # project_root provided but no draft found — don't fall back to vault
+        # (avoids loading parent's draft from shared vault in child projects)
+        logger.info("Chapter %d draft not found in %s", chapter, project_root)
+        return None
 
-    # Fallback to vault
+    # Vault fallback — only for legacy projects without project_root
     content = vault.read_note(note_name)
     if not content:
         logger.warning("Черновик главы %d не найден (%s)", chapter, note_name)
