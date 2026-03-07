@@ -364,6 +364,12 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
     if auto_register_mode == "none":
         vault_data = [vd for vd in vault_data if vd["citekey"] in existing]
 
+    # Filter out vault notes that match old (renamed-from) citekeys —
+    # prevents sync_source_sections from re-creating the old source row.
+    renamed_from = {old_ck for old_ck, _ in renames}
+    if renamed_from:
+        vault_data = [vd for vd in vault_data if vd["citekey"] not in renamed_from]
+
     result = state.sync_source_sections(vault_data, new_entries)
 
     # Backfill metadata (title/authors/year/abstract/doi) from library for sources missing it
