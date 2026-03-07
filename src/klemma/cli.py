@@ -3258,6 +3258,15 @@ def reassign(ctx, threshold, limit):
     # Filter to active sources only (exclude orphaned fragments)
     active_sources = state.get_existing_source_ids()
 
+    # Build section name lookup from project config
+    section_names: dict[str, str] = {}
+    project = kctx.project
+    if project:
+        for num, title in (project.chapters or {}).items():
+            section_names[str(num)] = title
+        for sec_id, title in (project.sections or {}).items():
+            section_names[str(sec_id)] = title
+
     # 3. Compute best section match for each fragment
     raw_suggestions = []
 
@@ -3275,13 +3284,14 @@ def reassign(ctx, threshold, limit):
                 continue
             current_section = meta.get("section") or ""
 
-            best_section = ""
-            best_score = -1.0
+            # Score all sections
+            scores = {}
             for sec_id, sec_vec in section_embeddings.items():
-                score = cosine_similarity(frag_vec, sec_vec)
-                if score > best_score:
-                    best_score = score
-                    best_section = sec_id
+                scores[sec_id] = cosine_similarity(frag_vec, sec_vec)
+
+            ranked = sorted(scores.items(), key=lambda x: -x[1])
+            best_section, best_score = ranked[0]
+            current_score = scores.get(current_section, 0.0)
 
             # Only suggest if different from current and above threshold
             if (best_section and best_section != current_section
@@ -3292,7 +3302,10 @@ def reassign(ctx, threshold, limit):
                     "current": current_section or "(none)",
                     "suggested": best_section,
                     "score": best_score,
-                    "preview": (meta.get("text_preview") or "")[:60],
+                    "current_score": current_score,
+                    "delta": best_score - current_score,
+                    "runner_up": ranked[1] if len(ranked) > 1 else None,
+                    "preview": (meta.get("text_preview") or "")[:80],
                 })
 
     # Deduplicate: keep best score per (source, suggested section)
@@ -3315,31 +3328,40 @@ def reassign(ctx, threshold, limit):
     total = len(suggestions)
     suggestions = suggestions[:limit]
 
-    table = Table(
-        title=f"Reassignment Suggestions ({len(suggestions)}/{total})",
-        show_edge=False, pad_edge=False,
-    )
-    table.add_column("#", width=4, style="dim")
-    table.add_column("Source", max_width=25)
-    table.add_column("Current", width=8)
-    table.add_column("Suggested", width=10)
-    table.add_column("Score", width=6, justify="right")
-    table.add_column("Fragment", max_width=50)
-
     for i, s in enumerate(suggestions, 1):
-        score_style = "green" if s["score"] >= 0.7 else "yellow"
-        table.add_row(
-            str(i),
-            f"@{s['citekey']}",
-            s["current"],
-            f"[bold]{s['suggested']}[/bold]",
-            f"[{score_style}]{s['score']:.3f}[/{score_style}]",
-            s["preview"],
-        )
+        cur_sec = s["current"]
+        sug_sec = s["suggested"]
+        cur_name = section_names.get(cur_sec, "")
+        sug_name = section_names.get(sug_sec, "")
+        delta = s["delta"]
+        runner_up = s.get("runner_up")
 
-    console.print(table)
+        console.print(f"[bold]── [{i}/{len(suggestions)}] @{s['citekey']} ──[/bold]")
+        console.print(f"  [dim]Fragment:[/dim] {s['preview']}")
+        console.print(
+            f"  [dim]Current:[/dim]   {cur_sec}"
+            + (f" ({cur_name})" if cur_name else "")
+            + f"  [dim]sim={s['current_score']:.3f}[/dim]"
+        )
+        score_style = "green" if s["score"] >= 0.7 else "yellow"
+        console.print(
+            f"  [bold]Suggested:[/bold] [{score_style}]{sug_sec}[/{score_style}]"
+            + (f" ({sug_name})" if sug_name else "")
+            + f"  [dim]sim={s['score']:.3f}[/dim]"
+            + f"  [bold][{score_style}]+{delta:.3f}[/{score_style}][/bold]"
+        )
+        if runner_up:
+            ru_sec, ru_score = runner_up
+            ru_name = section_names.get(ru_sec, "")
+            console.print(
+                f"  [dim]Runner-up: {ru_sec}"
+                + (f" ({ru_name})" if ru_name else "")
+                + f"  sim={ru_score:.3f}[/dim]"
+            )
+        console.print()
+
     console.print(
-        f"\n[dim]{total} suggestions total (showing top {len(suggestions)}). "
+        f"[dim]{total} suggestions total (showing top {len(suggestions)}). "
         f"Edit vault frontmatter 'sections:' to reassign, "
         f"then run any command to sync.[/dim]"
     )
