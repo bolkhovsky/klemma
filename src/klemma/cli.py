@@ -2546,27 +2546,71 @@ def role(ctx, citekey, role):
 
 
 def _show_writing_order(kctx: KlemmaContext, current_section: str) -> None:
-    """Display results-first writing order with current section highlighted."""
-    from .section_types import get_writing_order
+    """Display results-first writing order with current section highlighted.
+
+    Shows section-level items within the current chapter (parsed from outline),
+    falling back to chapter-level items from section_type_map DB.
+    """
+    import re
+
+    from .section_types import get_writing_order, infer_section_type
 
     project = kctx.project
-    if not project or not project.sections:
+    if not project:
         return
 
-    # Build type map from config or DB
+    # Determine current chapter from section (e.g. "3.2" → 3)
+    current_chapter = current_section.split(".")[0] if "." in current_section else None
+
+    # Try to parse section-level entries from the outline file
+    sections: dict[str, str] = {}
     type_map: dict[str, str] = {}
-    if project.section_type_map:
-        type_map = dict(project.section_type_map)
-    else:
+
+    if kctx.project_root:
+        # Find outline file
+        outline_pattern = re.compile(r"^Outline_.*\.md$")
+        for p in sorted(kctx.project_root.iterdir()):
+            if outline_pattern.match(p.name) and p.is_file():
+                outline_text = p.read_text(encoding="utf-8", errors="replace")
+                # Parse ### N.M. Title lines (section headings in outline)
+                sec_re = re.compile(r"^###\s+(\d+\.\d+)\.?\s+(.+)", re.MULTILINE)
+                for m in sec_re.finditer(outline_text):
+                    sec_id, title = m.group(1), m.group(2).strip()
+                    sec_chapter = sec_id.split(".")[0]
+                    if current_chapter and sec_chapter == current_chapter:
+                        sections[sec_id] = title
+                        inferred = infer_section_type(title)
+                        if inferred:
+                            type_map[sec_id] = inferred.value
+                break  # use first outline found
+
+    # Fallback: chapter-level from DB if no section-level entries found
+    if not sections:
         with kctx.state._conn() as conn:
             cur = conn.execute(
-                "SELECT section, section_type FROM section_type_map"
+                "SELECT section, section_type, chapter FROM section_type_map"
             )
-            type_map = {row["section"]: row["section_type"] for row in cur.fetchall()}
+            for row in cur.fetchall():
+                sec = row["section"]
+                # Skip entries not in config chapters (stale DB rows)
+                ch_num = row["chapter"]
+                if project.chapters and ch_num not in project.chapters:
+                    continue
+                type_map[sec] = row["section_type"]
+                ch_name = ""
+                if ch_num and project.chapters:
+                    ch_name = project.chapters.get(ch_num, "")
+                sections[sec] = ch_name or row["section_type"] or sec
+
+        if project.section_type_map:
+            type_map.update(project.section_type_map)
+
+    if not sections:
+        return
 
     drafts_dir = (kctx.project_root / "notes" / "drafts") if kctx.project_root else None
 
-    items = get_writing_order(project.sections, type_map, drafts_dir)
+    items = get_writing_order(sections, type_map, drafts_dir)
     if not items:
         return
 
@@ -2574,7 +2618,7 @@ def _show_writing_order(kctx: KlemmaContext, current_section: str) -> None:
     for item in items:
         if item.section_id == current_section:
             marker = "[bold cyan]→[/bold cyan]"
-            label = f"[bold cyan]{item.section_id} {item.title}[/bold cyan] [dim]← you are here[/dim]"
+            label = f"[bold cyan]{item.section_id} {item.title}[/bold cyan]"
         elif item.has_draft:
             marker = "[green]✓[/green]"
             label = f"[dim]{item.section_id} {item.title}[/dim]"
