@@ -89,9 +89,46 @@ Ran `klemma outline` twice — once with baseline prompts (pre-Step 11), once wi
 ### 005. No issues found during outline generation
 Child project context isolation (ADR-012) worked correctly: English output, paper-appropriate structure, no Russian leakage, no dissertation chapter inheritance. All four fixes from issues 001-004 confirmed working.
 
+### 006. Ghost sources with no metadata cited in drafts
+**Severity**: High (hallucinated citations in output)
+**When**: `klemma draft -s 3.1`
+**What**: Draft cited `[@RemoteSensingFree]` — a source that exists in the DB (`status=completed`, `quality_score=4`) but has NO title, authors, year, abstract, or fragments. The LLM reverse-engineered the source topic from the citekey name and cited it for a claim about remote sensing.
+**Scope**: 32 ghost sources in the DB with similar profile (ID only, no metadata).
+**Root cause**: Three failures:
+1. Sources imported with just an ID and no metadata, then marked `completed`
+2. `load_section_sources()` didn't filter by metadata completeness
+3. `get_by_section`/`get_by_chapter`/`get_all_sources` SQL queries didn't even SELECT title/authors
+**Fix**: PR #115 (issue #114):
+- Filter in `context_loader.load_section_sources()`: skip sources without title or authors
+- Added `title, authors` to all 4 source query SELECTs
+- DB migration v11: mark ghost sources as `status='incomplete'`
+- Warning in `mark_completed` when source has no metadata
+
+### 007. Draft section titles don't match outline
+**Severity**: Medium (confusing, requires manual correction)
+**When**: `klemma draft -s 3.1`
+**What**: Outline defines section as "3.1 Multi-Criteria Validation Framework" but the draft generates "3.1 Data Acquisition and Preprocessing Procedure". Every section invents its own title instead of using the one from the outline.
+**Root cause**: The prompt receives `chapter_name` ("Validation Methodology") but NOT the section title. The LLM invents a title from the content.
+**Fix**: Extract section title from outline (`### N.M. Title` pattern), pass through `generate_draft(section_title=...)` to `section_draft.md` template. Prompt now enforces exact title.
+
+### 008. Each draft section structured as standalone article
+**Severity**: Low (fixable at merge time)
+**When**: `klemma draft -s 3.1`, `3.2`, `3.3` — each draft
+**What**: Every section draft starts with an introductory paragraph restating the chapter topic, as if it were a self-contained article. When sections are merged into a chapter, these intros are redundant.
+**Root cause**: Prompt instruction said "Начни с вводного абзаца" (start with intro paragraph).
+**Fix**: Changed prompt to "Сразу переходи к содержанию раздела. НЕ пиши вводный абзац" (go straight to content, don't write intro paragraph). A merge-time drafting agent could further smooth transitions.
+
+### 009. Writing order shows chapters, not sections
+**Severity**: Low (UX confusion)
+**When**: `klemma draft -s 3.2` — writing order display
+**What**: Writing order showed chapter-level items (1 Introduction, 2 Related Work, ...) instead of section-level items within the current chapter (3.1, 3.2, 3.3, 3.4). No draft detection (all `○`), no current section highlight, stale chapter 7 entry.
+**Root cause**: `_show_writing_order` read from `section_type_map` DB which only had chapter-level entries. Outline file had section-level data but wasn't parsed.
+**Fix**: Parse outline file for `### N.M. Title` entries scoped to current chapter. Draft detection now works (`Draft_3.1.md` etc.). Stale DB entries filtered. Falls back to chapter-level when no outline exists.
+
 ### Observations
 
 - `--prompt` flag for custom directives works well for conference-specific instructions
 - `scan_project_files()` correctly picked up `previous_paper.md` and `dissertation_outline.md` as context
 - Methodology block (CARS, results-first, argument grouping) demonstrably shaped the outline structure
 - The outline correctly aligned with the TITDS conference track (AI/ML for transport)
+- Per-block RAG improves content density (+17% words, +2 citations) but doesn't change structure — see `klemma-paper/results/step_13_context_aware_rag_ablation.md`
