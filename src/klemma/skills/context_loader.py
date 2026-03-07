@@ -97,20 +97,32 @@ def load_section_sources(
     state: StateManager,
     vault: VaultAdapter,
     max_sources: int = 25,
+    citekey_filter: Optional[set[str]] = None,
 ) -> list[dict]:
-    """Load source metadata and vault summaries for a section."""
-    sources = state.get_by_section(section)
+    """Load source metadata and vault summaries for a section.
 
-    if len(sources) < 5:
-        chapter_sources = state.get_by_chapter(chapter)
-        existing_ids = {s["id"] for s in sources}
-        for cs in chapter_sources:
-            if cs["id"] not in existing_ids:
-                sources.append(cs)
-            if len(sources) >= max_sources:
-                break
+    When citekey_filter is provided (e.g., from RAG results), only load
+    summaries for those specific sources instead of section-based lookup.
+    This avoids parent section namespace collision in child projects.
+    """
+    if citekey_filter:
+        # Use specific citekeys instead of section-based lookup
+        all_sources = state.get_all_sources()
+        sources = [s for s in all_sources if s["id"] in citekey_filter]
+        sources = sources[:max_sources]
+    else:
+        sources = state.get_by_section(section)
 
-    sources = sources[:max_sources]
+        if len(sources) < 5:
+            chapter_sources = state.get_by_chapter(chapter)
+            existing_ids = {s["id"] for s in sources}
+            for cs in chapter_sources:
+                if cs["id"] not in existing_ids:
+                    sources.append(cs)
+                if len(sources) >= max_sources:
+                    break
+
+        sources = sources[:max_sources]
 
     enriched = []
     for src in sources:

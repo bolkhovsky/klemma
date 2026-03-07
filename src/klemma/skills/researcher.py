@@ -439,16 +439,22 @@ def research_section(
 
     # 3. Фрагменты: RAG-first, затем section-based fallback
     section_fragments = []
-    if embeddings and section_text:
+    # RAG query: prefer section text, fall back to chapter name for papers
+    # without drafts (avoids pulling parent's dissertation fragments by section ID)
+    rag_query = (section_text or "")[:500]
+    if not rag_query and chapter_name:
+        rag_query = chapter_name
+
+    if embeddings and rag_query:
         try:
-            query_vec = embeddings.embed(section_text[:500])
+            query_vec = embeddings.embed(rag_query)
             if query_vec:
                 section_fragments = state.retrieve_similar_fragments(
                     query_vec, top_k=40, model=embeddings.model_name
                 )
                 logger.debug(
-                    "RAG: retrieved %d fragments for section '%s'",
-                    len(section_fragments), section,
+                    "RAG: retrieved %d fragments for section '%s' (query: %s...)",
+                    len(section_fragments), section, rag_query[:60],
                 )
         except Exception:
             logger.debug("Fragment RAG failed, falling back to section-based", exc_info=True)
@@ -468,7 +474,15 @@ def research_section(
         )
 
     # 4. Аннотации источников из vault
-    source_summaries = _load_section_sources(section, chapter, state, vault)
+    # For fragments retrieved via RAG, derive sources from fragment citekeys
+    # instead of section-based lookup (avoids parent's section namespace collision)
+    rag_citekeys = {f.get("citekey", f.get("source_id")) for f in section_fragments}
+    if rag_citekeys and len(rag_citekeys) > 3:
+        # RAG gave us good sources — load summaries for those specifically
+        source_summaries = _load_section_sources(section, chapter, state, vault,
+                                                  citekey_filter=rag_citekeys)
+    else:
+        source_summaries = _load_section_sources(section, chapter, state, vault)
 
     # 5. Покрытие и пробелы
     coverage = state.get_coverage_stats()
@@ -554,11 +568,13 @@ def research_section(
         )
 
         project_type = project.type if project else "dissertation"
+        lang = config.ai.language
         system = (
             f"You are a research analyst for a {project_type}. "
+            f"Respond entirely in {lang}. "
             "This is a REPEAT analysis — update the previous briefing, do not rewrite from scratch. "
             "CRITICAL: Use ONLY citekeys from the source_summaries JSON. "
-            "Output only valid JSON."
+            f"Output only valid JSON in {lang}."
         )
 
         logger.info(
@@ -599,11 +615,13 @@ def research_section(
         )
 
         project_type = project.type if project else "dissertation"
+        lang = config.ai.language
         system = (
             f"You are a research analyst for a {project_type}. "
+            f"Respond entirely in {lang}. "
             "Analyze section readiness and suggest an argumentation structure. "
             "CRITICAL: Use ONLY citekeys from the source_summaries JSON. "
-            "Output only valid JSON."
+            f"Output only valid JSON in {lang}."
         )
 
     # 9. Вызов Claude
