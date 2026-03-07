@@ -41,12 +41,24 @@ class TestBuildBBTIndex:
         assert ("lewis", "2021") in by_author_year
         assert ("pautasso", "2013") in by_author_year
         assert ("smith", "2022") in by_author_year
+        # Values are lists now
+        assert len(by_author_year[("smith", "2022")]) == 1
 
     def test_entry_without_item_key(self):
         lookup = {"testEntry2020": _entry("")}
         by_item_key, by_author_year = build_bbt_index(lookup)
         assert len(by_item_key) == 0
         assert ("test", "2020") in by_author_year
+
+    def test_author_year_collision_stores_both(self):
+        """Multiple papers by same author+year are stored as list."""
+        lookup = {
+            "wangSelfConsistency2023": _entry("KEY1"),
+            "wangSurveyLLM2023": _entry("KEY2"),
+        }
+        _, by_author_year = build_bbt_index(lookup)
+        candidates = by_author_year[("wang", "2023")]
+        assert len(candidates) == 2
 
 
 class TestResolveOrphanBareKey:
@@ -116,4 +128,59 @@ class TestResolveOrphanBBTFormat:
 
     def test_non_parseable_key(self, bbt_index):
         result = resolve_orphan("NLP_and_DA", bbt_index)
+        assert result is None
+
+
+class TestAuthorYearCollision:
+    """Ambiguous author+year matches must be skipped to prevent wrong renames."""
+
+    def test_ambiguous_acquire_format_skipped(self):
+        """Two Wang2023 papers — acquire-format orphan should NOT match either."""
+        lookup = {
+            "wangSelfConsistency2023": _entry("KEY1"),
+            "wangSurveyLLM2023": _entry("KEY2"),
+        }
+        bbt_index = build_bbt_index(lookup)
+        result = resolve_orphan("Wang2023_A_Survey_on_Large_Language_Mod", bbt_index)
+        assert result is None
+
+    def test_ambiguous_bbt_format_skipped(self):
+        """Two wang2023 papers — BBT-format orphan should NOT match either."""
+        lookup = {
+            "wangSelfConsistency2023": _entry("KEY1"),
+            "wangSurveyLLM2023": _entry("KEY2"),
+        }
+        bbt_index = build_bbt_index(lookup)
+        result = resolve_orphan("wangOldTitle2023a", bbt_index)
+        assert result is None
+
+    def test_unambiguous_still_works(self):
+        """Single candidate for author+year — still matches correctly."""
+        lookup = {
+            "wangSelfConsistency2023": _entry("KEY1"),
+            "smithDeepLearning2022": _entry("KEY2"),
+        }
+        bbt_index = build_bbt_index(lookup)
+        result = resolve_orphan("Wang2023_Self_Consistency", bbt_index)
+        assert result is not None
+        assert result[0] == "wangSelfConsistency2023"
+
+    def test_bbt_suffix_stripped_for_year(self):
+        """BBT disambiguation suffix 'a' is stripped: 2023a → 2023."""
+        lookup = {
+            "smithDeepLearning2023": _entry("KEY1"),
+        }
+        bbt_index = build_bbt_index(lookup)
+        result = resolve_orphan("smithOldTitle2023a", bbt_index)
+        assert result is not None
+        assert result[0] == "smithDeepLearning2023"
+
+    def test_self_match_prevented(self):
+        """An orphan should not resolve to itself."""
+        lookup = {
+            "smithDeepLearning2023": _entry("KEY1"),
+        }
+        bbt_index = build_bbt_index(lookup)
+        # If this orphan IS the same citekey as in BBT, skip
+        result = resolve_orphan("smithDeepLearning2023", bbt_index)
         assert result is None
