@@ -179,6 +179,12 @@ class SourceRepository(BaseRepository):
         with self._conn() as conn:
             return {row["id"] for row in conn.execute("SELECT id FROM sources")}
 
+    def get_sources_missing_title(self) -> list[str]:
+        """Return citekeys of sources with no title set."""
+        with self._conn() as conn:
+            cur = conn.execute("SELECT id FROM sources WHERE title IS NULL OR title = ''")
+            return [row["id"] for row in cur.fetchall()]
+
     def get_completed_sources(self) -> list[str]:
         """Return citekeys of all completed sources."""
         with self._conn() as conn:

@@ -423,6 +423,9 @@ class StateManager:
     def get_existing_source_ids(self) -> set[str]:
         return self.sources.get_existing_source_ids()
 
+    def get_sources_missing_title(self) -> list[str]:
+        return self.sources.get_sources_missing_title()
+
     def get_sources_without_embeddings(self) -> list[str]:
         return self.sources.get_sources_without_embeddings()
 

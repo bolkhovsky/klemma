@@ -343,6 +343,26 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
 
     result = state.sync_source_sections(vault_data, new_entries)
 
+    # Backfill metadata (title/authors/year/abstract/doi) from library for sources missing it
+    if ctx.library:
+        entry_lookup = ctx.library.entries
+        missing = state.get_sources_missing_title()
+        backfilled = 0
+        for source_id in missing:
+            entry = entry_lookup.get(source_id)
+            if not entry:
+                continue
+            state.update_source_info(
+                source_id,
+                title=entry.title or "",
+                authors=entry.authors_str or "",
+                year=entry.year,
+                abstract=entry.abstract or "",
+                doi=entry.DOI or "",
+            )
+            backfilled += 1
+        result["metadata_backfilled"] = backfilled
+
     # Sync section type mappings (backfill section_type columns)
     project = ctx.project
     if project and (project.chapters or project.section_type_map):
