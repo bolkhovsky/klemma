@@ -52,12 +52,15 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `
 - `init_klemma_home()` — legacy alias for `init_system()`
 - Interactive mode: auto-discovers Obsidian vaults, Zotero exports via `discovery.py`
 
-### section_types.py (~140 lines)
+### section_types.py (~240 lines)
 Semantic section vocabulary — cross-project labels for dissertation/paper sections.
 - `SectionType(str, Enum)` — 12 values: introduction, background, literature_review, theoretical_framework, methodology, data_description, experiments, results, discussion, conclusion, appendix, custom
 - `SECTION_TYPE_KEYWORDS` — ru/en keyword lists per type for heuristic matching
 - `infer_section_type(chapter_name)` — keyword matching → `SectionType | None`
 - `resolve_section_identifier(input, config?)` — parse CLI input: numeric `"2.3"` → `(section, None)`, semantic `"methodology"` → `(section?, SectionType)`
+- `WRITING_ORDER_PRIORITY` — dict mapping SectionType → priority (1=write first, 6=write last), based on Kallestinova 2011 results-first order
+- `WritingOrderItem` — dataclass: section_id, title, section_type, priority, has_draft
+- `get_writing_order(sections, type_map, drafts_dir?)` — compute results-first writing order, detect existing drafts
 
 ### state.py (~965 lines)
 SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v10), auto-migrates via `_migrate_schema()`. All 70+ public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
@@ -69,7 +72,7 @@ SQLite state manager — **facade** over 8 domain repositories in `repositories/
 Tables:
 - `sources` — Zotero entries (citekey, title, authors, year, abstract, doi, status, chapter, quality, pdf_path, `embedding` BLOB float32, `embedding_model` TEXT)
 - `source_sections` — junction table: source_id × section × `section_type` (multi-section support)
-- `fragments` — extracted citation fragments (text, type, chapter, section, `section_type`, relevance, page, `citation_intent`: background/method/result_comparison, `embedding` BLOB float32, `embedding_model` TEXT, `UNIQUE(source_id, fragment_text)`)
+- `fragments` — extracted citation fragments (text, type, chapter, section, `section_type`, relevance, page, `citation_intent`: background/method/result_comparison/extends/contrasts/uses_data, `embedding` BLOB float32, `embedding_model` TEXT, `UNIQUE(source_id, fragment_text)`)
 - `reference_gaps` — missing references from bibliographies (status: open/resolved, score, `citation_intent`, `section_type`, intent-weighted scoring)
 - `section_type_map` — lookup table: numeric section → semantic type + chapter (populated from config)
 - `citation_links` — citation graph: source_id → target (title_hash MD5 for dedup, citation_intent, in_library flag)

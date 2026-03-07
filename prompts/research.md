@@ -124,10 +124,31 @@ Analyze the readiness of section {{ target_section }} for writing and generate a
 }
 ```
 
+### Section-Type Methodology (Kallestinova 2011, Swales 1990, Turbek et al. 2016)
+
+Adapt the argument structure to the section type:
+
+**Introductory sections** — use the CARS model (Swales 1990):
+- Block 1: Establish territory (what is known, key works)
+- Block 2: Establish niche (gap or problem — connect to coverage gaps above)
+- Block 3: Occupy niche (how this work fills the gap)
+
+**Literature review sections** — group by argument, not chronologically (Turbek et al. 2016):
+- Each block = one thesis supported by 2-3 sources
+- Order blocks from established consensus → open questions → this work's position
+
+**Methods sections** — structure blocks to mirror the expected results order (Kallestinova 2011):
+- Each method block maps to a corresponding result
+- Include justification for method choice with supporting citations
+
+**Results/Discussion sections** — interpret findings in context:
+- Each block: finding → comparison with literature → implication
+- Connect back to the gap identified in the introduction
+
 ### Rules
 
 0. **ONLY library sources** — You MUST use ONLY citekeys that appear in the "Key Source Annotations" JSON above. Do NOT invent, guess, or shorten citekeys. Do NOT cite papers you know from training that are not in the provided list. If a relevant source is missing from the library, add it to `missing_coverage` — never cite it directly
-1. **Argument structure** — break the section into 3-6 logical blocks. Each block: purpose, description, source list
+1. **Argument structure** — break the section into 3-6 logical blocks following the section-type methodology above. Each block: purpose, description, source list
 2. **Citation plan** — for each source, specify the concrete fragment and placement in text. Types: evidence, method, comparison, definition, quote
 3. **Readiness assessment** — if there's a draft, count words and determine readiness percentage. If section not written — readiness_pct = 0
 4. **Target volume** — follow the session plan (200-300 words per session)

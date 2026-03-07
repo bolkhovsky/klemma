@@ -51,10 +51,13 @@ Now extract key citation fragments from this paper. For each fragment, identify:
 4. Relevance score (1-5) for the project
 5. Usage hint: how to cite this in the text
 6. Page number (if visible from [Page N] markers)
-7. Citation intent — how this fragment would be cited in the project:
+7. Citation intent — how this fragment would be cited in the project (based on Teufel et al. 2006 citation function taxonomy):
    - `background` — context, general knowledge, literature review (e.g. "X showed that...")
    - `method` — a method, algorithm, or approach you adapt or build upon (e.g. "Following the approach of X...")
    - `result_comparison` — results or metrics for comparison (e.g. "X achieved 95% accuracy, while our method...")
+   - `extends` — this work extends, builds upon, or improves the cited approach (e.g. "Extending X's framework, we...")
+   - `contrasts` — this work disagrees with or shows limitations of the cited work (e.g. "Unlike X, our approach...")
+   - `uses_data` — uses datasets, benchmarks, or empirical data from the cited work (e.g. "Using the dataset from X...")
 
 Return a JSON object:
 
@@ -85,7 +88,7 @@ Guidelines:
 6. Map each fragment to the most specific section possible
 7. Usage hints should be in {{ language }}
 8. Fragments text stays in original paper language
-9. citation_intent must be one of: background, method, result_comparison
+9. citation_intent must be one of: background, method, result_comparison, extends, contrasts, uses_data
 {% if section_types %}
 10. When assigning section, prefer semantic section types: {{ section_types }}
 {% endif %}

@@ -50,10 +50,13 @@ For each recommendation, specify:
 
 1. **section_id** — which section (must match an outline section ID)
 2. **citekey** — which source (must be from the provided library)
-3. **intent** — how the source would be cited:
+3. **intent** — how the source would be cited (Teufel et al. 2006 citation function taxonomy):
    - `background` — provides context, general knowledge, or prior work
    - `method` — provides a method, algorithm, or technique to build upon
    - `result_comparison` — provides results or metrics for comparison
+   - `extends` — the paper extends, builds upon, or improves the cited approach
+   - `contrasts` — the paper disagrees with or shows limitations of the cited work
+   - `uses_data` — uses datasets, benchmarks, or empirical data from the cited work
 4. **justification** — brief reason for the recommendation (1 sentence)
 
 Rules:

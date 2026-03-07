@@ -7,7 +7,9 @@ across projects.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -167,3 +169,82 @@ def resolve_section_identifier(
 
     # Unrecognized — treat as literal section ID
     return (stripped, None)
+
+
+# ── Results-first writing order (Kallestinova 2011) ──────────────────────
+
+# Priority: lower = write first. Based on Kallestinova's results-first order:
+# Methods → Results → Discussion → Literature Review → Introduction → Conclusion
+WRITING_ORDER_PRIORITY: dict[SectionType, int] = {
+    SectionType.RESULTS: 1,
+    SectionType.EXPERIMENTS: 1,
+    SectionType.METHODOLOGY: 2,
+    SectionType.IMPLEMENTATION: 2,
+    SectionType.DATA_DESCRIPTION: 2,
+    SectionType.DISCUSSION: 3,
+    SectionType.THEORETICAL_FRAMEWORK: 3,
+    SectionType.LITERATURE_REVIEW: 4,
+    SectionType.BACKGROUND: 4,
+    SectionType.INTRODUCTION: 5,
+    SectionType.CONCLUSION: 6,
+    SectionType.APPENDIX: 7,
+    SectionType.CUSTOM: 3,
+}
+
+
+@dataclass
+class WritingOrderItem:
+    """A section in the recommended writing order."""
+
+    section_id: str
+    title: str
+    section_type: Optional[SectionType]
+    priority: int
+    has_draft: bool
+
+
+def get_writing_order(
+    sections: dict[str, str],
+    type_map: dict[str, str],
+    drafts_dir: Optional[Path] = None,
+) -> list[WritingOrderItem]:
+    """Compute results-first writing order for sections.
+
+    Args:
+        sections: {section_id: title} from outline or config
+        type_map: {section_id: section_type_str} from DB/config
+        drafts_dir: path to notes/drafts/ for draft detection
+
+    Returns:
+        Sorted list of WritingOrderItem (lowest priority first = write first).
+    """
+    items = []
+    for sec_id, title in sections.items():
+        type_str = type_map.get(sec_id)
+        sec_type = None
+        if type_str:
+            try:
+                sec_type = SectionType(type_str)
+            except ValueError:
+                pass
+        if sec_type is None:
+            sec_type = infer_section_type(title)
+
+        priority = WRITING_ORDER_PRIORITY.get(
+            sec_type or SectionType.CUSTOM, 3,
+        )
+
+        has_draft = False
+        if drafts_dir and drafts_dir.is_dir():
+            has_draft = (drafts_dir / f"Draft_{sec_id}.md").exists()
+
+        items.append(WritingOrderItem(
+            section_id=sec_id,
+            title=title,
+            section_type=sec_type,
+            priority=priority,
+            has_draft=has_draft,
+        ))
+
+    items.sort(key=lambda x: (x.priority, x.section_id))
+    return items
