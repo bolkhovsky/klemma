@@ -124,6 +124,9 @@ def load_section_sources(
 
         sources = sources[:max_sources]
 
+    # Filter out ghost sources with no metadata (#114)
+    sources = [s for s in sources if s.get("title") and s.get("authors")]
+
     enriched = []
     for src in sources:
         citekey = src["id"]

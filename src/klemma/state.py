@@ -206,7 +206,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 10  # bump this when adding new migrations
+        target = 11  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -424,6 +424,23 @@ class StateManager:
                 skipped_at TEXT DEFAULT (datetime('now')),
                 PRIMARY KEY (source_id, from_section, to_section)
             )""")
+
+        if version < 11:
+            import logging
+            _log = logging.getLogger("klemma.state")
+
+            # 11: Mark ghost sources (no title AND no authors) as incomplete
+            cur = conn.execute(
+                """UPDATE sources SET status = 'incomplete'
+                   WHERE (title IS NULL OR title = '')
+                     AND (authors IS NULL OR authors = '')
+                     AND status != 'incomplete'"""
+            )
+            if cur.rowcount:
+                _log.info(
+                    "v11 migration: marked %d ghost sources as incomplete",
+                    cur.rowcount,
+                )
 
         conn.execute(f"PRAGMA user_version = {target}")
 
