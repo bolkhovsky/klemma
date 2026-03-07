@@ -50,12 +50,24 @@ You are an academic writing advisor. Analyze the project materials and generate 
 Based on ALL provided materials (files, library data, existing context), generate a comprehensive {{ project_type }} outline.
 
 {% if project_type == "paper" %}
-For a paper, create a focused structure with 4-7 sections, each broken into subsections. Consider target venue requirements, page limits, and conference focus.
+For a paper, create a focused IMRAD structure (Introduction, Methods, Results, Discussion) with 4-7 sections, each broken into subsections. Consider target venue requirements, page limits, and conference focus.
 {% elif project_type == "thesis" %}
 For a thesis, create a structure with 3-5 chapters, each with detailed subsections. Consider the scope of a master's thesis.
 {% else %}
 For a dissertation, create a detailed structure with 3-6 chapters, each with subsections and sub-subsections where needed.
 {% endif %}
+
+### Methodology: Results-First Outline (Kallestinova 2011, Turbek et al. 2016)
+
+Build the outline starting from the **contributions and results**, then work backwards:
+1. First define what the work **proves or demonstrates** (scientific_results) — this is the core
+2. Then determine what **methods** are needed to support those results
+3. Then build the **introduction** to motivate those methods and results — use the Swales CARS model:
+   - Move 1: Establish territory (what is known in the field)
+   - Move 2: Establish niche (what gap or problem exists — use "Top Gaps" data above if available)
+   - Move 3: Occupy niche (how this work fills the gap — connects to scientific_results)
+4. Structure **literature review** sections around the argument, not chronologically — group sources by the claim they support
+5. End with **discussion/conclusion** that interprets results in context of the territory established in the introduction
 
 Return a JSON object:
 
