@@ -1,9 +1,12 @@
 """Source management repository — CRUD, status, sections, Zotero keys, vault sync."""
 
+import logging
 from datetime import date, datetime
 from typing import Optional
 
 from .base import BaseRepository
+
+logger = logging.getLogger(__name__)
 
 # Subquery for filtering out sources marked for pruning
 PRUNE_DROP_SUBQUERY = (
@@ -97,6 +100,18 @@ class SourceRepository(BaseRepository):
                    ON CONFLICT(date) DO UPDATE SET count = count + 1""",
                 (today,),
             )
+
+            # Warn if source completed without metadata (#114)
+            row = conn.execute(
+                "SELECT title, authors FROM sources WHERE id = ?",
+                (source_id,),
+            ).fetchone()
+            if row and (not row[0]) and (not row[1]):
+                logger.warning(
+                    "Source %s marked completed without title/authors — "
+                    "will be excluded from draft prompts",
+                    source_id,
+                )
 
     def update_source_metadata(
         self,
@@ -252,7 +267,8 @@ class SourceRepository(BaseRepository):
             cur = conn.execute(
                 """SELECT id, note_path, quality_score, primary_chapter,
                           primary_section, relevance_nr1, relevance_nr2,
-                          citation_priority, fragment_count, year
+                          citation_priority, fragment_count, year,
+                          title, authors
                    FROM sources WHERE status=?
                    ORDER BY primary_chapter, citation_priority DESC, quality_score DESC""",
                 (ProcessingStatus.COMPLETED,),
@@ -275,7 +291,7 @@ class SourceRepository(BaseRepository):
             cur = conn.execute(
                 f"""SELECT DISTINCT s.id, s.note_path, s.quality_score, s.primary_section,
                           s.relevance_nr1, s.relevance_nr2, s.citation_priority,
-                          s.fragment_count
+                          s.fragment_count, s.title, s.authors
                    FROM sources s
                    LEFT JOIN source_sections ss ON s.id = ss.source_id
                    WHERE s.status=? AND (s.primary_chapter=? OR ss.chapter=?)
@@ -294,7 +310,8 @@ class SourceRepository(BaseRepository):
                 cur = conn.execute(
                     f"""SELECT DISTINCT s.id, s.note_path, s.quality_score,
                               s.primary_chapter, s.relevance_nr1, s.relevance_nr2,
-                              s.citation_priority, s.fragment_count
+                              s.citation_priority, s.fragment_count,
+                              s.title, s.authors
                        FROM sources s
                        JOIN source_sections ss ON s.id = ss.source_id
                        WHERE s.status=? AND ss.section_type=?
@@ -306,7 +323,8 @@ class SourceRepository(BaseRepository):
                 cur = conn.execute(
                     f"""SELECT DISTINCT s.id, s.note_path, s.quality_score,
                               s.primary_chapter, s.relevance_nr1, s.relevance_nr2,
-                              s.citation_priority, s.fragment_count
+                              s.citation_priority, s.fragment_count,
+                              s.title, s.authors
                        FROM sources s
                        LEFT JOIN source_sections ss ON s.id = ss.source_id
                        WHERE s.status=? AND (s.primary_section LIKE ? OR ss.section LIKE ?)
