@@ -115,7 +115,10 @@ class Fragment(BaseModel):
     usage_hint: str = ""
     page: Optional[int] = None
     citation_intent: Optional[
-        Literal["background", "method", "result_comparison"]
+        Literal[
+            "background", "method", "result_comparison",
+            "extends", "contrasts", "uses_data",
+        ]
     ] = None
 
 
