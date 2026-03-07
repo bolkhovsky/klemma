@@ -2486,12 +2486,32 @@ def research(ctx, section, no_save, force, model):
     chapter = parse_chapter_from_section(section)
 
     # Auto-process unextracted sources
-    with console.status(f"Auto-processing unextracted sources for section {section}", spinner="arc"):
+    from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("[dim]{task.fields[status]}[/dim]"),
+        console=console,
+        transient=True,
+    )
+    task_id = progress.add_task(
+        f"Extracting fragments for section {section}",
+        total=None,
+        status="scanning sources...",
+    )
+
+    def _on_extract_progress(ck: str, status: str, i: int, n: int) -> None:
+        progress.update(task_id, total=n, completed=i, status=f"@{ck}: {status}")
+
+    with progress:
         extract_result = pre_extract_sources(
             section, chapter, cfg, state, vault, ai,
             force=force,
             library=kctx.library,
-            on_progress=lambda ck, st, i, n: None,  # suppress inside spinner
+            on_progress=_on_extract_progress,
             dissertation_context=kctx.dissertation_context,
             available_tags=kctx.available_tags,
             klemma_home=kctx.klemma_home,
