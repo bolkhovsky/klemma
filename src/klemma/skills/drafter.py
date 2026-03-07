@@ -69,6 +69,7 @@ def generate_draft(
     rag_fragments: Optional[list[dict]] = None,
     valid_citekeys: Optional[set[str]] = None,
     section_title: str = "",
+    custom_prompt: str = "",
 ) -> DraftResult:
     """Generate a section draft using AI.
 
@@ -105,6 +106,7 @@ def generate_draft(
         rag_fragments=rag_fragments,
         source_summaries=source_summaries,
         section_title=section_title,
+        custom_prompt=custom_prompt,
         language=config.ai.language,
     )
 

@@ -2643,8 +2643,14 @@ def _show_writing_order(kctx: KlemmaContext, current_section: str) -> None:
     is_flag=True,
     help="Skip per-block RAG retrieval (use section-level fragments only)",
 )
+@click.option(
+    "-p",
+    "--prompt",
+    default="",
+    help="Custom directive for AI (e.g. 'rely on goessling2016 and previous_paper.md')",
+)
 @click.pass_context
-def draft(ctx, section, model, no_save, no_rag):
+def draft(ctx, section, model, no_save, no_rag, prompt):
     """Generate dissertation section drafts.
 
     Standalone mode: klemma draft -s 1.3.2
@@ -2841,6 +2847,7 @@ def draft(ctx, section, model, no_save, no_rag):
             rag_fragments=rag_fragments_for_prompt or [],
             valid_citekeys=valid_citekeys,
             section_title=section_title,
+            custom_prompt=prompt,
         )
 
     if not result.text:
