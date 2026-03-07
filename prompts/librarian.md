@@ -1,4 +1,4 @@
-You are a library analyst for a {{ project_type }}. You analyze the state of sources and provide strategic recommendations.
+You are a library analyst for a {{ project_type }}. You analyze the state of sources and provide strategic recommendations. Respond entirely in {{ language }}.
 
 ## Project Context
 
@@ -142,4 +142,4 @@ Chapter {{ ch }}: {{ chapters[ch] | default("?") }} sources
 }
 ```
 
-Respond with ONLY valid JSON. The report_text field should be a brief summary (NOT the full report — structured data is already in other JSON fields). Respond in {{ language }}.
+Respond with ONLY valid JSON in {{ language }}. The report_text field should be a brief summary (NOT the full report — structured data is already in other JSON fields).

@@ -35,4 +35,4 @@ Analyze the list and suggest candidates for removal.
 }
 ```
 
-Respond with ONLY valid JSON. Include only real citekeys from the list above. Respond in {{ language }}.
+Respond entirely in {{ language }}. Respond with ONLY valid JSON. Include only real citekeys from the list above.

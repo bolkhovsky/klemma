@@ -290,8 +290,8 @@ class TestLoadProjectContext:
         assert "My Dissertation" in result
         assert "ice forecasting" in result
 
-    def test_nested_parent_first(self, tmp_path):
-        """Parent context appears first, child second."""
+    def test_nested_child_only(self, tmp_path):
+        """Child project uses only its own context, not parent's (ADR-012)."""
         parent = tmp_path / "thesis"
         child = parent / "paper1"
         (parent / ".klemma").mkdir(parents=True)
@@ -302,11 +302,13 @@ class TestLoadProjectContext:
         from klemma.config import load_project_context
 
         result = load_project_context([child, parent])
-        # Parent should come first
-        assert result.index("Dissertation") < result.index("Paper 1")
-        assert "---" in result  # separator
+        # Child context only — parent excluded (ADR-012)
+        assert "Paper 1" in result
+        assert "Dissertation" not in result
+        assert "---" not in result  # no separator
 
-    def test_missing_klemma_md_skipped(self, tmp_path):
+    def test_missing_child_klemma_md_falls_back_to_config(self, tmp_path):
+        """When child has no KLEMMA.md, fall back to config fields, not parent."""
         parent = tmp_path / "thesis"
         child = parent / "paper1"
         (parent / ".klemma").mkdir(parents=True)
@@ -314,10 +316,16 @@ class TestLoadProjectContext:
         # Only parent has KLEMMA.md
         (parent / "KLEMMA.md").write_text("# Dissertation")
 
-        from klemma.config import load_project_context
+        from klemma.config import KlemmaConfig, load_project_context
 
-        result = load_project_context([child, parent])
-        assert "Dissertation" in result
+        cfg = KlemmaConfig.model_validate({
+            "obsidian": {"vault_path": "/v"},
+            "project": {"type": "paper", "title": "My Paper"},
+        })
+        result = load_project_context([child, parent], config=cfg)
+        # Should fall back to config, not use parent
+        assert "My Paper" in result
+        assert "Dissertation" not in result
 
     def test_legacy_context_md_fallback(self, tmp_path):
         (tmp_path / ".klemma").mkdir()
@@ -460,6 +468,43 @@ class TestInitProject:
         content = (tmp_path / ".gitignore").read_text()
         assert ".klemma/data/" in content
         assert "*.pyc" in content
+
+
+    def test_child_project_skips_ai_defaults(self, tmp_path):
+        """Child project config should not write backend/model defaults (ADR-012)."""
+        from klemma.setup import InitValues, init_project
+
+        values = InitValues(
+            title="My Paper",
+            description="A paper",
+            language="en",
+            project_type="paper",
+        )
+        init_project(tmp_path, project_type="paper", values=values, has_parent=True)
+        import yaml
+        cfg = yaml.safe_load((tmp_path / ".klemma" / "config.yaml").read_text())
+        ai = cfg.get("ai", {})
+        assert ai.get("language") == "en"
+        assert "backend" not in ai  # inherited from parent
+        assert "model" not in ai  # inherited from parent
+
+    def test_root_project_writes_ai_defaults(self, tmp_path):
+        """Root project config should write backend/model defaults."""
+        from klemma.setup import InitValues, init_project
+
+        values = InitValues(
+            title="My Dissertation",
+            description="A dissertation",
+            language="ru",
+            project_type="dissertation",
+            backend="litellm",
+        )
+        init_project(tmp_path, project_type="dissertation", values=values, has_parent=False)
+        import yaml
+        cfg = yaml.safe_load((tmp_path / ".klemma" / "config.yaml").read_text())
+        ai = cfg.get("ai", {})
+        assert ai.get("backend") == "litellm"
+        assert "model" in ai  # default model written
 
 
 class TestInitSystem:

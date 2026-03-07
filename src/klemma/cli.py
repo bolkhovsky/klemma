@@ -763,7 +763,12 @@ def init(ctx, project_type, global_only, no_input, non_interactive, force, outli
             embeddings_backend=_emb,
         )
 
-    result = init_project(project_dir, project_type=project_type, values=values)
+    # Detect parent project before init — affects config defaults (ADR-012)
+    pre_chain = discover_project_chain(project_dir.parent)
+    _has_parent = len(pre_chain) > 0
+
+    result = init_project(project_dir, project_type=project_type, values=values,
+                          has_parent=_has_parent)
 
     # Overwrite KLEMMA.md with rich plan content if plan was provided
     effective_plan = plan_data or (values.plan_data if values else None)
