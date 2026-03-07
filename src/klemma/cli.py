@@ -144,7 +144,7 @@ def _init_ai(cfg):
     return create_ai(cfg.ai)
 
 
-BBTIndex = tuple[dict[str, str], dict[tuple[str, str], tuple[str, str]]]
+BBTIndex = tuple[dict[str, str], dict[tuple[str, str], list[tuple[str, str]]]]
 
 
 def build_bbt_index(entry_lookup: dict) -> BBTIndex:
@@ -152,12 +152,13 @@ def build_bbt_index(entry_lookup: dict) -> BBTIndex:
 
     Returns (by_item_key, by_author_year):
       - by_item_key: {item_key: citekey}
-      - by_author_year: {(author_lower, year): (citekey, item_key)}
+      - by_author_year: {(author_lower, year): [(citekey, item_key), ...]}
+        Multiple papers by same author+year are stored as a list.
     """
     import re
 
     by_item_key: dict[str, str] = {}
-    by_author_year: dict[tuple[str, str], tuple[str, str]] = {}
+    by_author_year: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for ck, entry in entry_lookup.items():
         if entry.item_key:
             by_item_key[entry.item_key] = ck
@@ -165,8 +166,25 @@ def build_bbt_index(entry_lookup: dict) -> BBTIndex:
         ym = re.search(r"(\d{4})", ck)
         if am and ym:
             author = am.group(1).replace(".", "").lower()
-            by_author_year[(author, ym.group(1))] = (ck, entry.item_key or "")
+            key = (author, ym.group(1))
+            by_author_year.setdefault(key, []).append((ck, entry.item_key or ""))
     return by_item_key, by_author_year
+
+
+def _unique_author_year_match(
+    by_author_year: dict[tuple[str, str], list[tuple[str, str]]],
+    author: str,
+    year: str,
+) -> tuple[str, str] | None:
+    """Return a match only when exactly one candidate exists for (author, year).
+
+    Ambiguous matches (multiple papers by same author+year) are skipped
+    to prevent wrong cross-renames.
+    """
+    candidates = by_author_year.get((author, year))
+    if candidates and len(candidates) == 1:
+        return candidates[0]
+    return None
 
 
 def resolve_orphan(old_ck: str, bbt_index: BBTIndex) -> tuple[str, str] | None:
@@ -192,17 +210,20 @@ def resolve_orphan(old_ck: str, bbt_index: BBTIndex) -> tuple[str, str] | None:
     # Strategy 2: acquire-format "Author2020_Title_Slug"
     acq = re.match(r"([A-Z][a-z]+)(\d{4})", old_ck)
     if acq:
-        match = by_author_year.get((acq.group(1).lower(), acq.group(2)))
+        match = _unique_author_year_match(by_author_year, acq.group(1).lower(), acq.group(2))
         if match:
             return match
 
     # Strategy 3: BBT-format "authorTitle2022a"
     clean = re.sub(r"^[a-z]\.[a-z]\.", "", old_ck)
     am = re.match(r"([a-z.]+?)(?=[A-Z\d])", clean)
-    ym = re.search(r"(\d{4})", old_ck)
+    # Strip BBT disambiguation suffix (a/b/c) from year: "2024a" → "2024"
+    ym = re.search(r"(\d{4})[a-z]?", old_ck)
     if am and ym:
-        match = by_author_year.get((am.group(1).replace(".", "").lower(), ym.group(1)))
-        if match:
+        author = am.group(1).replace(".", "").lower()
+        year = ym.group(1)
+        match = _unique_author_year_match(by_author_year, author, year)
+        if match and match[0] != old_ck:
             return match
     return None
 
@@ -311,6 +332,13 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
                     continue
                 new_entries.append((citekey, classification))
 
+        # Backfill zotero_key BEFORE orphan detection so itemKey-based
+        # renames (first loop above) catch most cases on subsequent runs,
+        # reducing reliance on fuzzy matching.
+        backfill = {ck: entry.item_key for ck, entry in entry_lookup.items() if entry.item_key}
+        if backfill:
+            state.populate_zotero_keys(backfill)
+
         # Fuzzy orphan cleanup: DB sources not in BBT JSON (pre-existing renames)
         bbt_citekeys = set(entry_lookup.keys())
         orphans = existing - bbt_citekeys
@@ -330,11 +358,6 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
                     existing.discard(old_ck)
                     existing.add(new_ck)
                     renames.append((old_ck, new_ck))
-
-        # Backfill zotero_key for existing sources (idempotent, only fills NULL)
-        backfill = {ck: entry.item_key for ck, entry in entry_lookup.items() if entry.item_key}
-        if backfill:
-            state.populate_zotero_keys(backfill)
 
     # 3. Sync to DB
     # Papers: only sync vault notes for sources already registered in DB
@@ -3258,14 +3281,22 @@ def reassign(ctx, threshold, limit):
     # Filter to active sources only (exclude orphaned fragments)
     active_sources = state.get_existing_source_ids()
 
-    # Build section name lookup from project config
-    section_names: dict[str, str] = {}
+    # Build section name lookup from project config (chapter-level names)
+    chapter_names: dict[str, str] = {}
     project = kctx.project
     if project:
         for num, title in (project.chapters or {}).items():
-            section_names[str(num)] = title
-        for sec_id, title in (project.sections or {}).items():
-            section_names[str(sec_id)] = title
+            chapter_names[str(num)] = title
+
+    def _section_label(sec_id: str) -> str:
+        """Resolve section ID to chapter name. '3.3' → 'Гл. 3: <title>'."""
+        if sec_id in chapter_names:
+            return chapter_names[sec_id]
+        chapter_num = sec_id.split(".")[0]
+        name = chapter_names.get(chapter_num)
+        if name:
+            return f"Гл. {chapter_num}"
+        return ""
 
     # 3. Compute best section match for each fragment
     raw_suggestions = []
@@ -3331,8 +3362,8 @@ def reassign(ctx, threshold, limit):
     for i, s in enumerate(suggestions, 1):
         cur_sec = s["current"]
         sug_sec = s["suggested"]
-        cur_name = section_names.get(cur_sec, "")
-        sug_name = section_names.get(sug_sec, "")
+        cur_name = _section_label(cur_sec)
+        sug_name = _section_label(sug_sec)
         delta = s["delta"]
         runner_up = s.get("runner_up")
 
@@ -3352,7 +3383,7 @@ def reassign(ctx, threshold, limit):
         )
         if runner_up:
             ru_sec, ru_score = runner_up
-            ru_name = section_names.get(ru_sec, "")
+            ru_name = _section_label(ru_sec)
             console.print(
                 f"  [dim]Runner-up: {ru_sec}"
                 + (f" ({ru_name})" if ru_name else "")
