@@ -3049,27 +3049,52 @@ def prune(ctx, chapter, verdict, clear_key, apply, yes):
     state = kctx.state
 
     if apply:
-        drop_ids = state.get_prune_drop_ids()
-        if not drop_ids:
+        verdicts = state.get_prune_verdicts(verdict="drop")
+        if not verdicts:
             console.print("[dim]No 'drop' verdicts to apply.[/dim]")
             return
-        # Show what will be deleted
-        console.print(f"\n[bold]Sources to remove ({len(drop_ids)}):[/bold]")
-        for citekey in sorted(drop_ids):
+        console.print(f"\n[bold]Review {len(verdicts)} sources marked for removal[/bold]")
+        console.print("[dim]y = delete, n = skip, q = quit. Vault notes are preserved.[/dim]\n")
+        deleted, skipped = 0, 0
+        for i, item in enumerate(verdicts, 1):
+            citekey = item["source_id"]
             src = state.get_source(citekey)
-            title = (src.get("title") or "untitled")[:60] if src else "unknown"
-            console.print(f"  [red]×[/red] @{citekey}  [dim]{title}[/dim]")
-        console.print(f"\n[yellow]This will delete {len(drop_ids)} sources and their fragments from DB.[/yellow]")
-        console.print("[dim]Vault notes are preserved.[/dim]")
-        if not yes:
-            if not click.confirm("Proceed?"):
-                console.print("[dim]Aborted.[/dim]")
-                return
-        deleted = 0
-        for citekey in sorted(drop_ids):
-            state.delete_source(citekey)
-            deleted += 1
-        console.print(f"\n[green]Removed {deleted} sources from DB (vault notes preserved).[/green]")
+            title = (src.get("title") or "untitled") if src else "unknown"
+            authors = (src.get("authors") or "") if src else ""
+            year = src.get("year") if src else None
+            abstract = (src.get("abstract") or "") if src else ""
+            reason = item.get("reason") or ""
+            q_score = item.get("quality_score")
+            frag_count = item.get("fragment_count") or 0
+            sections = item.get("sections") or ""
+            # Header
+            console.print(f"[bold red]── [{i}/{len(verdicts)}] @{citekey} ──[/bold red]")
+            console.print(f"  [bold]{title}[/bold]")
+            if authors:
+                console.print(f"  {authors}" + (f", {year}" if year else ""))
+            console.print(f"  [dim]Quality: {q_score or '?'} | Fragments: {frag_count} | Sections: {sections or 'none'}[/dim]")
+            if reason:
+                console.print(f"  [yellow]Reason: {reason}[/yellow]")
+            if abstract:
+                console.print(f"  [dim]{abstract[:200]}{'…' if len(abstract) > 200 else ''}[/dim]")
+            if yes:
+                state.delete_source(citekey)
+                deleted += 1
+                console.print("  [red]Deleted[/red]")
+            else:
+                choice = click.prompt("  Delete?", type=click.Choice(["y", "n", "q"]), default="n")
+                if choice == "q":
+                    console.print("[dim]Quit.[/dim]")
+                    break
+                elif choice == "y":
+                    state.delete_source(citekey)
+                    deleted += 1
+                    console.print("  [red]Deleted[/red]")
+                else:
+                    skipped += 1
+                    console.print("  [green]Kept[/green]")
+            console.print()
+        console.print(f"[bold]Result: {deleted} deleted, {skipped} kept (vault notes preserved).[/bold]")
         return
 
     if clear_key and (chapter is not None or verdict is not None):
