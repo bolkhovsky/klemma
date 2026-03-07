@@ -2686,6 +2686,24 @@ def draft(ctx, section, model, no_save, no_rag):
     # 0. Show writing order context (Kallestinova 2011 results-first)
     _show_writing_order(kctx, section)
 
+    # 0b. Extract section title from outline
+    section_title = ""
+    if kctx.project_root:
+        import re as _re
+        _outline_pat = _re.compile(r"^Outline_.*\.md$")
+        for p in sorted(kctx.project_root.iterdir()):
+            if _outline_pat.match(p.name) and p.is_file():
+                _sec_re = _re.compile(
+                    r"^###\s+" + _re.escape(section) + r"\.?\s+(.+)",
+                    _re.MULTILINE,
+                )
+                _m = _sec_re.search(
+                    p.read_text(encoding="utf-8", errors="replace")
+                )
+                if _m:
+                    section_title = _m.group(1).strip()
+                break
+
     # 1. Load research report
     research_report_content = ""
     if kctx.project_root:
@@ -2822,6 +2840,7 @@ def draft(ctx, section, model, no_save, no_rag):
             fragments=formatted_fragments,
             rag_fragments=rag_fragments_for_prompt or [],
             valid_citekeys=valid_citekeys,
+            section_title=section_title,
         )
 
     if not result.text:

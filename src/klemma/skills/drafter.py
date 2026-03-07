@@ -68,6 +68,7 @@ def generate_draft(
     fragments: Optional[list[dict]] = None,
     rag_fragments: Optional[list[dict]] = None,
     valid_citekeys: Optional[set[str]] = None,
+    section_title: str = "",
 ) -> DraftResult:
     """Generate a section draft using AI.
 
@@ -103,6 +104,7 @@ def generate_draft(
         fragments=fragments,
         rag_fragments=rag_fragments,
         source_summaries=source_summaries,
+        section_title=section_title,
         language=config.ai.language,
     )
 
@@ -139,6 +141,9 @@ def generate_draft(
             len(filtered),
             filtered,
         )
+
+    # Convert [@citekey] → [[@citekey]] for Obsidian wikilinks
+    text = re.sub(r"\[@([\w\-]+)\]", r"[[@\1]]", text)
 
     word_count = len(text.split())
 
