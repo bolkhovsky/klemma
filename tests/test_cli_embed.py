@@ -18,7 +18,7 @@ def test_embed_accepts_multiple_citekeys_and_warns_missing(tmp_path, monkeypatch
         state = StateManager(Path(".klemma/data/klemma.db"))
         state.register_sources(["exists1"])
 
-        result = runner.invoke(klemma_cli, ["embed", "exists1", "missing1", "--dry-run"])
+        result = runner.invoke(klemma_cli, ["embed", "sources", "exists1", "missing1", "--dry-run"])
 
     assert result.exit_code == 0
     assert "Missing citekeys: missing1" in result.output
@@ -26,7 +26,7 @@ def test_embed_accepts_multiple_citekeys_and_warns_missing(tmp_path, monkeypatch
 
 
 def test_embed_fragments_flag(tmp_path):
-    """klemma embed --fragments embeds un-embedded fragments."""
+    """klemma embed fragments embeds un-embedded fragments."""
     db = tmp_path / ".klemma" / "state.db"
     db.parent.mkdir(parents=True)
     sm = StateManager(db)
@@ -51,7 +51,7 @@ def test_embed_fragments_flag(tmp_path):
     with patch("klemma.cli.discover_project_root", return_value=tmp_path), \
          patch("klemma.cli._init_components", return_value=mock_ctx), \
          patch("klemma.cli._get_context", return_value=mock_ctx):
-        result = runner.invoke(klemma_cli, ["embed", "--fragments"])
+        result = runner.invoke(klemma_cli, ["embed", "fragments"])
 
     assert result.exit_code == 0, result.output
     assert "Embedded: 2" in result.output
@@ -63,7 +63,7 @@ def test_embed_fragments_flag(tmp_path):
 
 
 def test_embed_fragments_dry_run(tmp_path):
-    """klemma embed --fragments --dry-run shows count without embedding."""
+    """klemma embed fragments --dry-run shows count without embedding."""
     db = tmp_path / ".klemma" / "state.db"
     db.parent.mkdir(parents=True)
     sm = StateManager(db)
@@ -80,7 +80,7 @@ def test_embed_fragments_dry_run(tmp_path):
     with patch("klemma.cli.discover_project_root", return_value=tmp_path), \
          patch("klemma.cli._init_components", return_value=mock_ctx), \
          patch("klemma.cli._get_context", return_value=mock_ctx):
-        result = runner.invoke(klemma_cli, ["embed", "--fragments", "--dry-run"])
+        result = runner.invoke(klemma_cli, ["embed", "fragments", "--dry-run"])
 
     assert result.exit_code == 0, result.output
     assert "Would embed 1 fragments" in result.output
@@ -136,7 +136,7 @@ def _make_state_with_sections_and_embeddings(tmp_path):
 
 
 def test_embed_sections_flag(tmp_path):
-    """klemma embed --sections computes and stores centroid embeddings."""
+    """klemma embed sections computes and stores centroid embeddings."""
     sm = _make_state_with_sections_and_embeddings(tmp_path)
 
     mock_emb = MagicMock()
@@ -152,7 +152,7 @@ def test_embed_sections_flag(tmp_path):
     with patch("klemma.cli.discover_project_root", return_value=tmp_path), \
          patch("klemma.cli._init_components", return_value=mock_ctx), \
          patch("klemma.cli._get_context", return_value=mock_ctx):
-        result = runner.invoke(klemma_cli, ["embed", "--sections"])
+        result = runner.invoke(klemma_cli, ["embed", "sections"])
 
     assert result.exit_code == 0, result.output
     assert "Section embeddings: 2 computed" in result.output
@@ -176,7 +176,7 @@ def test_embed_sections_flag(tmp_path):
 
 
 def test_embed_sections_dry_run(tmp_path):
-    """klemma embed --sections --dry-run shows count without storing."""
+    """klemma embed sections --dry-run shows count without storing."""
     sm = _make_state_with_sections_and_embeddings(tmp_path)
 
     mock_emb = MagicMock()
@@ -192,7 +192,7 @@ def test_embed_sections_dry_run(tmp_path):
     with patch("klemma.cli.discover_project_root", return_value=tmp_path), \
          patch("klemma.cli._init_components", return_value=mock_ctx), \
          patch("klemma.cli._get_context", return_value=mock_ctx):
-        result = runner.invoke(klemma_cli, ["embed", "--sections", "--dry-run"])
+        result = runner.invoke(klemma_cli, ["embed", "sections", "--dry-run"])
 
     assert result.exit_code == 0, result.output
     assert "Would embed 2 sections" in result.output

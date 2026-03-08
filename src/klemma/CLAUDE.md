@@ -16,7 +16,7 @@ Click CLI entry point. Defines 17 commands + hidden aliases.
 - Deprecation warnings: bare `klemma gaps` → use `klemma status --verbose`; `klemma library -s` → use `klemma research -s`
 - `init --outline` generates an outline after project setup (requires AI backend)
 - `init` non-interactive mode: `--name`, `--description`, `--keywords`, `--language` flags auto-skip wizard; `--non-interactive` is alias for `--no-input`
-- `embed --sections` computes section centroid embeddings from source vectors (mean of assigned source embeddings per section)
+- `embed` group: `embed sources [CITEKEYS]` (default), `embed fragments`, `embed sections` (centroid from source vectors), `embed all` (sources→fragments→sections)
 - `--model` override available on: `research`, `ask`, `library`, `process`, `draft -s` — overrides `cfg.ai.model` per invocation
 - `draft` group: `draft introduction` (ГОСТ intro), `draft -s X.X` (standalone section draft → `notes/drafts/Draft_{section}.md`), `--no-rag` flag skips per-block RAG retrieval (ablation/debugging)
 

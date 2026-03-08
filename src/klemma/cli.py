@@ -1715,37 +1715,25 @@ def _process_single(
     return (len(result.fragments), "ok")
 
 
-@main.command()
-@click.argument("citekeys", required=False, nargs=-1)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    help="Show how many would be embedded without calling API",
-)
-@click.option(
-    "--backend",
-    type=click.Choice(["s2", "local", "openai"]),
-    help="Override embedding backend",
-)
-@click.option("--fragments", is_flag=True, help="Embed fragments instead of sources")
-@click.option("--sections", is_flag=True, help="Compute section centroid embeddings")
-@click.option(
-    "--backfill", is_flag=True, help="Fetch missing abstracts from S2 before embedding"
-)
+@main.group(invoke_without_command=True, name="embed")
 @click.pass_context
-def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
-    """Backfill embeddings for sources with abstracts.
+def embed(ctx):
+    """Compute and store embeddings.
 
-    Without CITEKEYS: embed all sources missing embeddings.
-    With CITEKEYS: embed specific sources.
-    Use --fragments to embed fragment text instead of source title+abstract.
-    Use --sections to compute section centroid embeddings from source vectors.
-    Use --dry-run to preview without API calls.
+    Subcommands:
+      klemma embed sources    — embed sources (default)
+      klemma embed fragments  — embed fragment text
+      klemma embed sections   — compute section centroid embeddings
+      klemma embed all        — run sources → fragments → sections in sequence
+
+    Run `klemma embed sources --help` for source-embedding options.
     """
-    kctx = _get_context(ctx)
-    state = kctx.state
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(embed_sources)
 
-    # Determine embedding provider
+
+def _resolve_emb(kctx, backend, dry_run):
+    """Resolve embedding provider from context or --backend override."""
     if backend:
         from .embeddings import create_embeddings as _create_emb
 
@@ -1759,98 +1747,39 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
             "Set embeddings.backend in config.yaml (s2, local, openai) "
             "or use --backend flag."
         )
+        return None
+    return emb
+
+
+@embed.command(name="sources")
+@click.argument("citekeys", required=False, nargs=-1)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show how many would be embedded without calling API",
+)
+@click.option(
+    "--backend",
+    type=click.Choice(["s2", "local", "openai"]),
+    help="Override embedding backend",
+)
+@click.option(
+    "--backfill", is_flag=True, help="Fetch missing abstracts from S2 before embedding"
+)
+@click.pass_context
+def embed_sources(ctx, citekeys, dry_run, backend, backfill):
+    """Embed source title+abstract vectors.
+
+    Without CITEKEYS: embed all sources missing embeddings.
+    With CITEKEYS: embed specific sources by citekey.
+    """
+    kctx = _get_context(ctx)
+    state = kctx.state
+    emb = _resolve_emb(kctx, backend, dry_run)
+    if emb is None:
         return
 
-    if fragments:
-        # Fragment embedding mode
-        candidates = state.get_unembedded_fragments()
-        if not candidates:
-            console.print("[green]All fragments already have embeddings.[/green]")
-            return
-        if dry_run:
-            console.print(f"[blue]Would embed {len(candidates)} fragments[/blue]")
-            return
-
-        embedded = 0
-        failed = 0
-        from rich.progress import Progress
-
-        with Progress(console=console) as progress:
-            task = progress.add_task("Embedding fragments...", total=len(candidates))
-            for frag in candidates:
-                try:
-                    vec = emb.embed(frag["fragment_text"])
-                    if vec:
-                        state.save_fragment_embedding(frag["id"], vec, emb.model_name)
-                        embedded += 1
-                    else:
-                        failed += 1
-                except Exception as e:
-                    console.print(f"  [red]Fragment {frag['id']}: {e}[/red]")
-                    failed += 1
-                progress.advance(task)
-
-        console.print(f"\n[green]Embedded: {embedded}[/green]", end="")
-        if failed:
-            console.print(f" | [red]Failed: {failed}[/red]", end="")
-        console.print()
-        return
-
-    if sections:
-        # Section centroid embedding mode
-        model_name = emb.model_name if emb else None
-        all_emb = state.get_all_embeddings(model=model_name)
-        if not all_emb:
-            console.print(
-                "[yellow]No source embeddings found. Run `klemma embed` first.[/yellow]"
-            )
-            return
-
-        # Get distinct sections from source_sections
-        with state._conn() as conn:
-            cur = conn.execute(
-                "SELECT DISTINCT section FROM source_sections ORDER BY section"
-            )
-            all_sections = [row["section"] for row in cur.fetchall()]
-
-        embedded = 0
-        skipped = 0
-        for sec in all_sections:
-            source_ids = state.get_section_sources(sec)
-            vecs = [all_emb[sid] for sid in source_ids if sid in all_emb]
-            if not vecs:
-                skipped += 1
-                continue
-            # Compute centroid (mean of source vectors)
-            dim = len(vecs[0])
-            centroid = [sum(v[i] for v in vecs) / len(vecs) for i in range(dim)]
-
-            if dry_run:
-                embedded += 1
-                continue
-
-            state.save_section_embedding(
-                sec, centroid, model_name or "unknown", len(vecs)
-            )
-            embedded += 1
-
-        if dry_run:
-            console.print(
-                f"[blue]Would embed {embedded} sections ({skipped} have no source embeddings)[/blue]"
-            )
-        else:
-            console.print(
-                f"[green]Section embeddings: {embedded} computed[/green]", end=""
-            )
-            if skipped:
-                console.print(
-                    f" | [yellow]{skipped} skipped (no source embeddings)[/yellow]",
-                    end="",
-                )
-            console.print()
-        return
-
-    # Get candidates: sources with abstract but no embedding
+    # Get candidates
     if citekeys:
         candidates = []
         missing = []
@@ -1865,17 +1794,13 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
         if not candidates:
             return
     else:
-        # Find completed sources without embeddings
         candidates = state.get_sources_without_embeddings()
 
     if not candidates:
         console.print("[green]All sources already have embeddings.[/green]")
         return
 
-    # S2 backend can embed by title alone (API search); others need text
     is_s2 = isinstance(emb, SemanticScholarEmbeddings) if emb else False
-
-    # For dry-run, check which have abstracts via library
     entries = kctx.library.entries if kctx.library else {}
 
     # --backfill: fetch missing abstracts from S2 before embedding
@@ -1911,7 +1836,6 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
         console.print(f"[blue]Would embed {len(candidates)} sources[/blue]")
         return
 
-    # Embed
     embedded = 0
     api_miss = 0
     failed = 0
@@ -1919,12 +1843,11 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
     from rich.progress import Progress
 
     with Progress(console=console) as progress:
-        task = progress.add_task("Embedding...", total=len(candidates))
+        task = progress.add_task("Embedding sources...", total=len(candidates))
         for ck in candidates:
             entry = entries.get(ck)
             title = entry.title if entry else ck
             abstract = entry.abstract if entry else ""
-            # For non-S2 backends: build embed text from title + abstract or fragments
             if not is_s2 and not abstract:
                 frags = state.get_fragments(source_id=ck, limit=10)
                 frag_text = " ".join(
@@ -1943,7 +1866,6 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
                 failed += 1
             progress.advance(task)
 
-    # Summary with full breakdown
     emb_stats = state.get_embedding_stats()
     parts = [f"[green]Embedded: {embedded}[/green]"]
     if api_miss:
@@ -1952,6 +1874,131 @@ def embed(ctx, citekeys, dry_run, backend, fragments, sections, backfill):
         parts.append(f"[red]Failed: {failed}[/red]")
     parts.append(f"[dim]Total: {emb_stats['embedded']}/{emb_stats['total']}[/dim]")
     console.print("\n" + " | ".join(parts))
+
+
+@embed.command(name="fragments")
+@click.option("--dry-run", is_flag=True, help="Preview without API calls")
+@click.option(
+    "--backend",
+    type=click.Choice(["s2", "local", "openai"]),
+    help="Override embedding backend",
+)
+@click.pass_context
+def embed_fragments(ctx, dry_run, backend):
+    """Embed extracted fragment text vectors."""
+    kctx = _get_context(ctx)
+    state = kctx.state
+    emb = _resolve_emb(kctx, backend, dry_run)
+    if emb is None:
+        return
+
+    candidates = state.get_unembedded_fragments()
+    if not candidates:
+        console.print("[green]All fragments already have embeddings.[/green]")
+        return
+    if dry_run:
+        console.print(f"[blue]Would embed {len(candidates)} fragments[/blue]")
+        return
+
+    embedded = 0
+    failed = 0
+    from rich.progress import Progress
+
+    with Progress(console=console) as progress:
+        task = progress.add_task("Embedding fragments...", total=len(candidates))
+        for frag in candidates:
+            try:
+                vec = emb.embed(frag["fragment_text"])
+                if vec:
+                    state.save_fragment_embedding(frag["id"], vec, emb.model_name)
+                    embedded += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                console.print(f"  [red]Fragment {frag['id']}: {e}[/red]")
+                failed += 1
+            progress.advance(task)
+
+    console.print(f"\n[green]Embedded: {embedded}[/green]", end="")
+    if failed:
+        console.print(f" | [red]Failed: {failed}[/red]", end="")
+    console.print()
+
+
+@embed.command(name="sections")
+@click.option("--dry-run", is_flag=True, help="Preview without writing to DB")
+@click.option(
+    "--backend",
+    type=click.Choice(["s2", "local", "openai"]),
+    help="Override embedding backend",
+)
+@click.pass_context
+def embed_sections(ctx, dry_run, backend):
+    """Compute section centroid embeddings from source vectors."""
+    kctx = _get_context(ctx)
+    state = kctx.state
+    emb = _resolve_emb(kctx, backend, dry_run)
+    if emb is None:
+        return
+
+    model_name = emb.model_name if emb else None
+    all_emb = state.get_all_embeddings(model=model_name)
+    if not all_emb:
+        console.print(
+            "[yellow]No source embeddings found. Run `klemma embed sources` first.[/yellow]"
+        )
+        return
+
+    with state._conn() as conn:
+        cur = conn.execute(
+            "SELECT DISTINCT section FROM source_sections ORDER BY section"
+        )
+        all_sections = [row["section"] for row in cur.fetchall()]
+
+    embedded = 0
+    skipped = 0
+    for sec in all_sections:
+        source_ids = state.get_section_sources(sec)
+        vecs = [all_emb[sid] for sid in source_ids if sid in all_emb]
+        if not vecs:
+            skipped += 1
+            continue
+        dim = len(vecs[0])
+        centroid = [sum(v[i] for v in vecs) / len(vecs) for i in range(dim)]
+        if not dry_run:
+            state.save_section_embedding(sec, centroid, model_name or "unknown", len(vecs))
+        embedded += 1
+
+    if dry_run:
+        console.print(
+            f"[blue]Would embed {embedded} sections ({skipped} have no source embeddings)[/blue]"
+        )
+    else:
+        console.print(f"[green]Section embeddings: {embedded} computed[/green]", end="")
+        if skipped:
+            console.print(
+                f" | [yellow]{skipped} skipped (no source embeddings)[/yellow]",
+                end="",
+            )
+        console.print()
+
+
+@embed.command(name="all")
+@click.option("--dry-run", is_flag=True, help="Preview without API calls")
+@click.option(
+    "--backend",
+    type=click.Choice(["s2", "local", "openai"]),
+    help="Override embedding backend",
+)
+@click.pass_context
+def embed_all(ctx, dry_run, backend):
+    """Run sources → fragments → sections in sequence."""
+    console.print("[dim]Step 1/3: sources[/dim]")
+    ctx.invoke(embed_sources, dry_run=dry_run, backend=backend)
+    console.print("\n[dim]Step 2/3: fragments[/dim]")
+    ctx.invoke(embed_fragments, dry_run=dry_run, backend=backend)
+    console.print("\n[dim]Step 3/3: sections[/dim]")
+    ctx.invoke(embed_sections, dry_run=dry_run, backend=backend)
 
 
 @main.command()
@@ -3248,6 +3295,9 @@ def outline(ctx, no_save, scan_only, prompt, fresh):
     from .skills.outliner import generate_outline as gen_outline
     from .skills.outliner import save_outline
 
+    # Capture current section IDs before generation (for stale-assignment warning)
+    old_sections = set(kctx.project.sections.keys()) if kctx.project else set()
+
     # 1. Scan project files
     project_files = scan_project_files(kctx.project_root)
 
@@ -3357,6 +3407,18 @@ def outline(ctx, no_save, scan_only, prompt, fresh):
         console.print("\n[dim]Outline saved to KLEMMA.md[/dim]")
     else:
         console.print(f"\n[dim]Saved: {saved_path}[/dim]")
+
+    # 5b. Warn if section structure changed and sources may need reassignment
+    if fresh and old_sections and result.sections:
+        new_sections = set(result.sections.keys())
+        removed = old_sections - new_sections
+        if removed:
+            console.print(
+                f"\n[yellow]⚠ Section structure changed "
+                f"(removed: {', '.join(sorted(removed))}).[/yellow]\n"
+                "[yellow]  Sources may be assigned to outdated sections.[/yellow]\n"
+                "[yellow]  Run: klemma reassign[/yellow]"
+            )
 
     # 6. Auto-generate chapter_mapping from outline chapters
     if result.chapters:
@@ -3484,7 +3546,7 @@ def ask(ctx, query, section, chapter, model):
             )
         else:
             console.print(
-                "[dim]RAG: no fragment embeddings (run klemma embed --fragments)[/dim]"
+                "[dim]RAG: no fragment embeddings (run klemma embed fragments)[/dim]"
             )
 
     console.print(f"[dim]Query: {query}[/dim]")
@@ -3970,7 +4032,7 @@ def reassign(ctx, threshold, limit, apply, fresh):
     if not section_embeddings:
         console.print(
             "[red]No section embeddings found. "
-            "Run 'klemma embed --sections' first.[/red]"
+            "Run 'klemma embed sections' first.[/red]"
         )
         raise SystemExit(1)
 
@@ -3979,7 +4041,7 @@ def reassign(ctx, threshold, limit, apply, fresh):
     if not frag_embeddings:
         console.print(
             "[red]No fragment embeddings found. "
-            "Run 'klemma embed --fragments' first.[/red]"
+            "Run 'klemma embed fragments' first.[/red]"
         )
         raise SystemExit(1)
 
