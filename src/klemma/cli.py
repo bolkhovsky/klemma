@@ -1035,8 +1035,8 @@ def _load_prefill(config_path: Path) -> dict:
         "openai_api_key": has_klemmarc_openai_key,  # bool for default, not the actual key
         "embeddings_backend": embeddings.get("backend", ""),
         "vault_path": obsidian.get("vault_path", ""),
-        "notes_folder": obsidian.get("notes_folder", "References"),
-        "tags_folder": obsidian.get("tags_folder", "Tags"),
+        "notes_folder": obsidian.get("notes_folder", ""),
+        "tags_folder": obsidian.get("tags_folder", ""),
         "zotero_storage": zotero.get("storage_path", ""),
         "zotero_library_json": zotero.get("library_json", ""),
     }
@@ -1224,9 +1224,9 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
     else:
         backend = "claude"
         ai_model = "sonnet"
-        click.echo("    LLM: Claude Code Max  |  Embeddings: Semantic Scholar (free)")
+        click.echo("    LLM: Claude Code Max  |  Embeddings: not configured (add later)")
 
-    embeddings_backend = "openai" if has_openai else "s2"
+    embeddings_backend = "openai" if has_openai else ""
 
     # --- Auto-discovery (prefill overrides discovery) ---
     click.echo("\n  Detecting paths...")
@@ -1266,15 +1266,22 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
         )
         values.vault_path = vault_str
 
-    if values.vault_path and values.notes_folder:
-        notes_dir = Path(values.vault_path) / values.notes_folder
-        if not notes_dir.is_dir():
-            console.print(
-                f"[yellow]  Warning: '{values.notes_folder}' not found in vault.[/yellow]"
-            )
-            console.print(
-                "[dim]  Fix notes_folder in .klemma/config.yaml after init.[/dim]"
-            )
+    if values.vault_path:
+        from .discovery import discover_vault_folders
+        auto_notes, auto_tags = discover_vault_folders(Path(values.vault_path))
+        if auto_notes and not values.notes_folder:
+            values.notes_folder = auto_notes
+        if auto_tags and not values.tags_folder:
+            values.tags_folder = auto_tags
+        if values.notes_folder:
+            notes_dir = Path(values.vault_path) / values.notes_folder
+            if not notes_dir.is_dir():
+                console.print(
+                    f"[yellow]  Warning: '{values.notes_folder}' not found in vault.[/yellow]"
+                )
+                console.print(
+                    "[dim]  Fix notes_folder in .klemma/config.yaml after init.[/dim]"
+                )
 
     # Zotero storage
     prefill_storage = pf.get("zotero_storage", "")

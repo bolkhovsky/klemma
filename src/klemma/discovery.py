@@ -255,6 +255,45 @@ def _extract_vault_tags(note_path: Path) -> list[str]:
         return []
 
 
+def discover_vault_folders(vault_path: Path) -> tuple[str, str]:
+    """Detect notes_folder and tags_folder by scanning vault subdirectories.
+
+    notes_folder: subdir containing the most "@"-prefixed .md files (citekey notes).
+    tags_folder:  subdir whose name contains "tag" (case-insensitive).
+
+    Returns ("", "") if nothing detected.
+    """
+    notes_folder = ""
+    tags_folder = ""
+
+    if not vault_path.is_dir():
+        return notes_folder, tags_folder
+
+    try:
+        subdirs = [d for d in vault_path.iterdir() if d.is_dir() and not d.name.startswith(".")]
+    except OSError:
+        return notes_folder, tags_folder
+
+    # notes_folder: subdir with most @citekey.md files
+    best_count = 0
+    for d in subdirs:
+        try:
+            count = sum(1 for f in d.iterdir() if f.suffix == ".md" and f.stem.startswith("@"))
+        except OSError:
+            count = 0
+        if count > best_count:
+            best_count = count
+            notes_folder = d.name
+
+    # tags_folder: subdir whose name contains "tag" (case-insensitive)
+    for d in subdirs:
+        if "tag" in d.name.lower():
+            tags_folder = d.name
+            break
+
+    return notes_folder, tags_folder
+
+
 def detect_language() -> str:
     """Detect 2-letter language code from system locale."""
     for var in ("LANG", "LC_ALL", "LC_MESSAGES"):

@@ -26,8 +26,8 @@ class InitValues:
     keywords: list[str] = None  # type: ignore[assignment]
     language: str = "ru"
     vault_path: str = ""
-    notes_folder: str = "References"
-    tags_folder: str = "Tags"
+    notes_folder: str = ""
+    tags_folder: str = ""
     zotero_storage: str = ""
     zotero_library_json: str = ""
     backend: str = ""          # "claude" | "litellm" | "" (use klemmarc default)
@@ -96,17 +96,15 @@ def _build_project_config(values: InitValues, *, has_parent: bool = False) -> di
             ai_cfg["model"] = "sonnet"
         cfg["ai"] = ai_cfg
 
-    # Embeddings — derived from whether OpenAI key is available
+    # Embeddings — only written when explicitly configured or OpenAI key present.
+    # Do NOT default to s2 — user should opt in explicitly.
     emb_backend = values.embeddings_backend
-    if not emb_backend:
-        emb_backend = "openai" if values.openai_api_key else "s2"
+    if not emb_backend and values.openai_api_key:
+        emb_backend = "openai"
     if emb_backend == "openai":
         cfg["embeddings"] = {"backend": "openai", "model": "text-embedding-3-small"}
     elif emb_backend == "s2":
         cfg["embeddings"] = {"backend": "s2"}
-
-    # State
-    cfg["state"] = {"db_path": "./data/klemma.db"}
 
     return cfg
 
