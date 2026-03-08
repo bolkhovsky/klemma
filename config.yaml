@@ -26,9 +26,6 @@ ai:
   timeout: 300
   retries: 2
 
-state:
-  db_path: "./data/klemma.db"
-
 dissertation:
   current_chapter: 1
   current_section: "1.2"
