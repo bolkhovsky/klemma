@@ -577,9 +577,14 @@ def load_outline_context(
         ol_idx = body.find("## Outline")
         if ol_idx != -1:
             after_ol = ol_idx + len("## Outline")
-            # Find the next top-level section that is NOT a numbered chapter heading
-            # (## Notes, ## History, ## etc.) — the outline section contains ## N. headings
-            next_h2_match = re.search(r"\n## [^0-9#]", body[after_ol:])
+            # Find the next KLEMMA.md-level meta-section (Notes/History).
+            # The outline body may itself contain ## headings (## Scientific
+            # Contributions, ## Глава N., etc.) which must NOT terminate extraction.
+            # Only ## Notes / ## History (canonical save_outline() siblings) terminate.
+            next_h2_match = re.search(
+                r"\n## (?:Notes|History|✏️|📋)",
+                body[after_ol:],
+            )
             if next_h2_match:
                 outline_text = body[after_ol:after_ol + next_h2_match.start()].strip()
             else:
@@ -615,9 +620,9 @@ def load_outline_context(
     if mb:
         result["current_section_desc"] = mb.group(1).strip()[:600]
 
-    # Extract chapter description: text after ## N. Title until first ###
+    # Extract chapter description: text after ## N. Title or ## Глава N. Title
     ch_block_re = re.compile(
-        r"^##\s+" + re.escape(str(chapter_num)) + r"[\.\s].+?\n(.*?)(?=^###|\Z)",
+        r"^##\s+(?:\S+\s+)?" + re.escape(str(chapter_num)) + r"[\.\s].+?\n(.*?)(?=^###|\Z)",
         re.MULTILINE | re.DOTALL,
     )
     mc = ch_block_re.search(outline_text)
