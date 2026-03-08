@@ -2,12 +2,16 @@
 
 Verifies CLI flags (--name, --description, --keywords, --language)
 create projects without TTY interaction.
+
+Content fields (type, title, chapters, etc.) now live in KLEMMA.md frontmatter.
+config.yaml contains only infrastructure (ai, zotero, obsidian, state).
 """
 
 import yaml
 from click.testing import CliRunner
 
 from klemma.cli import main as klemma_cli
+from klemma.config import parse_klemma_md
 
 
 def test_init_with_name_creates_project(monkeypatch, tmp_path):
@@ -25,7 +29,7 @@ def test_init_with_name_creates_project(monkeypatch, tmp_path):
 
 
 def test_init_non_interactive_creates_config_with_values(monkeypatch, tmp_path):
-    """CLI flags populate config.yaml correctly."""
+    """CLI flags populate KLEMMA.md frontmatter correctly; config.yaml has no content fields."""
     runner = CliRunner()
     monkeypatch.setenv("KLEMMA_HOME", str(tmp_path / ".klemma_home"))
 
@@ -41,11 +45,16 @@ def test_init_non_interactive_creates_config_with_values(monkeypatch, tmp_path):
 
         from pathlib import Path
 
+        # Content fields are now in KLEMMA.md frontmatter
+        fm, _ = parse_klemma_md(Path(td) / "KLEMMA.md")
+        assert fm["type"] == "paper"
+        assert fm["title"] == "Ice Sheet Analysis"
+        assert fm["description"] == "Modeling ice sheet dynamics"
+        assert fm["priority_terms"] == ["ice sheets", "climate", "GrIS"]
+
+        # config.yaml has no project: section (infrastructure only)
         cfg = yaml.safe_load((Path(td) / ".klemma" / "config.yaml").read_text())
-        assert cfg["project"]["type"] == "paper"
-        assert cfg["project"]["title"] == "Ice Sheet Analysis"
-        assert cfg["project"]["description"] == "Modeling ice sheet dynamics"
-        assert cfg["project"]["priority_terms"] == ["ice sheets", "climate", "GrIS"]
+        assert "project" not in cfg
         assert cfg["ai"]["language"] == "en"
 
 
@@ -95,9 +104,13 @@ def test_init_non_interactive_minimal(monkeypatch, tmp_path):
 
         from pathlib import Path
 
+        # Title is in KLEMMA.md frontmatter
+        fm, _ = parse_klemma_md(Path(td) / "KLEMMA.md")
+        assert fm["title"] == "Quick Project"
+
+        # config.yaml has no project: section; language is in ai:
         cfg = yaml.safe_load((Path(td) / ".klemma" / "config.yaml").read_text())
-        assert cfg["project"]["title"] == "Quick Project"
-        # Default language is ru
+        assert "project" not in cfg
         assert cfg["ai"]["language"] == "ru"
 
 

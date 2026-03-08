@@ -11,7 +11,7 @@ Click CLI entry point. Defines 17 commands + hidden aliases.
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
-- Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `library duplicates`, `suggest`, `reassign`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`
+- Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `library duplicates`, `suggest`, `reassign`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`, `migrate-content` (hidden — moves config.yaml content fields to KLEMMA.md frontmatter)
 - Hidden aliases: `gaps suggest` → `suggest`, `coverage` → `status --verbose`
 - Deprecation warnings: bare `klemma gaps` → use `klemma status --verbose`; `klemma library -s` → use `klemma research -s`
 - `init --outline` generates an outline after project setup (requires AI backend)
@@ -27,27 +27,30 @@ Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `li
 ### config.py (~800 lines)
 Pydantic config models + Git-style project discovery + klemmarc loading.
 Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `_resolved_api_keys` PrivateAttr), `EmbeddingsConfig`, `SearchConfig` (`backend`, `throttle`), `SuggestConfig` (`max_age_years=10`, `classic_min_score=15.0`), `StateConfig` (`db_path`, `inherit_db`), `DissertationConfig`, `SystemConfig`, `ProjectConfig` (`auto_register: "mapped"|"all"` — filter new sources by chapter_mapping match).
+- `parse_klemma_md(path)` — split YAML frontmatter from KLEMMA.md body; returns `({}, full_text)` if no frontmatter. Strict: only matches `---` at file start (not mid-file horizontal rules). Integer chapter keys preserved.
+- `save_klemma_md(path, frontmatter, body)` — write `---\n{yaml}\n---\n{body}` to KLEMMA.md
 - `generate_chapter_mapping(chapters, sections?)` — auto-generate `ChapterMapping` regex patterns from chapter titles (keyword extraction, stopword filtering)
 - `_load_klemmarc()` — load `~/.klemmarc.yaml` (or `.yml` / `.klemmarc`) global config
 - `_derive_provider(backend, model)` — extract provider name for api_keys lookup (e.g. `litellm` + `anthropic/claude-sonnet` → `"anthropic"`)
 - `_check_klemmarc_permissions()` — fix permissions on `~/.klemmarc*` if world-readable
 - `discover_project_root(start)` — traverse up from cwd to find nearest `.klemma/`
 - `discover_project_chain(start)` — find all project roots child-first, max depth 3
-- `resolve_effective_config(project_chain, config_override)` — merge: klemmarc < system < parent < child < CLI override; injects `api_keys` into `AIConfig._resolved_api_keys`; runs `_warn_config_issues()` on each layer
+- `resolve_effective_config(project_chain, config_override)` — merge: klemmarc < system < parent < child < CLI override; injects `api_keys` into `AIConfig._resolved_api_keys`; runs `_warn_config_issues()` on each layer. **ADR-013**: reads KLEMMA.md frontmatter for ProjectConfig (priority over config.yaml `project:` section). Emits DeprecationWarning when content fields found in config.yaml without frontmatter.
 - `_warn_config_issues(raw, source)` — warns about misplaced keys, unknown keys, bare Claude model shorthands with litellm backend; uses `warnings.warn()` for stderr visibility
-- `load_project_context(project_chain, config)` — aggregate KLEMMA.md files parent-first
+- `load_project_context(project_chain, config)` — aggregate KLEMMA.md files parent-first. Strips YAML frontmatter — AI commands see prose body only (not structured config).
 - `ensure_system_home()` — auto-create `~/.klemma/` via `init_system()` on first run; checks klemmarc permissions
 - `get_system_home()` / `get_klemma_home()` — returns `Path(KLEMMA_HOME)` or `~/.klemma`
 - `load_available_tags(klemma_home, config, project_chain?)` — reads `tags.yaml` with parent fallback
 - `resolve_prompt(name, klemma_home, project_chain?)` — 4-level: project → parent → system → shipped
 - `scan_project_files(project_root, max_chars?)` — scan .md/.tex/.bib/.txt files, returns [{name, path, size, content_preview}]
-- `update_project_config(project_root, updates)` — merge updates into .klemma/config.yaml project section
+- `update_project_config(project_root, updates)` — delegates to `_update_via_klemma_md()` if frontmatter exists, else `_update_via_config_yaml()`
 - Selective inheritance: only `_INHERITED_KEYS = {"obsidian", "zotero", "ai", "embeddings"}` from parent projects
 - Default AI backend: `litellm` (was `claude`)
 
 ### setup.py (338 lines)
 `klemma init` logic — creates per-directory `.klemma/` projects, `~/.klemma/` system config, and `~/.klemmarc.yaml` global config. Interactive wizard with auto-discovery; non-interactive mode via CLI flags.
-- `init_project(project_dir, project_type, values?)` — creates `.klemma/`, `KLEMMA.md`, updates `.gitignore`; accepts `InitValues` from wizard or CLI flags
+- `init_project(project_dir, project_type, values?)` — creates `.klemma/`, `KLEMMA.md` (with YAML frontmatter for content fields), updates `.gitignore`; `config.yaml` has infrastructure only (no `project:` section)
+- `migrate_content_to_klemma_md(project_root)` — reads content fields from `config.yaml project:`/`dissertation:`, writes to KLEMMA.md frontmatter, strips content from `config.yaml`; returns `{"migrated_fields": [...], "warnings": [...]}`
 - `init_system(system_home)` — creates `~/.klemmarc.yaml` (0600, with api_keys template) + `~/.klemma/config.yaml` (legacy fallback)
 - `init_klemma_home()` — legacy alias for `init_system()`
 - Interactive mode: auto-discovers Obsidian vaults, Zotero exports via `discovery.py`

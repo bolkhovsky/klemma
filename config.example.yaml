@@ -3,6 +3,9 @@
 # =============================================================================
 # Copy to ~/.klemma/config.yaml and customize for your project.
 # See: https://github.com/bolkhovsky/klemma
+#
+# NOTE: Content fields (chapters, scientific_results, title, etc.) go in
+# KLEMMA.md frontmatter, NOT here. This file is for infrastructure only.
 
 instance:
   name: "my-dissertation"
@@ -79,59 +82,11 @@ ai:
 state:
   db_path: "./data/klemma.db"          # relative to ~/.klemma/ or absolute
 
-dissertation:
-  current_chapter: 1
-  current_section: "1.1"
-  title: "Your dissertation title"
-  chapters:
-    1: "Literature review"
-    2: "Methodology"
-    3: "Results and discussion"
-    4: "Implementation"
-  scientific_results:
-    nr1: "First scientific result"
-    nr2: "Second scientific result"
-  deadlines:
-    - chapter: "1"
-      deadline: "2026-06-01"
-      label: "Chapter 1"
-    - chapter: "2"
-      deadline: "2026-09-01"
-      label: "Chapter 2"
-    - chapter: "3"
-      deadline: "2026-11-01"
-      label: "Chapter 3"
-    - chapter: "4"
-      deadline: "2027-01-01"
-      label: "Chapter 4"
-  chapter_plan_pattern: "Plan_Chapter{chapter}"
-  writing_constraints: "1-2 hours/day, 200-400 words/day"
-  priority_terms:
-    - your_key_term_1
-    - your_key_term_2
-  min_sources_per_section: 3
-  chapter_mapping:
-    # Map keywords in source text to chapters/sections:
-    # - pattern: "regex pattern"
-    #   chapter: 1
-    #   section: "1.2.1"
-    - pattern: "literature review|survey|state of the art"
-      chapter: 1
-      section: "1.1"
-    - pattern: "methodology|method|approach"
-      chapter: 2
-      section: "2.1"
-
-planning:
-  dissertation_focus: "Chapter 1, Section 1.1"
-  assistant_roadmap:
-    - "Fragment extraction (klemma process)"
-    - "Reading queue"
-
-reading:
-  snippet_length: 2000
-  daily_papers: 1
-  priority_boost_chapters: [1, 2]
+# DEPRECATED: dissertation: section — use KLEMMA.md frontmatter instead.
+# Run 'klemma migrate' to move content fields to KLEMMA.md.
+# dissertation:
+#   title: "Your dissertation title"
+#   chapters: ...
 
 processing:
   batch_size: 2
