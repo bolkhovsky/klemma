@@ -454,11 +454,13 @@ class TestInitProject:
         assert (tmp_path / ".klemma" / "config.yaml").read_text() == "existing"
 
     def test_project_type_in_config(self, tmp_path):
+        from klemma.config import parse_klemma_md
         from klemma.setup import init_project
 
         init_project(tmp_path, project_type="paper")
-        config_text = (tmp_path / ".klemma" / "config.yaml").read_text()
-        assert "paper" in config_text
+        # type is now in KLEMMA.md frontmatter, not config.yaml
+        fm, _ = parse_klemma_md(tmp_path / "KLEMMA.md")
+        assert fm["type"] == "paper"
 
     def test_gitignore_updated(self, tmp_path):
         (tmp_path / ".gitignore").write_text("*.pyc\n")

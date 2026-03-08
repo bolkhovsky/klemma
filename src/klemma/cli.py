@@ -1035,8 +1035,8 @@ def _load_prefill(config_path: Path) -> dict:
         "openai_api_key": has_klemmarc_openai_key,  # bool for default, not the actual key
         "embeddings_backend": embeddings.get("backend", ""),
         "vault_path": obsidian.get("vault_path", ""),
-        "notes_folder": obsidian.get("notes_folder", "References"),
-        "tags_folder": obsidian.get("tags_folder", "Tags"),
+        "notes_folder": obsidian.get("notes_folder", ""),
+        "tags_folder": obsidian.get("tags_folder", ""),
         "zotero_storage": zotero.get("storage_path", ""),
         "zotero_library_json": zotero.get("library_json", ""),
     }
@@ -1224,9 +1224,9 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
     else:
         backend = "claude"
         ai_model = "sonnet"
-        click.echo("    LLM: Claude Code Max  |  Embeddings: Semantic Scholar (free)")
+        click.echo("    LLM: Claude Code Max  |  Embeddings: not configured (add later)")
 
-    embeddings_backend = "openai" if has_openai else "s2"
+    embeddings_backend = "openai" if has_openai else ""
 
     # --- Auto-discovery (prefill overrides discovery) ---
     click.echo("\n  Detecting paths...")
@@ -1266,15 +1266,22 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
         )
         values.vault_path = vault_str
 
-    if values.vault_path and values.notes_folder:
-        notes_dir = Path(values.vault_path) / values.notes_folder
-        if not notes_dir.is_dir():
-            console.print(
-                f"[yellow]  Warning: '{values.notes_folder}' not found in vault.[/yellow]"
-            )
-            console.print(
-                "[dim]  Fix notes_folder in .klemma/config.yaml after init.[/dim]"
-            )
+    if values.vault_path:
+        from .discovery import discover_vault_folders
+        auto_notes, auto_tags = discover_vault_folders(Path(values.vault_path))
+        if auto_notes and not values.notes_folder:
+            values.notes_folder = auto_notes
+        if auto_tags and not values.tags_folder:
+            values.tags_folder = auto_tags
+        if values.notes_folder:
+            notes_dir = Path(values.vault_path) / values.notes_folder
+            if not notes_dir.is_dir():
+                console.print(
+                    f"[yellow]  Warning: '{values.notes_folder}' not found in vault.[/yellow]"
+                )
+                console.print(
+                    "[dim]  Fix notes_folder in .klemma/config.yaml after init.[/dim]"
+                )
 
     # Zotero storage
     prefill_storage = pf.get("zotero_storage", "")
@@ -2667,9 +2674,11 @@ def draft(ctx, section, model, no_save, no_rag, prompt):
 
     from .config import parse_chapter_from_section
     from .skills.context_loader import (
+        extract_previous_section_ending,
         extract_section,
         fit_prompt_budget,
         load_chapter_draft,
+        load_outline_context,
         load_research_report,
         load_section_sources,
         parse_argument_blocks,
@@ -2692,23 +2701,12 @@ def draft(ctx, section, model, no_save, no_rag, prompt):
     # 0. Show writing order context (Kallestinova 2011 results-first)
     _show_writing_order(kctx, section)
 
-    # 0b. Extract section title from outline
+    # 0b. Load outline context (section title, descriptions, scientific contributions)
+    outline_ctx: dict = {}
     section_title = ""
     if kctx.project_root:
-        import re as _re
-        _outline_pat = _re.compile(r"^Outline_.*\.md$")
-        for p in sorted(kctx.project_root.iterdir()):
-            if _outline_pat.match(p.name) and p.is_file():
-                _sec_re = _re.compile(
-                    r"^###\s+" + _re.escape(section) + r"\.?\s+(.+)",
-                    _re.MULTILINE,
-                )
-                _m = _sec_re.search(
-                    p.read_text(encoding="utf-8", errors="replace")
-                )
-                if _m:
-                    section_title = _m.group(1).strip()
-                break
+        outline_ctx = load_outline_context(section, kctx.project_root)
+        section_title = outline_ctx.get("section_title", "")
 
     # 1. Load research report
     research_report_content = ""
@@ -2732,6 +2730,23 @@ def draft(ctx, section, model, no_save, no_rag, prompt):
         console.print(
             f"[dim]Existing draft found ({len(existing_draft.split())} words)[/dim]"
         )
+
+    # 2b. Extract previous section ending for continuity bridge
+    prev_ending = ""
+    if draft_content and kctx.project_root:
+        prev_ending = extract_previous_section_ending(draft_content, section, max_chars=500)
+    if not prev_ending and chapter > 1 and kctx.project_root:
+        # Cross-chapter: load previous chapter draft
+        prev_chapter_content = load_chapter_draft(
+            chapter - 1, cfg, kctx.vault,
+            project=kctx.project, project_root=kctx.project_root,
+        )
+        if prev_chapter_content:
+            paras = [p.strip() for p in prev_chapter_content.split("\n\n") if p.strip()]
+            if paras:
+                prev_ending = paras[-1][:500]
+    if prev_ending:
+        console.print("[dim]Previous section ending loaded for continuity[/dim]")
 
     # 3. Load source summaries
     source_summaries = load_section_sources(section, chapter, kctx.state, kctx.vault)
@@ -2848,6 +2863,8 @@ def draft(ctx, section, model, no_save, no_rag, prompt):
             valid_citekeys=valid_citekeys,
             section_title=section_title,
             custom_prompt=prompt,
+            prev_ending=prev_ending,
+            outline_context=outline_ctx or None,
         )
 
     if not result.text:
@@ -3334,9 +3351,12 @@ def outline(ctx, no_save, scan_only, prompt, fresh):
     if no_save:
         return
 
-    # 5. Save to project_root (no config.yaml, KLEMMA.md, or vault writes)
+    # 5. Save outline: to KLEMMA.md if present, else Outline_*.md (legacy)
     saved_path = save_outline(result, project_name, kctx.project_root)
-    console.print(f"\n[dim]Saved: {saved_path}[/dim]")
+    if saved_path.name == "KLEMMA.md":
+        console.print("\n[dim]Outline saved to KLEMMA.md[/dim]")
+    else:
+        console.print(f"\n[dim]Saved: {saved_path}[/dim]")
 
     # 6. Auto-generate chapter_mapping from outline chapters
     if result.chapters:
@@ -5532,6 +5552,69 @@ def migrate(ctx, dry_run):
     console.print("\n[green]Migration complete.[/green]")
     console.print(f"[dim]Project created in {project_dir}/[/dim]")
     console.print(f"[dim]System config at {system_home}/[/dim]")
+
+
+# --- Migrate content fields to KLEMMA.md frontmatter ---
+
+
+@main.command(name="migrate-content", hidden=True)
+@click.option("--dry-run", is_flag=True, help="Preview changes without modifying files")
+@click.pass_context
+def migrate_content(ctx, dry_run):
+    """[hidden] Migrate content fields from config.yaml to KLEMMA.md frontmatter.
+
+    Moves chapters, scientific_results, title, deadlines, etc. from
+    .klemma/config.yaml project: section into KLEMMA.md YAML frontmatter.
+    Leaves infrastructure (ai, zotero, obsidian, state) in config.yaml.
+
+    Run once per project after upgrading to the new KLEMMA.md format.
+    """
+    from .setup import migrate_content_to_klemma_md
+
+    kctx = _get_context(ctx)
+    project_root = kctx.project_root
+
+    if dry_run:
+        console.print("[bold]Dry run — showing what would be migrated:[/bold]\n")
+        import yaml as _yaml
+        config_path = project_root / ".klemma" / "config.yaml"
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                raw = _yaml.safe_load(f) or {}
+            content_fields = {
+                "type", "title", "description", "current_focus", "chapters",
+                "scientific_results", "priority_terms", "chapter_mapping",
+                "section_type_map", "deadlines", "writing_constraints",
+                "min_sources_per_section", "auto_register",
+            }
+            project = raw.get("project", {})
+            found = [k for k in content_fields if k in project]
+            if found:
+                console.print(f"Would migrate from config.yaml project: {found}")
+            diss = raw.get("dissertation", {})
+            if diss:
+                console.print(f"Would migrate from config.yaml dissertation: {list(diss.keys())}")
+            if not found and not diss:
+                console.print("[dim]No content fields found to migrate.[/dim]")
+        console.print(f"\n[dim]Target: {project_root / 'KLEMMA.md'}[/dim]")
+        return
+
+    result = migrate_content_to_klemma_md(project_root)
+    migrated = result["migrated_fields"]
+    warnings = result["warnings"]
+
+    if migrated:
+        console.print(f"[green]Migrated {len(migrated)} fields to KLEMMA.md:[/green]")
+        for f in migrated:
+            console.print(f"  [dim]+ {f}[/dim]")
+    else:
+        console.print("[yellow]No content fields found to migrate.[/yellow]")
+
+    for w in warnings:
+        console.print(f"[yellow]Warning: {w}[/yellow]")
+
+    console.print(f"\n[dim]KLEMMA.md updated at {project_root / 'KLEMMA.md'}[/dim]")
+    console.print("[dim]config.yaml stripped of content fields (infrastructure only)[/dim]")
 
 
 # --- Backward-compatible aliases ---

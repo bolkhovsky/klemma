@@ -70,6 +70,8 @@ def generate_draft(
     valid_citekeys: Optional[set[str]] = None,
     section_title: str = "",
     custom_prompt: str = "",
+    prev_ending: str = "",
+    outline_context: Optional[dict] = None,
 ) -> DraftResult:
     """Generate a section draft using AI.
 
@@ -94,9 +96,15 @@ def generate_draft(
         klemma_home,
         project_chain=project_chain,
     )
+    # Build dissertation context title for structured prompt
+    dissertation_context_title = ""
+    if outline_context:
+        dissertation_context_title = outline_context.get("title", "") or dissertation_context
+
     prompt_text = ai.render_prompt(
         prompt_path,
         dissertation_context=dissertation_context,
+        dissertation_context_title=dissertation_context_title,
         section=section,
         chapter_num=chapter,
         chapter_name=chapter_name,
@@ -108,6 +116,8 @@ def generate_draft(
         section_title=section_title,
         custom_prompt=custom_prompt,
         language=config.ai.language,
+        prev_ending=prev_ending,
+        outline_context=outline_context or {},
     )
 
     system = (

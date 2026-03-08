@@ -1,8 +1,38 @@
 Ты — научный консультант. Напиши черновик раздела {{ section }}{% if section_title %} «{{ section_title }}»{% endif %} (глава {{ chapter_num }}{% if chapter_name %}: {{ chapter_name }}{% endif %}) диссертации.
 
-## Контекст диссертации
+## Цель и контекст работы
 
+**Тема:** {{ dissertation_context_title or dissertation_context }}
+{% if outline_context and outline_context.description %}
+**Описание:** {{ outline_context.description }}
+{% endif %}
+{% if outline_context and outline_context.scientific_contributions %}
+**Научные результаты:**
+{{ outline_context.scientific_contributions }}
+{% endif %}
+{% if not dissertation_context_title and not outline_context %}
 {{ dissertation_context }}
+{% endif %}
+
+{% if outline_context and outline_context.current_chapter_desc %}
+## Контекст главы
+
+{{ outline_context.current_chapter_desc }}
+{% endif %}
+
+{% if outline_context and outline_context.current_section_desc %}
+## Задача раздела {{ section }}
+
+{{ outline_context.current_section_desc }}
+{% endif %}
+
+{% if prev_ending %}
+## Окончание предыдущего раздела
+
+Обеспечь плавный переход от текста ниже. Не повторяй его содержание, но связь должна быть очевидна.
+
+{{ prev_ending }}
+{% endif %}
 
 {% if research_report %}
 ## Исследовательский брифинг

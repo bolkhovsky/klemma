@@ -26,8 +26,8 @@ class InitValues:
     keywords: list[str] = None  # type: ignore[assignment]
     language: str = "ru"
     vault_path: str = ""
-    notes_folder: str = "References"
-    tags_folder: str = "Tags"
+    notes_folder: str = ""
+    tags_folder: str = ""
     zotero_storage: str = ""
     zotero_library_json: str = ""
     backend: str = ""          # "claude" | "litellm" | "" (use klemmarc default)
@@ -43,6 +43,9 @@ class InitValues:
 
 def _build_project_config(values: InitValues, *, has_parent: bool = False) -> dict:
     """Build config dict from wizard values.
+
+    Content fields (chapters, title, etc.) now live in KLEMMA.md frontmatter.
+    This function returns infrastructure-only config (ai, zotero, obsidian, state).
 
     When has_parent=True, skip ai/embeddings defaults — child projects
     inherit these from parent via config cascade (ADR-012).
@@ -93,46 +96,15 @@ def _build_project_config(values: InitValues, *, has_parent: bool = False) -> di
             ai_cfg["model"] = "sonnet"
         cfg["ai"] = ai_cfg
 
-    # Project
-    project: dict = {"type": values.project_type}
-    if values.title:
-        project["title"] = values.title
-    if values.description:
-        project["description"] = values.description
-    if values.keywords:
-        project["priority_terms"] = values.keywords
-
-    # Dissertation structure from plan-prospect → merge into project section
-    if values.plan_data and values.project_type == "dissertation":
-        diss = _build_dissertation_config(values.plan_data)
-        # Map dissertation fields to project fields
-        if "chapters" in diss:
-            project["chapters"] = diss["chapters"]
-        if "section_type_map" in diss:
-            project["section_type_map"] = diss["section_type_map"]
-        if "scientific_results" in diss:
-            project["scientific_results"] = diss["scientific_results"]
-        if "current_section" in diss:
-            project["current_focus"] = diss["current_section"]
-        if "min_sources_per_section" in diss:
-            project["min_sources_per_section"] = diss["min_sources_per_section"]
-        # Also keep title from plan if not already set
-        if not project.get("title") and "title" in diss:
-            project["title"] = diss["title"]
-
-    cfg["project"] = project
-
-    # Embeddings — derived from whether OpenAI key is available
+    # Embeddings — only written when explicitly configured or OpenAI key present.
+    # Do NOT default to s2 — user should opt in explicitly.
     emb_backend = values.embeddings_backend
-    if not emb_backend:
-        emb_backend = "openai" if values.openai_api_key else "s2"
+    if not emb_backend and values.openai_api_key:
+        emb_backend = "openai"
     if emb_backend == "openai":
         cfg["embeddings"] = {"backend": "openai", "model": "text-embedding-3-small"}
     elif emb_backend == "s2":
         cfg["embeddings"] = {"backend": "s2"}
-
-    # State
-    cfg["state"] = {"db_path": "./data/klemma.db"}
 
     return cfg
 
@@ -199,33 +171,91 @@ def _build_dissertation_config(plan_data) -> dict:
 
 
 def _build_klemma_md(values: InitValues) -> str:
-    """Build KLEMMA.md content from wizard values."""
+    """Build KLEMMA.md content with YAML frontmatter from wizard values.
+
+    Content fields go in frontmatter; human-readable prose goes in markdown body.
+    """
+    import yaml as _yaml
+
     title = values.title or "Your project title here"
-    lines = [
-        "# Project Context\n",
-        "<!-- This file describes your project for AI. It is passed as context to all",
-        "     AI-powered commands (plan, research, process, ask, etc.).",
-        "",
-        "     For nested projects, context is aggregated: parent context first, then child.",
-        "     For example, if this is a paper inside a dissertation directory, AI will see",
-        "     the dissertation context followed by this paper's context. -->\n",
-        f'Topic: "{title}"\n',
-    ]
+
+    # Build frontmatter dict (content fields only)
+    frontmatter: dict = {"type": values.project_type, "title": title}
 
     if values.description:
-        lines.append(f"Description: {values.description}\n")
-
-    lines.append("Scientific Results:")
-    lines.append("- NR1: First scientific result")
-    lines.append("- NR2: Second scientific result\n")
-
+        frontmatter["description"] = values.description
     if values.keywords:
-        lines.append(f"Key terms: {', '.join(values.keywords)}")
-    else:
-        lines.append("Key terms: term1, term2, term3")
-    lines.append("")
+        frontmatter["priority_terms"] = values.keywords
 
-    return "\n".join(lines)
+    # Dissertation structure from plan-prospect → into frontmatter
+    if values.plan_data and values.project_type == "dissertation":
+        diss = _build_dissertation_config(values.plan_data)
+        if "chapters" in diss:
+            frontmatter["chapters"] = diss["chapters"]
+        if "section_type_map" in diss:
+            frontmatter["section_type_map"] = diss["section_type_map"]
+        if "scientific_results" in diss:
+            frontmatter["scientific_results"] = diss["scientific_results"]
+        if "current_section" in diss:
+            frontmatter["current_focus"] = diss["current_section"]
+        if "min_sources_per_section" in diss:
+            frontmatter["min_sources_per_section"] = diss["min_sources_per_section"]
+        if "chapter_mapping" in diss:
+            frontmatter["chapter_mapping"] = diss["chapter_mapping"]
+        if not frontmatter.get("title") and "title" in diss:
+            frontmatter["title"] = diss["title"]
+    else:
+        # Defaults for non-plan projects
+        frontmatter["current_focus"] = "1.1"
+        frontmatter["chapters"] = {
+            1: "Literature review",
+            2: "Methodology",
+            3: "Results and discussion",
+        }
+        frontmatter["scientific_results"] = {
+            "nr1": "First scientific result",
+            "nr2": "Second scientific result",
+        }
+
+    frontmatter["min_sources_per_section"] = frontmatter.get("min_sources_per_section", 3)
+    frontmatter["auto_register"] = "mapped"
+
+    fm_text = _yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+    # Build markdown body (prose context for AI)
+    nr_lines = ""
+    if "scientific_results" in frontmatter:
+        nrs = frontmatter["scientific_results"]
+        nr_lines = "\n".join(f"- {k.upper()}: {v}" for k, v in nrs.items())
+
+    ch_lines = ""
+    if "chapters" in frontmatter:
+        ch_lines = "\n".join(
+            f"{num}. {name}" for num, name in sorted(frontmatter["chapters"].items())
+        )
+
+    kw_line = ""
+    if values.keywords:
+        kw_line = f"\nKey terms: {', '.join(values.keywords)}"
+
+    desc_line = f"\nDescription: {values.description}" if values.description else ""
+
+    body = (
+        "# Project Context\n\n"
+        "<!-- This file describes your project for AI. It is passed as context to all\n"
+        "     AI-powered commands (plan, research, process, ask, etc.).\n\n"
+        "     YAML frontmatter above holds structured project data. The markdown body\n"
+        "     below is free-form context shown to AI. Keep both in sync. -->\n\n"
+        f'Topic: "{title}"\n'
+        f"{desc_line}\n\n"
+        "## Scientific Results\n\n"
+        f"{nr_lines}\n\n"
+        "## Structure\n\n"
+        f"{ch_lines}\n"
+        f"{kw_line}\n"
+    )
+
+    return f"---\n{fm_text}---\n{body}"
 
 
 def _setup_claude_skills(project_dir: Path, created: list[str], skipped: list[str]):
@@ -352,7 +382,14 @@ def init_project(
         else:
             source = _EXAMPLES_DIR / "klemma.example.md"
             if source.exists():
-                shutil.copy2(source, klemma_md)
+                from .config import parse_klemma_md as _parse, save_klemma_md as _save  # noqa: I001
+                fm, body = _parse(source)
+                if fm:
+                    fm["type"] = project_type
+                    _save(klemma_md, fm, body)
+                else:
+                    # No frontmatter in example — copy as-is
+                    shutil.copy2(source, klemma_md)
             else:
                 klemma_md.write_text(
                     f"# Project Context\n\n"
@@ -614,3 +651,129 @@ def init_system(
 def init_klemma_home(klemma_home: Path) -> dict:
     """Legacy: create klemma_home with template files. Use init_project() instead."""
     return init_system(klemma_home)
+
+
+def migrate_content_to_klemma_md(project_root: Path) -> dict:
+    """Migrate content fields from config.yaml project: section to KLEMMA.md frontmatter.
+
+    Reads: config.yaml project: + dissertation: sections
+    Writes: KLEMMA.md frontmatter (preserving existing body)
+    Strips: content fields from config.yaml (keeps infrastructure only)
+
+    Returns {"migrated_fields": [...], "warnings": [...]}.
+    """
+    import yaml as _yaml  # noqa: I001
+
+    from .config import parse_klemma_md, save_klemma_md
+
+    migrated_fields: list[str] = []
+    migration_warnings: list[str] = []
+
+    config_path = project_root / ".klemma" / "config.yaml"
+    klemma_md_path = project_root / "KLEMMA.md"
+
+    if not config_path.exists():
+        migration_warnings.append("config.yaml not found — nothing to migrate")
+        return {"migrated_fields": migrated_fields, "warnings": migration_warnings}
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        raw = _yaml.safe_load(f) or {}
+
+    # Collect content fields from project: and dissertation: sections
+    content_fields = {
+        "type", "title", "description", "current_focus",
+        "chapters", "scientific_results", "priority_terms",
+        "chapter_mapping", "section_type_map", "section_type_weights",
+        "deadlines", "writing_constraints", "min_sources_per_section",
+        "auto_register", "chapter_plan_pattern", "chapter_draft_pattern",
+        "section_weights",
+    }
+
+    # Start with dissertation: section (lower priority)
+    new_frontmatter: dict = {}
+    diss = raw.get("dissertation", {})
+    if isinstance(diss, dict):
+        # Map dissertation: fields to project fields
+        field_map = {
+            "title": "title",
+            "chapters": "chapters",
+            "scientific_results": "scientific_results",
+            "priority_terms": "priority_terms",
+            "chapter_mapping": "chapter_mapping",
+            "section_type_map": "section_type_map",
+            "deadlines": "deadlines",
+            "writing_constraints": "writing_constraints",
+            "min_sources_per_section": "min_sources_per_section",
+            "chapter_plan_pattern": "chapter_plan_pattern",
+            "chapter_draft_pattern": "chapter_draft_pattern",
+            "section_weights": "section_weights",
+        }
+        for diss_key, proj_key in field_map.items():
+            if diss_key in diss:
+                new_frontmatter[proj_key] = diss[diss_key]
+                migrated_fields.append(f"dissertation.{diss_key}")
+        # current_section / current_chapter → current_focus
+        if "current_section" in diss:
+            new_frontmatter["current_focus"] = diss["current_section"]
+            migrated_fields.append("dissertation.current_section")
+        elif "current_chapter" in diss:
+            new_frontmatter["current_focus"] = str(diss["current_chapter"])
+            migrated_fields.append("dissertation.current_chapter")
+
+    # project: section overrides dissertation: (higher priority)
+    project = raw.get("project", {})
+    if isinstance(project, dict):
+        for field in content_fields:
+            if field in project:
+                new_frontmatter[field] = project[field]
+                migrated_fields.append(f"project.{field}")
+
+    if not new_frontmatter:
+        migration_warnings.append("No content fields found in config.yaml to migrate")
+        return {"migrated_fields": migrated_fields, "warnings": migration_warnings}
+
+    # Ensure chapters keys are int
+    if "chapters" in new_frontmatter and isinstance(new_frontmatter["chapters"], dict):
+        new_frontmatter["chapters"] = {int(k): v for k, v in new_frontmatter["chapters"].items()}
+
+    # Read existing KLEMMA.md (preserve body, ignore existing frontmatter)
+    existing_fm, existing_body = parse_klemma_md(klemma_md_path)
+    if existing_fm:
+        migration_warnings.append(
+            "KLEMMA.md already has frontmatter — merging (new values override old)"
+        )
+        existing_fm.update(new_frontmatter)
+        new_frontmatter = existing_fm
+    elif not klemma_md_path.exists():
+        existing_body = "# Project Context\n\n<!-- Add project description here. -->\n"
+
+    # Check for Outline_*.md and merge body
+    outline_merged = False
+    for p in sorted(project_root.glob("Outline_*.md")):
+        outline_text = p.read_text(encoding="utf-8")
+        # Only merge if KLEMMA.md body doesn't already have ## Outline
+        if "## Outline" not in existing_body:
+            existing_body = existing_body.rstrip() + f"\n\n## Outline\n\n{outline_text}\n"
+            outline_merged = True
+            migration_warnings.append(
+                f"Merged {p.name} into KLEMMA.md '## Outline' section. "
+                "Old file preserved — remove manually."
+            )
+        break  # only first outline
+
+    if not outline_merged and any(project_root.glob("Outline_*.md")):
+        migration_warnings.append(
+            "Outline_*.md found but ## Outline already in KLEMMA.md — not merged"
+        )
+
+    # Write new KLEMMA.md
+    save_klemma_md(klemma_md_path, new_frontmatter, existing_body)
+
+    # Strip content fields from config.yaml (keep infrastructure only)
+    infra_keys = {"ai", "zotero", "obsidian", "embeddings", "search", "state",
+                  "instance", "tags", "export", "planning", "reading", "processing", "mcp"}
+    new_raw = {k: v for k, v in raw.items() if k in infra_keys}
+    with open(config_path, "w", encoding="utf-8") as f:
+        _yaml.dump(new_raw, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+    return {"migrated_fields": migrated_fields, "warnings": migration_warnings}

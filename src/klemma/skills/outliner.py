@@ -8,7 +8,14 @@ from pathlib import Path
 from typing import Optional
 
 from ..ai import AIProvider
-from ..config import KlemmaConfig, ProjectConfig, resolve_prompt, scan_project_files
+from ..config import (
+    KlemmaConfig,
+    ProjectConfig,
+    parse_klemma_md,
+    resolve_prompt,
+    save_klemma_md,
+    scan_project_files,
+)
 from ..state import StateManager
 from .planner import _get_dissertation_context
 
@@ -28,19 +35,70 @@ class OutlineResult:
     update_summary: str = ""
 
 
+def _extract_outline_context(text: str) -> dict:
+    """Extract user_notes, history, and previous_date from outline text."""
+    # Extract '## ✏️ Что нового' / '## Notes' section
+    user_notes = ""
+    for marker in ("## ✏️ Что нового", "## Notes"):
+        wn_idx = text.find(marker)
+        if wn_idx != -1:
+            after_wn = wn_idx + len(marker)
+            next_heading = text.find("\n## ", after_wn)
+            raw = text[after_wn:next_heading].strip() if next_heading != -1 else text[after_wn:].strip()
+            if raw and not raw.startswith("_Запишите замечания"):
+                user_notes = raw
+            break
+
+    # Extract '## 📋 История изменений' / '## History' section
+    history = ""
+    for marker in ("## 📋 История изменений", "## History"):
+        hist_idx = text.find(marker)
+        if hist_idx != -1:
+            after_hist = hist_idx + len(marker)
+            next_heading = text.find("\n## ", after_hist)
+            history = text[after_hist:next_heading].strip() if next_heading != -1 else text[after_hist:].strip()
+            break
+
+    # Extract previous generation date
+    date_match = re.search(r"\*Generated:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\*", text)
+    previous_date = date_match.group(1) if date_match else ""
+
+    return {
+        "previous_text": text,
+        "user_notes": user_notes,
+        "history": history,
+        "previous_date": previous_date,
+    }
+
+
 def _load_previous_outline(
     project_name: str,
     project_root: Path,
 ) -> Optional[dict]:
-    """Read previous outline from project_root and extract context for incremental update.
+    """Read previous outline from KLEMMA.md ## Outline section, or Outline_*.md (fallback).
 
     Returns dict with keys:
-    - previous_text: full note text
-    - user_notes: text from '## ✏️ Что нового'
-    - history: text from '## 📋 История изменений'
+    - previous_text: full outline text
+    - user_notes: text from '## Notes' / '## ✏️ Что нового'
+    - history: text from '## History' / '## 📋 История изменений'
     - previous_date: date string from *Generated: ...* line
     Returns None if no previous outline exists.
     """
+    # 1. Try KLEMMA.md ## Outline section (new format)
+    klemma_md_path = project_root / "KLEMMA.md"
+    if klemma_md_path.exists():
+        _, body = parse_klemma_md(klemma_md_path)
+        outline_marker = "## Outline"
+        ol_idx = body.find(outline_marker)
+        if ol_idx != -1:
+            # Extract outline section text
+            after_ol = ol_idx + len(outline_marker)
+            next_h2 = body.find("\n## ", after_ol)
+            outline_text = body[after_ol:next_h2].strip() if next_h2 != -1 else body[after_ol:].strip()
+            if outline_text:
+                return _extract_outline_context(body[ol_idx:])
+
+    # 2. Fallback: Outline_*.md (legacy format)
     outline_path = project_root / f"Outline_{project_name}.md"
     if not outline_path.exists():
         return None
@@ -53,43 +111,7 @@ def _load_previous_outline(
     if not text.strip():
         return None
 
-    # Extract '## ✏️ Что нового' section
-    user_notes = ""
-    whats_new_marker = "## ✏️ Что нового"
-    wn_idx = text.find(whats_new_marker)
-    if wn_idx != -1:
-        after_wn = wn_idx + len(whats_new_marker)
-        next_heading = text.find("\n## ", after_wn)
-        if next_heading != -1:
-            raw = text[after_wn:next_heading].strip()
-        else:
-            raw = text[after_wn:].strip()
-        # Skip default placeholder
-        if raw and not raw.startswith("_Запишите замечания"):
-            user_notes = raw
-
-    # Extract '## 📋 История изменений' section
-    history = ""
-    history_marker = "## 📋 История изменений"
-    hist_idx = text.find(history_marker)
-    if hist_idx != -1:
-        after_hist = hist_idx + len(history_marker)
-        next_heading = text.find("\n## ", after_hist)
-        if next_heading != -1:
-            history = text[after_hist:next_heading].strip()
-        else:
-            history = text[after_hist:].strip()
-
-    # Extract previous generation date
-    date_match = re.search(r"\*Generated:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\*", text)
-    previous_date = date_match.group(1) if date_match else ""
-
-    return {
-        "previous_text": text,
-        "user_notes": user_notes,
-        "history": history,
-        "previous_date": previous_date,
-    }
+    return _extract_outline_context(text)
 
 
 def _build_new_history(
@@ -248,50 +270,126 @@ def save_outline(
     project_name: str,
     project_root: Path,
 ) -> Path:
-    """Save outline report to project_root with feedback sections."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    """Save outline to KLEMMA.md (frontmatter + ## Outline section in body).
 
+    Updates frontmatter with chapters/sections/scientific_results from result.
+    Replaces ## Outline section in body with new outline text.
+    Preserves ## Notes and ## History sections.
+
+    Falls back to writing Outline_*.md if KLEMMA.md does not exist.
+    Returns path of the file written.
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    history = getattr(result, "_history", "")
+
+    klemma_md_path = project_root / "KLEMMA.md"
+
+    # --- Build outline text block ---
+    outline_lines = [
+        f"*Generated: {timestamp}*",
+        "",
+    ]
+    if result.description:
+        outline_lines.append(f"**Description:** {result.description}")
+        outline_lines.append("")
+    if result.update_summary:
+        outline_lines.append(f"> **Обновление:** {result.update_summary}")
+        outline_lines.append("")
+    if result.scientific_results:
+        outline_lines.append("### Scientific Contributions")
+        for key, value in result.scientific_results.items():
+            outline_lines.append(f"- **{key}:** {value}")
+        outline_lines.append("")
+    if result.outline_text:
+        outline_lines.append("### Detailed Outline")
+        outline_lines.append("")
+        outline_lines.append(result.outline_text)
+        outline_lines.append("")
+    new_outline_text = "\n".join(outline_lines)
+
+    # --- Write to KLEMMA.md ---
+    if klemma_md_path.exists():
+        fm, body = parse_klemma_md(klemma_md_path)
+
+        # Update frontmatter with outline data
+        if result.title:
+            fm["title"] = result.title
+        if result.chapters:
+            fm["chapters"] = result.chapters
+        if result.sections:
+            fm["sections"] = result.sections
+        if result.scientific_results:
+            fm["scientific_results"] = result.scientific_results
+
+        # Replace ## Outline section in body (preserve ## Notes and ## History)
+        notes_text = ""
+        notes_match = re.search(r"^## Notes\s*\n(.*?)(?=^## |\Z)", body, re.MULTILINE | re.DOTALL)
+        if notes_match:
+            notes_text = notes_match.group(0)
+        history_text = ""
+        history_match = re.search(r"^## History\s*\n(.*?)(?=^## |\Z)", body, re.MULTILINE | re.DOTALL)
+        if history_match:
+            history_text = history_match.group(0)
+
+        # Strip existing ## Outline / ## Notes / ## History from body
+        body_clean = re.sub(r"^## (Outline|Notes|History)\s*\n.*?(?=^## |\Z)", "", body,
+                            flags=re.MULTILINE | re.DOTALL).rstrip()
+
+        # Build new body with updated outline
+        new_body_parts = [body_clean, "", "## Outline", "", new_outline_text]
+
+        if notes_text:
+            new_body_parts.extend(["", notes_text.rstrip()])
+        else:
+            new_body_parts.extend([
+                "",
+                "## Notes",
+                "",
+                "_Запишите замечания, идеи по структуре —",
+                "всё, что учесть при следующем запуске `klemma outline`._",
+                "",
+            ])
+
+        if history_text:
+            new_body_parts.extend(["", history_text.rstrip()])
+        else:
+            new_body_parts.extend(["", "## History", ""])
+            if history:
+                new_body_parts.append(history)
+
+        new_body = "\n".join(new_body_parts) + "\n"
+        save_klemma_md(klemma_md_path, fm, new_body)
+        return klemma_md_path
+
+    # --- Fallback: write Outline_*.md (legacy / no KLEMMA.md) ---
     content_lines = [
         f"# Outline: {result.title}",
         f"*Generated: {timestamp}*",
         "",
     ]
-
     if result.description:
         content_lines.append(f"**Description:** {result.description}")
         content_lines.append("")
-
     if result.update_summary:
         content_lines.append(f"> **Обновление:** {result.update_summary}")
         content_lines.append("")
-
     if result.scientific_results:
         content_lines.append("## Scientific Contributions")
         for key, value in result.scientific_results.items():
             content_lines.append(f"- **{key}:** {value}")
         content_lines.append("")
-
     if result.outline_text:
         content_lines.append("## Detailed Outline")
         content_lines.append("")
         content_lines.append(result.outline_text)
         content_lines.append("")
-
-    # Feedback sections
     content_lines.extend([
-        "---",
-        "",
-        "## ✏️ Что нового",
-        "",
+        "---", "",
+        "## ✏️ Что нового", "",
         "_Запишите замечания, идеи по структуре, новые разделы —",
-        "всё, что учесть при следующем запуске `klemma outline`._",
-        "",
-        "## 📋 История изменений",
-        "",
+        "всё, что учесть при следующем запуске `klemma outline`._", "",
+        "## 📋 История изменений", "",
     ])
-
-    # Preserve history from previous runs
-    history = getattr(result, "_history", "")
     if history:
         content_lines.append(history)
         content_lines.append("")

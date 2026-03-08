@@ -16,11 +16,13 @@ Shared context-loading helpers (ADR-008). Extracted from researcher.py for reuse
 - `parse_argument_blocks(research_text)` — extract argument blocks (order, title, description, citations) from research report markdown `## Структура аргументации` section
 - `retrieve_rag_fragments_per_block(blocks, embeddings, state, top_k=5)` — embed each block description, retrieve top-K fragments per block via cosine similarity; deduplicates across blocks; graceful per-block failure handling
 - `load_research_report(section, project_root)` — read research report from `notes/research/`
+- `extract_previous_section_ending(content, section_id, max_chars=500)` — returns last paragraph of section preceding `section_id` (e.g., `"1.3"` → finds `"1.2"` ending); caps at `max_chars`; returns `""` if not found or first section of chapter
+- `load_outline_context(section, project_root)` — reads KLEMMA.md `## Outline` section + frontmatter; returns dict with `section_title`, `current_section_desc`, `current_chapter_desc`, `scientific_contributions`, `title`, `description`; falls back to `Outline_*.md` for backward compat
 
 ### drafter.py (145 lines)
 Section draft generation — general prose from research context.
 - `DraftResult` — dataclass: section, chapter, text, word_count, citations_used, filtered_citekeys, research_report_used
-- `generate_draft(section, chapter, config, ai, ..., rag_fragments?)` — pure skill: renders `prompts/section_draft.md` → AI → parse citations → filter hallucinated → `DraftResult`; accepts optional `rag_fragments` (per-block RAG) passed to template
+- `generate_draft(section, chapter, config, ai, ..., rag_fragments?, prev_ending="", outline_context=None)` — pure skill: renders `prompts/section_draft.md` → AI → parse citations → filter hallucinated → `DraftResult`; accepts `prev_ending` (last paragraph of previous section) and `outline_context` (dict from `load_outline_context()`) for structured context
 - `_extract_citations(text)` — regex `[@citekey]` parsing
 - `_filter_hallucinated_citations(text, valid_ids)` — remove invalid `[@citekey]` from prose, return cleaned text + removed list
 
@@ -68,11 +70,11 @@ Builds full project context for interactive Claude sessions.
 
 ### outliner.py (296 lines)
 Project outline generation from directory contents + database context. Two modes:
-- **Initial**: scan files → library context → `prompts/outline.md` → Claude → `OutlineResult` → `project_root/Outline_{name}.md`
-- **Incremental**: reads previous outline from project_root `## ✏️ Что нового` (user feedback), `prompts/outline_incremental.md` → updated outline. User notes archived to `## 📋 История изменений`.
+- **Initial**: scan files → library context → `prompts/outline.md` → Claude → `OutlineResult` → KLEMMA.md (frontmatter + `## Outline` body section)
+- **Incremental**: reads previous outline from KLEMMA.md `## Outline` section (fallback: `Outline_*.md`), `prompts/outline_incremental.md` → updated outline.
 - `generate_outline(config, state, ai, project_root, project_name, custom_prompt, force_initial)` → `(OutlineResult, mode)`
-- `save_outline(result, project_name, project_root)` — writes report with feedback sections to project_root
-- `_load_previous_outline(project_name, project_root)` — reads previous outline, extracts user notes and history
+- `save_outline(result, project_name, project_root)` — **ADR-013**: writes to KLEMMA.md (updates frontmatter chapters/scientific_results + replaces `## Outline` body section); preserves `## Notes` and `## History` sections; falls back to `Outline_*.md` only when KLEMMA.md doesn't exist
+- `_load_previous_outline(project_name, project_root)` — reads from KLEMMA.md `## Outline` section first, fallback to `Outline_*.md`
 - `OutlineResult` dataclass: title, description, chapters, sections, scientific_results, outline_text, update_summary
 - CLI options: `-p/--prompt` (custom directive), `--fresh` (force full regeneration)
 
@@ -126,7 +128,7 @@ On repeat: reads previous outline → incremental update. With `--fresh`: full r
 `klemma ask "query"` → pre-creates `notes/agents/` → `agent.build_agent_context(project_root=...)` → scans project_root for outline/reports/files + `notes/{research,library,agents}/` → system prompt → interactive Claude or `ai.call()`. Agent saves to `project_root/notes/agents/Agent_*.md` → `update_agents_index()` regenerates `notes/AGENTS.md`.
 
 ### Section draft generation
-`klemma draft -s X.X` → `_sync_sections()` → load research report (`context_loader.load_research_report`) → load chapter draft + extract section → load source summaries → **per-block RAG** (parse argument blocks from research report → embed descriptions → retrieve top-K fragments per block via `retrieve_rag_fragments_per_block`) → section-level RAG fallback → `fit_prompt_budget()` (RAG prioritized over section-level) → `drafter.generate_draft(rag_fragments=...)` → `DraftResult` → `project_root/notes/drafts/Draft_{section}.md`. `--no-rag` flag skips per-block RAG (uses section-level fragments only).
+`klemma draft -s X.X` → `_sync_sections()` → load research report (`context_loader.load_research_report`) → load chapter draft + extract section → load source summaries → **per-block RAG** (parse argument blocks from research report → embed descriptions → retrieve top-K fragments per block via `retrieve_rag_fragments_per_block`) → section-level RAG fallback → `fit_prompt_budget()` (RAG prioritized over section-level) → `extract_previous_section_ending()` (last paragraph of preceding section for continuity) → `load_outline_context()` (chapter/section descriptions + scientific contributions from KLEMMA.md) → `drafter.generate_draft(rag_fragments=..., prev_ending=..., outline_context=...)` → `DraftResult` → `project_root/notes/drafts/Draft_{section}.md`. `--no-rag` flag skips per-block RAG (uses section-level fragments only).
 
 ### Agent Skills (Claude Code)
 Agent uses Claude Code Skills from `.claude/skills/` instead of reading source code:

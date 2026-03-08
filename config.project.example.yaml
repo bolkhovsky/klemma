@@ -1,7 +1,8 @@
 # =============================================================================
-# KLEMMA PROJECT CONFIG — per-project settings
+# KLEMMA PROJECT CONFIG — per-project infrastructure settings
 # =============================================================================
 # This file lives in .klemma/config.yaml inside your project directory.
+# Content fields (chapters, scientific_results, etc.) go in KLEMMA.md frontmatter.
 # Shared resources (obsidian, zotero, ai) are inherited from parent
 # project if this is a nested project. Override only what you need.
 
@@ -35,27 +36,7 @@ ai:
   #     sonnet: "anthropic/claude-sonnet-4-6"
   #     haiku: "anthropic/claude-haiku-4-5-20251001"
 
-# --- Per-project settings (NOT inherited from parent) ---
-
-project:
-  type: dissertation                   # dissertation | paper | thesis
-  title: "Your project title"
-  current_focus: "1.1"
-  chapters:
-    1: "Literature review"
-    2: "Methodology"
-    3: "Results and discussion"
-  scientific_results:
-    nr1: "First scientific result"
-    nr2: "Second scientific result"
-  deadlines:
-    - chapter: "1"
-      deadline: "2026-06-01"
-      label: "Chapter 1"
-  writing_constraints: "1-2 hours/day, 200-400 words/day"
-  priority_terms:
-    - your_key_term_1
-    - your_key_term_2
+# --- Per-project infrastructure (NOT inherited from parent) ---
 
 state:
   db_path: "./data/klemma.db"          # relative to .klemma/

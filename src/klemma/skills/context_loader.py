@@ -475,6 +475,163 @@ def retrieve_rag_fragments_per_block(
     return rag_blocks
 
 
+def extract_previous_section_ending(
+    content: str,
+    section_id: str,
+    max_chars: int = 500,
+) -> str:
+    """Extract last paragraph of the section preceding section_id.
+
+    For section 1.3 → looks for 1.2; for 2.1 → looks for the last section
+    of chapter 1 in the content. Returns empty string if nothing found.
+    """
+    if not content or not section_id:
+        return ""
+
+    parts = section_id.split(".")
+    try:
+        chapter = int(parts[0])
+        sub = int(parts[1]) if len(parts) > 1 else 1
+    except (ValueError, IndexError):
+        return ""
+
+    # Determine previous section ID
+    if sub > 1:
+        prev_id = f"{chapter}.{sub - 1}"
+    elif chapter > 1:
+        # Cross-chapter: find last section of previous chapter
+        # Find all ### sections whose id starts with chapter-1
+        all_sections = re.findall(
+            r"^#{1,6}\s+(\d+\.\d+[\.\d]*)\b",
+            content,
+            re.MULTILINE,
+        )
+        prev_chapter_sections = [s for s in all_sections if s.startswith(f"{chapter - 1}.")]
+        if prev_chapter_sections:
+            prev_id = prev_chapter_sections[-1]
+        else:
+            return ""
+    else:
+        return ""  # First section of first chapter — no previous
+
+    prev_text = extract_section(content, prev_id)
+    if not prev_text:
+        return ""
+
+    # Return last non-empty paragraph
+    paragraphs = [p.strip() for p in prev_text.split("\n\n") if p.strip()]
+    if not paragraphs:
+        return ""
+    return paragraphs[-1][:max_chars]
+
+
+def load_outline_context(
+    section: str,
+    project_root: Path,
+) -> dict:
+    """Load structured outline context for the given section from KLEMMA.md.
+
+    Reads KLEMMA.md body ## Outline section (preferred) or Outline_*.md (fallback).
+    Extracts: section title, section description, chapter description,
+    scientific contributions, project title, project description.
+
+    Returns dict with keys (empty string if not found):
+        section_title, current_section_desc, current_chapter_desc,
+        scientific_contributions, title, description
+    """
+    from ..config import parse_klemma_md
+
+    result: dict = {
+        "section_title": "",
+        "current_section_desc": "",
+        "current_chapter_desc": "",
+        "scientific_contributions": "",
+        "title": "",
+        "description": "",
+    }
+
+    if not section or not project_root:
+        return result
+
+    parts = section.split(".")
+    try:
+        chapter_num = int(parts[0])
+    except (ValueError, IndexError):
+        return result
+
+    outline_text = ""
+
+    # 1. Try KLEMMA.md ## Outline section
+    klemma_md_path = project_root / "KLEMMA.md"
+    if klemma_md_path.exists():
+        fm, body = parse_klemma_md(klemma_md_path)
+        # Populate title/description from frontmatter
+        result["title"] = fm.get("title", "")
+        result["description"] = fm.get("description", "")
+        if fm.get("scientific_results"):
+            nrs = fm["scientific_results"]
+            result["scientific_contributions"] = "\n".join(
+                f"- {k.upper()}: {v}" for k, v in nrs.items()
+            )
+
+        ol_idx = body.find("## Outline")
+        if ol_idx != -1:
+            after_ol = ol_idx + len("## Outline")
+            # Find the next KLEMMA.md-level meta-section (Notes/History).
+            # The outline body may itself contain ## headings (## Scientific
+            # Contributions, ## Глава N., etc.) which must NOT terminate extraction.
+            # Only ## Notes / ## History (canonical save_outline() siblings) terminate.
+            next_h2_match = re.search(
+                r"\n## (?:Notes|History|✏️|📋)",
+                body[after_ol:],
+            )
+            if next_h2_match:
+                outline_text = body[after_ol:after_ol + next_h2_match.start()].strip()
+            else:
+                outline_text = body[after_ol:].strip()
+
+    # 2. Fallback: Outline_*.md
+    if not outline_text:
+        for p in sorted(project_root.glob("Outline_*.md")):
+            try:
+                outline_text = p.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            break
+
+    if not outline_text:
+        return result
+
+    # Extract section title: ### X.X. Title or ### X.X Title
+    sec_re = re.compile(
+        r"^###\s+" + re.escape(section) + r"\.?\s+(.+)",
+        re.MULTILINE,
+    )
+    m = sec_re.search(outline_text)
+    if m:
+        result["section_title"] = m.group(1).strip()
+
+    # Extract section description: text between ### X.X and next ###
+    sec_block_re = re.compile(
+        r"^###\s+" + re.escape(section) + r"[\.\s].+?\n(.*?)(?=^###|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    mb = sec_block_re.search(outline_text)
+    if mb:
+        result["current_section_desc"] = mb.group(1).strip()[:600]
+
+    # Extract chapter description: text after ## N. Title or ## Глава N. Title
+    ch_block_re = re.compile(
+        r"^##\s+(?:\S+\s+)?" + re.escape(str(chapter_num)) + r"[\.\s].+?\n(.*?)(?=^###|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    mc = ch_block_re.search(outline_text)
+    if mc:
+        result["current_chapter_desc"] = mc.group(1).strip()[:400]
+
+    return result
+
+
 def load_research_report(
     section: str,
     project_root: Path,

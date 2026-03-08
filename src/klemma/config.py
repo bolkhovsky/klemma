@@ -582,6 +582,37 @@ class KlemmaConfig(BaseModel):
     project: Optional[ProjectConfig] = None
 
 
+# --- KLEMMA.md frontmatter parser ---
+
+
+def parse_klemma_md(path: Path) -> tuple[dict, str]:
+    """Split YAML frontmatter from KLEMMA.md body.
+
+    Only matches frontmatter at the very start of the file (--- on first line),
+    not markdown horizontal rules mid-document.
+
+    Returns (frontmatter_dict, body_text). If no frontmatter, returns ({}, full_text).
+    Integer keys in `chapters` (YAML `1: Title`) are preserved as int.
+    """
+    if not path.exists():
+        return {}, ""
+    text = path.read_text(encoding="utf-8")
+    m = re.match(r"\A---\n(.+?)\n---\n(.*)", text, re.DOTALL)
+    if not m:
+        return {}, text
+    raw = yaml.safe_load(m.group(1)) or {}
+    # Ensure chapters keys are int (YAML may parse them as int already, but be explicit)
+    if "chapters" in raw and isinstance(raw["chapters"], dict):
+        raw["chapters"] = {int(k): v for k, v in raw["chapters"].items()}
+    return raw, m.group(2)
+
+
+def save_klemma_md(path: Path, frontmatter: dict, body: str) -> None:
+    """Write KLEMMA.md with YAML frontmatter + markdown body."""
+    fm_text = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    path.write_text(f"---\n{fm_text}---\n{body}", encoding="utf-8")
+
+
 # --- Config loading and merging ---
 
 
@@ -789,12 +820,32 @@ def resolve_effective_config(
         project_root = Path.cwd()
 
     # Extract ProjectConfig
-    if cfg.project:
+    # Priority: KLEMMA.md frontmatter > config.yaml project: > dissertation: > defaults
+    klemma_frontmatter: dict = {}
+    if project_root:
+        klemma_md_path = project_root / "KLEMMA.md"
+        klemma_frontmatter, _ = parse_klemma_md(klemma_md_path)
+
+    if klemma_frontmatter:
+        # KLEMMA.md frontmatter is authoritative source for ProjectConfig (ADR-013)
+        project = ProjectConfig.model_validate(klemma_frontmatter)
+        # Still merge dissertation data for any empty fields (backward compat)
+        if cfg.dissertation and cfg.dissertation.title:
+            _merge_dissertation_into_project(project, cfg.dissertation)
+    elif cfg.project:
         project = cfg.project
         # Merge dissertation data into project if project is missing key fields
         # (backward compat: old configs put chapters/section_type_map under dissertation:)
         if cfg.dissertation and cfg.dissertation.title:
             _merge_dissertation_into_project(project, cfg.dissertation)
+        # Emit deprecation warning if content fields are in config.yaml but not in KLEMMA.md
+        if (cfg.project.chapters or cfg.project.scientific_results) and project_root:
+            warnings.warn(
+                "Content fields (chapters, scientific_results) in config.yaml are deprecated. "
+                "Run 'klemma migrate' to move them to KLEMMA.md frontmatter.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
     elif cfg.dissertation and cfg.dissertation.title:
         project = ProjectConfig.from_dissertation(cfg.dissertation)
     else:
@@ -823,7 +874,8 @@ def load_project_context(project_chain: list[Path], config: Optional[KlemmaConfi
         # Try KLEMMA.md first
         klemma_md = target_root / "KLEMMA.md"
         if klemma_md.exists():
-            text = klemma_md.read_text(encoding="utf-8").strip()
+            _, body = parse_klemma_md(klemma_md)
+            text = body.strip()
             if text:
                 return text
 
@@ -1001,10 +1053,27 @@ def scan_project_files(
 
 
 def update_project_config(project_root: Path, updates: dict) -> None:
-    """Merge updates into .klemma/config.yaml (project section only).
+    """Merge updates into KLEMMA.md frontmatter (preferred) or .klemma/config.yaml.
 
-    Only updates keys present in `updates`. Preserves other config.
+    If KLEMMA.md has frontmatter, updates go there (ADR-013).
+    Otherwise falls back to config.yaml project: section (backward compat).
     """
+    klemma_md_path = project_root / "KLEMMA.md"
+    fm, body = parse_klemma_md(klemma_md_path)
+    if fm:
+        _update_via_klemma_md(klemma_md_path, fm, body, updates)
+    else:
+        _update_via_config_yaml(project_root, updates)
+
+
+def _update_via_klemma_md(path: Path, frontmatter: dict, body: str, updates: dict) -> None:
+    """Update KLEMMA.md frontmatter with provided key-value updates."""
+    frontmatter.update(updates)
+    save_klemma_md(path, frontmatter, body)
+
+
+def _update_via_config_yaml(project_root: Path, updates: dict) -> None:
+    """Update .klemma/config.yaml project: section (legacy path)."""
     config_path = project_root / ".klemma" / "config.yaml"
     if not config_path.exists():
         logger.warning("Config not found: %s", config_path)

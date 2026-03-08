@@ -884,10 +884,13 @@ class StateManager:
                 )
 
             # Backfill source_sections.section_type
+            # Use exact match OR prefix match with '.' separator to prevent
+            # chapter "2" matching section "20.x" (false-positive prefix match)
             cur = conn.execute(
                 """UPDATE source_sections SET section_type = (
                     SELECT stm.section_type FROM section_type_map stm
-                    WHERE source_sections.section LIKE stm.section || '%'
+                    WHERE source_sections.section = stm.section
+                       OR source_sections.section LIKE stm.section || '.%'
                     ORDER BY LENGTH(stm.section) DESC LIMIT 1
                 ) WHERE section_type IS NULL"""
             )
@@ -897,7 +900,8 @@ class StateManager:
             cur = conn.execute(
                 """UPDATE fragments SET section_type = (
                     SELECT stm.section_type FROM section_type_map stm
-                    WHERE fragments.section LIKE stm.section || '%'
+                    WHERE fragments.section = stm.section
+                       OR fragments.section LIKE stm.section || '.%'
                     ORDER BY LENGTH(stm.section) DESC LIMIT 1
                 ) WHERE section_type IS NULL AND section IS NOT NULL"""
             )
@@ -908,7 +912,8 @@ class StateManager:
             cur = conn.execute(
                 """UPDATE reference_gaps SET section_type = (
                     SELECT stm.section_type FROM section_type_map stm
-                    WHERE json_extract(dissertation_sections, '$[0]') LIKE stm.section || '%'
+                    WHERE json_extract(dissertation_sections, '$[0]') = stm.section
+                       OR json_extract(dissertation_sections, '$[0]') LIKE stm.section || '.%'
                     ORDER BY LENGTH(stm.section) DESC LIMIT 1
                 ) WHERE section_type IS NULL
                   AND dissertation_sections IS NOT NULL

@@ -2,6 +2,8 @@
 
 import yaml
 
+from klemma.config import parse_klemma_md
+
 
 class TestDiscoverObsidianVault:
     def test_finds_vault_in_documents(self, tmp_path, monkeypatch):
@@ -135,8 +137,9 @@ class TestInitProjectWithValues:
         config_path = tmp_path / ".klemma" / "config.yaml"
         cfg = yaml.safe_load(config_path.read_text())
 
-        assert cfg["project"]["type"] == "paper"
-        assert cfg["project"]["title"] == "Test Paper"
+        fm, _ = parse_klemma_md(tmp_path / "KLEMMA.md")
+        assert fm["type"] == "paper"
+        assert fm["title"] == "Test Paper"
         assert cfg["ai"]["language"] == "en"
         assert cfg["zotero"]["library_json"] == "/tmp/Zotero/lib.json"
         assert cfg["zotero"]["storage_path"] == "/tmp/Zotero/storage"
@@ -166,9 +169,8 @@ class TestInitProjectWithValues:
 
         init_project(tmp_path, project_type="thesis")
 
-        cfg_text = (tmp_path / ".klemma" / "config.yaml").read_text()
-        # Template has placeholder paths
-        assert "type: thesis" in cfg_text
+        fm, _ = parse_klemma_md(tmp_path / "KLEMMA.md")
+        assert fm.get("type") == "thesis"
 
     def test_paper_with_description_and_keywords(self, tmp_path):
         from klemma.setup import InitValues, init_project
@@ -181,11 +183,9 @@ class TestInitProjectWithValues:
         )
         init_project(tmp_path, project_type="paper", values=values)
 
-        cfg = yaml.safe_load((tmp_path / ".klemma" / "config.yaml").read_text())
-        assert cfg["project"]["description"] == "Analysis of ice sheet dynamics under warming"
-        assert cfg["project"]["priority_terms"] == ["ice sheets", "climate", "GrIS"]
-
-        md = (tmp_path / "KLEMMA.md").read_text()
+        fm, md = parse_klemma_md(tmp_path / "KLEMMA.md")
+        assert fm["description"] == "Analysis of ice sheet dynamics under warming"
+        assert fm["priority_terms"] == ["ice sheets", "climate", "GrIS"]
         assert "Analysis of ice sheet dynamics" in md
         assert "ice sheets, climate, GrIS" in md
 
