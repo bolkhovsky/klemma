@@ -1,7 +1,12 @@
 """Tests for klemma coach — contextual research advisor (#123)."""
 
-import pytest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
+import pytest
+from click.testing import CliRunner
+
+from klemma.cli import main as klemma_cli
 from klemma.skills.coach import (
     INTENT_BALANCE_THRESHOLD,
     SATURATION_THRESHOLD,
@@ -321,3 +326,112 @@ class TestCoachSectionHint:
         assert hint is not None
         # Saturation (action) should take priority over intent_balance (warning)
         assert "stop adding" in hint
+
+
+# --- CLI tests ---
+
+
+def _make_coach_ctx(state, vault=None):
+    mock_ctx = MagicMock()
+    mock_ctx.state = state
+    mock_ctx.config = MagicMock()
+    mock_ctx.config.obsidian.notes_folder = ""
+    mock_ctx.vault = vault
+    mock_ctx.project_root = Path("/tmp/test_project")
+    mock_ctx.project = MagicMock()
+    mock_ctx.project.type = "dissertation"
+    return mock_ctx
+
+
+class TestCoachCLI:
+    def test_coach_help(self):
+        runner = CliRunner()
+        result = runner.invoke(klemma_cli, ["coach", "--help"])
+        assert result.exit_code == 0
+
+    def test_coach_default_health_check(self, tmp_path):
+        from klemma.state import StateManager
+
+        db = tmp_path / "state.db"
+        sm = StateManager(db)
+        sm.register_sources(["paper1", "paper2"])
+        sm.mark_completed("paper1", "n/a")
+        sm.set_source_sections("paper1", ["1.1"], [1])
+
+        mock_ctx = _make_coach_ctx(sm)
+        runner = CliRunner()
+        with (
+            patch("klemma.cli._get_context", return_value=mock_ctx),
+            patch("klemma.cli._init_components", return_value=mock_ctx),
+            patch("klemma.cli.discover_project_root", return_value=tmp_path),
+            patch("klemma.cli._sync_sections"),
+        ):
+            result = runner.invoke(klemma_cli, ["coach"])
+        assert result.exit_code == 0, result.output
+
+    def test_coach_section_focus(self, tmp_path):
+        from klemma.state import StateManager
+
+        db = tmp_path / "state.db"
+        sm = StateManager(db)
+        sm.register_sources(["p1", "p2", "p3"])
+        for p in ["p1", "p2", "p3"]:
+            sm.mark_completed(p, "n/a")
+            sm.set_source_sections(p, ["1.1"], [1])
+
+        mock_ctx = _make_coach_ctx(sm)
+        runner = CliRunner()
+        with (
+            patch("klemma.cli._get_context", return_value=mock_ctx),
+            patch("klemma.cli._init_components", return_value=mock_ctx),
+            patch("klemma.cli.discover_project_root", return_value=tmp_path),
+            patch("klemma.cli._sync_sections"),
+        ):
+            result = runner.invoke(klemma_cli, ["coach", "-s", "1.1"])
+        assert result.exit_code == 0, result.output
+        assert "1.1" in result.output
+
+    def test_coach_json_output(self, tmp_path):
+        import json
+
+        from klemma.state import StateManager
+
+        db = tmp_path / "state.db"
+        sm = StateManager(db)
+
+        mock_ctx = _make_coach_ctx(sm)
+        runner = CliRunner()
+        with (
+            patch("klemma.cli._get_context", return_value=mock_ctx),
+            patch("klemma.cli._init_components", return_value=mock_ctx),
+            patch("klemma.cli.discover_project_root", return_value=tmp_path),
+            patch("klemma.cli._sync_sections"),
+        ):
+            result = runner.invoke(klemma_cli, ["coach", "--json"])
+        assert result.exit_code == 0, result.output
+        # Extract JSON from output (status line may precede it)
+        json_start = result.output.index("{")
+        data = json.loads(result.output[json_start:])
+        assert "findings" in data
+
+
+class TestCoachHintInAdd:
+    def test_add_shows_coach_hint(self, tmp_path):
+        from klemma.state import StateManager
+
+        db = tmp_path / "state.db"
+        sm = StateManager(db)
+        sm.register_sources(["paper1"])
+        sm.mark_completed("paper1", "notes/paper1.md")
+
+        mock_ctx = _make_coach_ctx(sm)
+        runner = CliRunner()
+        with (
+            patch("klemma.cli._get_context", return_value=mock_ctx),
+            patch("klemma.cli._init_components", return_value=mock_ctx),
+            patch("klemma.cli.discover_project_root", return_value=tmp_path),
+        ):
+            result = runner.invoke(klemma_cli, ["add", "paper1", "--section", "1.1"])
+        assert result.exit_code == 0
+        # With only 1 source, coach should hint about low adequacy
+        assert "sources" in result.output.lower() or "1.1" in result.output

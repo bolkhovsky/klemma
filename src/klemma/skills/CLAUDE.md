@@ -105,6 +105,15 @@ Dynamic work context builder — replaces hardcoded DISSERTATION_CONTEXT constan
 - `get_current_deadline(project, language)` — returns (deadline_str, days_remaining) for current focus chapter
 - Multi-language labels (ru/en) for chapter headings, deadlines, etc.
 
+### coach.py (~170 lines)
+Contextual research advisor — methodology-driven heuristics (zero AI calls). Thresholds from 21 methodology papers (Pautasso 2013, Cohan 2019, Kallestinova 2011).
+- `CoachFinding` — dataclass: category, section, message, severity
+- `CoachReport` — dataclass: findings list, optional section focus
+- `analyze_section(section, source_count, level, intent_counts, fragment_count, has_draft)` → `list[CoachFinding]` — per-section heuristics: adequacy (Pautasso), intent balance (Cohan), writing readiness (Kallestinova), saturation
+- `analyze_project(coverage_stats, intent_coverage, fragment_stats, gap_summary, section_levels, drafts)` → `CoachReport` — project-wide health check: iterates all sections + ref-gap priority
+- `coach_section_hint(section, source_count, level, intent_counts, fragment_count, has_draft)` → `str | None` — 1-line hint for inline use in `add`, `draft`, `research`
+- Constants: `SOURCE_ADEQUACY_CHAPTER` (15–30), `SOURCE_ADEQUACY_SUBSECTION` (5–10), `INTENT_BALANCE_THRESHOLD` (0.7), `WRITING_READINESS_MIN_SOURCES` (10), `SATURATION_THRESHOLD` (30)
+
 ## Data flows
 
 ### Fragment extraction (end-to-end)

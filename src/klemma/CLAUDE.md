@@ -4,8 +4,8 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 
 ## Modules
 
-### cli.py (3860 lines)
-Click CLI entry point. Defines 17 commands + hidden aliases.
+### cli.py (~5950 lines)
+Click CLI entry point. Defines 18 commands + hidden aliases.
 - `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery; attaches parent DB for inheritance when `inherit_db=True` and project chain > 1
 - `_resolve_parent_db(parent_root)` — reads parent's `.klemma/config.yaml` to locate its DB path
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
@@ -23,6 +23,8 @@ Click CLI entry point. Defines 17 commands + hidden aliases.
 - `_detect_input_type(value) -> "url" | "citekey" | "path"` — input detection helper for `add` command
 - `--model` override available on: `research`, `ask`, `library`, `process`, `draft -s` — overrides `cfg.ai.model` per invocation
 - `draft` group: `draft introduction` (ГОСТ intro), `draft -s X.X` (standalone section draft → `notes/drafts/Draft_{section}.md`), `--no-rag` flag skips per-block RAG retrieval (ablation/debugging)
+- `coach` command: methodology-driven research advisor (zero AI calls). Default: project-wide health check. `-s X.X`: section focus. `--json`: structured output. Calls `_sync_sections()` before reading (ADR-010)
+- `_coach_section_hint(state, section, project_root)` — generates 1-line hint for inline use; called from `add`, `draft -s`, `research -s`
 
 ### context.py (41 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.

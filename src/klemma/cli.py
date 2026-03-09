@@ -1563,6 +1563,28 @@ def process(ctx, citekeys, serial, force, model, no_embed):
             console.print(hint)
 
 
+def _coach_section_hint(state, section: str, project_root=None) -> str | None:
+    """Generate 1-line coach hint for a section. Returns None if nothing to say."""
+    from .skills.coach import coach_section_hint
+
+    sources = state.get_section_sources(section)
+    intent = state.get_intent_coverage().get(section, {})
+    frags = state.get_fragments(section=section)
+    level = "chapter" if "." not in section else "subsection"
+    has_draft = bool(
+        project_root
+        and (project_root / "notes" / "drafts" / f"Draft_{section}.md").exists()
+    )
+    return coach_section_hint(
+        section=section,
+        source_count=len(sources),
+        level=level,
+        intent_counts=intent,
+        fragment_count=len(frags),
+        has_draft=has_draft,
+    )
+
+
 def _auto_embed_after_process(
     citekey,
     state,
@@ -2804,6 +2826,12 @@ def draft(ctx, section, model, no_save, no_rag, prompt):
     kctx = _get_context(ctx)
     cfg = kctx.config
     _sync_sections(kctx)
+
+    # Coach hint (informational, before AI call)
+    hint = _coach_section_hint(kctx.state, section, kctx.project_root)
+    if hint:
+        console.print(f"[dim]\U0001f4a1 {hint}[/dim]")
+
     if model:
         cfg.ai.model = model
     ai = _init_ai(cfg)
@@ -3334,6 +3362,11 @@ def research(ctx, section, no_save, force, model):
         console.print(
             f"\n[dim]Брифинг сохранён: notes/research/Research_{section}.md[/dim]"
         )
+
+    # Coach hint (informational, after research)
+    hint = _coach_section_hint(state, section, kctx.project_root)
+    if hint:
+        console.print(f"\n[dim]\U0001f4a1 {hint}[/dim]")
 
 
 @main.command()
@@ -4657,6 +4690,109 @@ def add(ctx, input_value, section, title, authors, year, no_process, no_embed, m
     if sections:
         parts.append(f"sections {', '.join(sections)}")
     console.print(f"\n[green]Done: {', '.join(parts)}.[/green]")
+
+    # --- Coach hint ---
+    if sections and citekey:
+        for sec in sections:
+            hint = _coach_section_hint(state, sec, kctx.project_root)
+            if hint:
+                console.print(f"[dim]\U0001f4a1 {hint}[/dim]")
+                break  # one hint is enough
+
+
+# --- Coach: research advisor ---
+
+
+@main.command()
+@click.option("--section", "-s", help="Focus on a specific section")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@click.pass_context
+def coach(ctx, section, json_output):
+    """Research advisor \u2014 methodology-driven guidance (zero AI calls)."""
+    import json as json_mod
+
+    from .skills.coach import CoachReport, analyze_project, analyze_section
+
+    kctx = _get_context(ctx)
+    state = kctx.state
+    _sync_sections(kctx)
+
+    if section:
+        # Section focus mode
+        sources = state.get_section_sources(section)
+        intent = state.get_intent_coverage().get(section, {})
+        frags = state.get_fragments(section=section)
+        level = "chapter" if "." not in section else "subsection"
+        has_draft = bool(
+            kctx.project_root
+            and (
+                kctx.project_root / "notes" / "drafts" / f"Draft_{section}.md"
+            ).exists()
+        )
+        findings = analyze_section(
+            section=section,
+            source_count=len(sources),
+            level=level,
+            intent_counts=intent,
+            fragment_count=len(frags),
+            has_draft=has_draft,
+        )
+        report = CoachReport(findings=findings, section=section)
+    else:
+        # Project-wide health check
+        coverage = state.get_coverage_stats()
+        intent_coverage = state.get_intent_coverage()
+        fragment_stats = state.get_fragment_embedding_stats()
+        gap_summary = state.get_gap_summary()
+        sections_map = coverage.get("sections", {})
+        section_levels = {
+            s: ("chapter" if "." not in s else "subsection")
+            for s in sections_map
+        }
+        drafts: set[str] = set()
+        if kctx.project_root:
+            drafts_dir = kctx.project_root / "notes" / "drafts"
+            if drafts_dir.exists():
+                for f in drafts_dir.glob("Draft_*.md"):
+                    drafts.add(f.stem.replace("Draft_", ""))
+        report = analyze_project(
+            coverage_stats=coverage,
+            intent_coverage=intent_coverage,
+            fragment_stats=fragment_stats,
+            gap_summary=gap_summary,
+            section_levels=section_levels,
+            drafts=drafts,
+        )
+
+    # Output
+    if json_output:
+        data = {
+            "section": report.section,
+            "findings": [
+                {
+                    "category": f.category,
+                    "section": f.section,
+                    "message": f.message,
+                    "severity": f.severity,
+                }
+                for f in report.findings
+            ],
+        }
+        click.echo(json_mod.dumps(data, indent=2))
+        return
+
+    if not report.findings:
+        console.print("[green]All sections look good.[/green]")
+        return
+
+    for f in report.findings:
+        style = {"action": "bold red", "warning": "yellow", "info": "dim"}.get(
+            f.severity, ""
+        )
+        prefix = {"action": "\u2192", "warning": "\u26a0", "info": "\u2139"}.get(
+            f.severity, "\u2022"
+        )
+        console.print(f"  [{style}]{prefix} {f.message}[/{style}]")
 
 
 # --- Acquire: download + add to Zotero + register ---
