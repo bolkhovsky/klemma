@@ -4474,6 +4474,185 @@ def reassign(ctx, threshold, limit, apply, fresh):
     )
 
 
+# --- Add: unified source ingestion ---
+
+
+def _detect_input_type(value: str) -> str:
+    """Detect whether input is a URL, local PDF path, or citekey.
+
+    Returns 'url', 'path', or 'citekey'.
+    """
+    if value.startswith(("http://", "https://", "doi:")):
+        return "url"
+    p = Path(value)
+    if p.suffix.lower() == ".pdf" and p.exists():
+        return "path"
+    return "citekey"
+
+
+@main.command()
+@click.argument("input_value")
+@click.option("--section", "-s", multiple=True, help="Dissertation section(s) to assign")
+@click.option("--title", "-t", help="Paper title (URL mode only)")
+@click.option("--authors", "-a", help="Authors, comma-separated (URL mode only)")
+@click.option("--year", "-y", type=int, help="Publication year (URL mode only)")
+@click.option(
+    "--no-process", is_flag=True, help="Skip fragment extraction"
+)
+@click.option(
+    "--no-embed", is_flag=True, help="Skip auto-embedding after processing"
+)
+@click.option(
+    "--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)"
+)
+@click.pass_context
+def add(ctx, input_value, section, title, authors, year, no_process, no_embed, model):
+    """Add a paper: URL, citekey, or local PDF path.
+
+    Auto-detects input type and runs the full pipeline:
+
+      klemma add <url>       --section 1.1
+      klemma add <citekey>   --section 2.3
+      klemma add <paper.pdf> --section 1.2
+    """
+    from .skills.acquirer import PaperMetadata, acquire_paper_local
+
+    kctx = _get_context(ctx)
+    cfg, state = kctx.config, kctx.state
+    if model:
+        cfg.ai.model = model
+    sections = list(section)
+    input_type = _detect_input_type(input_value)
+
+    citekey = None
+    total_frags = 0
+
+    if input_type == "url":
+        # --- URL mode: acquire → process → embed ---
+        meta = PaperMetadata(
+            url=input_value,
+            title=title or "",
+            authors=authors or "",
+            year=year,
+            sections=sections,
+        )
+        console.print(f"[bold]Adding from URL:[/bold] {input_value[:80]}")
+        result = acquire_paper_local(
+            meta,
+            storage_path=cfg.zotero.storage_path,
+            state=state,
+        )
+        if result.status not in ("ok", "ok_no_pdf"):
+            console.print(f"  [red]{result.status}[/red]")
+            return
+        citekey = result.citekey
+        console.print(f"  [green]@{citekey}[/green]")
+        if result.zotero_added:
+            console.print("  [blue]Added to Zotero[/blue]")
+        if result.status == "ok_no_pdf":
+            console.print("  [yellow]No open-access PDF (metadata-only)[/yellow]")
+            no_process = True  # can't process without PDF
+
+    elif input_type == "path":
+        # --- Local PDF mode: copy + register → process → embed ---
+        pdf_path = Path(input_value).resolve()
+        console.print(f"[bold]Adding from PDF:[/bold] {pdf_path.name}")
+        # Use acquire with file:// URL — acquirer handles local paths
+        meta = PaperMetadata(
+            url=f"file://{pdf_path}",
+            title=title or "",
+            authors=authors or "",
+            year=year,
+            sections=sections,
+            pdf_override=str(pdf_path),
+        )
+        result = acquire_paper_local(
+            meta,
+            storage_path=cfg.zotero.storage_path,
+            state=state,
+        )
+        if result.status not in ("ok", "ok_no_pdf"):
+            console.print(f"  [red]{result.status}[/red]")
+            return
+        citekey = result.citekey
+        console.print(f"  [green]@{citekey}[/green]")
+
+    elif input_type == "citekey":
+        # --- Citekey mode: assign sections + process if needed ---
+        citekey = input_value
+        source = state.get_source(citekey)
+        if not source:
+            console.print(f"[red]Source @{citekey} not found in database.[/red]")
+            console.print("[dim]Use a URL or PDF path to add a new source.[/dim]")
+            return
+        console.print(f"[bold]Adding sections to:[/bold] @{citekey}")
+
+    # --- Section assignment (all input types) ---
+    if sections and citekey:
+        chapters = list({int(s.split(".")[0]) for s in sections if "." in s})
+        state.set_source_sections(citekey, sections, chapters)
+        # Update vault note frontmatter if note exists
+        if kctx.vault:
+            note_name = f"@{citekey}"
+            notes_folder = kctx.config.obsidian.notes_folder or None
+            kctx.vault.update_frontmatter_sections(note_name, sections, folder=notes_folder)
+        console.print(f"  [dim]sections: {', '.join(sections)}[/dim]")
+
+    # --- Process (if not suppressed and we have a citekey) ---
+    if citekey and not no_process:
+        source = state.get_source(citekey)
+        has_pdf = source and source.get("pdf_path")
+        status = source["status"] if source else None
+
+        # Process if: pending/failed, or citekey mode (force reprocess for section assignment)
+        if has_pdf and status in ("pending", "failed", None) or (
+            input_type == "citekey" and has_pdf and status == "completed"
+        ):
+            try:
+                ai = _init_ai(cfg)
+            except Exception as e:
+                console.print(f"  [yellow]Skipping process (AI unavailable: {e})[/yellow]")
+                ai = None
+
+            if ai:
+                from .literature.pdf import PDFExtractor
+
+                pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
+                force = input_type == "citekey" and status == "completed"
+                with console.status(
+                    f"Extracting fragments from @{citekey}", spinner="arc"
+                ):
+                    n_frags, _ = _process_single(
+                        citekey,
+                        cfg,
+                        state,
+                        kctx.vault,
+                        ai,
+                        pdf_extractor,
+                        kctx.library,
+                        dissertation_context=kctx.dissertation_context,
+                        available_tags=kctx.available_tags,
+                        klemma_home=kctx.klemma_home,
+                        project_type=(
+                            kctx.project.type if kctx.project else "dissertation"
+                        ),
+                        embeddings=kctx.embeddings,
+                        no_embed=no_embed,
+                        force=force,
+                    )
+                total_frags = n_frags
+        elif not has_pdf:
+            console.print("  [dim]no PDF available, skipping processing[/dim]")
+
+    # --- Summary ---
+    parts = [f"@{citekey}"]
+    if total_frags:
+        parts.append(f"{total_frags} fragments")
+    if sections:
+        parts.append(f"sections {', '.join(sections)}")
+    console.print(f"\n[green]Done: {', '.join(parts)}.[/green]")
+
+
 # --- Acquire: download + add to Zotero + register ---
 
 

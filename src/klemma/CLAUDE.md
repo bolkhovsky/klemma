@@ -18,7 +18,9 @@ Click CLI entry point. Defines 17 commands + hidden aliases.
 - `init` non-interactive mode: `--name`, `--description`, `--keywords`, `--language` flags auto-skip wizard; `--non-interactive` is alias for `--no-input`
 - `embed` group: `embed sources [CITEKEYS]` (default), `embed fragments`, `embed sections` (centroid from source vectors), `embed all` (sources→fragments→sections)
 - `_auto_embed_after_process(citekey, state, embeddings, quiet)` — embeds fragments + recomputes section centroids for a just-processed source; called automatically from `_process_single()` unless `--no-embed` is set
-- `--no-embed` flag on `process` and `acquire` — skips all auto-embedding (source, fragment, section centroid) after processing
+- `--no-embed` flag on `process`, `acquire`, and `add` — skips all auto-embedding (source, fragment, section centroid) after processing
+- `add` command: unified source ingestion — auto-detects input type (URL/citekey/PDF path) and runs full pipeline: register → section assign → process → embed. Flags: `--section`, `--no-process`, `--no-embed`, `--model`, `--title`/`--authors`/`--year` (URL mode)
+- `_detect_input_type(value) -> "url" | "citekey" | "path"` — input detection helper for `add` command
 - `--model` override available on: `research`, `ask`, `library`, `process`, `draft -s` — overrides `cfg.ai.model` per invocation
 - `draft` group: `draft introduction` (ГОСТ intro), `draft -s X.X` (standalone section draft → `notes/drafts/Draft_{section}.md`), `--no-rag` flag skips per-block RAG retrieval (ablation/debugging)
 
