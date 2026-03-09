@@ -4601,13 +4601,15 @@ def add(ctx, input_value, section, title, authors, year, no_process, no_embed, m
     # --- Process (if not suppressed and we have a citekey) ---
     if citekey and not no_process:
         source = state.get_source(citekey)
-        has_pdf = source and source.get("pdf_path")
         status = source["status"] if source else None
 
-        # Process if: pending/failed, or citekey mode (force reprocess for section assignment)
-        if has_pdf and status in ("pending", "failed", None) or (
-            input_type == "citekey" and has_pdf and status == "completed"
-        ):
+        # Process if: pending/failed, or citekey mode (force reprocess).
+        # Don't check pdf_path here — _process_single() has its own PDF
+        # discovery via pdf_extractor.find_pdf() which searches Zotero storage.
+        should_process = status in ("pending", "failed", None) or (
+            input_type == "citekey" and status == "completed"
+        )
+        if should_process:
             try:
                 ai = _init_ai(cfg)
             except Exception as e:
@@ -4641,8 +4643,6 @@ def add(ctx, input_value, section, title, authors, year, no_process, no_embed, m
                         force=force,
                     )
                 total_frags = n_frags
-        elif not has_pdf:
-            console.print("  [dim]no PDF available, skipping processing[/dim]")
 
     # --- Summary ---
     parts = [f"@{citekey}"]
