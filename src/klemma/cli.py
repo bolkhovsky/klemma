@@ -1,5 +1,6 @@
 """Klemma CLI — AI academic assistant."""
 
+import re
 from pathlib import Path
 
 import click
@@ -1408,8 +1409,11 @@ def plan(ctx):
 @click.option(
     "--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)"
 )
+@click.option(
+    "--no-embed", is_flag=True, help="Skip auto-embedding after processing"
+)
 @click.pass_context
-def process(ctx, citekeys, serial, force, model):
+def process(ctx, citekeys, serial, force, model, no_embed):
     """Process source(s): extract fragments, annotate, create vault note.
 
     With CITEKEY(s): process specified sources (parallel when >1).
@@ -1480,6 +1484,7 @@ def process(ctx, citekeys, serial, force, model):
                         klemma_home=kctx.klemma_home,
                         embeddings=kctx.embeddings,
                         force=force,
+                        no_embed=no_embed,
                     ): ck
                     for ck in keys
                 }
@@ -1532,6 +1537,7 @@ def process(ctx, citekeys, serial, force, model):
                 project_type=kctx.project.type if kctx.project else "dissertation",
                 embeddings=kctx.embeddings,
                 force=force,
+                no_embed=no_embed,
             )
             if n_frags > 0:
                 processed += 1
@@ -1557,6 +1563,62 @@ def process(ctx, citekeys, serial, force, model):
             console.print(hint)
 
 
+def _auto_embed_after_process(
+    citekey,
+    state,
+    embeddings,
+    quiet=False,
+):
+    """Embed fragments + recompute section centroids for a just-processed source.
+
+    Returns total embeddings created.
+    """
+    count = 0
+
+    # Fragment embeddings
+    fragments = state.get_fragments(source_id=citekey)
+    for frag in fragments:
+        if frag.get("embedding"):  # already embedded
+            continue
+        try:
+            vec = embeddings.embed(frag["fragment_text"])
+            if vec:
+                state.save_fragment_embedding(frag["id"], vec, embeddings.model_name)
+                count += 1
+        except Exception:
+            pass
+
+    if count and not quiet:
+        console.print(f"  [dim]embedded {count} fragments[/dim]")
+
+    # Section centroid recomputation for sections this source belongs to
+    model_name = embeddings.model_name
+    all_emb = state.get_all_embeddings(model=model_name)
+    if all_emb:
+        with state._conn() as conn:
+            cur = conn.execute(
+                "SELECT DISTINCT section FROM source_sections WHERE source_id=?",
+                (citekey,),
+            )
+            source_sections = [row["section"] for row in cur.fetchall()]
+
+        sections_updated = 0
+        for sec in source_sections:
+            source_ids = state.get_section_sources(sec)
+            vecs = [all_emb[sid] for sid in source_ids if sid in all_emb]
+            if not vecs:
+                continue
+            dim = len(vecs[0])
+            centroid = [sum(v[i] for v in vecs) / len(vecs) for i in range(dim)]
+            state.save_section_embedding(sec, centroid, model_name, len(vecs))
+            sections_updated += 1
+
+        if sections_updated and not quiet:
+            console.print(f"  [dim]updated {sections_updated} section centroids[/dim]")
+
+    return count
+
+
 def _process_single(
     citekey,
     cfg,
@@ -1572,6 +1634,7 @@ def _process_single(
     project_type="dissertation",
     embeddings=None,
     force=False,
+    no_embed=False,
 ):
     """Process a single source: find PDF, extract fragments, save to vault.
 
@@ -1700,17 +1763,22 @@ def _process_single(
         except Exception:
             pass
 
-    # Auto-embed if provider available and entry has abstract
-    if embeddings and abstract:
-        try:
-            vec = embeddings.embed(entry.title or citekey, abstract)
-            if vec:
-                state.save_embedding(citekey, vec, embeddings.model_name)
+    # Auto-embed if provider available and not suppressed
+    if embeddings and not no_embed:
+        # Source embedding (title + abstract)
+        if abstract:
+            try:
+                vec = embeddings.embed(entry.title or citekey, abstract)
+                if vec:
+                    state.save_embedding(citekey, vec, embeddings.model_name)
+                    if not quiet:
+                        console.print(f"  [dim]embedded ({embeddings.model_name})[/dim]")
+            except Exception as e:
                 if not quiet:
-                    console.print(f"  [dim]embedded ({embeddings.model_name})[/dim]")
-        except Exception as e:
-            if not quiet:
-                console.print(f"  [dim]embed failed: {e}[/dim]")
+                    console.print(f"  [dim]embed failed: {e}[/dim]")
+
+        # Fragment embeddings + section centroids
+        _auto_embed_after_process(citekey, state, embeddings, quiet=quiet)
 
     return (len(result.fragments), "ok")
 
@@ -3236,8 +3304,17 @@ def research(ctx, section, no_save, force, model):
     # Пробелы
     if result.missing_coverage:
         console.print("\n[yellow]Пробелы в покрытии:[/yellow]")
+        gap_sections: list[str] = []
         for m in result.missing_coverage:
             console.print(f"  - {m}")
+            # Extract section numbers like 2.3.4 from free-text gap descriptions
+            sec_match = re.search(r"\b(\d+(?:\.\d+)+)\b", m)
+            if sec_match:
+                gap_sections.append(sec_match.group(1))
+        if gap_sections:
+            console.print("\n[dim]Следующие шаги:[/dim]")
+            for sec in dict.fromkeys(gap_sections):  # deduplicate, preserve order
+                console.print(f"  [cyan]klemma suggest -s {sec}[/cyan]")
 
     # Рекомендации
     if result.writing_suggestions:
@@ -4425,6 +4502,9 @@ def reassign(ctx, threshold, limit, apply, fresh):
 @click.option(
     "--no-process", is_flag=True, help="Skip fragment extraction after adding"
 )
+@click.option(
+    "--no-embed", is_flag=True, help="Skip auto-embedding after processing"
+)
 @click.pass_context
 def acquire(
     ctx,
@@ -4439,6 +4519,7 @@ def acquire(
     pdf_url,
     batch_path,
     no_process,
+    no_embed,
 ):
     """Download PDF, add to Zotero, register in klemma.
 
@@ -4474,6 +4555,7 @@ def acquire(
         return
 
     ok = 0
+    total_frags = 0
 
     for i, meta in enumerate(papers, 1):
         label = meta.title[:50] if meta.title else meta.url[:50]
@@ -4526,7 +4608,7 @@ def acquire(
                     with console.status(
                         f"Extracting fragments from @{result.citekey}", spinner="arc"
                     ):
-                        _process_single(
+                        n_frags, _ = _process_single(
                             result.citekey,
                             cfg,
                             state,
@@ -4540,13 +4622,19 @@ def acquire(
                             project_type=(
                                 kctx.project.type if kctx.project else "dissertation"
                             ),
+                            embeddings=kctx.embeddings,
+                            no_embed=no_embed,
                         )
+                        total_frags += n_frags
 
             ok += 1
         else:
             console.print(f"  [red]{result.status}[/red]")
 
-    console.print(f"\n[green]Done: {ok}/{len(papers)} acquired.[/green]")
+    parts = [f"{ok}/{len(papers)} acquired"]
+    if total_frags:
+        parts.append(f"{total_frags} fragments")
+    console.print(f"\n[green]Done: {', '.join(parts)}.[/green]")
 
     # DEV mode: show benchmark candidate hints
     if kctx.config.instance.dev_mode:
