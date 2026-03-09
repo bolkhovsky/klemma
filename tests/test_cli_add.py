@@ -74,6 +74,30 @@ def test_add_citekey_not_found(tmp_path):
     assert "not found" in result.output
 
 
+def test_add_citekey_auto_registers_from_library(tmp_path):
+    """klemma add <citekey> auto-registers if source is in Zotero library but not DB."""
+    db = tmp_path / "state.db"
+    sm = StateManager(db)
+
+    mock_library = MagicMock()
+    mock_library.entries = {"paper1": MagicMock()}
+
+    mock_ctx = _make_mock_ctx(sm, vault=None)
+    mock_ctx.library = mock_library
+
+    runner = CliRunner()
+    with patch("klemma.cli._get_context", return_value=mock_ctx), \
+         patch("klemma.cli._init_components", return_value=mock_ctx), \
+         patch("klemma.cli.discover_project_root", return_value=tmp_path), \
+         patch("klemma.cli._init_ai", side_effect=Exception("no AI")):
+        result = runner.invoke(klemma_cli, ["add", "paper1", "--section", "1.1"])
+
+    assert result.exit_code == 0
+    assert "Registering" in result.output
+    assert sm.get_source("paper1") is not None
+    assert "paper1" in sm.get_section_sources("1.1")
+
+
 def test_add_citekey_assigns_sections(tmp_path):
     """klemma add <citekey> --section 1.1 assigns section in DB."""
     db = tmp_path / "state.db"

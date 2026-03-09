@@ -4582,10 +4582,16 @@ def add(ctx, input_value, section, title, authors, year, no_process, no_embed, m
         citekey = input_value
         source = state.get_source(citekey)
         if not source:
-            console.print(f"[red]Source @{citekey} not found in database.[/red]")
-            console.print("[dim]Use a URL or PDF path to add a new source.[/dim]")
-            return
-        console.print(f"[bold]Adding sections to:[/bold] @{citekey}")
+            # Not in DB — check if it exists in Zotero library and auto-register
+            if kctx.library and citekey in kctx.library.entries:
+                state.register_sources([citekey])
+                console.print(f"[bold]Registering:[/bold] @{citekey}")
+            else:
+                console.print(f"[red]Source @{citekey} not found in database or library.[/red]")
+                console.print("[dim]Use a URL or PDF path to add a new source.[/dim]")
+                return
+        else:
+            console.print(f"[bold]Adding sections to:[/bold] @{citekey}")
 
     # --- Section assignment (all input types) ---
     if sections and citekey:
