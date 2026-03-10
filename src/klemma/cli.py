@@ -4107,6 +4107,14 @@ def duplicates(ctx):
 
 
 @main.command()
+@click.argument("citekey", required=False, default=None)
+@click.option(
+    "--section",
+    "-s",
+    "target_section",
+    default=None,
+    help="Target section for direct reassignment (requires CITEKEY + --apply)",
+)
 @click.option(
     "--threshold",
     "-t",
@@ -4121,22 +4129,33 @@ def duplicates(ctx):
     "--apply",
     is_flag=True,
     default=False,
-    help="Apply suggestions: add sections to vault frontmatter",
-)
-@click.option(
-    "--fresh",
-    is_flag=True,
-    default=False,
-    help="Clear saved skip decisions and show all suggestions",
+    help="Apply reassignment (requires CITEKEY and -s SECTION)",
 )
 @click.pass_context
-def reassign(ctx, threshold, limit, apply, fresh):
-    """Suggest fragment-to-section reassignments based on embedding similarity."""
+def reassign(ctx, citekey, target_section, threshold, limit, apply):
+    """Suggest fragment-to-section reassignments based on embedding similarity.
+
+    Optionally provide CITEKEY to filter suggestions for a single source.
+    Combine with -s SECTION and --apply to directly reassign.
+    """
     from .embeddings import cosine_similarity
 
     kctx = _get_context(ctx)
     state = kctx.state
     _sync_sections(kctx)
+
+    # Validate -s requires citekey
+    if target_section and not citekey:
+        console.print("[red]--section/-s requires a CITEKEY argument.[/red]")
+        raise SystemExit(1)
+
+    # Validate --apply requires citekey + section
+    if apply and not (citekey and target_section):
+        console.print(
+            "[red]--apply requires both CITEKEY and -s SECTION.[/red]\n"
+            "[dim]Example: klemma reassign myPaper2024 -s 1.1 --apply[/dim]"
+        )
+        raise SystemExit(1)
 
     # 1. Load section embeddings
     section_embeddings = state.get_all_section_embeddings()
@@ -4161,6 +4180,11 @@ def reassign(ctx, threshold, limit, apply, fresh):
 
     # Filter to active sources only (exclude orphaned fragments)
     active_sources = state.get_existing_source_ids()
+
+    # Validate citekey exists
+    if citekey and citekey not in active_sources:
+        console.print(f"[red]Source @{citekey} not found in library.[/red]")
+        raise SystemExit(1)
 
     # Build section name lookup from project config (chapter-level names)
     chapter_names: dict[str, str] = {}
@@ -4225,6 +4249,10 @@ def reassign(ctx, threshold, limit, apply, fresh):
                     }
                 )
 
+    # Filter by citekey if specified
+    if citekey:
+        raw_suggestions = [s for s in raw_suggestions if s["citekey"] == citekey]
+
     # Group by (citekey, current, suggested) — collect all fragment IDs per group
     groups: dict[tuple[str, str, str], dict] = {}
     for s in raw_suggestions:
@@ -4239,29 +4267,7 @@ def reassign(ctx, threshold, limit, apply, fresh):
                 groups[key].update(s)
                 groups[key]["frag_ids"] = best_frag_ids
 
-    # Filter out previously skipped suggestions
-    if fresh:
-        cleared = state.clear_reassign_skips()
-        if cleared:
-            console.print(f"[dim]Cleared {cleared} saved skip(s).[/dim]")
-        skips: set[tuple[str, str, str]] = set()
-    else:
-        skips = state.get_reassign_skips()
-
-    suggestions = []
-    skipped_by_memory = 0
-    for key, group in groups.items():
-        source_id, from_sec, to_sec = key
-        if (source_id, from_sec, to_sec) in skips:
-            skipped_by_memory += 1
-            continue
-        suggestions.append(group)
-
-    if skipped_by_memory:
-        console.print(
-            f"[dim]Filtered {skipped_by_memory} previously skipped suggestion(s). "
-            f"Use --fresh to reset.[/dim]"
-        )
+    suggestions = list(groups.values())
 
     if not suggestions:
         console.print(
@@ -4307,205 +4313,81 @@ def reassign(ctx, threshold, limit, apply, fresh):
                 + (f" ({ru_name})" if ru_name else "")
                 + f"  sim={ru_score:.3f}[/dim]"
             )
+        console.print(
+            f"  Run: [cyan]klemma reassign {s['citekey']} "
+            f"-s {sug_sec} --apply[/cyan]"
+        )
         console.print()
 
     if not apply:
         console.print(
             f"[dim]{total} suggestions total (showing top {len(suggestions)}). "
-            f"Use --apply to reassign fragments interactively.[/dim]"
+            f"Use the per-suggestion commands above to apply.[/dim]"
         )
         return
 
-    # --- Apply: per-item interactive confirmation (ADR-011) ---
-    from .cli_confirm import ReviewItem, interactive_review
+    # --- Direct apply: citekey + target_section bypasses interactive review ---
+    if citekey and target_section:
+        vault = kctx.vault
+        notes_folder = kctx.config.obsidian.notes_folder
 
-    vault = kctx.vault
-    notes_folder = kctx.config.obsidian.notes_folder
+        # Only move fragments that embeddings suggest belong to target_section
+        frag_ids_to_move: list[int] = []
+        for s in suggestions:
+            if s["citekey"] == citekey and s["suggested"] == target_section:
+                frag_ids_to_move.extend(s.get("frag_ids", [s["frag_id"]]))
 
-    # Build section description: type + sample source titles
-    section_type_labels: dict[str, str] = {}
-    if project:
-        type_map = project.section_type_map or {}
-        for sec_id, sec_type in type_map.items():
-            section_type_labels[sec_id] = sec_type
-        # Infer subsection types from parent: 1.4.1 → type of "1"
-        for ch_num in project.chapters or {}:
-            if str(ch_num) in type_map:
-                section_type_labels[str(ch_num)] = type_map[str(ch_num)]
-
-    # Sample source titles per section (top 3 by relevance)
-    section_samples: dict[str, list[str]] = {}
-    try:
-        with state._conn() as conn:
-            cur = conn.execute(
-                """SELECT ss.section, s.title
-                   FROM source_sections ss
-                   JOIN sources s ON ss.source_id = s.id
-                   WHERE s.title IS NOT NULL AND s.title != ''
-                   ORDER BY ss.section"""
-            )
-            for row in cur.fetchall():
-                sec = row["section"]
-                section_samples.setdefault(sec, [])
-                if len(section_samples[sec]) < 3:
-                    title = row["title"]
-                    if title and len(title) > 60:
-                        title = title[:57] + "..."
-                    if title:
-                        section_samples[sec].append(title)
-    except Exception:
-        pass
-
-    def _describe_section(sec_id: str) -> str:
-        parts = []
-        # Section type (inherit from parent chapter if not explicitly mapped)
-        st = section_type_labels.get(sec_id)
-        if not st:
-            ch = sec_id.split(".")[0]
-            st = section_type_labels.get(ch)
-        if st:
-            parts.append(f"[{st}]")
-        # Chapter name (short — just the chapter number)
-        ch_num = sec_id.split(".")[0]
-        ch_name = chapter_names.get(ch_num)
-        if ch_name and sec_id != ch_num:
-            # Truncate long chapter names for subsections
-            short = ch_name[:50] + "..." if len(ch_name) > 50 else ch_name
-            parts.append(f"Гл. {ch_num}: {short}")
-        elif ch_name:
-            parts.append(ch_name)
-        # Sample sources in this section
-        samples = section_samples.get(sec_id, [])
-        if samples:
-            parts.append(f"({len(samples)}+ sources: {samples[0]})")
-        return " | ".join(parts) if parts else sec_id
-
-    # Load full fragment texts for detailed display
-    frag_texts: dict[int, str] = {}
-    all_frag_ids: list[int] = []
-    for s in suggestions:
-        all_frag_ids.extend(s.get("frag_ids", [s["frag_id"]]))
-    if all_frag_ids:
-        with state._conn() as conn:
-            placeholders = ",".join("?" * len(all_frag_ids))
-            cur = conn.execute(
-                f"SELECT id, fragment_text FROM fragments WHERE id IN ({placeholders})",
-                all_frag_ids,
-            )
-            frag_texts = {row["id"]: row["fragment_text"] for row in cur.fetchall()}
-
-    # Build ReviewItems
-    review_items = []
-    for s in suggestions:
-        frag_ids_list = s.get("frag_ids", [s["frag_id"]])
-        frag_text = frag_texts.get(s["frag_id"], s["preview"])
-        cur_sec = s["current"]
-        sug_sec = s["suggested"]
-        cur_desc = _describe_section(cur_sec) if cur_sec != "(none)" else "unassigned"
-        sug_desc = _describe_section(sug_sec)
-        score_style = "green" if s["score"] >= 0.7 else "yellow"
-        frag_count = len(frag_ids_list)
-        count_note = f" ({frag_count} fragments)" if frag_count > 1 else ""
-
-        review_items.append(
-            ReviewItem(
-                key=f"{s['citekey']}:{cur_sec}:{sug_sec}",
-                header=f"@{s['citekey']}{count_note}",
-                details=[
-                    ("Fragment", frag_text),
-                    (
-                        "Current",
-                        f"{cur_sec} — {cur_desc}  (sim={s['current_score']:.3f})",
-                    ),
-                    (
-                        "Suggested",
-                        f"[{score_style}]{sug_sec}[/{score_style}] — "
-                        f"{sug_desc}  (sim={s['score']:.3f}, +{s['delta']:.3f})",
-                    ),
-                ],
-                action_label=(
-                    f"Move {frag_count} fragment(s) from {cur_sec} → {sug_sec}"
-                ),
-                data={
-                    "citekey": s["citekey"],
-                    "frag_ids": frag_ids_list,
-                    "section": sug_sec,
-                    "from_section": cur_sec,
-                },
-            )
-        )
-
-    result = interactive_review(
-        review_items,
-        console=console,
-        title="Review reassignment suggestions",
-    )
-
-    # Save skip decisions for items not accepted
-    new_skips: list[tuple[str, str, str]] = []
-    accepted_keys = {item.key for item in result.accepted}
-    for item in review_items:
-        if item.key not in accepted_keys:
-            new_skips.append(
-                (
-                    item.data["citekey"],
-                    item.data["from_section"],
-                    item.data["section"],
+        if not frag_ids_to_move:
+            # Check if there were suggestions for a different section
+            other_suggestions = [
+                s for s in suggestions
+                if s["citekey"] == citekey and s["suggested"] != target_section
+            ]
+            if other_suggestions:
+                best = other_suggestions[0]
+                console.print(
+                    f"[yellow]No suggestions match section {target_section} "
+                    f"for @{citekey} (best match: {best['suggested']}, "
+                    f"sim={best['score']:.3f}).[/yellow]"
                 )
-            )
-    if new_skips:
-        state.save_reassign_skips_batch(new_skips)
+            else:
+                console.print(
+                    f"[yellow]No fragments for @{citekey} suggest "
+                    f"section {target_section}.[/yellow]"
+                )
+            return
 
-    if not result.accepted:
-        console.print(f"[dim]No changes applied ({result.skipped} skipped).[/dim]")
-        return
+        console.print(
+            f"Moving {len(frag_ids_to_move)} fragment(s) "
+            f"for @{citekey} → {target_section}"
+        )
 
-    # 1. Update fragment sections in DB — move ALL fragments per group
-    moved = 0
-    for item in result.accepted:
-        for frag_id in item.data["frag_ids"]:
-            ok = state.update_fragment_section(frag_id, item.data["section"])
+        moved = 0
+        for fid in frag_ids_to_move:
+            ok = state.update_fragment_section(fid, target_section)
             if ok:
                 moved += 1
 
-    # 2. Also add new sections to vault frontmatter (if source not already associated)
-    vault_updates = 0
-    additions: dict[str, set[str]] = {}
-    for item in result.accepted:
-        additions.setdefault(item.data["citekey"], set()).add(item.data["section"])
-
-    for citekey, new_sections in additions.items():
+        # Update vault frontmatter
         note_name = f"@{citekey}"
         props = vault.get_properties(note_name)
-        if not props:
-            continue
+        vault_updated = False
+        if props is not None:
+            current = set(str(s) for s in props.get("sections", []))
+            if target_section not in current:
+                merged = current | {target_section}
+                ok = vault.update_frontmatter_sections(
+                    note_name, list(merged), folder=notes_folder,
+                )
+                if ok:
+                    vault_updated = True
 
-        current = set(str(s) for s in props.get("sections", []))
-        merged = current | new_sections
-        if merged == current:
-            continue
-
-        ok = vault.update_frontmatter_sections(
-            note_name,
-            list(merged),
-            folder=notes_folder,
+        console.print(
+            f"[green]Reassigned {moved} fragment(s) for @{citekey} → {target_section}[/green]"
+            + (" [dim](vault updated)[/dim]" if vault_updated else "")
         )
-        if ok:
-            added = sorted(merged - current)
-            vault_updates += 1
-            console.print(
-                f"  [dim]Vault @{citekey}: added sections {', '.join(added)}[/dim]"
-            )
+        return
 
-    console.print(
-        f"\n[green]{moved} fragment(s) reassigned in DB, "
-        f"{result.skipped} skipped.[/green]"
-        + (
-            f" [dim]{vault_updates} vault note(s) updated.[/dim]"
-            if vault_updates
-            else ""
-        )
-    )
 
 
 # --- Add: unified source ingestion ---

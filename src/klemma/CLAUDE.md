@@ -25,6 +25,7 @@ Click CLI entry point. Defines 18 commands + hidden aliases.
 - `draft` group: `draft introduction` (ГОСТ intro), `draft -s X.X` (standalone section draft → `notes/drafts/Draft_{section}.md`), `--no-rag` flag skips per-block RAG retrieval (ablation/debugging)
 - `coach` command: methodology-driven research advisor (zero AI calls). Default: project-wide health check. `-s X.X`: section focus. `--json`: structured output. Calls `_sync_sections()` before reading (ADR-010)
 - `_coach_section_hint(state, section, project_root)` — generates 1-line hint for inline use; called from `add`, `draft -s`, `research -s`
+- `reassign` command: suggest fragment-to-section reassignments via embedding similarity. Optional `CITEKEY` arg filters to one source. `-s SECTION` + `--apply` directly reassigns. Dry-run shows per-suggestion runnable commands. No batch apply — each reassignment is an explicit user decision.
 
 ### context.py (41 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.
@@ -90,7 +91,7 @@ Tables:
 - `prune_verdicts` — librarian audit results (drop/maybe with reason)
 - `benchmark_runs` — benchmark run history (run_id, timestamp, metrics JSON, paper_citekey, git_commit, klemma_version, config_snapshot, duration)
 - `section_embeddings` — section centroid embeddings (section × embedding_model composite PK, BLOB float32, source_count, updated_at)
-- `reassign_skips` — persisted skip decisions for `reassign` command (PK: source_id, from_section, to_section; `--fresh` clears)
+- `reassign_skips` — persisted skip decisions (legacy, unused since batch --apply removed)
 
 Key methods: `register_sources()`, `update_source_info()`, `get_by_section(section, section_type?)` (JOIN on `source_sections`), `get_coverage_stats()` (includes `section_types` dict), `get_gap_summary()`, `save_plan()`, `save_citation_links()`, `get_citation_graph()`, `save_embedding()`, `get_embeddings()`, `save_section_embedding()`, `get_section_embedding()`, `get_all_section_embeddings()`, `get_section_embedding_stats()`, `save_prune_verdicts()`, `get_prune_verdicts()`, `save_benchmark_run()`, `get_benchmark_runs()`, `compare_benchmark_runs()`, `sync_section_types(config)`.
 
