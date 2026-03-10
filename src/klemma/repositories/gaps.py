@@ -332,13 +332,15 @@ class GapsRepository(BaseRepository):
                 stats["chapters"][row["primary_chapter"]] = row["cnt"]
 
             cur = conn.execute(
-                """SELECT primary_section, COUNT(*) as cnt FROM sources
-                   WHERE status=? AND primary_section IS NOT NULL
-                   GROUP BY primary_section""",
+                """SELECT ss.section, COUNT(DISTINCT ss.source_id) as cnt
+                   FROM source_sections ss
+                   JOIN sources s ON s.id = ss.source_id
+                   WHERE s.status=?
+                   GROUP BY ss.section""",
                 ("completed",),
             )
             for row in cur.fetchall():
-                stats["sections"][row["primary_section"]] = row["cnt"]
+                stats["sections"][row["section"]] = row["cnt"]
 
             # Per-type coverage: count distinct sources per section_type
             cur = conn.execute(
