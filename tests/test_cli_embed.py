@@ -7,20 +7,26 @@ from klemma.cli import main as klemma_cli
 from klemma.state import StateManager
 
 
-def test_embed_accepts_multiple_citekeys_and_warns_missing(tmp_path, monkeypatch):
+def test_embed_accepts_multiple_citekeys_and_warns_missing(tmp_path):
+    db = tmp_path / ".klemma" / "state.db"
+    db.parent.mkdir(parents=True)
+    sm = StateManager(db)
+    sm.register_sources(["exists1"])
+
+    mock_ctx = MagicMock()
+    mock_ctx.state = sm
+    mock_ctx.embeddings = MagicMock()
+    mock_ctx.embeddings.model_name = "test-model"
+    mock_ctx.config = MagicMock()
+    mock_ctx.library = None
+
     runner = CliRunner()
-    monkeypatch.setenv("KLEMMA_HOME", str(tmp_path / ".klemma_home"))
-
-    with runner.isolated_filesystem():
-        init_result = runner.invoke(klemma_cli, ["init", "--no-input"])
-        assert init_result.exit_code == 0
-
-        state = StateManager(Path(".klemma/data/klemma.db"))
-        state.register_sources(["exists1"])
-
+    with patch("klemma.cli.discover_project_root", return_value=tmp_path), \
+         patch("klemma.cli._init_components", return_value=mock_ctx), \
+         patch("klemma.cli._get_context", return_value=mock_ctx):
         result = runner.invoke(klemma_cli, ["embed", "sources", "exists1", "missing1", "--dry-run"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert "Missing citekeys: missing1" in result.output
     assert "Would embed 1 sources" in result.output
 
