@@ -1,5 +1,6 @@
 """Klemma CLI — AI academic assistant."""
 
+import os
 import re
 from pathlib import Path
 
@@ -3666,6 +3667,10 @@ def ask(ctx, query, section, chapter, model):
     if ai.interactive_available:
         import subprocess as _sp
 
+        # Sanitize env to avoid nested Claude Code session detection (#131)
+        clean_env = {
+            k: v for k, v in os.environ.items() if k != "CLAUDECODE"
+        }
         result = _sp.run(
             [
                 "claude",
@@ -3679,6 +3684,7 @@ def ask(ctx, query, section, chapter, model):
             capture_output=True,
             text=True,
             timeout=cfg.ai.timeout,
+            env=clean_env,
         )
         response = result.stdout
         if response:

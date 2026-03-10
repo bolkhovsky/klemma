@@ -271,6 +271,10 @@ class ClaudeClient(AIProviderBase):
             )
         # --model flag requires ANTHROPIC_API_KEY (Max subscriptions don't support it)
         self._has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        # Sanitize env to avoid nested Claude Code session detection (#131)
+        self._clean_env = {
+            k: v for k, v in os.environ.items() if k != "CLAUDECODE"
+        }
 
     def _build_cmd(self, model: str) -> list[str]:
         """Build claude CLI command, omitting --model when no API key."""
@@ -303,6 +307,7 @@ class ClaudeClient(AIProviderBase):
                     cmd, input=prompt,
                     capture_output=True, text=True,
                     timeout=effective_timeout,
+                    env=self._clean_env,
                 )
                 if result.returncode != 0:
                     error_msg = (result.stderr or result.stdout or "")[:300]
@@ -346,6 +351,7 @@ class ClaudeClient(AIProviderBase):
                 result = subprocess.run(
                     cmd, input=prompt,
                     capture_output=True, text=True, timeout=effective_timeout,
+                    env=self._clean_env,
                 )
                 if result.returncode != 0:
                     retries_used = attempt + 1
