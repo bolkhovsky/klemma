@@ -1567,7 +1567,8 @@ def _coach_section_hint(state, section: str, project_root=None) -> str | None:
     """Generate 1-line coach hint for a section. Returns None if nothing to say."""
     from .skills.coach import coach_section_hint
 
-    sources = state.get_section_sources(section)
+    coverage = state.get_coverage_stats()
+    source_count = coverage.get("sections", {}).get(section, 0)
     intent = state.get_intent_coverage().get(section, {})
     frags = state.get_fragments(section=section)
     level = "chapter" if "." not in section else "subsection"
@@ -1577,7 +1578,7 @@ def _coach_section_hint(state, section: str, project_root=None) -> str | None:
     )
     return coach_section_hint(
         section=section,
-        source_count=len(sources),
+        source_count=source_count,
         level=level,
         intent_counts=intent,
         fragment_count=len(frags),
@@ -4718,8 +4719,9 @@ def coach(ctx, section, json_output):
     _sync_sections(kctx)
 
     if section:
-        # Section focus mode
-        sources = state.get_section_sources(section)
+        # Section focus mode — use get_coverage_stats for parent-aware count
+        coverage = state.get_coverage_stats()
+        source_count = coverage.get("sections", {}).get(section, 0)
         intent = state.get_intent_coverage().get(section, {})
         frags = state.get_fragments(section=section)
         level = "chapter" if "." not in section else "subsection"
@@ -4731,7 +4733,7 @@ def coach(ctx, section, json_output):
         )
         findings = analyze_section(
             section=section,
-            source_count=len(sources),
+            source_count=source_count,
             level=level,
             intent_counts=intent,
             fragment_count=len(frags),
