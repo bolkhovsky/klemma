@@ -135,7 +135,14 @@ def analyze_project(
     findings: list[CoachFinding] = []
 
     sections = coverage_stats.get("sections", {})
+    all_section_ids = set(sections.keys())
     for sec, count in sorted(sections.items()):
+        # Skip parent sections when children exist (e.g. skip 1.3 if 1.3.1 is listed)
+        has_children = any(
+            s != sec and s.startswith(sec + ".") for s in all_section_ids
+        )
+        if has_children:
+            continue
         level = section_levels.get(sec, "subsection")
         intents = intent_coverage.get(sec, {})
         frag_count = sum(intents.values()) if intents else 0

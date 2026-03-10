@@ -249,6 +249,39 @@ class TestAnalyzeProject:
         )
         assert report.findings == []
 
+    def test_parent_sections_skipped_when_children_exist(self):
+        """Section 1.3 should be skipped if 1.3.1/1.3.2 are present."""
+        report = analyze_project(
+            coverage_stats={
+                "sections": {"1.3": 167, "1.3.1": 123, "1.3.2": 81},
+            },
+            intent_coverage={},
+            fragment_stats={},
+            gap_summary={"open_count": 0},
+            section_levels={
+                "1.3": "subsection",
+                "1.3.1": "subsection",
+                "1.3.2": "subsection",
+            },
+            drafts=set(),
+        )
+        mentioned_sections = {f.section for f in report.findings}
+        assert "1.3" not in mentioned_sections
+        assert "1.3.1" in mentioned_sections
+        assert "1.3.2" in mentioned_sections
+
+    def test_leaf_section_not_skipped(self):
+        """Sections without children are always analyzed."""
+        report = analyze_project(
+            coverage_stats={"sections": {"2.1": 3}},
+            intent_coverage={},
+            fragment_stats={},
+            gap_summary={"open_count": 0},
+            section_levels={"2.1": "subsection"},
+            drafts=set(),
+        )
+        assert any(f.section == "2.1" for f in report.findings)
+
 
 class TestCoachSectionHint:
     """Tests for coach_section_hint()."""
