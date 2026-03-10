@@ -88,6 +88,25 @@ Tables:
 
 Key methods: `register_sources()`, `update_source_info()`, `get_by_section(section, section_type?)` (JOIN on `source_sections`), `get_coverage_stats()` (includes `section_types` dict), `get_gap_summary()`, `save_plan()`, `save_citation_links()`, `get_citation_graph()`, `save_embedding()`, `get_embeddings()`, `save_section_embedding()`, `get_section_embedding()`, `get_all_section_embeddings()`, `get_section_embedding_stats()`, `save_prune_verdicts()`, `get_prune_verdicts()`, `save_benchmark_run()`, `get_benchmark_runs()`, `compare_benchmark_runs()`, `sync_section_types(config)`.
 
+### hashing.py (25 lines)
+Content-addressable hashing utilities for the three-tier library (ADR-014). Pure stdlib, no internal dependencies.
+- `compute_pdf_hash(pdf_path)` — SHA256 of PDF bytes for content-addressable paper dedup
+- `compute_content_hash(paper_id, text, page)` — SHA256 fragment ID (deterministic: same PDF + extraction = same IDs)
+- `compute_prompt_hash(prompt_text)` — first 16 hex chars of SHA256 for extraction prompt versioning
+
+### protocols.py (100 lines)
+Protocol interfaces for the three-tier library split (ADR-014). Defines the boundary between tiers.
+- `PaperStore` — content-addressable paper storage (Global Corpus): find/register papers, save/get fragments and embeddings
+- `UserLibrary` — user's personal collection: citekey→paper_id mapping, source status
+- `ProjectStore` — per-project data: section assignments, coverage stats, reference gaps
+All three are `@runtime_checkable`. Skills do NOT import this module.
+
+### models.py (60 lines)
+Data classes for the three-tier storage layer (ADR-014). Distinct from `literature/models.py` (AI extraction output).
+- `PaperRecord` — global corpus paper (paper_id, pdf_hash, doi, title, authors, year, abstract)
+- `FragmentRecord` — stored fragment with content-addressable ID (fragment_id = content_hash)
+- `UserSource` — user's source entry mapping citekey → global paper_id
+
 ### errors.py (32 lines)
 Klemma error taxonomy for AI backends.
 - `KlemmaAIError` — base class with `retryable` flag and optional `cause` chaining
