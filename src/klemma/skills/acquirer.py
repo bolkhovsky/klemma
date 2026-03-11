@@ -44,6 +44,7 @@ class AcquireResult:
     pdf_path: str = ""
     status: str = ""  # ok, download_failed
     zotero_added: bool = False
+    pdf_hash: str = ""  # SHA256 of PDF bytes (ADR-014: content-addressable dedup)
 
 
 def _is_allowed_download_url(url: str) -> bool:
@@ -621,6 +622,17 @@ def acquire_paper_local(
             doi=resolved.get("doi", ""),
         )
 
+    # Compute PDF hash before temp file cleanup (ADR-014: content-addressable dedup)
+    from ..hashing import compute_pdf_hash
+
+    hash_path = Path(permanent_path) if permanent_path else pdf_path
+    try:
+        pdf_hash = compute_pdf_hash(hash_path)
+        logger.info("PDF hash for %s: %s", citekey, pdf_hash[:12])
+    except Exception as e:
+        logger.debug("Could not compute PDF hash: %s", e)
+        pdf_hash = ""
+
     if not is_local_file:
         pdf_path.unlink(missing_ok=True)
     return AcquireResult(
@@ -628,6 +640,7 @@ def acquire_paper_local(
         pdf_path=permanent_path or str(pdf_path),
         status="ok",
         zotero_added=zotero_citekey is not None,
+        pdf_hash=pdf_hash,
     )
 
 

@@ -81,6 +81,9 @@ def extract_fragments(
         logger.warning("No valid fragments extracted for %s", entry.id)
         return None
 
+    # Compute content hashes for future content-addressable storage (ADR-014)
+    from ..hashing import compute_content_hash
+
     # Save to database
     fragment_dicts = [
         {
@@ -92,6 +95,7 @@ def extract_fragments(
             "usage_hint": f.usage_hint,
             "page": f.page,
             "citation_intent": f.citation_intent,
+            "content_hash": compute_content_hash(entry.id, f.text, f.page),
         }
         for f in fragments
     ]

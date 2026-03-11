@@ -1,7 +1,9 @@
 # Tests
 
-## Current test suite (807 tests)
+## Current test suite (832 tests)
 - `test_errors.py` (33 lines) — `KlemmaAIError` hierarchy, `retryable` classification, cause chaining
+- `test_hashing.py` (~80 lines) — 15 tests: `compute_pdf_hash` (determinism, different content, hex format, missing file), `compute_content_hash` (determinism, uniqueness by paper/text/page, None page, empty text), `compute_prompt_hash` (determinism, uniqueness, 16-char truncation, empty)
+- `test_protocols.py` (~80 lines) — 10 tests: `PaperRecord`/`FragmentRecord`/`UserSource` dataclass defaults + all-fields, runtime-checkable Protocol verification, non-implementing class rejection
 - `test_ai.py` (170 lines) — `extract_json()`, `AIProviderBase`, `AICallResult` dataclass, `call_with_meta()` base + Claude, `create_ai()` factory
 - `test_ai_litellm.py` (265 lines) — `LiteLLMClient` with mocked litellm: call, json_mode, base_url, api_key, reasoning model detection, retry, `call_with_meta()` with structured error mapping + token extraction
 - `test_ai_openai.py` (127 lines) — deprecated `OpenAIClient`: DeprecationWarning, delegation to LiteLLMClient, model prefixing
