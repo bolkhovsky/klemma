@@ -223,3 +223,41 @@ class TestDBInheritance:
         sec_sources = child.get_by_section("2.1")
         ids = {s["id"] for s in sec_sources}
         assert "parent-src-2" in ids
+
+    def test_sources_without_embeddings_excludes_parent_embedded(self, linked_states):
+        """get_sources_without_embeddings() skips sources embedded in parent DB."""
+        child, parent = linked_states
+        # Parent has embeddings for both sources
+        parent.save_embedding("parent-src-1", [0.1, 0.2, 0.3], "spec")
+        parent.save_embedding("parent-src-2", [0.4, 0.5, 0.6], "spec")
+
+        # Child inherits the sources but has no local embeddings
+        # Without the fix, both would be reported as missing
+        missing = child.get_sources_without_embeddings()
+        assert "parent-src-1" not in missing
+        assert "parent-src-2" not in missing
+
+    def test_sources_without_embeddings_reports_truly_missing(self, linked_states):
+        """Child-only sources without embeddings are still reported."""
+        child, parent = linked_states
+        # Embed parent sources
+        parent.save_embedding("parent-src-1", [0.1, 0.2, 0.3], "spec")
+        parent.save_embedding("parent-src-2", [0.4, 0.5, 0.6], "spec")
+
+        # Register a child-only source without embedding
+        child.register_sources(["child-new"])
+        child.mark_completed("child-new", note_path="@child-new.md")
+
+        missing = child.get_sources_without_embeddings()
+        # Parent sources are embedded — not missing
+        assert "parent-src-1" not in missing
+        assert "parent-src-2" not in missing
+        # child-new has no embedding — still reported
+        assert "child-new" in missing
+
+    def test_sources_without_embeddings_no_parent(self, child_state):
+        """Without parent, method returns all un-embedded completed sources."""
+        child_state.register_sources(["solo1"])
+        child_state.mark_completed("solo1", note_path="@s.md")
+        missing = child_state.get_sources_without_embeddings()
+        assert "solo1" in missing
