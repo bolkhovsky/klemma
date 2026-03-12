@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -580,6 +580,24 @@ class KlemmaConfig(BaseModel):
     tags: TagsConfig = Field(default_factory=TagsConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
     project: Optional[ProjectConfig] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_subsections_to_empty(cls, data: object) -> object:
+        """Convert null YAML subsections to empty dicts so default_factory applies.
+
+        YAML files may have `zotero:` with only comments below it, which parses
+        as `{"zotero": None}`. Without this validator, Pydantic rejects None for
+        non-Optional fields like ZoteroConfig.
+        """
+        if not isinstance(data, dict):
+            return data
+        _non_optional = {
+            "instance", "zotero", "obsidian", "ai", "embeddings",
+            "search", "suggest", "state", "dissertation", "planning",
+            "reading", "processing", "tags", "export",
+        }
+        return {k: ({} if k in _non_optional and v is None else v) for k, v in data.items()}
 
 
 # --- KLEMMA.md frontmatter parser ---

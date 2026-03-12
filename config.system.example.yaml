@@ -7,8 +7,8 @@
 # and is the recommended way to configure klemma globally.
 # See klemmarc.example.yaml for the full reference.
 
-zotero:
-  # storage_path: ~/Zotero/storage     # local Zotero PDF storage
+# zotero:
+#   storage_path: ~/Zotero/storage     # local Zotero PDF storage
 
 ai:
   language: "ru"                       # default AI response language
