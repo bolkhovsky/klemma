@@ -206,7 +206,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 11  # bump this when adding new migrations
+        target = 12  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -442,12 +442,38 @@ class StateManager:
                     cur.rowcount,
                 )
 
+        if version < 12:
+            existing_src = {
+                row[1] for row in conn.execute("PRAGMA table_info(sources)")
+            }
+            for col, col_type in [
+                ("url", "TEXT"),
+                ("source_type", "TEXT DEFAULT 'pdf'"),
+            ]:
+                if col not in existing_src:
+                    conn.execute(
+                        f"ALTER TABLE sources ADD COLUMN {col} {col_type}"
+                    )
+
         conn.execute(f"PRAGMA user_version = {target}")
 
     # ── Source delegation ─────────────────────────────────────────────────
 
     def register_sources(self, source_ids: list[str]):
         return self.sources.register_sources(source_ids)
+
+    def register_online_source(
+        self,
+        citekey: str,
+        title: str,
+        authors: str,
+        year: Optional[int],
+        url: str,
+        abstract: str = "",
+    ) -> None:
+        return self.sources.register_online_source(
+            citekey, title, authors, year, url, abstract
+        )
 
     def set_pdf_path(self, source_id: str, path: str):
         return self.sources.set_pdf_path(source_id, path)
@@ -491,8 +517,11 @@ class StateManager:
         return self.sources.get_source(source_id)
 
     def update_source_info(self, source_id: str, title: str = "", authors: str = "",
-                           year: Optional[int] = None, abstract: str = "", doi: str = ""):
-        return self.sources.update_source_info(source_id, title, authors, year, abstract, doi)
+                           year: Optional[int] = None, abstract: str = "", doi: str = "",
+                           url: str = "", source_type: str = ""):
+        return self.sources.update_source_info(
+            source_id, title, authors, year, abstract, doi, url, source_type
+        )
 
     def set_source_role(self, source_id: str, role: str):
         return self.sources.set_source_role(source_id, role)

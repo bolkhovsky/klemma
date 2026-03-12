@@ -34,6 +34,19 @@ from ..cli import (
     help="JSON file with papers list",
 )
 @click.option(
+    "--bibtex",
+    "bibtex_str",
+    default=None,
+    help="BibTeX @online{...} entry string to register as online source",
+)
+@click.option(
+    "--bibtex-file",
+    "bibtex_file",
+    type=click.Path(exists=True),
+    default=None,
+    help=".bib file containing one @online{...} entry to register",
+)
+@click.option(
     "--no-process", is_flag=True, help="Skip fragment extraction after adding"
 )
 @click.pass_context
@@ -49,6 +62,8 @@ def acquire(
     section,
     pdf_url,
     batch_path,
+    bibtex_str,
+    bibtex_file,
     no_process,
 ):
     """Download PDF, add to Zotero, register in klemma.
@@ -56,13 +71,100 @@ def acquire(
     Single paper: klemma acquire <pdf_url> --title "..." --authors "..." --year 2022 --section 1.2
     With DOI + direct PDF: klemma acquire <doi_url> --pdf <direct_pdf_url> --section 1.3
     Batch: klemma acquire --batch papers.json
+    Online source: klemma acquire --bibtex '@online{key2024, title={...}, url={...}}'
+    Online from file: klemma acquire --bibtex-file source.bib --section 1.2
     """
-    from ..skills.acquirer import PaperMetadata, acquire_paper_local, load_batch
+    from ..skills.acquirer import (
+        PaperMetadata,
+        acquire_paper_local,
+        load_batch,
+        parse_bibtex_online,
+    )
 
     kctx = _get_context(ctx)
     cfg, state = kctx.config, kctx.state
 
-    # Build paper list
+    # --- BibTeX @online mode ---
+    if bibtex_str or bibtex_file:
+        if bibtex_file:
+            from pathlib import Path as _Path
+            bib_text = _Path(bibtex_file).read_text(encoding="utf-8")
+        else:
+            bib_text = bibtex_str
+
+        records = parse_bibtex_online(bib_text)
+        if not records:
+            console.print("[red]No @online{} entries found in BibTeX input.[/red]")
+            return
+
+        ok = 0
+        for rec in records:
+            console.print(f"\n[bold]Online source:[/bold] {rec.citekey}")
+            state.register_online_source(
+                citekey=rec.citekey,
+                title=rec.title,
+                authors=rec.authors,
+                year=rec.year,
+                url=rec.url,
+                abstract=rec.abstract,
+            )
+            if list(section):
+                sections_list = list(section)
+                chapters = list({int(s.split(".")[0]) for s in sections_list if "." in s})
+                state.set_source_sections(rec.citekey, sections_list, chapters)
+                console.print(f"  [dim]sections: {', '.join(sections_list)}[/dim]")
+
+            console.print(f"  [green]@{rec.citekey}[/green]")
+            if rec.title:
+                console.print(f"  Title: {rec.title}")
+            if rec.authors:
+                console.print(f"  Authors: {rec.authors}")
+            if rec.year:
+                console.print(f"  Year: {rec.year}")
+            if rec.url:
+                console.print(f"  URL: {rec.url}")
+            console.print("  [yellow]Online source (no PDF — use 'klemma process' to fetch text)[/yellow]")
+
+            if not no_process and rec.url:
+                try:
+                    ai = _init_ai(cfg)
+                except Exception as e:
+                    console.print(
+                        f"  [yellow]Skipping auto-process (AI unavailable: {e})[/yellow]"
+                    )
+                    console.print(
+                        f"  [dim]Run manually: klemma process {rec.citekey}[/dim]"
+                    )
+                    ai = None
+
+                if ai:
+                    from ..literature.pdf import PDFExtractor
+
+                    pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
+                    with console.status(
+                        f"Extracting fragments from @{rec.citekey}", spinner="arc"
+                    ):
+                        _process_single(
+                            rec.citekey,
+                            cfg,
+                            state,
+                            kctx.vault,
+                            ai,
+                            pdf_extractor,
+                            kctx.library,
+                            dissertation_context=kctx.dissertation_context,
+                            available_tags=kctx.available_tags,
+                            klemma_home=kctx.klemma_home,
+                            project_type=(
+                                kctx.project.type if kctx.project else "dissertation"
+                            ),
+                        )
+            ok += 1
+
+        console.print(f"\n[green]Done: {ok}/{len(records)} online source(s) registered.[/green]")
+        return
+
+    # --- Build paper list (URL / batch mode) ---
     if batch_path:
         papers = load_batch(batch_path)
         console.print(f"[blue]Loaded {len(papers)} papers from batch file[/blue]")
@@ -81,7 +183,7 @@ def acquire(
             )
         ]
     else:
-        console.print("[red]Provide a URL or --batch file[/red]")
+        console.print("[red]Provide a URL, --batch file, or --bibtex entry[/red]")
         return
 
     ok = 0
