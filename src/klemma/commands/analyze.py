@@ -1,0 +1,489 @@
+"""Status, coach, and suggest commands."""
+
+import click
+from rich.table import Table
+
+from ..cli import (
+    _get_context,
+    _lookup_section_type,
+    _print_recommended_actions,
+    _print_ref_gaps_table,
+    _sync_sections,
+    console,
+    main,
+)
+
+
+@main.command()
+@click.option("--verbose", "-v", is_flag=True, help="Show full detailed tables")
+@click.option("--chapter", "-ch", type=int, help="Filter by chapter")
+@click.pass_context
+def status(ctx, verbose, chapter):
+    """Unified status: processing, coverage, gaps, reference gaps."""
+    kctx = _get_context(ctx)
+    cfg, state = kctx.config, kctx.state
+    project = kctx.project
+    _sync_sections(kctx, quiet=True)
+
+    proc_stats = state.get_stats()
+    frag_stats = state.get_fragment_stats()
+    cov = state.get_coverage_stats()
+
+    # --- Processing summary ---
+    completed = proc_stats.get("completed", 0)
+    pending = proc_stats.get("pending", 0)
+    failed = proc_stats.get("failed", 0)
+    skipped = proc_stats.get("skipped", 0)
+    total = proc_stats.get("total", 0)
+    parts = [f"[green]{completed} completed[/green]"]
+    if skipped:
+        parts.append(f"[dim]{skipped} skipped[/dim]")
+    if pending:
+        parts.append(f"[yellow]{pending} pending[/yellow]")
+    if failed:
+        parts.append(f"[red]{failed} failed[/red]")
+    console.print(
+        f"Processing: {' | '.join(parts)}  [dim]({total} total, {frag_stats.get('total', 0)} fragments)[/dim]"
+    )
+    console.print()
+
+    # --- Coverage (chapter-based for dissertation/thesis, simple for paper) ---
+    has_chapters = project and project.chapters and project.type != "paper"
+
+    if has_chapters:
+        chapter_numbers = project.chapter_numbers
+        type_lookup = cov.get("section_type_lookup", {})
+        table = Table(title="Coverage by Chapter", show_edge=False, pad_edge=False)
+        table.add_column("Chapter", style="cyan")
+        table.add_column("Type", style="dim")
+        table.add_column("Sources", justify="right", width=8)
+        for ch in chapter_numbers:
+            if chapter and ch != chapter:
+                continue
+            count = cov["chapters"].get(ch, 0)
+            style = "green" if count >= 10 else "yellow" if count >= 5 else "red"
+            name = project.chapters.get(ch, "")
+            stype = type_lookup.get(str(ch), "")
+            table.add_row(f"Ch {ch}: {name}", stype, f"[{style}]{count}[/{style}]")
+        console.print(table)
+
+        # Sections (verbose or filtered by chapter)
+        if (verbose or chapter) and cov["sections"]:
+            console.print()
+            type_lookup = cov.get("section_type_lookup", {})
+            sec_table = Table(
+                title="Coverage by Section", show_edge=False, pad_edge=False
+            )
+            sec_table.add_column("Section", style="cyan")
+            sec_table.add_column("Type", style="dim")
+            sec_table.add_column("Sources", justify="right", width=8)
+            for sec, count in sorted(cov["sections"].items()):
+                if chapter and not sec.startswith(f"{chapter}."):
+                    continue
+                style = "green" if count >= 3 else "yellow" if count >= 1 else "red"
+                stype = _lookup_section_type(sec, type_lookup)
+                sec_table.add_row(sec, stype, f"[{style}]{count}[/{style}]")
+            console.print(sec_table)
+    elif not project or project.type == "paper":
+        # Paper: show section coverage if any, no chapter structure
+        if cov["sections"]:
+            type_lookup = cov.get("section_type_lookup", {})
+            sec_table = Table(
+                title="Coverage by Section", show_edge=False, pad_edge=False
+            )
+            sec_table.add_column("Section", style="cyan")
+            sec_table.add_column("Type", style="dim")
+            sec_table.add_column("Sources", justify="right", width=8)
+            for sec, count in sorted(cov["sections"].items()):
+                style = "green" if count >= 3 else "yellow" if count >= 1 else "red"
+                stype = _lookup_section_type(sec, type_lookup)
+                sec_table.add_row(sec, stype, f"[{style}]{count}[/{style}]")
+            console.print(sec_table)
+    else:
+        # Fallback: legacy dissertation config
+        chapter_numbers = list(range(1, 5))
+        type_lookup = cov.get("section_type_lookup", {})
+        table = Table(title="Coverage by Chapter", show_edge=False, pad_edge=False)
+        table.add_column("Chapter", style="cyan")
+        table.add_column("Type", style="dim")
+        table.add_column("Sources", justify="right", width=8)
+        for ch in chapter_numbers:
+            count = cov["chapters"].get(ch, 0)
+            style = "green" if count >= 10 else "yellow" if count >= 5 else "red"
+            name = cfg.dissertation.chapters.get(ch, "")
+            stype = type_lookup.get(str(ch), "")
+            table.add_row(f"Ch {ch}: {name}", stype, f"[{style}]{count}[/{style}]")
+        console.print(table)
+
+    # --- Coverage by semantic type ---
+    section_types = cov.get("section_types", {})
+    if section_types:
+        console.print()
+        type_parts = []
+        for st_name, st_count in sorted(section_types.items()):
+            style = "green" if st_count >= 10 else "yellow" if st_count >= 5 else "dim"
+            type_parts.append(f"[{style}]{st_name} {st_count}[/{style}]")
+        console.print(f"[bold]By type:[/bold] {' | '.join(type_parts)}")
+
+    # --- Top gaps ---
+    min_sources = (
+        project.min_sources_per_section
+        if project
+        else cfg.dissertation.min_sources_per_section
+    )
+    gaps_data = state.get_gaps(min_sources=min_sources)
+    if gaps_data:
+        if chapter:
+            gaps_data = [g for g in gaps_data if g["section"].startswith(f"{chapter}.")]
+        shown = gaps_data if verbose else gaps_data[:5]
+        console.print()
+        console.print(
+            f"[bold]Top Gaps[/bold] [dim](sections with < {min_sources} sources)[/dim]"
+        )
+        for gap in shown:
+            needed = min_sources - gap["count"]
+            console.print(
+                f"  [red]{gap['section']}[/red] — {gap['count']} sources [dim](need {needed} more)[/dim]"
+            )
+        if not verbose and len(gaps_data) > 5:
+            console.print(
+                f"  [dim]... and {len(gaps_data) - 5} more (use --verbose)[/dim]"
+            )
+
+    # --- Reference gaps ---
+    _sw = kctx.project.section_weights if kctx.project else None
+    if verbose:
+        _print_ref_gaps_table(
+            state, limit=20, embeddings=kctx.embeddings, section_weights=_sw
+        )
+    else:
+        ref_gaps = state.get_reference_gaps(limit=5, section_weights=_sw)
+        if ref_gaps:
+            gap_summary = state.get_gap_summary()
+            console.print()
+            console.print(
+                f"[bold]Ref Gaps[/bold] [dim]({gap_summary['open_count']} open)[/dim]"
+            )
+            for g in ref_gaps:
+                year = g.get("ref_year") or ""
+                console.print(
+                    f"  [yellow]x{g['count']}[/yellow]  {(g['ref_authors'] or '')[:20]} ({year}) "
+                    f"[dim]— {(g.get('why_relevant') or '')[:40]}[/dim]"
+                )
+
+    # --- Verbose: fragment breakdown ---
+    if verbose and frag_stats["total"] > 0:
+        console.print()
+        ft = Table(title="Fragment Distribution", show_edge=False, pad_edge=False)
+        ft.add_column("Category", style="cyan")
+        ft.add_column("Count", justify="right")
+        for ftype, cnt in sorted(frag_stats["by_type"].items()):
+            ft.add_row(ftype, str(cnt))
+        console.print(ft)
+
+    # --- Verbose: intent coverage matrix ---
+    if verbose:
+        intent_cov = state.get_intent_coverage()
+        if intent_cov:
+            console.print()
+            it = Table(title="Intent Coverage", show_edge=False, pad_edge=False)
+            it.add_column("Section", style="cyan")
+            it.add_column("Background", justify="right")
+            it.add_column("Method", justify="right")
+            it.add_column("Result", justify="right")
+            it.add_column("Total", justify="right", style="bold")
+            for sec in sorted(intent_cov):
+                if chapter and not sec.startswith(f"{chapter}."):
+                    continue
+                d = intent_cov[sec]
+                it.add_row(
+                    sec,
+                    str(d["background"]) if d["background"] else "[dim]0[/dim]",
+                    str(d["method"]) if d["method"] else "[dim]0[/dim]",
+                    (
+                        str(d["result_comparison"])
+                        if d["result_comparison"]
+                        else "[dim]0[/dim]"
+                    ),
+                    str(d["total"]),
+                )
+            console.print(it)
+
+    # --- Verbose: embedding stats ---
+    if verbose:
+        emb_stats = state.get_embedding_stats()
+        if emb_stats["embedded"] > 0 or emb_stats["total"] > 0:
+            console.print()
+            pct = (
+                (emb_stats["embedded"] / emb_stats["total"] * 100)
+                if emb_stats["total"]
+                else 0
+            )
+            console.print(
+                f"[bold]Embeddings[/bold]: {emb_stats['embedded']}/{emb_stats['total']} "
+                f"sources ({pct:.0f}%)"
+            )
+            for model, cnt in emb_stats["models"].items():
+                console.print(f"  [dim]{model}: {cnt}[/dim]")
+
+            # Section embeddings
+            sec_stats = state.get_section_embedding_stats()
+            if sec_stats["total_sections"] > 0:
+                sec_emb = sec_stats["embedded_sections"]
+                sec_total = sec_stats["total_sections"]
+                sec_pct = sec_emb / sec_total * 100
+                missing = sec_total - sec_emb
+                line = (
+                    f"[bold]Section embeddings[/bold]: {sec_emb}/{sec_total} "
+                    f"sections ({sec_pct:.0f}%)"
+                )
+                if missing:
+                    line += f"  [yellow]{missing} missing[/yellow]"
+                console.print(line)
+                for model, cnt in sec_stats["models"].items():
+                    console.print(f"  [dim]{model}: {cnt}[/dim]")
+
+    # --- Verbose: citation graph stats ---
+    if verbose:
+        graph = state.get_citation_graph_stats()
+        if graph["total_links"] > 0:
+            console.print()
+            console.print(
+                f"[bold]Citation Graph[/bold]: {graph['total_links']} links, "
+                f"{graph['unique_targets']} unique targets "
+                f"({graph['in_library']} in library, {graph['external']} external)"
+            )
+            console.print(
+                f"  [dim]{graph['source_count']} citing sources, "
+                f"avg {graph['avg_refs_per_source']} refs/source[/dim]"
+            )
+            if graph["most_cited_external"]:
+                console.print()
+                console.print(
+                    "[bold]Most Cited External[/bold] [dim](bridging nodes)[/dim]"
+                )
+                for ref in graph["most_cited_external"][:5]:
+                    authors = (ref["target_authors"] or "")[:25]
+                    year = ref["target_year"] or ""
+                    console.print(
+                        f"  [yellow]x{ref['cite_count']}[/yellow]  "
+                        f"{authors} ({year}) [dim]{(ref['target_title'] or '')[:40]}[/dim]"
+                    )
+            if graph["most_connected_internal"]:
+                console.print()
+                console.print("[bold]Most Connected Internal[/bold]")
+                for ref in graph["most_connected_internal"][:5]:
+                    console.print(
+                        f"  [green]x{ref['cite_count']}[/green]  @{ref['target_citekey']}"
+                    )
+
+    # --- Author publications (ГОСТ Р 7.0.11-2011) ---
+    author_counts = state.get_author_publication_counts()
+    if author_counts:
+        from ..source_role import ROLE_LABELS, format_gost_phrase
+
+        console.print()
+        console.print("[bold]Публикации автора[/bold]")
+        for role, cnt in sorted(author_counts.items()):
+            label = ROLE_LABELS.get(role, role)
+            console.print(f"  {label}: [green]{cnt}[/green]")
+        gost = format_gost_phrase(author_counts)
+        if gost:
+            console.print(f"\n  [dim italic]{gost}[/dim italic]")
+
+    # --- Recommended actions ---
+    _emb = state.get_embedding_stats()
+    _prune = state.get_prune_summary()
+    _ref = state.get_reference_gaps(limit=3, section_weights=_sw)
+    _print_recommended_actions(proc_stats, _emb, gaps_data, _ref, _prune)
+
+
+# Backward-compatible aliases
+@main.command(hidden=True)
+@click.pass_context
+def stats(ctx):
+    """[alias] -> status"""
+    ctx.invoke(status)
+
+
+@main.command(hidden=True)
+@click.pass_context
+def coverage(ctx):
+    """[alias] -> status --verbose"""
+    ctx.invoke(status, verbose=True)
+
+
+@main.command()
+@click.option("--limit", "-n", type=int, default=10, help="Number of suggestions")
+@click.option("--section", "-s", default=None, help="Filter by section (e.g. 1.3)")
+@click.pass_context
+def suggest(ctx, limit, section):
+    """Suggest papers to fill reference gaps."""
+    from ..search import (
+        ChainSearchProvider,
+        CrossRefSearchProvider,
+        S2SearchProvider,
+        create_search,
+    )
+    from ..skills.suggester import suggest_acquisitions
+
+    kctx = _get_context(ctx)
+    _sync_sections(kctx, quiet=True)
+
+    # Fetch more gaps than needed (some won't resolve)
+    gaps_list = kctx.state.get_reference_gaps(section=section, limit=limit * 3)
+
+    if not gaps_list:
+        console.print("[yellow]No open reference gaps found.[/yellow]")
+        return
+
+    # Initialize search: configured provider, or default S2 -> CrossRef chain
+    search = kctx.search
+    if search is None:
+        search_cfg = kctx.config.search
+        if search_cfg.backend:
+            search = create_search(search_cfg.model_dump())
+        else:
+            search = ChainSearchProvider(
+                [
+                    CrossRefSearchProvider(),
+                    S2SearchProvider(),
+                ]
+            )
+
+    console.print(f"\n[bold]Resolving top gaps via {search.backend_name}...[/bold]\n")
+
+    suggest_cfg = kctx.config.suggest
+    candidates, filtered_old = suggest_acquisitions(
+        gaps_list,
+        search,
+        limit=limit,
+        max_age_years=suggest_cfg.max_age_years,
+        classic_min_score=suggest_cfg.classic_min_score,
+    )
+
+    if not candidates:
+        msg = "[yellow]No gaps could be resolved.[/yellow]"
+        if filtered_old:
+            msg += f"\n[dim]{filtered_old} older papers filtered (>{suggest_cfg.max_age_years}y)[/dim]"
+        console.print(msg)
+        return
+
+    total_open = len(gaps_list)
+    table = Table(
+        title=f"Gap Suggestions ({len(candidates)} of {total_open} open gaps)",
+        show_lines=True,
+    )
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Score", justify="right", width=6)
+    table.add_column("Authors", width=20)
+    table.add_column("Year", width=5)
+    table.add_column("Title", width=35)
+    table.add_column("Sections", width=12)
+
+    for i, c in enumerate(candidates, 1):
+        year_str = str(c.ref_year) if c.ref_year else "\u2014"
+        sections_str = ", ".join(c.sections) if c.sections else "\u2014"
+        title_display = (
+            c.ref_title[:60] + "..." if len(c.ref_title) > 60 else c.ref_title
+        )
+
+        table.add_row(
+            str(i),
+            f"{c.score:.1f}",
+            c.ref_authors[:25] if c.ref_authors else "\u2014",
+            year_str,
+            title_display,
+            sections_str,
+        )
+
+    console.print(table)
+
+    # Print acquire commands below the table
+    console.print()
+    for i, c in enumerate(candidates, 1):
+        if c.acquire_cmd:
+            console.print(f"  [dim]{i}.[/dim] [green]\u2192 {c.acquire_cmd}[/green]")
+        elif c.doi:
+            console.print(
+                f"  [dim]{i}.[/dim] [yellow]\u26a0 No open-access PDF found"
+                f" (DOI: {c.doi})[/yellow]"
+            )
+        else:
+            console.print(f"  [dim]{i}.[/dim] [dim]\u26a0 Not found in search API[/dim]")
+    if filtered_old:
+        console.print(
+            f"  [dim]{filtered_old} older papers filtered (>{suggest_cfg.max_age_years}y, score<{suggest_cfg.classic_min_score})[/dim]"
+        )
+    console.print()
+
+
+# Backward-compat: `klemma gaps` group with `suggest` subcommand
+@main.group(invoke_without_command=True)
+@click.pass_context
+def gaps(ctx):
+    """Reference gaps and acquisition suggestions."""
+    if ctx.invoked_subcommand is None:
+        console.print(
+            "[yellow]Warning: `klemma gaps` is deprecated. Use `klemma status --verbose`.[/yellow]"
+        )
+        ctx.invoke(status, verbose=True)
+
+
+main.add_command(gaps)
+
+
+# Keep options in sync with top-level suggest
+@gaps.command(name="suggest", hidden=True)
+@click.option("--limit", "-n", type=int, default=10)
+@click.option("--section", "-s", default=None)
+@click.pass_context
+def gaps_suggest(ctx, limit, section):
+    """[alias] -> suggest"""
+    ctx.invoke(suggest, limit=limit, section=section)
+
+
+# Source group with role subcommand
+@main.group(invoke_without_command=True)
+@click.pass_context
+def source(ctx):
+    """Manage individual sources."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+main.add_command(source)
+
+
+@source.command()
+@click.argument("citekey")
+@click.argument(
+    "role",
+    type=click.Choice(
+        [
+            "external",
+            "author_vak",
+            "author_scopus",
+            "author_wos",
+            "author_conf",
+            "author_patent",
+            "author_program",
+            "author_other",
+        ]
+    ),
+)
+@click.pass_context
+def role(ctx, citekey, role):
+    """Assign a source_role to a source (e.g. author_vak, author_conf)."""
+    kctx = _get_context(ctx)
+    src = kctx.state.get_source(citekey)
+    if not src:
+        console.print(f"[red]Source '{citekey}' not found.[/red]")
+        raise SystemExit(1)
+    kctx.state.set_source_role(citekey, role)
+    from ..source_role import ROLE_LABELS
+
+    label = ROLE_LABELS.get(role, role)
+    console.print(f"[green]@{citekey}[/green] \u2192 {label}")
+
+

@@ -85,7 +85,7 @@ Local-only paper acquisition pipeline: download → auto-extract metadata → Zo
 - `_store_pdf_locally()` — copy to Zotero storage dir (skipped when Zotero has the PDF)
 - `_generate_citekey()` — generates `author2024_title_slug` from metadata (fallback when Zotero/BBT unavailable)
 - `load_batch()` — parse JSON batch file
-- Dataclasses: `PaperMetadata`, `AcquireResult` (with `zotero_added` bool)
+- Dataclasses: `PaperMetadata`, `AcquireResult` (with `zotero_added` bool, `pdf_hash` str — SHA256 of PDF bytes, ADR-014)
 
 ### duplicate_checker.py (120 lines)
 Duplicate source detection by metadata. Pure skill — receives source list, returns duplicate pairs.
