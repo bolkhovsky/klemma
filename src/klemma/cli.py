@@ -12,7 +12,7 @@ from .ai import create_ai
 from .config import (
     _load_yaml,
     discover_project_chain,
-    discover_project_root,
+    discover_project_root,  # noqa: F401 — imported for test mocking via klemma.cli.discover_project_root
     ensure_system_home,
     load_available_tags,
     load_project_context,
@@ -629,22 +629,12 @@ def main(ctx, config):
     if ctx.invoked_subcommand in (None, "init"):
         console.print(get_banner(cwd=str(Path.cwd())))
 
-    # Check for project (skip for init/info/tree/migrate)
+    # Initialize project context if a subcommand is being run.
+    # Skip for init/info/tree/migrate which bootstrap a project.
+    # The try/except lets --help and similar eager options work in non-project dirs:
+    # Click processes --help BEFORE invoking the subcommand callback, so _get_context()
+    # is never called for --help, making the silent swallow of ClickException safe.
     skip_check = {"init", "info", "tree", "migrate"}
-    if (
-        ctx.invoked_subcommand is not None
-        and ctx.invoked_subcommand not in skip_check
-        and config is None
-        and discover_project_root() is None
-    ):
-        console.print(
-            "[yellow]Not in a klemma project.[/yellow]\n"
-            "Run [bold]klemma init[/bold] to create a project here, "
-            "or use --config to specify a config file."
-        )
-        ctx.exit(1)
-        return
-
     if ctx.invoked_subcommand is not None and ctx.invoked_subcommand not in skip_check:
         # Initialize once and cache for subcommands to reuse
         try:
@@ -997,6 +987,97 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
     return values
 
 
+def _coach_section_hint(state, section: str, project_root=None) -> str | None:
+    """Generate 1-line coach hint for a section. Returns None if nothing to say."""
+    from .skills.coach import coach_section_hint
+
+    coverage = state.get_coverage_stats()
+    source_count = coverage.get("sections", {}).get(section, 0)
+    intent = state.get_intent_coverage().get(section, {})
+    frags = state.get_fragments(section=section)
+    level = "chapter" if "." not in section else "subsection"
+    has_draft = bool(
+        project_root
+        and (project_root / "notes" / "drafts" / f"Draft_{section}.md").exists()
+    )
+    return coach_section_hint(
+        section=section,
+        source_count=source_count,
+        level=level,
+        intent_counts=intent,
+        fragment_count=len(frags),
+        has_draft=has_draft,
+    )
+
+
+def _auto_embed_after_process(
+    citekey,
+    state,
+    embeddings,
+    quiet=False,
+):
+    """Embed fragments + recompute section centroids for a just-processed source.
+
+    Returns total embeddings created.
+    """
+    count = 0
+
+    # Fragment embeddings
+    fragments = state.get_fragments(source_id=citekey)
+    for frag in fragments:
+        if frag.get("embedding"):  # already embedded
+            continue
+        try:
+            vec = embeddings.embed(frag["fragment_text"])
+            if vec:
+                state.save_fragment_embedding(frag["id"], vec, embeddings.model_name)
+                count += 1
+        except Exception:
+            pass
+
+    if count and not quiet:
+        console.print(f"  [dim]embedded {count} fragments[/dim]")
+
+    # Section centroid recomputation for sections this source belongs to
+    model_name = embeddings.model_name
+    all_emb = state.get_all_embeddings(model=model_name)
+    if all_emb:
+        with state._conn() as conn:
+            cur = conn.execute(
+                "SELECT DISTINCT section FROM source_sections WHERE source_id=?",
+                (citekey,),
+            )
+            source_sections = [row["section"] for row in cur.fetchall()]
+
+        sections_updated = 0
+        for sec in source_sections:
+            source_ids = state.get_section_sources(sec)
+            vecs = [all_emb[sid] for sid in source_ids if sid in all_emb]
+            if not vecs:
+                continue
+            dim = len(vecs[0])
+            centroid = [sum(v[i] for v in vecs) / len(vecs) for i in range(dim)]
+            state.save_section_embedding(sec, centroid, model_name, len(vecs))
+            sections_updated += 1
+
+        if sections_updated and not quiet:
+            console.print(f"  [dim]updated {sections_updated} section centroids[/dim]")
+
+    return count
+
+
+def _detect_input_type(value: str) -> str:
+    """Detect whether input is a URL, local PDF path, or citekey.
+
+    Returns 'url', 'path', or 'citekey'.
+    """
+    if value.startswith(("http://", "https://", "doi:")):
+        return "url"
+    p = Path(value)
+    if p.suffix.lower() == ".pdf" and p.exists():
+        return "path"
+    return "citekey"
+
 def _process_single(
     citekey,
     cfg,
@@ -1012,6 +1093,7 @@ def _process_single(
     project_type="dissertation",
     embeddings=None,
     force=False,
+    no_embed=False,
 ):
     """Process a single source: find PDF, extract fragments, save to vault.
 
@@ -1140,17 +1222,22 @@ def _process_single(
         except Exception:
             pass
 
-    # Auto-embed if provider available and entry has abstract
-    if embeddings and abstract:
-        try:
-            vec = embeddings.embed(entry.title or citekey, abstract)
-            if vec:
-                state.save_embedding(citekey, vec, embeddings.model_name)
+    # Auto-embed if provider available and not suppressed
+    if embeddings and not no_embed:
+        # Source embedding (title + abstract)
+        if abstract:
+            try:
+                vec = embeddings.embed(entry.title or citekey, abstract)
+                if vec:
+                    state.save_embedding(citekey, vec, embeddings.model_name)
+                    if not quiet:
+                        console.print(f"  [dim]embedded ({embeddings.model_name})[/dim]")
+            except Exception as e:
                 if not quiet:
-                    console.print(f"  [dim]embedded ({embeddings.model_name})[/dim]")
-        except Exception as e:
-            if not quiet:
-                console.print(f"  [dim]embed failed: {e}[/dim]")
+                    console.print(f"  [dim]embed failed: {e}[/dim]")
+
+        # Fragment embeddings + section centroids
+        _auto_embed_after_process(citekey, state, embeddings, quiet=quiet)
 
     return (len(result.fragments), "ok")
 
@@ -1592,6 +1679,284 @@ def _print_benchmark_compare(state, id_a: str, id_b: str):
             delta_str = ""
         t.add_row(key, va_str, vb_str, delta_str)
     console.print(t)
+
+
+# --- Add: unified source ingestion ---
+
+
+@main.command()
+@click.argument("input_value")
+@click.option("--section", "-s", multiple=True, help="Dissertation section(s) to assign")
+@click.option("--title", "-t", help="Paper title (URL mode only)")
+@click.option("--authors", "-a", help="Authors, comma-separated (URL mode only)")
+@click.option("--year", "-y", type=int, help="Publication year (URL mode only)")
+@click.option(
+    "--no-process", is_flag=True, help="Skip fragment extraction"
+)
+@click.option(
+    "--no-embed", is_flag=True, help="Skip auto-embedding after processing"
+)
+@click.option(
+    "--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)"
+)
+@click.pass_context
+def add(ctx, input_value, section, title, authors, year, no_process, no_embed, model):
+    """Add a paper: URL, citekey, or local PDF path.
+
+    Auto-detects input type and runs the full pipeline:
+
+      klemma add <url>       --section 1.1
+      klemma add <citekey>   --section 2.3
+      klemma add <paper.pdf> --section 1.2
+    """
+    from .skills.acquirer import PaperMetadata, acquire_paper_local
+
+    kctx = _get_context(ctx)
+    cfg, state = kctx.config, kctx.state
+    if model:
+        cfg.ai.model = model
+    sections = list(section)
+    input_type = _detect_input_type(input_value)
+
+    citekey = None
+    total_frags = 0
+
+    if input_type == "url":
+        # --- URL mode: acquire → process → embed ---
+        meta = PaperMetadata(
+            url=input_value,
+            title=title or "",
+            authors=authors or "",
+            year=year,
+            sections=sections,
+        )
+        console.print(f"[bold]Adding from URL:[/bold] {input_value[:80]}")
+        result = acquire_paper_local(
+            meta,
+            storage_path=cfg.zotero.storage_path,
+            state=state,
+        )
+        if result.status not in ("ok", "ok_no_pdf"):
+            console.print(f"  [red]{result.status}[/red]")
+            return
+        citekey = result.citekey
+        console.print(f"  [green]@{citekey}[/green]")
+        if result.zotero_added:
+            console.print("  [blue]Added to Zotero[/blue]")
+        if result.status == "ok_no_pdf":
+            console.print("  [yellow]No open-access PDF (metadata-only)[/yellow]")
+            no_process = True  # can't process without PDF
+
+    elif input_type == "path":
+        # --- Local PDF mode: copy + register → process → embed ---
+        from pathlib import Path as _Path
+
+        pdf_path = _Path(input_value).resolve()
+        console.print(f"[bold]Adding from PDF:[/bold] {pdf_path.name}")
+        # Use acquire with file:// URL — acquirer handles local paths
+        meta = PaperMetadata(
+            url=f"file://{pdf_path}",
+            title=title or "",
+            authors=authors or "",
+            year=year,
+            sections=sections,
+            pdf_override=str(pdf_path),
+        )
+        result = acquire_paper_local(
+            meta,
+            storage_path=cfg.zotero.storage_path,
+            state=state,
+        )
+        if result.status not in ("ok", "ok_no_pdf"):
+            console.print(f"  [red]{result.status}[/red]")
+            return
+        citekey = result.citekey
+        console.print(f"  [green]@{citekey}[/green]")
+
+    elif input_type == "citekey":
+        # --- Citekey mode: assign sections + process if needed ---
+        citekey = input_value
+        source = state.get_source(citekey)
+        if not source:
+            # Not in DB — check if it exists in Zotero library and auto-register
+            if kctx.library and citekey in kctx.library.entries:
+                state.register_sources([citekey])
+                console.print(f"[bold]Registering:[/bold] @{citekey}")
+            else:
+                console.print(f"[red]Source @{citekey} not found in database or library.[/red]")
+                console.print("[dim]Use a URL or PDF path to add a new source.[/dim]")
+                return
+        else:
+            console.print(f"[bold]Adding sections to:[/bold] @{citekey}")
+
+    # --- Section assignment (all input types) ---
+    if sections and citekey:
+        chapters = list({int(s.split(".")[0]) for s in sections if "." in s})
+        state.set_source_sections(citekey, sections, chapters)
+        # Update vault note frontmatter if note exists
+        if kctx.vault:
+            note_name = f"@{citekey}"
+            notes_folder = kctx.config.obsidian.notes_folder or None
+            kctx.vault.update_frontmatter_sections(note_name, sections, folder=notes_folder)
+        console.print(f"  [dim]sections: {', '.join(sections)}[/dim]")
+
+    # --- Process (if not suppressed and we have a citekey) ---
+    if citekey and not no_process:
+        source = state.get_source(citekey)
+        status = source["status"] if source else None
+
+        # Process if: pending/failed, or citekey mode (force reprocess).
+        # Don't check pdf_path here — _process_single() has its own PDF
+        # discovery via pdf_extractor.find_pdf() which searches Zotero storage.
+        should_process = status in ("pending", "failed", None) or (
+            input_type == "citekey" and status == "completed"
+        )
+        if should_process:
+            try:
+                ai = _init_ai(cfg)
+            except Exception as e:
+                console.print(f"  [yellow]Skipping process (AI unavailable: {e})[/yellow]")
+                ai = None
+
+            if ai:
+                from .literature.pdf import PDFExtractor
+
+                pdf_extractor = PDFExtractor(max_chars=cfg.ai.max_pdf_chars)
+                force = input_type == "citekey" and status == "completed"
+                with console.status(
+                    f"Extracting fragments from @{citekey}", spinner="arc"
+                ):
+                    n_frags, _ = _process_single(
+                        citekey,
+                        cfg,
+                        state,
+                        kctx.vault,
+                        ai,
+                        pdf_extractor,
+                        kctx.library,
+                        dissertation_context=kctx.dissertation_context,
+                        available_tags=kctx.available_tags,
+                        klemma_home=kctx.klemma_home,
+                        project_type=(
+                            kctx.project.type if kctx.project else "dissertation"
+                        ),
+                        embeddings=kctx.embeddings,
+                        no_embed=no_embed,
+                        force=force,
+                    )
+                total_frags = n_frags
+
+    # --- Summary ---
+    parts = [f"@{citekey}"]
+    if total_frags:
+        parts.append(f"{total_frags} fragments")
+    if sections:
+        parts.append(f"sections {', '.join(sections)}")
+    console.print(f"\n[green]Done: {', '.join(parts)}.[/green]")
+
+    # --- Coach hint ---
+    if sections and citekey:
+        for sec in sections:
+            hint = _coach_section_hint(state, sec, kctx.project_root)
+            if hint:
+                console.print(f"[dim]\U0001f4a1 {hint}[/dim]")
+                break  # one hint is enough
+
+
+# --- Coach: research advisor ---
+
+
+@main.command()
+@click.option("--section", "-s", help="Focus on a specific section")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@click.pass_context
+def coach(ctx, section, json_output):
+    """Research advisor \u2014 methodology-driven guidance (zero AI calls)."""
+    import json as json_mod
+
+    from .skills.coach import CoachReport, analyze_project, analyze_section
+
+    kctx = _get_context(ctx)
+    state = kctx.state
+    _sync_sections(kctx)
+
+    if section:
+        # Section focus mode — use get_coverage_stats for parent-aware count
+        coverage = state.get_coverage_stats()
+        source_count = coverage.get("sections", {}).get(section, 0)
+        intent = state.get_intent_coverage().get(section, {})
+        frags = state.get_fragments(section=section)
+        level = "chapter" if "." not in section else "subsection"
+        has_draft = bool(
+            kctx.project_root
+            and (
+                kctx.project_root / "notes" / "drafts" / f"Draft_{section}.md"
+            ).exists()
+        )
+        findings = analyze_section(
+            section=section,
+            source_count=source_count,
+            level=level,
+            intent_counts=intent,
+            fragment_count=len(frags),
+            has_draft=has_draft,
+        )
+        report = CoachReport(findings=findings, section=section)
+    else:
+        # Project-wide health check
+        coverage = state.get_coverage_stats()
+        intent_coverage = state.get_intent_coverage()
+        fragment_stats = state.get_fragment_embedding_stats()
+        gap_summary = state.get_gap_summary()
+        sections_map = coverage.get("sections", {})
+        section_levels = {
+            s: ("chapter" if "." not in s else "subsection")
+            for s in sections_map
+        }
+        drafts: set[str] = set()
+        if kctx.project_root:
+            drafts_dir = kctx.project_root / "notes" / "drafts"
+            if drafts_dir.exists():
+                for f in drafts_dir.glob("Draft_*.md"):
+                    drafts.add(f.stem.replace("Draft_", ""))
+        report = analyze_project(
+            coverage_stats=coverage,
+            intent_coverage=intent_coverage,
+            fragment_stats=fragment_stats,
+            gap_summary=gap_summary,
+            section_levels=section_levels,
+            drafts=drafts,
+        )
+
+    # Output
+    if json_output:
+        data = {
+            "section": report.section,
+            "findings": [
+                {
+                    "category": f.category,
+                    "section": f.section,
+                    "message": f.message,
+                    "severity": f.severity,
+                }
+                for f in report.findings
+            ],
+        }
+        click.echo(json_mod.dumps(data, indent=2))
+        return
+
+    if not report.findings:
+        console.print("[green]All sections look good.[/green]")
+        return
+
+    for f in report.findings:
+        style = {"action": "bold red", "warning": "yellow", "info": "dim"}.get(
+            f.severity, ""
+        )
+        prefix = {"action": "\u2192", "warning": "\u26a0", "info": "\u2139"}.get(
+            f.severity, "\u2022"
+        )
+        console.print(f"  [{style}]{prefix} {f.message}[/{style}]")
 
 
 # Register CLI commands from submodules (must be at bottom to avoid circular imports)

@@ -1,10 +1,13 @@
 """Research, library, and ask commands."""
 
+import re
+
 import click
 from rich.panel import Panel
 from rich.table import Table
 
 from ..cli import (
+    _coach_section_hint,
     _get_context,
     _init_ai,
     _print_ref_gaps_table,
@@ -250,8 +253,17 @@ def research(ctx, section, no_save, force, model):
     # Coverage gaps
     if result.missing_coverage:
         console.print("\n[yellow]Пробелы в покрытии:[/yellow]")
+        gap_sections: list[str] = []
         for m in result.missing_coverage:
             console.print(f"  - {m}")
+            # Extract section numbers like 2.3.4 from free-text gap descriptions
+            sec_match = re.search(r"\b(\d+(?:\.\d+)+)\b", m)
+            if sec_match:
+                gap_sections.append(sec_match.group(1))
+        if gap_sections:
+            console.print("\n[dim]Следующие шаги:[/dim]")
+            for sec in dict.fromkeys(gap_sections):  # deduplicate, preserve order
+                console.print(f"  [cyan]klemma suggest -s {sec}[/cyan]")
 
     # Writing suggestions
     if result.writing_suggestions:
@@ -271,6 +283,11 @@ def research(ctx, section, no_save, force, model):
         console.print(
             f"\n[dim]Брифинг сохранён: notes/research/Research_{section}.md[/dim]"
         )
+
+    # Coach hint (informational, after research)
+    hint = _coach_section_hint(state, section, kctx.project_root)
+    if hint:
+        console.print(f"\n[dim]\U0001f4a1 {hint}[/dim]")
 
 
 @main.command()
@@ -326,8 +343,13 @@ def ask(ctx, query, section, chapter, model):
 
     response = None
     if ai.interactive_available:
+        import os
         import subprocess as _sp
 
+        # Sanitize env to avoid nested Claude Code session detection (#131)
+        clean_env = {
+            k: v for k, v in os.environ.items() if k != "CLAUDECODE"
+        }
         result = _sp.run(
             [
                 "claude",
@@ -341,6 +363,7 @@ def ask(ctx, query, section, chapter, model):
             capture_output=True,
             text=True,
             timeout=cfg.ai.timeout,
+            env=clean_env,
         )
         response = result.stdout
         if response:

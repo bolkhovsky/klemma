@@ -25,8 +25,11 @@ from ..embeddings import SemanticScholarEmbeddings
 @click.option(
     "--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)"
 )
+@click.option(
+    "--no-embed", is_flag=True, help="Skip auto-embedding after processing"
+)
 @click.pass_context
-def process(ctx, citekeys, serial, force, model):
+def process(ctx, citekeys, serial, force, model, no_embed):
     """Process source(s): extract fragments, annotate, create vault note.
 
     With CITEKEY(s): process specified sources (parallel when >1).
@@ -97,6 +100,7 @@ def process(ctx, citekeys, serial, force, model):
                         klemma_home=kctx.klemma_home,
                         embeddings=kctx.embeddings,
                         force=force,
+                        no_embed=no_embed,
                     ): ck
                     for ck in keys
                 }
@@ -149,6 +153,7 @@ def process(ctx, citekeys, serial, force, model):
                 project_type=kctx.project.type if kctx.project else "dissertation",
                 embeddings=kctx.embeddings,
                 force=force,
+                no_embed=no_embed,
             )
             if n_frags > 0:
                 processed += 1

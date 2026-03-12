@@ -119,6 +119,66 @@ class TestReassignLogic:
         assert should_suggest is False
 
 
+class TestReassignCLI:
+    """Test reassign CLI command argument handling."""
+
+    def test_reassign_help_shows_citekey_argument(self):
+        from click.testing import CliRunner
+
+        from klemma.cli import main as klemma_cli
+
+        runner = CliRunner()
+        result = runner.invoke(klemma_cli, ["reassign", "--help"])
+        assert result.exit_code == 0
+        assert "CITEKEY" in result.output
+        assert "--section" in result.output
+
+    def test_section_without_citekey_fails(self):
+        from unittest.mock import MagicMock, patch
+
+        from click.testing import CliRunner
+
+        from klemma.cli import main as klemma_cli
+
+        runner = CliRunner()
+        mock_ctx = MagicMock()
+        mock_ctx.state = MagicMock()
+        with (
+            patch("klemma.cli._get_context", return_value=mock_ctx),
+            patch("klemma.cli._init_components", return_value=mock_ctx),
+            patch("klemma.cli.discover_project_root", return_value="/tmp"),
+            patch("klemma.cli._sync_sections"),
+        ):
+            result = runner.invoke(klemma_cli, ["reassign", "-s", "1.1"])
+        assert result.exit_code != 0
+        assert "--section/-s requires a CITEKEY" in result.output
+
+    def test_citekey_not_found_fails(self):
+        from unittest.mock import MagicMock, patch
+
+        from click.testing import CliRunner
+
+        from klemma.cli import main as klemma_cli
+
+        runner = CliRunner()
+        mock_ctx = MagicMock()
+        mock_state = MagicMock()
+        mock_state.get_all_section_embeddings.return_value = {"1.1": [0.1]}
+        mock_state.get_fragment_embeddings.return_value = {1: [0.1]}
+        mock_state.get_embedded_fragment_metadata.return_value = []
+        mock_state.get_existing_source_ids.return_value = {"real_paper"}
+        mock_ctx.state = mock_state
+        with (
+            patch("klemma.cli._get_context", return_value=mock_ctx),
+            patch("klemma.cli._init_components", return_value=mock_ctx),
+            patch("klemma.cli.discover_project_root", return_value="/tmp"),
+            patch("klemma.cli._sync_sections"),
+        ):
+            result = runner.invoke(klemma_cli, ["reassign", "nonexistent"])
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
+
 class TestFragmentMetadataRepo:
     """Test get_embedded_fragment_metadata repository method."""
 

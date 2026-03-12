@@ -5,6 +5,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ..cli import (
+    _coach_section_hint,
     _get_context,
     _init_ai,
     _show_writing_order,
@@ -67,6 +68,12 @@ def draft(ctx, section, model, no_save, no_rag, prompt):
     kctx = _get_context(ctx)
     cfg = kctx.config
     _sync_sections(kctx)
+
+    # Coach hint (informational, before AI call)
+    hint = _coach_section_hint(kctx.state, section, kctx.project_root)
+    if hint:
+        console.print(f"[dim]\U0001f4a1 {hint}[/dim]")
+
     if model:
         cfg.ai.model = model
     ai = _init_ai(cfg)

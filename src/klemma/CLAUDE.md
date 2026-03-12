@@ -4,8 +4,8 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 
 ## Modules
 
-### cli.py (3860 lines)
-Click CLI entry point. Defines 17 commands + hidden aliases.
+### cli.py (~5950 lines)
+Click CLI entry point. Defines 18 commands + hidden aliases.
 - `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery; attaches parent DB for inheritance when `inherit_db=True` and project chain > 1
 - `_resolve_parent_db(parent_root)` — reads parent's `.klemma/config.yaml` to locate its DB path
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
@@ -17,8 +17,15 @@ Click CLI entry point. Defines 17 commands + hidden aliases.
 - `init --outline` generates an outline after project setup (requires AI backend)
 - `init` non-interactive mode: `--name`, `--description`, `--keywords`, `--language` flags auto-skip wizard; `--non-interactive` is alias for `--no-input`
 - `embed` group: `embed sources [CITEKEYS]` (default), `embed fragments`, `embed sections` (centroid from source vectors), `embed all` (sources→fragments→sections)
+- `_auto_embed_after_process(citekey, state, embeddings, quiet)` — embeds fragments + recomputes section centroids for a just-processed source; called automatically from `_process_single()` unless `--no-embed` is set
+- `--no-embed` flag on `process`, `acquire`, and `add` — skips all auto-embedding (source, fragment, section centroid) after processing
+- `add` command: unified source ingestion — auto-detects input type (URL/citekey/PDF path) and runs full pipeline: register → section assign → process → embed. Flags: `--section`, `--no-process`, `--no-embed`, `--model`, `--title`/`--authors`/`--year` (URL mode)
+- `_detect_input_type(value) -> "url" | "citekey" | "path"` — input detection helper for `add` command
 - `--model` override available on: `research`, `ask`, `library`, `process`, `draft -s` — overrides `cfg.ai.model` per invocation
 - `draft` group: `draft introduction` (ГОСТ intro), `draft -s X.X` (standalone section draft → `notes/drafts/Draft_{section}.md`), `--no-rag` flag skips per-block RAG retrieval (ablation/debugging)
+- `coach` command: methodology-driven research advisor (zero AI calls). Default: project-wide health check. `-s X.X`: section focus. `--json`: structured output. Calls `_sync_sections()` before reading (ADR-010)
+- `_coach_section_hint(state, section, project_root)` — generates 1-line hint for inline use; called from `add`, `draft -s`, `research -s`
+- `reassign` command: suggest fragment-to-section reassignments via embedding similarity. Optional `CITEKEY` arg filters to one source. `-s SECTION` + `--apply` directly reassigns. Dry-run shows per-suggestion runnable commands. No batch apply — each reassignment is an explicit user decision.
 
 ### context.py (41 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.
@@ -84,7 +91,7 @@ Tables:
 - `prune_verdicts` — librarian audit results (drop/maybe with reason)
 - `benchmark_runs` — benchmark run history (run_id, timestamp, metrics JSON, paper_citekey, git_commit, klemma_version, config_snapshot, duration)
 - `section_embeddings` — section centroid embeddings (section × embedding_model composite PK, BLOB float32, source_count, updated_at)
-- `reassign_skips` — persisted skip decisions for `reassign` command (PK: source_id, from_section, to_section; `--fresh` clears)
+- `reassign_skips` — persisted skip decisions (legacy, unused since batch --apply removed)
 
 Key methods: `register_sources()`, `update_source_info()`, `get_by_section(section, section_type?)` (JOIN on `source_sections`), `get_coverage_stats()` (includes `section_types` dict), `get_gap_summary()`, `save_plan()`, `save_citation_links()`, `get_citation_graph()`, `save_embedding()`, `get_embeddings()`, `save_section_embedding()`, `get_section_embedding()`, `get_all_section_embeddings()`, `get_section_embedding_stats()`, `save_prune_verdicts()`, `get_prune_verdicts()`, `save_benchmark_run()`, `get_benchmark_runs()`, `compare_benchmark_runs()`, `sync_section_types(config)`.
 

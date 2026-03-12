@@ -41,7 +41,7 @@ Source lifecycle, sections, Zotero key management, vault sync.
 - `rename_source()`, `delete_source()` — cascade operations
 
 ### fragments.py (~330 lines)
-Fragment CRUD, citation intent coverage, fragment-level embeddings, and reassign skip persistence.
+Fragment CRUD, citation intent coverage, fragment-level embeddings.
 - `save_fragments()` — `INSERT OR IGNORE` (UNIQUE constraint on source_id+fragment_text prevents duplicates)
 - `get_fragments(section_type?)`, `get_fragment_stats()`
 - `get_intent_coverage()` — section x intent matrix
@@ -51,9 +51,7 @@ Fragment CRUD, citation intent coverage, fragment-level embeddings, and reassign
 - `get_fragment_embedding_stats()` — coverage stats (total, embedded, by model)
 - `get_unembedded_fragments()` — fragments missing embeddings
 - `retrieve_similar_fragments(query_embedding, top_k, model?)` — top-K cosine retrieval
-- `save_reassign_skip()`, `save_reassign_skips_batch()` — persist skip decisions for `reassign`
-- `get_reassign_skips()` — return `{(source_id, from, to)}` set
-- `clear_reassign_skips()` — remove all skips (used by `--fresh`)
+- `save_reassign_skip()`, `save_reassign_skips_batch()`, `get_reassign_skips()`, `clear_reassign_skips()` — legacy skip persistence (unused since batch --apply removed)
 
 ### embeddings_store.py (~180 lines)
 Vector BLOB storage with model versioning.

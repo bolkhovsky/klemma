@@ -11,7 +11,7 @@ Klemma CLI has several commands that mutate state (DB, vault files, external ser
 | Command | Mutation | Confirmation style |
 |---------|----------|--------------------|
 | `prune --apply` | Delete sources from DB | Per-item y/n/q with details |
-| `reassign --apply` | Add sections to vault frontmatter | Per-item y/n/q with details |
+| `reassign <citekey> -s <section> --apply` | Reassign fragments to target section | Direct single-source apply |
 | `acquire` | Download PDF + register source | Batch confirm |
 | `process` | Extract fragments, overwrite existing | No confirmation |
 | `library prune` | AI generates drop/keep verdicts | No confirmation (suggest-only) |
@@ -87,11 +87,21 @@ Every item shows:
 5. After all items, print summary: `N accepted, M skipped, K applied`
 6. Mutations are visible: print what changed after each accepted item
 
+### Direct-Apply Pattern (reassign)
+
+Some mutations are better as explicit single-item commands rather than batch review:
+
+```
+klemma reassign hollandInherentSeaIce2011 -s 3.3 --apply
+```
+
+`reassign` dry-run mode shows per-suggestion runnable commands. The user copies and runs the one they want. This avoids delegating decision-making to cosine similarity in batch mode.
+
 ### Migration Plan
 
 | Command | Current | Target | Priority |
 |---------|---------|--------|----------|
-| `reassign --apply` | Custom loop | `interactive_review()` | Now |
+| `reassign` | Direct single-source apply | Done | ✅ |
 | `prune --apply` | Custom loop | `interactive_review()` | Next |
 | `acquire` (batch) | `click.confirm()` | Keep as-is (batch, not per-item) | Low |
 | `process` | No confirmation | Add `--yes` for overwrite | Low |

@@ -485,3 +485,5 @@ def role(ctx, citekey, role):
 
     label = ROLE_LABELS.get(role, role)
     console.print(f"[green]@{citekey}[/green] \u2192 {label}")
+
+
