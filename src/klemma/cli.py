@@ -12,7 +12,7 @@ from .ai import create_ai
 from .config import (
     _load_yaml,
     discover_project_chain,
-    discover_project_root,
+    discover_project_root,  # noqa: F401 — imported for test mocking via klemma.cli.discover_project_root
     ensure_system_home,
     load_available_tags,
     load_project_context,
@@ -629,22 +629,12 @@ def main(ctx, config):
     if ctx.invoked_subcommand in (None, "init"):
         console.print(get_banner(cwd=str(Path.cwd())))
 
-    # Check for project (skip for init/info/tree/migrate)
+    # Initialize project context if a subcommand is being run.
+    # Skip for init/info/tree/migrate which bootstrap a project.
+    # The try/except lets --help and similar eager options work in non-project dirs:
+    # Click processes --help BEFORE invoking the subcommand callback, so _get_context()
+    # is never called for --help, making the silent swallow of ClickException safe.
     skip_check = {"init", "info", "tree", "migrate"}
-    if (
-        ctx.invoked_subcommand is not None
-        and ctx.invoked_subcommand not in skip_check
-        and config is None
-        and discover_project_root() is None
-    ):
-        console.print(
-            "[yellow]Not in a klemma project.[/yellow]\n"
-            "Run [bold]klemma init[/bold] to create a project here, "
-            "or use --config to specify a config file."
-        )
-        ctx.exit(1)
-        return
-
     if ctx.invoked_subcommand is not None and ctx.invoked_subcommand not in skip_check:
         # Initialize once and cache for subcommands to reuse
         try:
