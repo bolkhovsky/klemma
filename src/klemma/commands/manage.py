@@ -565,6 +565,18 @@ def tree(ctx):
     help="Minimum cosine similarity for suggestion (default: 0.5)",
 )
 @click.option(
+    "--min-delta",
+    type=float,
+    default=0.0,
+    help="Minimum score delta required to suggest reassignment (default: 0.0)",
+)
+@click.option(
+    "--cross-type-penalty",
+    type=float,
+    default=0.05,
+    help="Score penalty for cross-section-type suggestions (default: 0.05)",
+)
+@click.option(
     "--limit", "-n", type=int, default=20, help="Max suggestions to show (default: 20)"
 )
 @click.option(
@@ -574,7 +586,7 @@ def tree(ctx):
     help="Apply reassignment (requires CITEKEY and -s SECTION)",
 )
 @click.pass_context
-def reassign(ctx, citekey, target_section, threshold, limit, apply):
+def reassign(ctx, citekey, target_section, threshold, min_delta, cross_type_penalty, limit, apply):
     """Suggest fragment-to-section reassignments based on embedding similarity.
 
     Optionally provide CITEKEY to filter suggestions for a single source.
@@ -608,7 +620,7 @@ def reassign(ctx, citekey, target_section, threshold, limit, apply):
         )
         raise SystemExit(1)
 
-    # 2. Load fragment embeddings + metadata
+    # 2. Load fragment embeddings + metadata (including citation_intent + section_type)
     frag_embeddings = state.get_fragment_embeddings()
     if not frag_embeddings:
         console.print(
@@ -619,6 +631,34 @@ def reassign(ctx, citekey, target_section, threshold, limit, apply):
 
     frag_meta = state.get_embedded_fragment_metadata()
     meta_by_id = {m["id"]: m for m in frag_meta}
+
+    # 2b. Load section type map: {section_id: section_type_str}
+    section_type_map: dict[str, str] = {}
+    with state._conn() as _conn:
+        for row in _conn.execute(
+            "SELECT section, section_type FROM section_type_map"
+        ).fetchall():
+            section_type_map[row[0]] = row[1]
+
+    # 2c. Load citation_intent per fragment: {frag_id: intent_str}
+    frag_intents: dict[int, str] = {}
+    with state._conn() as _conn:
+        for row in _conn.execute(
+            "SELECT id, citation_intent FROM fragments WHERE embedding IS NOT NULL"
+        ).fetchall():
+            if row[1]:
+                frag_intents[row[0]] = row[1]
+
+    # Intent → compatible section types (soft affinity)
+    intent_type_affinity: dict[str, set[str]] = {
+        "background": {"introduction", "literature_review", "background", "theoretical_framework"},
+        "method": {"methodology", "implementation", "experiments"},
+        "result_comparison": {"results", "discussion", "experiments"},
+        "extends": {"discussion", "conclusion", "theoretical_framework"},
+        "contrasts": {"discussion", "literature_review", "results"},
+        "uses_data": {"data_description", "methodology", "experiments"},
+    }
+    intent_bonus = 0.03
 
     # Filter to active sources only (exclude orphaned fragments)
     active_sources = state.get_existing_source_ids()
@@ -667,15 +707,34 @@ def reassign(ctx, citekey, target_section, threshold, limit, apply):
             for sec_id, sec_vec in section_embeddings.items():
                 scores[sec_id] = cosine_similarity(frag_vec, sec_vec)
 
-            ranked = sorted(scores.items(), key=lambda x: -x[1])
-            best_section, best_score = ranked[0]
-            current_score = scores.get(current_section, 0.0)
+            # Apply section-type penalty and citation-intent bonus
+            current_stype = section_type_map.get(current_section, "")
+            frag_intent = frag_intents.get(frag_id, "")
+            intent_affinity = intent_type_affinity.get(frag_intent, set())
 
-            # Only suggest if different from current and above threshold
+            adjusted: dict[str, float] = {}
+            for sec_id, raw_score in scores.items():
+                adj = raw_score
+                sec_stype = section_type_map.get(sec_id, "")
+                # Cross-type penalty
+                if current_stype and sec_stype and sec_stype != current_stype:
+                    adj -= cross_type_penalty
+                # Intent-type bonus
+                if sec_stype and sec_stype in intent_affinity:
+                    adj += intent_bonus
+                adjusted[sec_id] = adj
+
+            ranked = sorted(adjusted.items(), key=lambda x: -x[1])
+            best_section, best_score = ranked[0]
+            current_score = adjusted.get(current_section, 0.0)
+            delta = best_score - current_score
+
+            # Only suggest if different from current, above threshold, and delta >= min_delta
             if (
                 best_section
                 and best_section != current_section
                 and best_score >= threshold
+                and delta >= min_delta
             ):
                 raw_suggestions.append(
                     {
@@ -685,7 +744,7 @@ def reassign(ctx, citekey, target_section, threshold, limit, apply):
                         "suggested": best_section,
                         "score": best_score,
                         "current_score": current_score,
-                        "delta": best_score - current_score,
+                        "delta": delta,
                         "runner_up": ranked[1] if len(ranked) > 1 else None,
                         "preview": (meta.get("text_preview") or "")[:80],
                     }
