@@ -525,6 +525,32 @@ def extract_previous_section_ending(
     return paragraphs[-1][:max_chars]
 
 
+def _parse_word_target(text: str) -> Optional[int]:
+    """Extract a numeric word-count target from a section description string.
+
+    Recognises the following patterns (Russian and English):
+    - ``*~200 слов*``
+    - ``(~300 words)``
+    - ``≈400 слов``
+    - bare ``~500 слов`` or ``~500 words``
+
+    Returns the integer value, or None if no recognisable pattern is found.
+    """
+    if not text:
+        return None
+    patterns = [
+        r"\*~(\d+)\s+(?:слов|words)\*",       # *~200 слов*  or  *~200 words*
+        r"\(~(\d+)\s+(?:слов|words)\)",        # (~300 words) or (~300 слов)
+        r"≈\s*(\d+)\s+(?:слов|words)",         # ≈400 слов
+        r"~(\d+)\s+(?:слов|words)",            # ~500 слов (bare, no parens/asterisks)
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text)
+        if m:
+            return int(m.group(1))
+    return None
+
+
 def load_outline_context(
     section: str,
     project_root: Path,
@@ -548,6 +574,7 @@ def load_outline_context(
         "scientific_contributions": "",
         "title": "",
         "description": "",
+        "word_target": None,
     }
 
     if not section or not project_root:
@@ -618,7 +645,9 @@ def load_outline_context(
     )
     mb = sec_block_re.search(outline_text)
     if mb:
-        result["current_section_desc"] = mb.group(1).strip()[:600]
+        sec_desc_raw = mb.group(1).strip()
+        result["current_section_desc"] = sec_desc_raw[:600]
+        result["word_target"] = _parse_word_target(sec_desc_raw)
 
     # Extract chapter description: text after ## N. Title or ## Глава N. Title
     ch_block_re = re.compile(

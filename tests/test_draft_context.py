@@ -193,6 +193,7 @@ class TestLoadOutlineContext:
             "scientific_contributions": "",
             "title": "",
             "description": "",
+            "word_target": None,
         }
 
 
