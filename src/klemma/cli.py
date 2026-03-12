@@ -1,5 +1,6 @@
 """Klemma CLI — AI academic assistant."""
 
+import logging
 from pathlib import Path
 
 import click
@@ -25,6 +26,7 @@ from .state import StateManager
 from .vault import VaultAdapter
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 # CLI command → task name for model routing (used in status line)
 _CMD_TASK_MAP = {
@@ -123,6 +125,11 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     dissertation_context = load_project_context(project_chain, cfg)
     available_tags = load_available_tags(klemma_home, cfg, project_chain=project_chain)
 
+    # Three-tier library (ADR-014 Phase 1B): shared paper store at ~/.klemma/library.db
+    from .stores import LocalPaperStore
+
+    paper_store = LocalPaperStore(system_home / "library.db")
+
     return KlemmaContext(
         config=cfg,
         state=state,
@@ -138,6 +145,7 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
         project_root=project_root,
         project_chain=project_chain,
         system_home=system_home,
+        paper_store=paper_store,
     )
 
 
@@ -1100,6 +1108,7 @@ def _process_single(
     embeddings=None,
     force=False,
     no_embed=False,
+    paper_store=None,
 ):
     """Process a single source: find PDF, extract fragments, save to vault.
 
@@ -1177,6 +1186,42 @@ def _process_single(
             state.sources.mark_skipped(citekey, "PDF not found")
             return (0, "PDF not found")
 
+        # Phase 1B dedup: check library.db before extracting (ADR-014)
+        _pdf_hash = None
+        _paper_id = None
+        if paper_store and not force:
+            try:
+                from .hashing import compute_pdf_hash
+
+                _pdf_hash = compute_pdf_hash(pdf_path)
+                paper_rec = paper_store.find_paper(pdf_hash=_pdf_hash)
+                if paper_rec:
+                    _paper_id = paper_rec.paper_id
+                    lib_frags = paper_store.get_fragments(_paper_id)
+                    if lib_frags:
+                        frag_dicts = [
+                            {
+                                "text": f.fragment_text,
+                                "type": f.fragment_type or "key_idea",
+                                "page": f.page_number,
+                                "citation_intent": f.citation_intent,
+                                "relevance": 3,
+                            }
+                            for f in lib_frags
+                        ]
+                        n = state.fragments.save_fragments(citekey, frag_dicts)
+                        state.sources.mark_completed(citekey, note_path="")
+                        if not quiet:
+                            console.print(
+                                f"  [green]{n} fragments[/green] "
+                                f"[dim](library cache — Claude skipped)[/dim]"
+                            )
+                        if embeddings and not no_embed:
+                            _auto_embed_after_process(citekey, state, embeddings, quiet=quiet)
+                        return (n, "ok")
+            except Exception as _e:
+                logger.debug("Library dedup check failed for %s: %s", citekey, _e)
+
         # Extract text
         pdf_text = pdf_extractor.extract(pdf_path)
         if not pdf_text or len(pdf_text) < cfg.processing.min_pdf_length:
@@ -1231,6 +1276,52 @@ def _process_single(
             console.print(f" → @{citekey}")
         else:
             console.print(" [dim](DB only)[/dim]")
+
+    # Phase 1B dual-write: also persist to library.db (ADR-014)
+    if paper_store and not force and source_type != "online":
+        try:
+            from .hashing import compute_content_hash, compute_prompt_hash
+            from .models import FragmentRecord
+
+            # Get or compute pdf_hash (may already be set from dedup check above)
+            if "_pdf_hash" not in dir():
+                _pdf_hash = None
+                _paper_id = None
+            if _pdf_hash is None and "pdf_path" in dir() and pdf_path:
+                from .hashing import compute_pdf_hash
+
+                _pdf_hash = compute_pdf_hash(pdf_path)
+            if _pdf_hash and _paper_id is None:
+                _paper_id = paper_store.register_paper(
+                    title=entry.title or citekey,
+                    authors=entry.authors_str or "",
+                    year=entry.year,
+                    doi=getattr(entry, "doi", None) or None,
+                    abstract=entry.abstract or "",
+                    pdf_hash=_pdf_hash,
+                )
+            if _paper_id:
+                lib_records = [
+                    FragmentRecord(
+                        fragment_id=compute_content_hash(_paper_id, f.text, f.page),
+                        paper_id=_paper_id,
+                        fragment_text=f.text,
+                        fragment_type=f.type,
+                        page_number=f.page,
+                        citation_intent=f.citation_intent,
+                        content_hash=compute_content_hash(_paper_id, f.text, f.page),
+                    )
+                    for f in result.fragments
+                ]
+                p_hash = compute_prompt_hash(cfg.ai.model or "unknown")
+                paper_store.save_fragments(
+                    _paper_id, lib_records, p_hash, cfg.ai.model or "unknown"
+                )
+                logger.debug(
+                    "Library dual-write: %d fragments for %s", len(lib_records), citekey
+                )
+        except Exception as _e:
+            logger.debug("Library dual-write failed for %s: %s", citekey, _e)
 
     # Backfill abstract from S2 if missing (e.g. acquire hit rate limit)
     abstract = entry.abstract or ""

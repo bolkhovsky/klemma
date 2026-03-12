@@ -101,6 +101,7 @@ def process(ctx, citekeys, serial, force, model, no_embed):
                         embeddings=kctx.embeddings,
                         force=force,
                         no_embed=no_embed,
+                        paper_store=kctx.paper_store,
                     ): ck
                     for ck in keys
                 }
@@ -154,6 +155,7 @@ def process(ctx, citekeys, serial, force, model, no_embed):
                 embeddings=kctx.embeddings,
                 force=force,
                 no_embed=no_embed,
+                paper_store=kctx.paper_store,
             )
             if n_frags > 0:
                 processed += 1
