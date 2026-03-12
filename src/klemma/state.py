@@ -507,7 +507,11 @@ class StateManager:
         return self.sources.get_sources_missing_title()
 
     def get_sources_without_embeddings(self) -> list[str]:
-        return self.sources.get_sources_without_embeddings()
+        candidates = self.sources.get_sources_without_embeddings()
+        if not self.parent_state:
+            return candidates
+        parent_embedded = set(self.parent_state.embeddings_store.get_all_embeddings())
+        return [c for c in candidates if c not in parent_embedded]
 
     def get_stats(self) -> dict[str, int]:
         return self.sources.get_stats()
