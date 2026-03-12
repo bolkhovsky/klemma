@@ -292,10 +292,16 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
         sections_list = props.get("sections", [])
         chapters_list = props.get("chapters", [])
 
+        # Phase 1 fallback (issue #105): singular `section:` treated as [section]
+        # when plural `sections:` list is absent or empty — backward compat.
+        primary_section_str = str(props.get("section", "")) or None
+        if not sections_list and primary_section_str:
+            sections_list = [primary_section_str]
+
         vault_data.append(
             {
                 "citekey": citekey,
-                "primary_section": str(props.get("section", "")) or None,
+                "primary_section": primary_section_str,
                 "primary_chapter": chapter,
                 "sections": (
                     [str(s) for s in sections_list]
