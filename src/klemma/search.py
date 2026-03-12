@@ -173,6 +173,130 @@ class CrossRefSearchProvider:
         return result.pdf_url if result and result.pdf_url else None
 
 
+class OpenAlexSearchProvider:
+    """OpenAlex search — 250M+ works, no API key, 10 req/s polite pool.
+
+    Free, no authentication needed. Provides abstract via inverted-index
+    reconstruction and richer coverage than S2 for non-CS disciplines.
+    Polite pool requires a mailto address in the User-Agent header.
+    """
+
+    backend_name = "openalex"
+    _API_BASE = "https://api.openalex.org"
+
+    def __init__(self, mailto: str = "") -> None:
+        self._mailto = mailto or "klemma@example.com"
+
+    def _headers(self) -> dict:
+        return {"User-Agent": f"klemma/1.0 (mailto:{self._mailto})"}
+
+    @staticmethod
+    def _reconstruct_abstract(inverted_index: dict | None) -> str:
+        """Reconstruct abstract text from OpenAlex inverted index format.
+
+        Format: {word: [position1, position2, ...], ...}
+        """
+        if not inverted_index:
+            return ""
+        words: list[tuple[int, str]] = []
+        for word, positions in inverted_index.items():
+            for pos in positions:
+                words.append((pos, word))
+        words.sort()
+        return " ".join(w for _, w in words)
+
+    @staticmethod
+    def _extract_authors(authorships: list) -> str:
+        """Extract author display names from OpenAlex authorships list."""
+        names = []
+        for a in authorships:
+            display = a.get("author", {}).get("display_name", "")
+            if display:
+                names.append(display)
+        return ", ".join(names)
+
+    def resolve(
+        self,
+        title: str,
+        authors: str = "",
+        year: int | None = None,
+    ) -> SearchResult | None:
+        from urllib.parse import quote_plus
+
+        import requests
+
+        from .evaluation.resolvers import _titles_match
+
+        url = f"{self._API_BASE}/works?search={quote_plus(title)}&per-page=3"
+        try:
+            resp = requests.get(url, timeout=10, headers=self._headers())
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.warning("OpenAlex lookup failed for '%s': %s", title[:60], e)
+            return None
+
+        for work in data.get("results", []):
+            work_title = work.get("title") or ""
+            if not _titles_match(title, work_title):
+                continue
+
+            oa_year = work.get("publication_year") or year
+            doi = (work.get("doi") or "").replace("https://doi.org/", "")
+            abstract = self._reconstruct_abstract(
+                work.get("abstract_inverted_index")
+            )
+            oa_authors = self._extract_authors(work.get("authorships", []))
+
+            return SearchResult(
+                title=work_title,
+                authors=oa_authors or authors,
+                year=oa_year,
+                abstract=abstract,
+                doi=doi,
+                source_api="openalex",
+            )
+
+        return None
+
+    def resolve_pdf_url(
+        self,
+        title: str,
+        authors: str = "",
+        year: int | None = None,
+    ) -> str | None:
+        from urllib.parse import quote_plus
+
+        import requests
+
+        from .evaluation.resolvers import _titles_match
+
+        url = f"{self._API_BASE}/works?search={quote_plus(title)}&per-page=3"
+        try:
+            resp = requests.get(url, timeout=10, headers=self._headers())
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.warning("OpenAlex PDF resolve failed for '%s': %s", title[:60], e)
+            return None
+
+        for work in data.get("results", []):
+            work_title = work.get("title") or ""
+            if not _titles_match(title, work_title):
+                continue
+            # Check open access PDF URL
+            oa_info = work.get("open_access", {})
+            oa_url = oa_info.get("oa_url")
+            if oa_url:
+                return oa_url
+            # Check primary location PDF
+            primary = work.get("primary_location") or {}
+            pdf_url = primary.get("pdf_url")
+            if pdf_url:
+                return pdf_url
+        return None
+
+
 class ChainSearchProvider:
     """Try multiple search providers in sequence — first hit wins.
 
@@ -231,12 +355,13 @@ def create_search(
     """Create a SearchProvider from config dict.
 
     Config keys:
-        backend: "s2" | "crossref" | "auto" | "" (default: "" = disabled)
+        backend: "s2" | "crossref" | "openalex" | "auto" | "" (default: "" = disabled)
         throttle: seconds between S2 API requests (default: 3.1)
+        mailto: email for OpenAlex polite pool User-Agent (default: klemma@example.com)
 
-    "auto" (and the on-demand default in `gaps suggest`) creates a
-    ChainSearchProvider: CrossRef → S2, so CrossRef handles most
-    lookups and S2 is only tried as last-resort fallback.
+    "auto" creates a ChainSearchProvider: OpenAlex → CrossRef → S2.
+    OpenAlex handles most lookups (free, generous rate limits, abstract included);
+    CrossRef is fallback for DOI metadata; S2 is last-resort for CS/ML papers.
 
     Returns None if backend is empty or unknown.
     """
@@ -248,6 +373,7 @@ def create_search(
         return None
 
     throttle = config.get("throttle", 3.1)
+    mailto = config.get("mailto", "")
 
     if backend == "s2":
         return S2SearchProvider(throttle=throttle)
@@ -255,8 +381,12 @@ def create_search(
     if backend == "crossref":
         return CrossRefSearchProvider()
 
+    if backend == "openalex":
+        return OpenAlexSearchProvider(mailto=mailto)
+
     if backend == "auto":
         return ChainSearchProvider([
+            OpenAlexSearchProvider(mailto=mailto),
             CrossRefSearchProvider(),
             S2SearchProvider(throttle=throttle),
         ])

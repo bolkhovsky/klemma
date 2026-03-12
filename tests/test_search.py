@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from klemma.search import (
     ChainSearchProvider,
     CrossRefSearchProvider,
+    OpenAlexSearchProvider,
     S2SearchProvider,
     SearchProvider,
     SearchResult,
@@ -246,3 +247,146 @@ class TestChainSearchProvider:
         chain = ChainSearchProvider([p1, p2])
         url = chain.resolve_pdf_url("Test")
         assert url == "https://example.com/paper.pdf"
+
+
+class TestOpenAlexSearchProvider:
+    def test_protocol_conformance(self):
+        provider = OpenAlexSearchProvider()
+        assert isinstance(provider, SearchProvider)
+        assert provider.backend_name == "openalex"
+
+    def test_reconstruct_abstract(self):
+        inverted = {
+            "Sea": [0],
+            "ice": [1],
+            "prediction": [2],
+            "methods": [3],
+        }
+        result = OpenAlexSearchProvider._reconstruct_abstract(inverted)
+        assert result == "Sea ice prediction methods"
+
+    def test_reconstruct_abstract_empty(self):
+        assert OpenAlexSearchProvider._reconstruct_abstract(None) == ""
+        assert OpenAlexSearchProvider._reconstruct_abstract({}) == ""
+
+    def test_extract_authors(self):
+        authorships = [
+            {"author": {"display_name": "Jane Smith"}},
+            {"author": {"display_name": "John Doe"}},
+        ]
+        result = OpenAlexSearchProvider._extract_authors(authorships)
+        assert result == "Jane Smith, John Doe"
+
+    def test_extract_authors_empty(self):
+        assert OpenAlexSearchProvider._extract_authors([]) == ""
+
+    @patch("requests.get")
+    def test_resolve_found(self, mock_get):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "results": [{
+                    "title": "Arctic Sea Ice Predictions Using ML",
+                    "doi": "https://doi.org/10.1234/arctic",
+                    "publication_year": 2022,
+                    "authorships": [
+                        {"author": {"display_name": "Anna Petrov"}},
+                    ],
+                    "abstract_inverted_index": {
+                        "Machine": [0], "learning": [1], "for": [2], "ice": [3],
+                    },
+                    "open_access": {"oa_url": ""},
+                    "primary_location": {},
+                }]
+            },
+        )
+        provider = OpenAlexSearchProvider(mailto="test@example.com")
+        result = provider.resolve("Arctic Sea Ice Predictions Using ML")
+        assert result is not None
+        assert result.title == "Arctic Sea Ice Predictions Using ML"
+        assert result.doi == "10.1234/arctic"
+        assert result.year == 2022
+        assert result.source_api == "openalex"
+        assert "Anna Petrov" in result.authors
+        assert "Machine" in result.abstract
+
+    @patch("requests.get")
+    def test_resolve_no_match(self, mock_get):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"results": []},
+        )
+        provider = OpenAlexSearchProvider()
+        assert provider.resolve("Completely Nonexistent Paper XYZ") is None
+
+    @patch("requests.get")
+    def test_resolve_api_error(self, mock_get):
+        mock_get.side_effect = Exception("Network error")
+        provider = OpenAlexSearchProvider()
+        assert provider.resolve("Some Paper") is None
+
+    @patch("requests.get")
+    def test_resolve_pdf_url_from_oa(self, mock_get):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "results": [{
+                    "title": "A Paper Title Here",
+                    "open_access": {"oa_url": "https://arxiv.org/pdf/2301.12345"},
+                    "primary_location": {},
+                }]
+            },
+        )
+        provider = OpenAlexSearchProvider()
+        url = provider.resolve_pdf_url("A Paper Title Here")
+        assert url == "https://arxiv.org/pdf/2301.12345"
+
+    @patch("requests.get")
+    def test_resolve_pdf_url_none(self, mock_get):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"results": []},
+        )
+        provider = OpenAlexSearchProvider()
+        assert provider.resolve_pdf_url("Nonexistent Paper") is None
+
+    def test_mailto_in_user_agent(self):
+        provider = OpenAlexSearchProvider(mailto="user@example.com")
+        headers = provider._headers()
+        assert "user@example.com" in headers["User-Agent"]
+
+    def test_doi_prefix_stripped(self):
+        """DOI URL prefix is stripped from the result."""
+        with patch("requests.get") as mock_get:
+            mock_get.return_value = MagicMock(
+                status_code=200,
+                json=lambda: {
+                    "results": [{
+                        "title": "Test Paper About Climate",
+                        "doi": "https://doi.org/10.5678/climate",
+                        "publication_year": 2023,
+                        "authorships": [],
+                        "abstract_inverted_index": None,
+                        "open_access": {},
+                        "primary_location": {},
+                    }]
+                },
+            )
+            provider = OpenAlexSearchProvider()
+            result = provider.resolve("Test Paper About Climate")
+            assert result is not None
+            assert result.doi == "10.5678/climate"
+
+
+class TestCreateSearchWithOpenAlex:
+    def test_openalex_backend(self):
+        provider = create_search({"backend": "openalex", "mailto": "me@example.com"})
+        assert provider is not None
+        assert isinstance(provider, OpenAlexSearchProvider)
+        assert provider.backend_name == "openalex"
+
+    def test_auto_chain_includes_openalex(self):
+        provider = create_search({"backend": "auto"})
+        assert isinstance(provider, ChainSearchProvider)
+        assert "openalex" in provider.backend_name
+        assert "s2" in provider.backend_name
