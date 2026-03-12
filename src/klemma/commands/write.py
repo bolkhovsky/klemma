@@ -1,5 +1,10 @@
 """Draft group and outline commands."""
 
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
 import click
 from rich.panel import Panel
 from rich.table import Table
@@ -15,6 +20,27 @@ from ..cli import (
 )
 
 
+def _resolve_output(
+    output: Optional[str],
+    project_root: Optional[Path],
+    section: str,
+    no_save: bool,
+) -> Optional[Path]:
+    """Resolve output path for draft -s.
+
+    Returns None if draft should be printed (no_save=True or no project_root).
+    -o path overrides default notes/drafts/ location.
+    --no-save takes priority over -o.
+    """
+    if no_save:
+        return None
+    if output:
+        return Path(output).expanduser()
+    if project_root:
+        return project_root / "notes" / "drafts" / f"Draft_{section}.md"
+    return None
+
+
 @main.group(invoke_without_command=True)
 @click.option(
     "--section",
@@ -24,6 +50,12 @@ from ..cli import (
 )
 @click.option("--model", default=None, help="Override AI model")
 @click.option("--no-save", is_flag=True, help="Print draft without saving to file")
+@click.option(
+    "--output",
+    "-o",
+    default=None,
+    help="Write draft to this path instead of default notes/drafts/",
+)
 @click.option(
     "--no-rag",
     is_flag=True,
@@ -36,7 +68,7 @@ from ..cli import (
     help="Custom directive for AI (e.g. 'rely on goessling2016 and previous_paper.md')",
 )
 @click.pass_context
-def draft(ctx, section, model, no_save, no_rag, prompt):
+def draft(ctx, section, model, no_save, output, no_rag, prompt):
     """Generate dissertation section drafts.
 
     Standalone mode: klemma draft -s 1.3.2
@@ -256,14 +288,13 @@ def draft(ctx, section, model, no_save, no_rag, prompt):
         console.print("[red]AI returned empty result.[/red]")
         raise SystemExit(1)
 
-    # 8. Save to notes/drafts/
-    if not no_save and kctx.project_root:
-        drafts_dir = kctx.project_root / "notes" / "drafts"
-        drafts_dir.mkdir(parents=True, exist_ok=True)
-        out_path = drafts_dir / f"Draft_{section}.md"
+    # 8. Save draft
+    out_path = _resolve_output(output, kctx.project_root, section, no_save)
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(result.text, encoding="utf-8")
         console.print(f"[green]Saved to {out_path}[/green]")
-    elif no_save:
+    else:
         console.print(result.text)
 
     # 9. Summary
