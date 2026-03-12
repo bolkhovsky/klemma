@@ -487,3 +487,78 @@ def role(ctx, citekey, role):
     console.print(f"[green]@{citekey}[/green] \u2192 {label}")
 
 
+@source.command()
+@click.argument("citekey")
+@click.pass_context
+def show(ctx, citekey):
+    """Display full source card: metadata, sections, fragments."""
+    kctx = _get_context(ctx)
+    src = kctx.state.get_source(citekey)
+    if not src:
+        console.print(f"[red]Source '{citekey}' not found.[/red]")
+        raise SystemExit(1)
+
+    # Header
+    title = src.get("title") or "(no title)"
+    authors = src.get("authors") or "(no authors)"
+    year = src.get("year") or "?"
+    console.print(f"\n[bold]@{citekey}[/bold]")
+    console.print(f"  [cyan]{title}[/cyan]")
+    console.print(f"  {authors} ({year})")
+
+    # Metadata
+    doi = src.get("doi")
+    if doi:
+        console.print(f"  DOI: {doi}")
+    status = src.get("status", "?")
+    console.print(f"  Status: {status}")
+    source_role = src.get("source_role")
+    if source_role and source_role != "external":
+        from ..source_role import ROLE_LABELS
+        console.print(f"  Role: {ROLE_LABELS.get(source_role, source_role)}")
+    priority = src.get("citation_priority")
+    if priority:
+        console.print(f"  Priority: {priority}")
+    quality = src.get("quality_score")
+    if quality is not None:
+        console.print(f"  Quality: {quality}")
+    nr1 = src.get("relevance_nr1", 0)
+    nr2 = src.get("relevance_nr2", 0)
+    if nr1 or nr2:
+        console.print(f"  Relevance: NR1={nr1} NR2={nr2}")
+
+    # Sections
+    fragments = kctx.state.get_fragments(source_id=citekey, limit=500)
+    sections = sorted({f["section"] for f in fragments if f.get("section")})
+    if sections:
+        console.print(f"  Sections: {', '.join(sections)}")
+
+    # Paths
+    pdf = src.get("pdf_path")
+    if pdf:
+        console.print(f"  PDF: {pdf}")
+    note = src.get("note_path")
+    if note:
+        console.print(f"  Note: {note}")
+
+    # Fragments
+    frag_count = src.get("fragment_count", 0) or len(fragments)
+    console.print(f"\n  [bold]Fragments[/bold]: {frag_count}")
+    if fragments:
+        tbl = Table(show_header=True, box=None, padding=(0, 1))
+        tbl.add_column("#", style="dim", width=4)
+        tbl.add_column("Section", width=8)
+        tbl.add_column("Type", width=10)
+        tbl.add_column("Text", max_width=80)
+        for i, f in enumerate(fragments, 1):
+            text = (f.get("fragment_text") or "")[:120]
+            if len(f.get("fragment_text") or "") > 120:
+                text += "..."
+            tbl.add_row(
+                str(i),
+                f.get("section") or "-",
+                f.get("fragment_type") or "-",
+                text,
+            )
+        console.print(tbl)
+    console.print()
