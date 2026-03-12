@@ -1278,16 +1278,15 @@ def _process_single(
             console.print(" [dim](DB only)[/dim]")
 
     # Phase 1B dual-write: also persist to library.db (ADR-014)
+    # online sources have no PDF hash — skip dual-write
     if paper_store and not force and source_type != "online":
         try:
             from .hashing import compute_content_hash, compute_prompt_hash
             from .models import FragmentRecord
 
-            # Get or compute pdf_hash (may already be set from dedup check above)
-            if "_pdf_hash" not in dir():
-                _pdf_hash = None
-                _paper_id = None
-            if _pdf_hash is None and "pdf_path" in dir() and pdf_path:
+            # _pdf_hash/_paper_id always initialized at top of dedup block above;
+            # reuse them if already computed, otherwise compute now.
+            if _pdf_hash is None and pdf_path:
                 from .hashing import compute_pdf_hash
 
                 _pdf_hash = compute_pdf_hash(pdf_path)
