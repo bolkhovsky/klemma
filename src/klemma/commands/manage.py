@@ -1012,6 +1012,109 @@ def migrate_content(ctx, dry_run):
     console.print("[dim]config.yaml stripped of content fields (infrastructure only)[/dim]")
 
 
+# --- Migrate frontmatter ---
+
+
+@main.command(name="migrate-frontmatter")
+@click.option("--dry-run", is_flag=True, help="Preview changes without modifying files")
+@click.pass_context
+def migrate_frontmatter(ctx, dry_run):
+    """Migrate vault notes from singular section:/chapter: to plural sections:/chapters:.
+
+    Scans all @*.md notes in the Obsidian vault and rewrites frontmatter:
+    - `section: "1.2"` → `sections: ["1.2"]` (merged with any existing sections list)
+    - `chapter: 1` → `chapters: [1]` (merged with any existing chapters list)
+    - Singular fields are removed after migration
+
+    Idempotent: notes already using plural fields are skipped.
+    """
+    import yaml as _yaml
+
+    kctx = _get_context(ctx)
+    vault = kctx.vault
+    config = kctx.config
+
+    if vault is None:
+        console.print("[red]No Obsidian vault configured. Set obsidian.vault_path.[/red]")
+        raise SystemExit(1)
+
+    notes_folder = config.obsidian.notes_folder or ""
+    note_names = vault.list_notes(folder=notes_folder)
+    citekey_notes = [n for n in note_names if n.startswith("@")]
+
+    updated = 0
+    skipped = 0
+
+    for note_name in citekey_notes:
+        props = vault.get_properties(note_name)
+        if not props:
+            skipped += 1
+            continue
+
+        singular_section = str(props.get("section", "")).strip() if props.get("section") else None
+        singular_chapter = props.get("chapter")
+        has_singular = bool(singular_section) or bool(singular_chapter)
+
+        if not has_singular:
+            skipped += 1
+            continue
+
+        # Build merged plural lists
+        sections_list = list(props.get("sections") or [])
+        chapters_list = list(props.get("chapters") or [])
+
+        if singular_section and singular_section not in [str(s) for s in sections_list]:
+            sections_list.append(singular_section)
+        if singular_chapter is not None:
+            try:
+                ch = int(singular_chapter)
+                if ch not in [int(c) for c in chapters_list]:
+                    chapters_list.append(ch)
+            except (TypeError, ValueError):
+                pass
+
+        if dry_run:
+            console.print(f"[dim]{note_name}[/dim]: section={singular_section!r} → sections={sections_list}")
+            updated += 1
+            continue
+
+        # Rewrite the note's frontmatter via vault adapter
+        if notes_folder:
+            target = vault._resolve_folder(notes_folder) / f"{note_name}.md"
+        else:
+            found = list(vault.vault_path.rglob(f"{note_name}.md"))
+            target = found[0] if found else None
+
+        if not target or not target.exists():
+            skipped += 1
+            continue
+
+        text = target.read_text(encoding="utf-8")
+        if not text.startswith("---"):
+            skipped += 1
+            continue
+        end = text.find("---", 3)
+        if end == -1:
+            skipped += 1
+            continue
+
+        fm = _yaml.safe_load(text[3:end]) or {}
+        fm["sections"] = sorted(
+            [str(s) for s in sections_list],
+            key=lambda s: [int(x) for x in s.split(".")] if all(x.isdigit() for x in s.split(".")) else [0],
+        )
+        fm["chapters"] = sorted(int(c) for c in chapters_list)
+        fm.pop("section", None)
+        fm.pop("chapter", None)
+
+        new_fm = _yaml.dump(fm, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        target.write_text(f"---\n{new_fm}---{text[end + 3:]}", encoding="utf-8")
+        updated += 1
+
+    verb = "Would update" if dry_run else "Updated"
+    console.print(f"[green]{verb} {updated} notes[/green], skipped {skipped} (already plural or no frontmatter).")
+
+
 # --- Import (hidden) ---
 
 
