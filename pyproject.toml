@@ -1,6 +1,6 @@
 [project]
 name = "klemma"
-version = "0.9.0"
+version = "0.10.0"
 description = "AI-powered CLI assistant for PhD dissertation research — manages literature, extracts citations, generates plans"
 requires-python = ">=3.11"
 readme = "README.md"
