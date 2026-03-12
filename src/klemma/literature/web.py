@@ -83,6 +83,10 @@ def fetch_url_text(url: str, max_chars: int = 200_000) -> str:
 
     Returns empty string on network/HTTP errors. Caps output at max_chars.
     Handles gzip-encoded responses transparently (requests does this).
+
+    Limitation: JavaScript-rendered pages (SPAs) are not supported — only
+    server-rendered HTML is extracted. Use --no-process for JS-heavy sites
+    and process the content manually.
     """
     import requests
 

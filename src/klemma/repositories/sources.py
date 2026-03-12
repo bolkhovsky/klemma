@@ -46,6 +46,9 @@ class SourceRepository(BaseRepository):
 
         Inserts into sources with source_type='online', then sets metadata.
         Idempotent — safe to call if citekey already exists.
+
+        # TODO three-tier (#125): url + source_type will move to LocalPaperStore.papers
+        # during PR B migration. Update this method at that time.
         """
         with self._conn() as conn:
             conn.execute(
