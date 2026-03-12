@@ -1,6 +1,7 @@
 # Tests
 
-## Current test suite (832 tests)
+## Current test suite (854 tests)
+- `test_paper_store.py` (~200 lines) — 22 tests: `LocalPaperStore` schema (version=1, all 6 tables, migration idempotency, new-dir creation), register/find CRUD (UUID return, idempotency by pdf_hash, find by DOI, metadata roundtrip), fragments (save/get, INSERT OR IGNORE dedup, types), paper-level embeddings (roundtrip, upsert, missing=None), fragment-level embeddings (roundtrip, empty), dual-write cache scenario (second project hits library cache)
 - `test_errors.py` (33 lines) — `KlemmaAIError` hierarchy, `retryable` classification, cause chaining
 - `test_hashing.py` (~80 lines) — 15 tests: `compute_pdf_hash` (determinism, different content, hex format, missing file), `compute_content_hash` (determinism, uniqueness by paper/text/page, None page, empty text), `compute_prompt_hash` (determinism, uniqueness, 16-char truncation, empty)
 - `test_protocols.py` (~80 lines) — 10 tests: `PaperRecord`/`FragmentRecord`/`UserSource` dataclass defaults + all-fields, runtime-checkable Protocol verification, non-implementing class rejection

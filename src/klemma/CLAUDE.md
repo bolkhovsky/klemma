@@ -27,9 +27,9 @@ Click CLI entry point. Defines 18 commands + hidden aliases.
 - `_coach_section_hint(state, section, project_root)` — generates 1-line hint for inline use; called from `add`, `draft -s`, `research -s`
 - `reassign` command: suggest fragment-to-section reassignments via embedding similarity. Optional `CITEKEY` arg filters to one source. `-s SECTION` + `--apply` directly reassigns. Dry-run shows per-suggestion runnable commands. No batch apply — each reassignment is an explicit user decision.
 
-### context.py (41 lines)
+### context.py (47 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.
-Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `library` (optional), `project` (optional), `klemma_home`, `dissertation_context`, `available_tags`, `project_root`, `project_chain`, `system_home`.
+Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `library` (optional), `project` (optional), `klemma_home`, `dissertation_context`, `available_tags`, `project_root`, `project_chain`, `system_home`, `paper_store` (optional — `LocalPaperStore` at `~/.klemma/library.db`, added ADR-014 Phase 1B).
 
 ### config.py (~800 lines)
 Pydantic config models + Git-style project discovery + klemmarc loading.
@@ -113,6 +113,21 @@ Data classes for the three-tier storage layer (ADR-014). Distinct from `literatu
 - `PaperRecord` — global corpus paper (paper_id, pdf_hash, doi, title, authors, year, abstract)
 - `FragmentRecord` — stored fragment with content-addressable ID (fragment_id = content_hash)
 - `UserSource` — user's source entry mapping citekey → global paper_id
+
+### stores/ (ADR-014 Phase 1B)
+SQLite backends implementing the `PaperStore` protocol. Currently contains `LocalPaperStore`.
+
+#### stores/paper_store.py (~350 lines)
+`LocalPaperStore` — SQLite-backed `PaperStore` at `~/.klemma/library.db`. Content-addressable: same PDF → same paper_id → same fragments (global dedup).
+- `__init__(db_path)` — creates parent dirs, runs `_migrate_schema()` (schema version 1)
+- `find_paper(*, pdf_hash?, doi?) -> PaperRecord | None` — look up by hash or DOI
+- `register_paper(*, title, pdf_hash, ...) -> str` — idempotent: same pdf_hash → same paper_id (UUID)
+- `get_fragments(paper_id) -> list[FragmentRecord]` — all stored fragments for a paper
+- `save_fragments(paper_id, fragments, prompt_hash, ai_model) -> int` — insert with `INSERT OR IGNORE`, creates `extractions` record
+- `get/save_paper_embedding(paper_id, vector, model)` — blob-packed float32 roundtrip
+- `get/save_fragment_embedding(fragment_id, vector, model)` — same pattern
+- Tables: `papers`, `extractions`, `fragments`, `paper_embeddings`, `fragment_embeddings`, `citation_graph`
+- Used by: `_init_components()` in `cli.py` (always created); `_process_single()` in `cli.py` (dedup check + dual-write)
 
 ### errors.py (32 lines)
 Klemma error taxonomy for AI backends.
