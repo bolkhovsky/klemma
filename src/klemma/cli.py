@@ -1964,6 +1964,7 @@ from .commands import (  # noqa: E402, F401
     acquire,
     analyze,
     benchmark,
+    bib,
     manage,
     process,
     research,
