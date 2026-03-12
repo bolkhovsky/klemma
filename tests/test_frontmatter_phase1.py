@@ -8,7 +8,6 @@ from click.testing import CliRunner
 
 from klemma.cli import main as klemma_cli
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -35,7 +34,6 @@ class TestSyncSectionsFallback:
     def _build_vault_data_entry(self, props: dict) -> dict:
         """Replicate the vault_data entry construction from _sync_sections."""
         sections_list = props.get("sections", [])
-        chapters_list = props.get("chapters", [])
 
         primary_section_str = str(props.get("section", "")) or None
         if not sections_list and primary_section_str:
@@ -96,8 +94,8 @@ class TestMigrateFrontmatter:
 
     @pytest.fixture
     def mock_ctx(self, tmp_path):
-        from klemma.state import StateManager
         from klemma.context import KlemmaContext
+        from klemma.state import StateManager
         sm = StateManager(str(tmp_path / "test.db"))
         config = MagicMock()
         config.obsidian.notes_folder = ""
