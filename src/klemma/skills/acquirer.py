@@ -662,3 +662,96 @@ def load_batch(path: str) -> list[PaperMetadata]:
             sections=item.get("sections", []),
         ))
     return papers
+
+
+@dataclass
+class OnlineSourceRecord:
+    """Parsed BibTeX @online entry for direct DB registration."""
+
+    citekey: str
+    title: str
+    authors: str
+    year: Optional[int]
+    url: str
+    abstract: str = ""
+
+
+def parse_bibtex_online(bibtex_text: str) -> list[OnlineSourceRecord]:
+    """Parse @online{} BibTeX entries from a string.
+
+    Supports single or multiple entries. Only @online type is accepted —
+    @article, @book, etc. are ignored (those go through acquire).
+
+    Field extraction handles:
+    - Braced values: title = {Some Title}
+    - Quoted values: title = "Some Title"
+    - Multiline values (braces must be balanced within the block)
+
+    Returns list of OnlineSourceRecord (empty list if none found).
+    """
+    records = []
+
+    # Find all @online{...} blocks
+    entry_pattern = re.compile(
+        r"@online\s*\{([^,]+),([^@]*)\}",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    for match in entry_pattern.finditer(bibtex_text):
+        citekey = match.group(1).strip()
+        fields_text = match.group(2)
+
+        def _extract_field(name: str, text: str) -> str:
+            """Extract a BibTeX field value (braced or quoted)."""
+            # Braced: field = {value}
+            m = re.search(
+                rf"(?i)\b{name}\s*=\s*\{{((?:[^{{}}]|\{{[^{{}}]*\}})*)\}}",
+                text,
+            )
+            if m:
+                return m.group(1).strip()
+            # Quoted: field = "value"
+            m = re.search(rf'(?i)\b{name}\s*=\s*"([^"]*)"', text)
+            if m:
+                return m.group(1).strip()
+            return ""
+
+        title = _extract_field("title", fields_text)
+        url = _extract_field("url", fields_text)
+        abstract = _extract_field("abstract", fields_text)
+
+        # Authors: try "author" field first
+        raw_authors = _extract_field("author", fields_text)
+        # Normalise "Last, First and Last2, First2" → "Last First, Last2 First2"
+        if " and " in raw_authors:
+            parts = [a.strip() for a in raw_authors.split(" and ")]
+            normalised = []
+            for part in parts:
+                if "," in part:
+                    last, first = part.split(",", 1)
+                    normalised.append(f"{first.strip()} {last.strip()}")
+                else:
+                    normalised.append(part)
+            authors = ", ".join(normalised)
+        else:
+            authors = raw_authors
+
+        # Year
+        year_str = _extract_field("year", fields_text)
+        year: Optional[int] = None
+        if year_str and year_str.isdigit():
+            year = int(year_str)
+
+        if not citekey:
+            continue
+
+        records.append(OnlineSourceRecord(
+            citekey=citekey,
+            title=title,
+            authors=authors,
+            year=year,
+            url=url,
+            abstract=abstract,
+        ))
+
+    return records

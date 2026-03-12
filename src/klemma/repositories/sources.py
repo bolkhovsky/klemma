@@ -33,6 +33,37 @@ class SourceRepository(BaseRepository):
                 [(sid,) for sid in source_ids],
             )
 
+    def register_online_source(
+        self,
+        citekey: str,
+        title: str,
+        authors: str,
+        year: Optional[int],
+        url: str,
+        abstract: str = "",
+    ) -> None:
+        """Register an online source (no PDF) with metadata in one step.
+
+        Inserts into sources with source_type='online', then sets metadata.
+        Idempotent — safe to call if citekey already exists.
+        """
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO sources (id, source_type) VALUES (?, 'online')",
+                (citekey,),
+            )
+            conn.execute(
+                """UPDATE sources SET
+                    title = COALESCE(NULLIF(?, ''), title),
+                    authors = COALESCE(NULLIF(?, ''), authors),
+                    year = COALESCE(?, year),
+                    abstract = COALESCE(NULLIF(?, ''), abstract),
+                    url = COALESCE(NULLIF(?, ''), url),
+                    source_type = 'online'
+                WHERE id = ?""",
+                (title, authors, year, abstract, url, citekey),
+            )
+
     def set_pdf_path(self, source_id: str, path: str):
         """Set the direct PDF path for a source."""
         with self._conn() as conn:
@@ -166,8 +197,10 @@ class SourceRepository(BaseRepository):
         year: Optional[int] = None,
         abstract: str = "",
         doi: str = "",
+        url: str = "",
+        source_type: str = "",
     ):
-        """Persist paper metadata (title/authors/year/abstract/doi).
+        """Persist paper metadata (title/authors/year/abstract/doi/url/source_type).
 
         Only sets non-empty values — existing data is preserved via COALESCE.
         """
@@ -178,9 +211,11 @@ class SourceRepository(BaseRepository):
                     authors = COALESCE(NULLIF(?, ''), authors),
                     year = COALESCE(?, year),
                     abstract = COALESCE(NULLIF(?, ''), abstract),
-                    doi = COALESCE(NULLIF(?, ''), doi)
+                    doi = COALESCE(NULLIF(?, ''), doi),
+                    url = COALESCE(NULLIF(?, ''), url),
+                    source_type = COALESCE(NULLIF(?, ''), source_type)
                 WHERE id = ?""",
-                (title, authors, year, abstract, doi, source_id),
+                (title, authors, year, abstract, doi, url, source_type, source_id),
             )
 
     def get_source(self, source_id: str) -> Optional[dict]:

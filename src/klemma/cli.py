@@ -1142,29 +1142,48 @@ def _process_single(
             f"[blue]Processing: {entry.authors_str} ({entry.year or '?'})[/blue] [dim]@{citekey}[/dim]"
         )
 
-    # Find PDF
-    pdf_search_paths = [Path(cfg.zotero.storage_path)]
-    pdf_path = pdf_extractor.find_pdf(
-        citekey,
-        pdf_search_paths,
-        entry_title=entry.title or "",
-        direct_path=source.get("pdf_path") if source else entry.pdf_path,
-        pdf_lookup=library.pdf_paths,
-    )
-
-    if not pdf_path:
+    # Online source: fetch URL text instead of PDF
+    source_type = source.get("source_type", "") if source else ""
+    if source_type == "online":
+        source_url = source.get("url", "") if source else ""
+        if not source_url:
+            if not quiet:
+                console.print("  [red]Online source has no URL[/red]")
+            state.sources.mark_skipped(citekey, "online source missing URL")
+            return (0, "online source missing URL")
         if not quiet:
-            console.print("  [red]PDF not found[/red]")
-        state.sources.mark_skipped(citekey, "PDF not found")
-        return (0, "PDF not found")
+            console.print(f"  [dim]Fetching URL: {source_url[:80]}[/dim]")
+        from .literature.web import fetch_url_text
+        pdf_text = fetch_url_text(source_url, max_chars=cfg.ai.max_pdf_chars)
+        if not pdf_text or len(pdf_text) < 100:
+            if not quiet:
+                console.print("  [red]URL fetch failed or content too short[/red]")
+            state.sources.mark_skipped(citekey, "URL fetch failed")
+            return (0, "URL fetch failed")
+    else:
+        # Find PDF
+        pdf_search_paths = [Path(cfg.zotero.storage_path)]
+        pdf_path = pdf_extractor.find_pdf(
+            citekey,
+            pdf_search_paths,
+            entry_title=entry.title or "",
+            direct_path=source.get("pdf_path") if source else entry.pdf_path,
+            pdf_lookup=library.pdf_paths,
+        )
 
-    # Extract text
-    pdf_text = pdf_extractor.extract(pdf_path)
-    if not pdf_text or len(pdf_text) < cfg.processing.min_pdf_length:
-        if not quiet:
-            console.print("  [red]PDF extraction failed or text too short[/red]")
-        state.sources.mark_skipped(citekey, "text too short")
-        return (0, "text too short")
+        if not pdf_path:
+            if not quiet:
+                console.print("  [red]PDF not found[/red]")
+            state.sources.mark_skipped(citekey, "PDF not found")
+            return (0, "PDF not found")
+
+        # Extract text
+        pdf_text = pdf_extractor.extract(pdf_path)
+        if not pdf_text or len(pdf_text) < cfg.processing.min_pdf_length:
+            if not quiet:
+                console.print("  [red]PDF extraction failed or text too short[/red]")
+            state.sources.mark_skipped(citekey, "text too short")
+            return (0, "text too short")
 
     # If reprocessing, clear old fragments before extracting fresh ones
     if force:
