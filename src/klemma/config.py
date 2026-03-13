@@ -101,8 +101,8 @@ def _warn_config_issues(raw: dict, source: str) -> None:
     # --- 2. Unknown keys at every level ---
     for key in raw:
         if key not in root_keys and key not in child_fields:
-            if key in ("api_keys", "mcp"):
-                continue  # api_keys valid in klemmarc; mcp reserved
+            if key in ("api_keys", "mcp", "telegram"):
+                continue  # api_keys valid in klemmarc; mcp/telegram reserved for tooling
             warnings.warn(
                 f"[{source}] unknown top-level key '{key}' (ignored)",
                 UserWarning,
