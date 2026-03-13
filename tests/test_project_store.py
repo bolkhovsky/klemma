@@ -116,6 +116,8 @@ def test_coverage_stats_empty(store):
     stats = store.get_coverage_stats()
     assert stats["total_sources"] == 0
     assert stats["by_section"] == {}
+    assert stats["sections"] == {}
+    assert stats["chapters"] == {}
 
 
 def test_coverage_stats_with_data(store):
@@ -123,8 +125,16 @@ def test_coverage_stats_with_data(store):
     store.set_source_sections("b2021", "p2", ["1.1"], [1])
     stats = store.get_coverage_stats()
     assert stats["total_sources"] == 2
+    # sections and by_section are the same dict
     assert stats["by_section"]["1.1"] == 2
     assert stats["by_section"]["2.3"] == 1
+    assert stats["sections"] is stats["by_section"]
+    # chapters aggregation
+    assert stats["chapters"][1] == 2  # a2020 + b2021 both in ch 1
+    assert stats["chapters"][2] == 1  # a2020 in ch 2
+    # StateManager-compat keys present
+    assert "section_type_lookup" in stats
+    assert "section_types" in stats
 
 
 # ---------------------------------------------------------------------------

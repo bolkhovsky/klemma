@@ -27,7 +27,13 @@ def status(ctx, verbose, chapter):
 
     proc_stats = state.get_stats()
     frag_stats = state.get_fragment_stats()
-    cov = state.get_coverage_stats()
+    # Prefer project.db coverage stats (ADR-014 Phase 1D); fall back to monolithic DB
+    _ps = kctx.project_store
+    cov = (
+        _ps.get_coverage_stats()
+        if _ps and _ps.count_sources() > 0
+        else state.get_coverage_stats()
+    )
 
     # --- Processing summary ---
     completed = proc_stats.get("completed", 0)

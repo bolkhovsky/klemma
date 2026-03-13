@@ -134,7 +134,11 @@ class LocalProjectStore:
             )
 
     def get_coverage_stats(self) -> dict:
-        """Return basic coverage statistics for the project."""
+        """Return coverage stats in the same shape as StateManager.get_coverage_stats().
+
+        Keys: total_sources, sections, chapters, by_section (alias),
+        section_type_lookup, section_types.
+        """
         with self._conn() as conn:
             total = conn.execute(
                 "SELECT COUNT(*) FROM project_sources"
@@ -144,9 +148,21 @@ class LocalProjectStore:
                    FROM project_source_sections
                    GROUP BY section ORDER BY section"""
             ).fetchall()
+            by_chapter = conn.execute(
+                """SELECT chapter, COUNT(DISTINCT citekey) as cnt
+                   FROM project_source_sections
+                   WHERE chapter IS NOT NULL
+                   GROUP BY chapter ORDER BY chapter"""
+            ).fetchall()
+        sections = {row["section"]: row["cnt"] for row in by_section}
+        chapters = {row["chapter"]: row["cnt"] for row in by_chapter}
         return {
             "total_sources": total,
-            "by_section": {row["section"]: row["cnt"] for row in by_section},
+            "sections": sections,
+            "by_section": sections,  # backward-compat alias
+            "chapters": chapters,
+            "section_type_lookup": {},  # section_type_map migration deferred to D2
+            "section_types": {},
         }
 
     def get_reference_gaps(self, **_: object) -> list[dict]:
