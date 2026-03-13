@@ -10,7 +10,8 @@ def test_init_outline_skips_when_ai_missing(monkeypatch, tmp_path):
     def _boom(_cfg):
         raise RuntimeError("AI not configured")
 
-    monkeypatch.setattr("klemma.cli._init_ai", _boom)
+    # manage.py imports _init_ai directly, so patch the local binding there
+    monkeypatch.setattr("klemma.commands.manage._init_ai", _boom)
 
     with runner.isolated_filesystem():
         result = runner.invoke(klemma_cli, ["init", "--no-input", "--outline"])
@@ -28,7 +29,7 @@ def test_init_without_outline_does_not_call_ai(monkeypatch, tmp_path):
         called.append(True)
         raise RuntimeError("should not be called")
 
-    monkeypatch.setattr("klemma.cli._init_ai", _boom)
+    monkeypatch.setattr("klemma.commands.manage._init_ai", _boom)
 
     with runner.isolated_filesystem():
         result = runner.invoke(klemma_cli, ["init", "--no-input"])

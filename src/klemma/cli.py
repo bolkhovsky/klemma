@@ -92,7 +92,13 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     state = StateManager(db_path)
 
     # Attach parent DB for read-only inheritance (#55)
+    # inherit_db is deprecated: shared library.db makes parent-child DB chains unnecessary.
     if len(project_chain) > 1 and cfg.state.inherit_db:
+        console.print(
+            "[yellow]Deprecation: inherit_db will be removed in a future release. "
+            "Shared library.db replaces parent-child DB inheritance. "
+            "Set [bold]inherit_db: false[/bold] in config.yaml to suppress this warning.[/yellow]"
+        )
         parent_db = _resolve_parent_db(project_chain[1])
         if parent_db and parent_db.exists():
             state.set_parent(parent_db)
@@ -132,6 +138,13 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     paper_store = LocalPaperStore(_lib_db)
     user_library = LocalUserLibrary(_lib_db)
     project_store = LocalProjectStore(klemma_home / "data" / "project.db")
+
+    # Auto-migration hint: monolithic DB has data but project.db is empty
+    if project_store.count_sources() == 0 and state.get_coverage_stats().get("total_sources", 0) > 0:
+        console.print(
+            "[yellow]Hint: Run [bold]klemma migrate-library --apply[/bold] "
+            "to migrate to the three-tier layout (library.db + project.db).[/yellow]"
+        )
 
     return KlemmaContext(
         config=cfg,
@@ -441,6 +454,22 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
         resolved = state.resolve_gaps(ctx.library.entries)
         if resolved:
             result["gaps_resolved"] = resolved
+
+    # Dual-write section assignments to project.db (ADR-014 Phase 1D)
+    if ctx.project_store and ctx.user_library:
+        for vd in vault_data:
+            if not vd.get("sections"):
+                continue
+            paper_id = (
+                ctx.user_library.resolve_paper_id(vd["citekey"])
+                or f"migrated:{vd['citekey']}"
+            )
+            ctx.project_store.set_source_sections(
+                vd["citekey"],
+                paper_id,
+                vd["sections"],
+                vd.get("chapters") or [],
+            )
 
     # Sync section type mappings (backfill section_type columns)
     project = ctx.project
