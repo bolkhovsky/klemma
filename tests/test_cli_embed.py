@@ -205,3 +205,129 @@ def test_embed_sections_dry_run(tmp_path):
     # Verify nothing was stored
     stats = sm.get_section_embedding_stats()
     assert stats["embedded_sections"] == 0
+
+
+def test_embed_fragments_dedup_from_library(tmp_path):
+    """Library cache hit skips API call and copies vector to local state."""
+    db = tmp_path / ".klemma" / "state.db"
+    db.parent.mkdir(parents=True)
+    sm = StateManager(db)
+    sm.register_sources(["paper1"])
+    sm.save_fragments("paper1", [
+        {"text": "Ice forecast accuracy", "type": "result", "page": 1},
+    ])
+
+    mock_emb = MagicMock()
+    mock_emb.model_name = "test-model"
+
+    mock_paper_store = MagicMock()
+    mock_user_library = MagicMock()
+    mock_user_library.resolve_paper_id.return_value = "paper-uuid-1"
+
+    from klemma.hashing import compute_content_hash
+    ch = compute_content_hash("paper-uuid-1", "Ice forecast accuracy", 1)
+    mock_paper_store.get_fragment_embeddings.return_value = {ch: [0.1, 0.2, 0.3]}
+
+    mock_ctx = MagicMock()
+    mock_ctx.state = sm
+    mock_ctx.embeddings = mock_emb
+    mock_ctx.paper_store = mock_paper_store
+    mock_ctx.user_library = mock_user_library
+    mock_ctx.config = MagicMock()
+    mock_ctx.library = None
+
+    runner = CliRunner()
+    with patch("klemma.cli.discover_project_root", return_value=tmp_path), \
+         patch("klemma.cli._init_components", return_value=mock_ctx), \
+         patch("klemma.cli._get_context", return_value=mock_ctx):
+        result = runner.invoke(klemma_cli, ["embed", "fragments"])
+
+    assert result.exit_code == 0, result.output
+    assert "Embedded: 1" in result.output
+    assert mock_emb.embed.call_count == 0  # API skipped — library cache hit
+
+    stats = sm.get_fragment_embedding_stats()
+    assert stats["embedded"] == 1
+
+
+def test_embed_fragments_write_through_to_library(tmp_path):
+    """New fragment embedding is written through to library.db."""
+    db = tmp_path / ".klemma" / "state.db"
+    db.parent.mkdir(parents=True)
+    sm = StateManager(db)
+    sm.register_sources(["paper1"])
+    sm.save_fragments("paper1", [
+        {"text": "Sea ice extent", "type": "result", "page": 5},
+    ])
+
+    mock_emb = MagicMock()
+    mock_emb.model_name = "test-model"
+    mock_emb.embed.return_value = [0.4, 0.5, 0.6]
+
+    mock_paper_store = MagicMock()
+    mock_user_library = MagicMock()
+    mock_user_library.resolve_paper_id.return_value = "paper-uuid-2"
+    mock_paper_store.get_fragment_embeddings.return_value = {}  # cache miss
+
+    mock_ctx = MagicMock()
+    mock_ctx.state = sm
+    mock_ctx.embeddings = mock_emb
+    mock_ctx.paper_store = mock_paper_store
+    mock_ctx.user_library = mock_user_library
+    mock_ctx.config = MagicMock()
+    mock_ctx.library = None
+
+    runner = CliRunner()
+    with patch("klemma.cli.discover_project_root", return_value=tmp_path), \
+         patch("klemma.cli._init_components", return_value=mock_ctx), \
+         patch("klemma.cli._get_context", return_value=mock_ctx):
+        result = runner.invoke(klemma_cli, ["embed", "fragments"])
+
+    assert result.exit_code == 0, result.output
+    assert "Embedded: 1" in result.output
+    assert mock_emb.embed.call_count == 1  # API was called
+
+    from klemma.hashing import compute_content_hash
+    expected_ch = compute_content_hash("paper-uuid-2", "Sea ice extent", 5)
+    mock_paper_store.save_fragment_embedding.assert_called_once_with(
+        expected_ch, [0.4, 0.5, 0.6], "test-model"
+    )
+
+
+def test_embed_sources_dedup_from_library(tmp_path):
+    """Library cache hit skips API call for source-level embedding."""
+    db = tmp_path / ".klemma" / "state.db"
+    db.parent.mkdir(parents=True)
+    sm = StateManager(db)
+    sm.register_sources(["paper1"])
+    sm.mark_completed("paper1", "")
+
+    mock_emb = MagicMock()
+    mock_emb.model_name = "test-model"
+
+    mock_paper_store = MagicMock()
+    mock_user_library = MagicMock()
+    mock_user_library.resolve_paper_id.return_value = "paper-uuid-1"
+    mock_paper_store.get_paper_embedding.return_value = [0.7, 0.8, 0.9]
+
+    mock_ctx = MagicMock()
+    mock_ctx.state = sm
+    mock_ctx.embeddings = mock_emb
+    mock_ctx.paper_store = mock_paper_store
+    mock_ctx.user_library = mock_user_library
+    mock_ctx.config = MagicMock()
+    mock_ctx.library = MagicMock()
+    mock_ctx.library.entries = {}
+
+    runner = CliRunner()
+    with patch("klemma.cli.discover_project_root", return_value=tmp_path), \
+         patch("klemma.cli._init_components", return_value=mock_ctx), \
+         patch("klemma.cli._get_context", return_value=mock_ctx):
+        result = runner.invoke(klemma_cli, ["embed", "sources"])
+
+    assert result.exit_code == 0, result.output
+    assert "Embedded: 1" in result.output
+    assert mock_emb.embed.call_count == 0  # API skipped — library cache hit
+
+    all_emb = sm.get_all_embeddings()
+    assert "paper1" in all_emb

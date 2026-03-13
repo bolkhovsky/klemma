@@ -1085,23 +1085,60 @@ def _auto_embed_after_process(
     state,
     embeddings,
     quiet=False,
+    paper_store=None,
+    user_library=None,
 ):
     """Embed fragments + recompute section centroids for a just-processed source.
 
     Returns total embeddings created.
     """
+    from .hashing import compute_content_hash
+
     count = 0
+
+    # Resolve library fragment cache for this citekey
+    _paper_id = None
+    _lib_cache: dict[str, list[float]] = {}
+    if paper_store and user_library:
+        try:
+            _paper_id = user_library.resolve_paper_id(citekey)
+            if _paper_id:
+                _lib_cache = paper_store.get_fragment_embeddings(
+                    _paper_id, embeddings.model_name
+                )
+        except Exception:
+            pass
 
     # Fragment embeddings
     fragments = state.get_fragments(source_id=citekey)
     for frag in fragments:
         if frag.get("embedding"):  # already embedded
             continue
+
+        # Library cache check
+        if _paper_id and _lib_cache:
+            ch = compute_content_hash(
+                _paper_id, frag["fragment_text"], frag.get("page_number")
+            )
+            if ch in _lib_cache:
+                state.save_fragment_embedding(frag["id"], _lib_cache[ch], embeddings.model_name)
+                count += 1
+                continue
+
         try:
             vec = embeddings.embed(frag["fragment_text"])
             if vec:
                 state.save_fragment_embedding(frag["id"], vec, embeddings.model_name)
                 count += 1
+                # Write-through to library.db
+                if _paper_id and paper_store:
+                    try:
+                        ch = compute_content_hash(
+                            _paper_id, frag["fragment_text"], frag.get("page_number")
+                        )
+                        paper_store.save_fragment_embedding(ch, vec, embeddings.model_name)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -1274,7 +1311,10 @@ def _process_single(
                                 f"[dim](library cache — Claude skipped)[/dim]"
                             )
                         if embeddings and not no_embed:
-                            _auto_embed_after_process(citekey, state, embeddings, quiet=quiet)
+                            _auto_embed_after_process(
+                                citekey, state, embeddings, quiet=quiet,
+                                paper_store=paper_store, user_library=user_library,
+                            )
                         return (n, "ok")
             except Exception as _e:
                 logger.debug("Library dedup check failed for %s: %s", citekey, _e)
@@ -1422,7 +1462,10 @@ def _process_single(
                     console.print(f"  [dim]embed failed: {e}[/dim]")
 
         # Fragment embeddings + section centroids
-        _auto_embed_after_process(citekey, state, embeddings, quiet=quiet)
+        _auto_embed_after_process(
+            citekey, state, embeddings, quiet=quiet,
+            paper_store=paper_store, user_library=user_library,
+        )
 
     return (len(result.fragments), "ok")
 

@@ -230,10 +230,10 @@ class FragmentRepository(BaseRepository):
             return {"total": total, "embedded": embedded, "models": models}
 
     def get_unembedded_fragments(self, limit: int = 100000) -> list[dict]:
-        """Get fragments without embeddings. Returns id, source_id, fragment_text."""
+        """Get fragments without embeddings. Returns id, source_id, fragment_text, page_number."""
         with self._conn() as conn:
             cur = conn.execute(
-                """SELECT f.id, f.source_id, f.fragment_text, s.id as citekey
+                """SELECT f.id, f.source_id, f.fragment_text, f.page_number, s.id as citekey
                    FROM fragments f
                    JOIN sources s ON f.source_id = s.id
                    WHERE f.embedding IS NULL
