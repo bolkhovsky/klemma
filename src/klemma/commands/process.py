@@ -234,6 +234,9 @@ def embed_sources(ctx, citekeys, dry_run, backend, backfill):
     if emb is None:
         return
 
+    paper_store = kctx.paper_store
+    user_library = kctx.user_library
+
     # Get candidates
     if citekeys:
         candidates = []
@@ -294,12 +297,34 @@ def embed_sources(ctx, citekeys, dry_run, backend, backfill):
     embedded = 0
     api_miss = 0
     failed = 0
+    lib_hits = 0
 
     from rich.progress import Progress
 
     with Progress(console=console) as progress:
         task = progress.add_task("Embedding sources...", total=len(candidates))
         for ck in candidates:
+            # Resolve paper_id once per source for library dedup
+            _paper_id = None
+            if paper_store and user_library:
+                try:
+                    _paper_id = user_library.resolve_paper_id(ck)
+                except Exception:
+                    pass
+
+            # Library cache check: skip API if embedding already in library.db
+            if _paper_id:
+                try:
+                    cached_vec = paper_store.get_paper_embedding(_paper_id, emb.model_name)
+                    if cached_vec:
+                        state.save_embedding(ck, cached_vec, emb.model_name)
+                        embedded += 1
+                        lib_hits += 1
+                        progress.advance(task)
+                        continue
+                except Exception:
+                    pass
+
             entry = entries.get(ck)
             title = entry.title if entry else ck
             abstract = entry.abstract if entry else ""
@@ -314,6 +339,12 @@ def embed_sources(ctx, citekeys, dry_run, backend, backfill):
                 if vec:
                     state.save_embedding(ck, vec, emb.model_name)
                     embedded += 1
+                    # Write-through to library.db
+                    if _paper_id:
+                        try:
+                            paper_store.save_paper_embedding(_paper_id, vec, emb.model_name)
+                        except Exception:
+                            pass
                 else:
                     api_miss += 1
             except Exception as e:
@@ -323,6 +354,8 @@ def embed_sources(ctx, citekeys, dry_run, backend, backfill):
 
     emb_stats = state.get_embedding_stats()
     parts = [f"[green]Embedded: {embedded}[/green]"]
+    if lib_hits:
+        parts.append(f"[dim]Library cache: {lib_hits}[/dim]")
     if api_miss:
         parts.append(f"[yellow]Not found: {api_miss}[/yellow]")
     if failed:
@@ -343,6 +376,8 @@ def embed_fragments(ctx, dry_run, backend):
     """Embed extracted fragment text vectors."""
     kctx = _get_context(ctx)
     state = kctx.state
+    paper_store = kctx.paper_store
+    user_library = kctx.user_library
     emb = _resolve_emb(kctx, backend, dry_run)
     if emb is None:
         return
@@ -357,24 +392,80 @@ def embed_fragments(ctx, dry_run, backend):
 
     embedded = 0
     failed = 0
+    lib_hits = 0
+
     from rich.progress import Progress
+
+    from ..hashing import compute_content_hash
+
+    # Per-paper_id cache: {paper_id: {content_hash: vector}}
+    _lib_cache: dict[str, dict[str, list[float]]] = {}
+
+    def _get_lib_frag_cache(paper_id: str) -> dict[str, list[float]]:
+        if paper_id not in _lib_cache:
+            try:
+                _lib_cache[paper_id] = paper_store.get_fragment_embeddings(
+                    paper_id, emb.model_name
+                )
+            except Exception:
+                _lib_cache[paper_id] = {}
+        return _lib_cache[paper_id]
 
     with Progress(console=console) as progress:
         task = progress.add_task("Embedding fragments...", total=len(candidates))
         for frag in candidates:
-            try:
-                vec = emb.embed(frag["fragment_text"])
-                if vec:
-                    state.save_fragment_embedding(frag["id"], vec, emb.model_name)
-                    embedded += 1
-                else:
+            lib_hit = False
+
+            # Library cache check
+            if paper_store and user_library:
+                try:
+                    paper_id = user_library.resolve_paper_id(frag["citekey"])
+                    if paper_id:
+                        cache = _get_lib_frag_cache(paper_id)
+                        ch = compute_content_hash(
+                            paper_id, frag["fragment_text"], frag.get("page_number")
+                        )
+                        if ch in cache:
+                            state.save_fragment_embedding(
+                                frag["id"], cache[ch], emb.model_name
+                            )
+                            embedded += 1
+                            lib_hits += 1
+                            lib_hit = True
+                except Exception:
+                    pass
+
+            if not lib_hit:
+                try:
+                    vec = emb.embed(frag["fragment_text"])
+                    if vec:
+                        state.save_fragment_embedding(frag["id"], vec, emb.model_name)
+                        embedded += 1
+                        # Write-through to library.db
+                        if paper_store and user_library:
+                            try:
+                                paper_id = user_library.resolve_paper_id(frag["citekey"])
+                                if paper_id:
+                                    ch = compute_content_hash(
+                                        paper_id,
+                                        frag["fragment_text"],
+                                        frag.get("page_number"),
+                                    )
+                                    paper_store.save_fragment_embedding(
+                                        ch, vec, emb.model_name
+                                    )
+                            except Exception:
+                                pass
+                    else:
+                        failed += 1
+                except Exception as e:
+                    console.print(f"  [red]Fragment {frag['id']}: {e}[/red]")
                     failed += 1
-            except Exception as e:
-                console.print(f"  [red]Fragment {frag['id']}: {e}[/red]")
-                failed += 1
             progress.advance(task)
 
     console.print(f"\n[green]Embedded: {embedded}[/green]", end="")
+    if lib_hits:
+        console.print(f" | [dim]Library cache: {lib_hits}[/dim]", end="")
     if failed:
         console.print(f" | [red]Failed: {failed}[/red]", end="")
     console.print()
