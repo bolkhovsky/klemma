@@ -1,6 +1,6 @@
 # Migration Guide: Monolithic DB → Three-Tier Library
 
-**Applies to**: klemma v0.14+ (after PRs #143–#145 merged, ADR-014 Phase 1A–1C)
+**Applies to**: klemma after PRs #143–#145 merged (ADR-014 Phase 1A–1C). The `migrate-library` command ships with PR #145.
 **Estimated time**: 5–15 minutes per project
 
 ---
@@ -26,11 +26,18 @@ project/.klemma/data/project.db          ← section assignments, gaps, plans, b
 
 ## Before you start
 
-**1. Upgrade klemma**
+**1. Verify `migrate-library` is available**
+
+```bash
+klemma migrate-library --help
+```
+
+If you get `No such command`, PR #145 hasn't merged into your installed version yet — upgrade first:
 
 ```bash
 pip install --upgrade klemma
-klemma --version   # must be >= 0.14.0
+# or, to install directly from the merged branch:
+pip install git+https://github.com/klemma-ai/klemma.git@master
 ```
 
 **2. Check which projects you have**
