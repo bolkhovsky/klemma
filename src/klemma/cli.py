@@ -436,6 +436,12 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
             backfilled += 1
         result["metadata_backfilled"] = backfilled
 
+    # Auto-resolve reference gaps against current library
+    if ctx.library:
+        resolved = state.resolve_gaps(ctx.library.entries)
+        if resolved:
+            result["gaps_resolved"] = resolved
+
     # Sync section type mappings (backfill section_type columns)
     project = ctx.project
     if project and (project.chapters or project.section_type_map):
@@ -457,6 +463,8 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
             parts.append(
                 f"[yellow]{skipped_irrelevant} skipped (no chapter_mapping match)[/yellow]"
             )
+        if result.get("gaps_resolved"):
+            parts.append(f"[green]{result['gaps_resolved']} gap(s) resolved[/green]")
         if parts:
             console.print("[dim]Sync:[/dim] " + " | ".join(parts))
 
