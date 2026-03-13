@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS project_sources (
@@ -51,6 +51,17 @@ CREATE TABLE IF NOT EXISTS project_fragments (
 CREATE INDEX IF NOT EXISTS idx_pf_section ON project_fragments(section);
 CREATE INDEX IF NOT EXISTS idx_pf_citekey ON project_fragments(citekey);
 """
+
+_MIGRATE_V2 = """
+CREATE TABLE IF NOT EXISTS prune_verdicts (
+    source_id  TEXT PRIMARY KEY,
+    verdict    TEXT NOT NULL CHECK(verdict IN ('drop', 'maybe')),
+    reason     TEXT DEFAULT '',
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+_PRUNE_EXPIRY_DAYS = 14
 
 
 class LocalProjectStore:
@@ -92,8 +103,11 @@ class LocalProjectStore:
 
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version < _SCHEMA_VERSION:
+        if version < 1:
             conn.executescript(_CREATE_SCHEMA)
+        if version < 2:
+            conn.executescript(_MIGRATE_V2)
+        if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
     # ------------------------------------------------------------------ #
@@ -214,3 +228,105 @@ class LocalProjectStore:
     def count_sources(self) -> int:
         with self._conn() as conn:
             return conn.execute("SELECT COUNT(*) FROM project_sources").fetchone()[0]
+
+    # ------------------------------------------------------------------ #
+    # Prune verdicts (schema v2)                                          #
+    # ------------------------------------------------------------------ #
+
+    def save_prune_verdicts(self, drop: list[dict], maybe: list[dict]) -> None:
+        """Replace all prune verdicts with fresh results."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM prune_verdicts")
+            for item in drop:
+                ck = item.get("citekey", "").lstrip("@")
+                if not ck:
+                    continue
+                conn.execute(
+                    "INSERT OR REPLACE INTO prune_verdicts (source_id, verdict, reason)"
+                    " VALUES (?, 'drop', ?)",
+                    (ck, item.get("reason", "")),
+                )
+            for item in maybe:
+                ck = item.get("citekey", "").lstrip("@")
+                if not ck:
+                    continue
+                conn.execute(
+                    "INSERT OR REPLACE INTO prune_verdicts (source_id, verdict, reason)"
+                    " VALUES (?, 'maybe', ?)",
+                    (ck, item.get("reason", "")),
+                )
+
+    def get_prune_verdicts(
+        self,
+        verdict: str | None = None,
+        chapter: int | None = None,
+        section_type: str | None = None,
+    ) -> list[dict]:
+        """Return prune verdicts, optionally filtered by verdict type."""
+        with self._conn() as conn:
+            conditions = [
+                f"pv.updated_at > datetime('now', '-{_PRUNE_EXPIRY_DAYS} days')"
+            ]
+            params: list = []
+
+            if verdict:
+                conditions.append("pv.verdict = ?")
+                params.append(verdict)
+
+            if chapter is not None:
+                ch = str(chapter)
+                conditions.append(
+                    "EXISTS (SELECT 1 FROM project_source_sections pss"
+                    " WHERE pss.citekey = pv.source_id"
+                    " AND (pss.section = ? OR pss.section LIKE ?))"
+                )
+                params.extend([ch, f"{ch}.%"])
+
+            if section_type:
+                conditions.append(
+                    "EXISTS (SELECT 1 FROM project_source_sections pss2"
+                    " WHERE pss2.citekey = pv.source_id AND pss2.section_type = ?)"
+                )
+                params.append(section_type)
+
+            where = " AND ".join(conditions)
+            cur = conn.execute(
+                f"SELECT pv.source_id, pv.verdict, pv.reason,"
+                f" GROUP_CONCAT(DISTINCT pss3.section) as sections"
+                f" FROM prune_verdicts pv"
+                f" LEFT JOIN project_source_sections pss3 ON pss3.citekey = pv.source_id"
+                f" WHERE {where}"
+                f" GROUP BY pv.source_id"
+                f" ORDER BY pv.verdict, pv.source_id",
+                params,
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_prune_drop_ids(self, max_age_days: int = _PRUNE_EXPIRY_DAYS) -> set[str]:
+        """Return citekeys with verdict='drop' within expiry window."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT source_id FROM prune_verdicts"
+                " WHERE verdict='drop' AND updated_at > datetime('now', ?)",
+                (f"-{max_age_days} days",),
+            )
+            return {row["source_id"] for row in cur.fetchall()}
+
+    def get_prune_summary(self) -> dict:
+        """Return prune verdict counts."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "SELECT verdict, COUNT(*) as cnt FROM prune_verdicts"
+                " WHERE updated_at > datetime('now', ?) GROUP BY verdict",
+                (f"-{_PRUNE_EXPIRY_DAYS} days",),
+            )
+            result = {"drop": 0, "maybe": 0}
+            for row in cur.fetchall():
+                result[row["verdict"]] = row["cnt"]
+            result["total"] = result["drop"] + result["maybe"]
+            return result
+
+    def clear_prune_verdict(self, source_id: str) -> None:
+        """Remove prune verdict for a source."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM prune_verdicts WHERE source_id=?", (source_id,))

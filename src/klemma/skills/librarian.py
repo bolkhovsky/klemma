@@ -10,6 +10,7 @@ from ..ai import AIProvider
 from ..config import AIConfig, KlemmaConfig, ProjectConfig, SuggestConfig, resolve_prompt
 from ..literature.models import LibraryReport
 from ..state import StateManager
+from ..stores.project_store import LocalProjectStore
 from ..vault import VaultAdapter
 from .planner import _get_current_deadline
 
@@ -31,6 +32,7 @@ def analyze_library(
     klemma_home: Optional[Path] = None,
     project_name: str = "",
     project_root: Optional[Path] = None,
+    project_store: Optional[LocalProjectStore] = None,
 ) -> Optional[LibraryReport]:
     """Run AI library analysis and return structured report.
 
@@ -88,10 +90,12 @@ def analyze_library(
         prune_result = _run_prune_analysis(active_sources, entry_lookup, config, ai, klemma_home=klemma_home)
         if prune_result:
             report.prune = prune_result
-            state.save_prune_verdicts(
-                drop=prune_result.get("drop", []),
-                maybe=prune_result.get("maybe", []),
-            )
+            drop = prune_result.get("drop", [])
+            maybe = prune_result.get("maybe", [])
+            if project_store is not None:
+                project_store.save_prune_verdicts(drop=drop, maybe=maybe)
+            else:
+                state.save_prune_verdicts(drop=drop, maybe=maybe)
 
     # Save report
     _save_report_to_vault(

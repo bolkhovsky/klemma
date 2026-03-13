@@ -47,6 +47,7 @@ def mock_ctx(prune_state, tmp_path):
     ctx.vault = None
     ctx.embeddings = None
     ctx.project_root = tmp_path
+    ctx.project_store = None  # use state-based path (no project.db)
     return ctx
 
 
