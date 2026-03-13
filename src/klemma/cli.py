@@ -1887,14 +1887,13 @@ def add(ctx, input_value, section, title, authors, year, no_process, no_embed, m
 
         pdf_path = _Path(input_value).resolve()
         console.print(f"[bold]Adding from PDF:[/bold] {pdf_path.name}")
-        # Use acquire with file:// URL — acquirer handles local paths
+        # Use acquire with file:// URL — acquirer handles local paths via scheme check
         meta = PaperMetadata(
             url=f"file://{pdf_path}",
             title=title or "",
             authors=authors or "",
             year=year,
             sections=sections,
-            pdf_override=str(pdf_path),
         )
         result = acquire_paper_local(
             meta,
