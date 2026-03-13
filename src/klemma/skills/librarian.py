@@ -4,13 +4,12 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from ..ai import AIProvider
 from ..config import AIConfig, KlemmaConfig, ProjectConfig, SuggestConfig, resolve_prompt
 from ..literature.models import LibraryReport
 from ..state import StateManager
-from ..stores.project_store import LocalProjectStore
 from ..vault import VaultAdapter
 from .planner import _get_current_deadline
 
@@ -32,7 +31,7 @@ def analyze_library(
     klemma_home: Optional[Path] = None,
     project_name: str = "",
     project_root: Optional[Path] = None,
-    project_store: Optional[LocalProjectStore] = None,
+    project_store: Optional[Any] = None,
 ) -> Optional[LibraryReport]:
     """Run AI library analysis and return structured report.
 
