@@ -309,7 +309,7 @@ class AIConfig(BaseModel):
     backend: str = "litellm"  # "claude" | "litellm" | "openai" (deprecated)
     model: str = "opus"
     max_pdf_chars: int = 50000
-    timeout: int = 180
+    timeout: int = 300
     retries: int = 2
     base_url: Optional[str] = None  # URL for OpenAI-compatible endpoints
     api_key_env: str = ""  # env var name for API key (e.g. "OPENAI_API_KEY")
