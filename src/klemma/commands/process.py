@@ -102,6 +102,7 @@ def process(ctx, citekeys, serial, force, model, no_embed):
                         force=force,
                         no_embed=no_embed,
                         paper_store=kctx.paper_store,
+                        user_library=kctx.user_library,
                     ): ck
                     for ck in keys
                 }
@@ -156,6 +157,7 @@ def process(ctx, citekeys, serial, force, model, no_embed):
                 force=force,
                 no_embed=no_embed,
                 paper_store=kctx.paper_store,
+                user_library=kctx.user_library,
             )
             if n_frags > 0:
                 processed += 1

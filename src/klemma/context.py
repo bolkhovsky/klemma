@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from .config import KlemmaConfig, ProjectConfig
     from .embeddings import EmbeddingProvider
     from .library_provider import LibraryProvider
-    from .protocols import PaperStore
+    from .protocols import PaperStore, ProjectStore, UserLibrary
     from .search import SearchProvider
     from .state import StateManager
     from .vault import VaultAdapter
@@ -44,3 +44,6 @@ class KlemmaContext:
     system_home: Path = field(default_factory=lambda: Path.home() / ".klemma")
     # Three-tier library (ADR-014 Phase 1B): shared paper/fragment/embedding store
     paper_store: Optional[PaperStore] = None
+    # Three-tier library (ADR-014 Phase 1C): citekey→paper_id mapping + project assignments
+    user_library: Optional[UserLibrary] = None
+    project_store: Optional[ProjectStore] = None

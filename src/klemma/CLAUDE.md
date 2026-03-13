@@ -11,7 +11,7 @@ Click CLI entry point. Defines 18 commands + hidden aliases.
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
-- Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `library duplicates`, `suggest`, `reassign`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`, `migrate-content` (hidden — moves config.yaml content fields to KLEMMA.md frontmatter)
+- Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `library duplicates`, `suggest`, `reassign`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`, `migrate-content` (hidden — moves config.yaml content fields to KLEMMA.md frontmatter), `migrate-library` (dry-run by default; `--run` copies monolithic klemma.db → library.db + project.db via three-tier stores)
 - Hidden aliases: `gaps suggest` → `suggest`, `coverage` → `status --verbose`
 - Deprecation warnings: bare `klemma gaps` → use `klemma status --verbose`; `klemma library -s` → use `klemma research -s`
 - `init --outline` generates an outline after project setup (requires AI backend)
@@ -29,7 +29,7 @@ Click CLI entry point. Defines 18 commands + hidden aliases.
 
 ### context.py (47 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.
-Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `library` (optional), `project` (optional), `klemma_home`, `dissertation_context`, `available_tags`, `project_root`, `project_chain`, `system_home`, `paper_store` (optional — `LocalPaperStore` at `~/.klemma/library.db`, added ADR-014 Phase 1B).
+Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `library` (optional), `project` (optional), `klemma_home`, `dissertation_context`, `available_tags`, `project_root`, `project_chain`, `system_home`, `paper_store` (optional — `LocalPaperStore` at `~/.klemma/library.db`, Phase 1B), `user_library` (optional — `LocalUserLibrary` at same `library.db`, Phase 1C), `project_store` (optional — `LocalProjectStore` at `project/.klemma/data/project.db`, Phase 1C).
 
 ### config.py (~800 lines)
 Pydantic config models + Git-style project discovery + klemmarc loading.
@@ -114,8 +114,8 @@ Data classes for the three-tier storage layer (ADR-014). Distinct from `literatu
 - `FragmentRecord` — stored fragment with content-addressable ID (fragment_id = content_hash)
 - `UserSource` — user's source entry mapping citekey → global paper_id
 
-### stores/ (ADR-014 Phase 1B)
-SQLite backends implementing the `PaperStore` protocol. Currently contains `LocalPaperStore`.
+### stores/ (ADR-014 Phase 1B–1C)
+SQLite backends implementing the three-tier library protocols.
 
 #### stores/paper_store.py (~350 lines)
 `LocalPaperStore` — SQLite-backed `PaperStore` at `~/.klemma/library.db`. Content-addressable: same PDF → same paper_id → same fragments (global dedup).
@@ -128,6 +128,26 @@ SQLite backends implementing the `PaperStore` protocol. Currently contains `Loca
 - `get/save_fragment_embedding(fragment_id, vector, model)` — same pattern
 - Tables: `papers`, `extractions`, `fragments`, `paper_embeddings`, `fragment_embeddings`, `citation_graph`
 - Used by: `_init_components()` in `cli.py` (always created); `_process_single()` in `cli.py` (dedup check + dual-write)
+
+#### stores/user_library.py (~210 lines)
+`LocalUserLibrary` — SQLite-backed `UserLibrary` at `~/.klemma/library.db` (same file as `LocalPaperStore`, schema version 2). Maps citekey → paper_id for the User Library tier.
+- `add_source(paper_id, citekey, *, status, pdf_path, ...) -> None` — upsert on citekey conflict; replaces chapters/sections
+- `get_source_by_citekey(citekey) -> UserSource | None`
+- `resolve_paper_id(citekey) -> str | None`
+- `get_existing_citekeys() -> set[str]`
+- `update_status(citekey, status)`, `get_all_sources()`, `count()`
+- Tables: `user_sources`, `user_source_chapters`, `user_source_sections`
+- Called from `_process_single()` in `cli.py` to register citekey after successful extraction
+
+#### stores/project_store.py (~200 lines)
+`LocalProjectStore` — SQLite-backed `ProjectStore` at `project/.klemma/data/project.db`. Per-project section assignments and coverage stats.
+- `set_source_sections(citekey, paper_id, sections, chapters) -> None` — upsert + replace section assignments
+- `get_coverage_stats() -> dict` — `{total_sources, by_section: {section: count}}`
+- `get_reference_gaps(**kwargs) -> list[dict]` — returns `[]` (Phase 1D stub)
+- `get_source_sections(citekey) -> list[str]`, `get_sources_by_section(section) -> list[str]`
+- `register_fragment(fragment_id, *, citekey, section, ...) -> None` — INSERT OR IGNORE
+- `count_sources() -> int`
+- Tables: `project_sources`, `project_source_sections`, `project_fragments`
 
 ### errors.py (32 lines)
 Klemma error taxonomy for AI backends.

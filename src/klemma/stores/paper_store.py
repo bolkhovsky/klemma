@@ -236,12 +236,21 @@ class LocalPaperStore:
 
         extraction_id = str(uuid.uuid4())
         with self._conn() as conn:
-            conn.execute(
+            cur = conn.execute(
                 """INSERT OR IGNORE INTO extractions
                    (extraction_id, paper_id, prompt_hash, ai_model, klemma_version, fragment_count)
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (extraction_id, paper_id, prompt_hash, ai_model, _kv, len(fragments)),
             )
+            if cur.rowcount == 0:
+                # Row already exists (UNIQUE conflict on paper_id+prompt_hash+ai_model)
+                # Use the existing extraction_id so fragment FK constraint is satisfied
+                row = conn.execute(
+                    "SELECT extraction_id FROM extractions WHERE paper_id=? AND prompt_hash=? AND ai_model=?",
+                    (paper_id, prompt_hash, ai_model),
+                ).fetchone()
+                if row:
+                    extraction_id = row["extraction_id"]
             inserted = 0
             for f in fragments:
                 cur = conn.execute(

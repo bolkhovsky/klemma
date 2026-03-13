@@ -125,10 +125,13 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     dissertation_context = load_project_context(project_chain, cfg)
     available_tags = load_available_tags(klemma_home, cfg, project_chain=project_chain)
 
-    # Three-tier library (ADR-014 Phase 1B): shared paper store at ~/.klemma/library.db
-    from .stores import LocalPaperStore
+    # Three-tier library (ADR-014 Phase 1B/1C): shared stores at ~/.klemma/library.db
+    from .stores import LocalPaperStore, LocalProjectStore, LocalUserLibrary
 
-    paper_store = LocalPaperStore(system_home / "library.db")
+    _lib_db = system_home / "library.db"
+    paper_store = LocalPaperStore(_lib_db)
+    user_library = LocalUserLibrary(_lib_db)
+    project_store = LocalProjectStore(klemma_home / "data" / "project.db")
 
     return KlemmaContext(
         config=cfg,
@@ -146,6 +149,8 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
         project_chain=project_chain,
         system_home=system_home,
         paper_store=paper_store,
+        user_library=user_library,
+        project_store=project_store,
     )
 
 
@@ -431,6 +436,12 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
             backfilled += 1
         result["metadata_backfilled"] = backfilled
 
+    # Auto-resolve reference gaps against current library
+    if ctx.library:
+        resolved = state.resolve_gaps(ctx.library.entries)
+        if resolved:
+            result["gaps_resolved"] = resolved
+
     # Sync section type mappings (backfill section_type columns)
     project = ctx.project
     if project and (project.chapters or project.section_type_map):
@@ -452,6 +463,8 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
             parts.append(
                 f"[yellow]{skipped_irrelevant} skipped (no chapter_mapping match)[/yellow]"
             )
+        if result.get("gaps_resolved"):
+            parts.append(f"[green]{result['gaps_resolved']} gap(s) resolved[/green]")
         if parts:
             console.print("[dim]Sync:[/dim] " + " | ".join(parts))
 
@@ -1109,6 +1122,7 @@ def _process_single(
     force=False,
     no_embed=False,
     paper_store=None,
+    user_library=None,
 ):
     """Process a single source: find PDF, extract fragments, save to vault.
 
@@ -1321,6 +1335,19 @@ def _process_single(
                 )
         except Exception as _e:
             logger.debug("Library dual-write failed for %s: %s", citekey, _e)
+
+    # Phase 1C: register citekey → paper_id in user library
+    if user_library and _paper_id:
+        try:
+            user_library.add_source(
+                _paper_id,
+                citekey,
+                status="completed",
+                pdf_path=str(pdf_path) if pdf_path else None,
+            )
+            logger.debug("User library: registered %s → %s", citekey, _paper_id)
+        except Exception as _e:
+            logger.debug("User library registration failed for %s: %s", citekey, _e)
 
     # Backfill abstract from S2 if missing (e.g. acquire hit rate limit)
     abstract = entry.abstract or ""
@@ -1868,14 +1895,13 @@ def add(ctx, input_value, section, title, authors, year, no_process, no_embed, m
 
         pdf_path = _Path(input_value).resolve()
         console.print(f"[bold]Adding from PDF:[/bold] {pdf_path.name}")
-        # Use acquire with file:// URL — acquirer handles local paths
+        # Use acquire with file:// URL — acquirer handles local paths via scheme check
         meta = PaperMetadata(
             url=f"file://{pdf_path}",
             title=title or "",
             authors=authors or "",
             year=year,
             sections=sections,
-            pdf_override=str(pdf_path),
         )
         result = acquire_paper_local(
             meta,

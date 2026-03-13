@@ -101,8 +101,8 @@ def _warn_config_issues(raw: dict, source: str) -> None:
     # --- 2. Unknown keys at every level ---
     for key in raw:
         if key not in root_keys and key not in child_fields:
-            if key in ("api_keys", "mcp"):
-                continue  # api_keys valid in klemmarc; mcp reserved
+            if key in ("api_keys", "mcp", "telegram"):
+                continue  # api_keys valid in klemmarc; mcp/telegram reserved for tooling
             warnings.warn(
                 f"[{source}] unknown top-level key '{key}' (ignored)",
                 UserWarning,
@@ -309,7 +309,7 @@ class AIConfig(BaseModel):
     backend: str = "litellm"  # "claude" | "litellm" | "openai" (deprecated)
     model: str = "opus"
     max_pdf_chars: int = 50000
-    timeout: int = 180
+    timeout: int = 300
     retries: int = 2
     base_url: Optional[str] = None  # URL for OpenAI-compatible endpoints
     api_key_env: str = ""  # env var name for API key (e.g. "OPENAI_API_KEY")

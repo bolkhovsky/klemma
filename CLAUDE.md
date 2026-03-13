@@ -9,11 +9,13 @@ Only after reviewing GH context should you explore code or files.
 
 ## Automatic PM & CTO reviews
 
-Before creating a PR or GitHub issue for any feature/epic, **automatically** run both reviews without being asked:
+**Before** creating a PR or GitHub issue for any feature/epic, **automatically** run both reviews without being asked:
 1. `/pm-review` — product fit, scope, priority, core loop alignment
 2. `/cto-review` — architecture, red lines, dependency direction, SaaS readiness
 
 Present both reviews to the user and wait for their decision before proceeding. This applies to all features and epics — skip only for trivial bugfixes and typo-level changes.
+
+**After** creating a PR, run `/cto-review <PR#>` immediately and work on all Required Changes before the PR is considered done. Do not wait for the user to ask.
 
 ## Feature development workflow
 
@@ -26,6 +28,7 @@ Every epic/feature follows this sequence. Do not skip or reorder steps. Skip thi
 5. **Verify** — `ruff check src/ tests/` then `python -m pytest tests/ -q`; fix until both pass
 6. **Docs** — update all affected `CLAUDE.md` files, `README.md`, and user guide in `docs/`
 7. **Commit & PR** — atomic commit, then `gh pr create`. **Always link PRs to issues** using `Closes #N` (for issues the PR fully resolves) or `Part of #N` (for epics). After creating the PR, tick off the completed task checkboxes in the epic issue body (`gh issue edit <N> --body "..."` with updated `- [x]` items). The PR body must also include a **Release Note** mini-article (~300 words) with four sections:
+7b. **Post-PR CTO review** — immediately after `gh pr create`, run `/cto-review` on the new PR. Work on every Required Change before considering the PR done. Suggestions are optional but should be addressed if quick. Do not wait for the user to ask.
    ```
    ## Release Note
 
