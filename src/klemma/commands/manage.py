@@ -1055,7 +1055,7 @@ def migrate_library(ctx, do_run):
     conn.row_factory = sqlite3.Row
 
     sources = conn.execute(
-        "SELECT id, title, authors, year, abstract, doi, status, pdf_path, quality FROM sources"
+        "SELECT id, title, authors, year, abstract, doi, status, pdf_path, quality_score FROM sources"
     ).fetchall()
     fragments = conn.execute(
         "SELECT source_id, fragment_text, fragment_type, page_number, citation_intent FROM fragments"
@@ -1121,7 +1121,7 @@ def migrate_library(ctx, do_run):
             citekey,
             status=src["status"] or "pending",
             pdf_path=src["pdf_path"],
-            quality_score=src["quality"],
+            quality_score=src["quality_score"],
         )
 
         # Migrate fragments

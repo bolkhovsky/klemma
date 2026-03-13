@@ -24,7 +24,7 @@ def _make_mono_db(path: Path) -> None:
             doi TEXT,
             status TEXT DEFAULT 'completed',
             pdf_path TEXT,
-            quality INTEGER
+            quality_score INTEGER
         );
         CREATE TABLE fragments (
             source_id TEXT,
@@ -40,7 +40,7 @@ def _make_mono_db(path: Path) -> None:
         INSERT INTO sources VALUES (
             'smith2022', 'A Great Paper', 'Smith, J.', 2022,
             'Abstract here.', '10.1234/test', 'completed', NULL, 4
-        );
+        );  -- quality_score=4
         INSERT INTO fragments VALUES (
             'smith2022', 'Key finding text.', 'key_idea', 3, 'background'
         );
