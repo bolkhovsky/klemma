@@ -395,6 +395,33 @@ def _format_research_with_history(section: str, data: dict, history: str = "") -
     return base
 
 
+def _get_required_fragments(
+    required_citekeys: list[str],
+    state: StateManager,
+    section: str,
+    chapter: Optional[int],
+) -> tuple[list[dict], list[str]]:
+    """Fetch fragments for required citekeys, returning (fragments, missing_citekeys).
+
+    For each citekey, fetches top-10 fragments assigned to the target section.
+    Citekeys with no section fragments are returned in the missing list.
+    """
+    if not required_citekeys:
+        return [], []
+
+    all_fragments: list[dict] = []
+    missing: list[str] = []
+
+    for citekey in required_citekeys:
+        frags = state.get_fragments(source_id=citekey, section=section, limit=10)
+        if frags:
+            all_fragments.extend(frags)
+        else:
+            missing.append(citekey)
+
+    return all_fragments, missing
+
+
 def research_section(
     section: str,
     config: KlemmaConfig,
@@ -409,6 +436,7 @@ def research_section(
     embeddings=None,
     paper_store=None,
     user_library=None,
+    required_citekeys: Optional[list[str]] = None,
 ) -> ResearchResult:
     """Сгенерировать исследовательский брифинг для раздела диссертации.
 
@@ -519,6 +547,31 @@ def research_section(
         )
         if _added:
             logger.debug("Library supplement: added %d fragments from library.db", _added)
+
+    # 3b. Inject required citekey fragments (before RAG results, dedup by id)
+    _req_missing: list[str] = []
+    if required_citekeys:
+        req_frags, _req_missing = _get_required_fragments(
+            required_citekeys, state, section, chapter
+        )
+        for ck in _req_missing:
+            logger.warning(
+                "Required citekey @%s has no fragments in section '%s' — "
+                "run 'klemma process %s' first",
+                ck,
+                section,
+                ck,
+            )
+        # Prepend required fragments, dedup against existing by fragment id
+        existing_ids = {f["id"] for f in section_fragments}
+        new_req = [f for f in req_frags if f["id"] not in existing_ids]
+        section_fragments = new_req + section_fragments
+        logger.debug(
+            "Required: injected %d fragments (%d already present, %d missing citekeys)",
+            len(new_req),
+            len(req_frags) - len(new_req),
+            len(_req_missing),
+        )
 
     # 4. Аннотации источников из vault
     # For fragments retrieved via RAG, derive sources from fragment citekeys
@@ -741,6 +794,7 @@ def research_section(
         missing_coverage=data.get("missing_coverage", []),
         writing_suggestions=data.get("writing_suggestions", []),
         filtered_citekeys=filtered_citekeys,
+        required_missing=_req_missing,
         research_text=research_text,
     )
 

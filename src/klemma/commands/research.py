@@ -29,8 +29,15 @@ from ..cli import (
 @click.option(
     "--model", default=None, help="Override AI model (e.g. openai/gpt-4.1-mini)"
 )
+@click.option(
+    "--require",
+    "require",
+    multiple=True,
+    metavar="CITEKEY",
+    help="Pin citekey into RAG context regardless of similarity rank (repeatable).",
+)
 @click.pass_context
-def research(ctx, section, no_save, force, model):
+def research(ctx, section, no_save, force, model, require):
     """Deep section analysis — argument structure, citation plan, gaps.
 
     Auto-processes unextracted sources before analysis.
@@ -154,6 +161,8 @@ def research(ctx, section, no_save, force, model):
     else:
         spinner_text = f"Анализ раздела {section}"
 
+    required_citekeys = list(require) if require else None
+
     with console.status(spinner_text, spinner="dots"):
         result = research_section(
             section,
@@ -169,11 +178,19 @@ def research(ctx, section, no_save, force, model):
             embeddings=kctx.embeddings,
             paper_store=kctx.paper_store,
             user_library=kctx.user_library,
+            required_citekeys=required_citekeys,
         )
 
     if not result.section_status:
         console.print("[red]Не удалось сгенерировать брифинг.[/red]")
         return
+
+    # Show warnings for required citekeys with no section fragments
+    for ck in result.required_missing:
+        console.print(
+            f"[yellow]Warning:[/yellow] @{ck} has no fragments in section {section} "
+            f"— run [bold]klemma process {ck}[/bold] first"
+        )
 
     console.print()
 
