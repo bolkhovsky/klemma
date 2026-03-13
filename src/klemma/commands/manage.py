@@ -1011,9 +1011,17 @@ def migrate(ctx, dry_run):
 # --- Three-tier library migration (ADR-014 Phase 1C) ---
 
 
+def _table_exists(conn, name: str) -> bool:
+    """Return True if a table exists in the SQLite connection."""
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone()
+    return row is not None
+
+
 @main.command(name="migrate-library")
 @click.option(
-    "--run",
+    "--apply",
     "do_run",
     is_flag=True,
     default=False,
@@ -1028,7 +1036,7 @@ def migrate_library(ctx, do_run):
       - ~/.klemma/library.db: papers, fragments, embeddings (shared across projects)
       - .klemma/data/project.db: source–section assignments for this project
 
-    Default is dry-run (shows what would be migrated). Pass --run to execute.
+    Default is dry-run (shows what would be migrated). Pass --apply to execute.
     Creates a backup at .klemma/data/klemma.db.bak before writing.
     """
     import shutil
@@ -1068,7 +1076,7 @@ def migrate_library(ctx, do_run):
     console.print(f"\n  [cyan]{n_sources}[/cyan] sources · [cyan]{n_frags}[/cyan] fragments · [cyan]{n_secs}[/cyan] section assignments")
 
     if not do_run:
-        console.print("\n[dim]Dry run — pass --run to execute migration[/dim]")
+        console.print("\n[dim]Dry run — pass --apply to execute migration[/dim]")
         return
 
     # ---- Backup ------------------------------------------------------------
@@ -1155,14 +1163,12 @@ def migrate_library(ctx, do_run):
     console.print(f"  Section entries   : {sum(len(v) for v in secs_by_citekey.values())}")
     console.print(f"\n[dim]Monolithic DB preserved at {mono_db}[/dim]")
     console.print("[dim]Run 'klemma status' to verify coverage is unchanged.[/dim]")
-
-
-def _table_exists(conn, name: str) -> bool:
-    """Return True if a table exists in the SQLite connection."""
-    row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)
-    ).fetchone()
-    return row is not None
+    console.print(
+        "\n[yellow]Note:[/yellow] Migrated papers use citekey-based deduplication "
+        "(not PDF SHA256). Same paper under different citekeys in two projects will "
+        "create separate entries. Re-process with [bold]klemma process --force[/bold] "
+        "to upgrade to content-addressable dedup."
+    )
 
 
 # --- Migrate content fields to KLEMMA.md frontmatter ---
