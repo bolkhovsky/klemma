@@ -324,6 +324,14 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
         if not sections_list and primary_section_str:
             sections_list = [primary_section_str]
 
+        # Warn on bare chapter assignments (e.g. sections: [1] instead of 1.1)
+        for _sec in sections_list:
+            if str(_sec).isdigit():
+                console.print(
+                    f"[yellow]Warning:[/yellow] @{citekey} assigned to bare chapter "
+                    f"'{_sec}' — did you mean a subsection (e.g. {_sec}.1)?"
+                )
+
         vault_data.append(
             {
                 "citekey": citekey,
