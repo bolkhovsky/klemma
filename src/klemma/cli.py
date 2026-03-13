@@ -501,7 +501,10 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
 
 
 def _print_status_line(
-    state: StateManager, project_name: str = "default", model: str = ""
+    state: StateManager,
+    project_name: str = "default",
+    model: str = "",
+    db_label: str = "",
 ):
     """Print a compact status line with key metrics."""
     try:
@@ -528,6 +531,8 @@ def _print_status_line(
             parts.append(
                 f"[yellow]{prune['total']} pruned ({prune['drop']} drop, {prune['maybe']} maybe)[/yellow]"
             )
+        if db_label:
+            parts.append(f"[dim]{db_label}[/dim]")
         console.print("[dim]|[/dim] " + " [dim]|[/dim] ".join(parts))
     except Exception:
         pass  # Don't crash on status line failure
@@ -604,7 +609,7 @@ def _print_recommended_actions(
         actions.append(
             (
                 f"{drop} drop + {maybe} maybe prune verdicts pending",
-                "klemma library prune --list",
+                "klemma library prune",
             )
         )
 
@@ -705,8 +710,17 @@ def main(ctx, config):
                 override = resolve_task_model(task, kctx.config.ai)
                 if override:
                     effective_model = override
+            _ps = kctx.project_store
+            db_label = (
+                "data/project.db"
+                if _ps and _ps.count_sources() > 0
+                else "data/klemma.db"
+            )
             _print_status_line(
-                kctx.state, project_name=kctx.project_name, model=effective_model
+                kctx.state,
+                project_name=kctx.project_name,
+                model=effective_model,
+                db_label=db_label,
             )
         except Exception:
             pass
