@@ -1,6 +1,6 @@
 # Tests
 
-## Current test suite (1170 tests)
+## Current test suite (1216 tests)
 - `test_paper_store.py` (~200 lines) — 22 tests: `LocalPaperStore` schema (version=1, all 6 tables, migration idempotency, new-dir creation), register/find CRUD (UUID return, idempotency by pdf_hash, find by DOI, metadata roundtrip), fragments (save/get, INSERT OR IGNORE dedup, types), paper-level embeddings (roundtrip, upsert, missing=None), fragment-level embeddings (roundtrip, empty), dual-write cache scenario (second project hits library cache)
 - `test_user_library.py` (~185 lines) — 23 tests: `LocalUserLibrary` schema (version=2, 3 tables, PaperStore coexistence on same db_path, idempotency), add_source (basic, metadata, upsert), get_source missing=None, resolve_paper_id, get_existing_citekeys (empty, multiple), update_status, count, chapters/sections replaced on upsert
 - `test_project_store.py` (~160 lines) — 20 tests: `LocalProjectStore` schema (version=1, 3 tables, idempotency, parent-dir creation), set_source_sections (basic, upserts paper_id, replaces sections, empty), get_source_sections (data, missing), get_sources_by_section (multi-source, empty), get_coverage_stats (empty, with data), get_reference_gaps (stub returns []), register_fragment (basic, INSERT OR IGNORE dedup), count_sources (empty, multiple)
