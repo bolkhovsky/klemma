@@ -134,7 +134,7 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     # Three-tier library (ADR-014 Phase 1B/1C): shared stores at ~/.klemma/library.db
     from .stores import LocalPaperStore, LocalProjectStore, LocalUserLibrary
 
-    _lib_db = Path(cfg.library_db_path) if cfg.library_db_path else (system_home / "library.db")
+    _lib_db = cfg.library_db_path.expanduser() if cfg.library_db_path else (system_home / "library.db")
     paper_store = LocalPaperStore(_lib_db)
     user_library = LocalUserLibrary(_lib_db)
     project_store = LocalProjectStore(klemma_home / "data" / "project.db")

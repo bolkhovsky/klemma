@@ -31,12 +31,13 @@ class TestLibraryDbPathField:
         cfg = KlemmaConfig.model_validate({"library_db_path": p})
         assert cfg.library_db_path == p
 
-    def test_tilde_expanded(self):
-        """Pydantic resolves ~ in Path fields."""
+    def test_tilde_stored_as_is_expanded_at_use_time(self):
+        """Pydantic stores ~ as-is; _init_components() must call .expanduser()."""
         cfg = KlemmaConfig.model_validate({"library_db_path": "~/shared/library.db"})
-        # Pydantic does not expand ~ automatically — the path is stored as-is
-        assert cfg.library_db_path is not None
-        assert "library.db" in str(cfg.library_db_path)
+        # stored as-is — NOT expanded by Pydantic
+        assert cfg.library_db_path == Path("~/shared/library.db")
+        # expansion happens at use time via .expanduser()
+        assert cfg.library_db_path.expanduser() != cfg.library_db_path
 
 
 # ---------------------------------------------------------------------------
