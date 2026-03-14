@@ -1272,6 +1272,40 @@ def _process_single(
             state.sources.mark_skipped(citekey, "URL fetch failed")
             return (0, "URL fetch failed")
     else:
+        # Phase 1C citekey fast-path dedup: check user_library before reading PDF (ADR-014)
+        # Faster than pdf_hash check: no PDF read needed when same citekey already processed.
+        if user_library and paper_store and not force:
+            try:
+                _fast_paper_id = user_library.resolve_paper_id(citekey)
+                if _fast_paper_id:
+                    _fast_frags = paper_store.get_fragments(_fast_paper_id)
+                    if _fast_frags:
+                        frag_dicts = [
+                            {
+                                "text": f.fragment_text,
+                                "type": f.fragment_type or "key_idea",
+                                "page": f.page_number,
+                                "citation_intent": f.citation_intent,
+                                "relevance": 3,
+                            }
+                            for f in _fast_frags
+                        ]
+                        n = state.fragments.save_fragments(citekey, frag_dicts)
+                        state.sources.mark_completed(citekey, note_path="")
+                        if not quiet:
+                            console.print(
+                                f"  [green]{n} fragments[/green] "
+                                f"[dim](library cache — skipped PDF)[/dim]"
+                            )
+                        if embeddings and not no_embed:
+                            _auto_embed_after_process(
+                                citekey, state, embeddings, quiet=quiet,
+                                paper_store=paper_store, user_library=user_library,
+                            )
+                        return (n, "ok")
+            except Exception as _e:
+                logger.debug("Citekey dedup check failed for %s: %s", citekey, _e)
+
         # Find PDF
         pdf_search_paths = [Path(cfg.zotero.storage_path)]
         pdf_path = pdf_extractor.find_pdf(

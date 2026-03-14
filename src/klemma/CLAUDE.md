@@ -18,6 +18,7 @@ Click CLI entry point. Defines 18 commands + hidden aliases.
 - `init` non-interactive mode: `--name`, `--description`, `--keywords`, `--language` flags auto-skip wizard; `--non-interactive` is alias for `--no-input`
 - `embed` group: `embed sources [CITEKEYS]` (default), `embed fragments`, `embed sections` (centroid from source vectors), `embed all` (sources→fragments→sections)
 - `_auto_embed_after_process(citekey, state, embeddings, quiet)` — embeds fragments + recomputes section centroids for a just-processed source; called automatically from `_process_single()` unless `--no-embed` is set
+- Citekey fast-path dedup (Phase 1C, ADR-014): at start of PDF path in `_process_single()`, checks `user_library.resolve_paper_id(citekey)` before finding/reading PDF — if citekey already in library with fragments, reuses them immediately without PDF read; faster than pdf_hash check for cross-project sharing
 - `--no-embed` flag on `process`, `acquire`, and `add` — skips all auto-embedding (source, fragment, section centroid) after processing
 - `add` command: unified source ingestion — auto-detects input type (URL/citekey/PDF path) and runs full pipeline: register → section assign → process → embed. Flags: `--section`, `--no-process`, `--no-embed`, `--model`, `--title`/`--authors`/`--year` (URL mode)
 - `_detect_input_type(value) -> "url" | "citekey" | "path"` — input detection helper for `add` command
