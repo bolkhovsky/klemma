@@ -103,8 +103,9 @@ class LocalProjectStore:
 
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version < 1:
-            conn.executescript(_CREATE_SCHEMA)
+        # Always ensure base V1 schema exists (CREATE TABLE IF NOT EXISTS — idempotent).
+        # This guards against DBs that somehow have user_version=1 but missing tables.
+        conn.executescript(_CREATE_SCHEMA)
         if version < 2:
             conn.executescript(_MIGRATE_V2)
         if version < _SCHEMA_VERSION:

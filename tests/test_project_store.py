@@ -239,6 +239,18 @@ def test_migration_v1_to_v2_idempotent(tmp_path):
     assert "prune_verdicts" in tables
 
 
+def test_base_schema_ensured_on_reopen(tmp_path):
+    """Opening an existing v2 DB re-applies base schema idempotently (no table loss)."""
+    db_path = tmp_path / "project.db"
+    store1 = LocalProjectStore(db_path)
+    store1.set_source_sections("ck1", "pid1", ["1.1"], [1])
+
+    # Re-open — should not corrupt existing tables
+    store2 = LocalProjectStore(db_path)
+    assert store2.count_sources() == 1
+    assert store2.get_source_sections("ck1") == ["1.1"]
+
+
 def test_save_and_get_prune_verdicts_basic(store):
     """save_prune_verdicts stores drop and maybe; get_prune_verdicts returns all."""
     store.save_prune_verdicts(

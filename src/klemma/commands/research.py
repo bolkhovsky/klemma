@@ -627,9 +627,9 @@ def prune(ctx, chapter, verdict, clear_key, apply, yes):
     _ps = kctx.project_store  # prefer project_store when available
 
     if apply:
-        verdicts = (
-            _ps.get_prune_verdicts(verdict="drop") if _ps else state.get_prune_verdicts(verdict="drop")
-        )
+        # Prefer project_store verdicts; fall back to StateManager during migration
+        _ps_drop = _ps.get_prune_verdicts(verdict="drop") if _ps else []
+        verdicts = _ps_drop or state.get_prune_verdicts(verdict="drop")
         if not verdicts:
             console.print("[dim]No 'drop' verdicts to apply.[/dim]")
             return
@@ -699,16 +699,13 @@ def prune(ctx, chapter, verdict, clear_key, apply, yes):
         key = clear_key.lstrip("@")
         if _ps:
             _ps.clear_prune_verdict(key)
-        else:
-            state.clear_prune_verdict(key)
+        state.clear_prune_verdict(key)  # always clear from legacy store too
         console.print(f"[green]Cleared prune verdict for @{key}[/green]")
         return
 
-    items = (
-        _ps.get_prune_verdicts(chapter=chapter, verdict=verdict)
-        if _ps
-        else state.get_prune_verdicts(chapter=chapter, verdict=verdict)
-    )
+    # Prefer project_store verdicts; fall back to StateManager during migration
+    _ps_items = _ps.get_prune_verdicts(chapter=chapter, verdict=verdict) if _ps else []
+    items = _ps_items or state.get_prune_verdicts(chapter=chapter, verdict=verdict)
     if not items:
         label = []
         if verdict:
