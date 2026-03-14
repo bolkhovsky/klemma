@@ -4,14 +4,14 @@ version = "0.14.0"
 description = "AI-powered CLI assistant for PhD dissertation research — manages literature, extracts citations, generates plans"
 requires-python = ">=3.11"
 readme = "README.md"
-license = {text = "MIT"}
-authors = [{name = "Ilya Bolkhovsky"}]
+license = {text = "Polyform-Noncommercial-1.0.0"}
+authors = [{name = "Ilya Bolkhovskiy"}]
 keywords = ["academic", "dissertation", "research", "zotero", "obsidian", "ai", "pdf", "citations"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering",
-    "License :: OSI Approved :: MIT License",
+    "License :: Other/Proprietary License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
@@ -52,9 +52,9 @@ all-ai = ["openai>=1.0", "litellm>=1.40"]
 klemma = "klemma.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/bolkhovsky/klemma"
-Repository = "https://github.com/bolkhovsky/klemma"
-"Bug Reports" = "https://github.com/bolkhovsky/klemma/issues"
+Homepage = "https://github.com/klemma-ai/klemma"
+Repository = "https://github.com/klemma-ai/klemma"
+"Bug Reports" = "https://github.com/klemma-ai/klemma/issues"
 
 [build-system]
 requires = ["hatchling"]
