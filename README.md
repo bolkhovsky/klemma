@@ -3,8 +3,8 @@
 ```
     /\  /\
    ( o  o )   Klemma
-   (  >>  )   AI Academic Assistant
-    / || \
+   ( ^_^  )   AI Academic Assistant
+    \    /
    (_/  \_)
 ```
 

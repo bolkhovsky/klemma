@@ -8,8 +8,8 @@ __version__ = "0.14.0"
 _SQUIRREL = [
     ("[red]    /\\  /\\ [/red]", ""),
     ("[red]   ([/red] o  o [red])[/red]", "  [bold]Klemma[/bold] [dim]v{version}[/dim]"),
-    ("[red]   (  >>  )[/red]", "  AI Academic Assistant"),
-    ("[red]    / || \\ [/red]", "  [dim]{cwd}[/dim]"),
+    ("[red]   ( ^_^  )[/red]", "  AI Academic Assistant"),
+    ("[red]    \\    / [/red]", "  [dim]{cwd}[/dim]"),
     ("[red]   (_/  \\_)[/red]", ""),
 ]
 
