@@ -31,9 +31,13 @@ class FragmentRepository(BaseRepository):
                     ),
                 )
                 inserted += cur.rowcount
+            # Count actual stored fragments (not just newly inserted ones) so
+            # repeated calls via INSERT OR IGNORE don't reset fragment_count to 0
             conn.execute(
-                "UPDATE sources SET fragment_count=? WHERE id=?",
-                (inserted, source_id),
+                """UPDATE sources
+                   SET fragment_count=(SELECT COUNT(*) FROM fragments WHERE source_id=?)
+                   WHERE id=?""",
+                (source_id, source_id),
             )
             return inserted
 

@@ -152,6 +152,8 @@ def build_agent_context(
     project_root: Optional[Path] = None,
     embeddings=None,
     query: Optional[str] = None,
+    paper_store=None,
+    user_library=None,
 ) -> str:
     """Build a rich system prompt with full research context for the agent.
 
@@ -255,6 +257,25 @@ def build_agent_context(
                 )
         except Exception:
             logger.debug("Fragment RAG retrieval failed", exc_info=True)
+
+    # Library supplement: pull relevant fragments from library.db when local state is empty
+    if paper_store and user_library and len(relevant_fragments) < 5:
+        from .context_loader import supplement_fragments_from_library
+
+        _seen = {f.get("id", f.get("fragment_id", "")) for f in relevant_fragments}
+        _lib_sources = sources[:20]  # limit to avoid large DB scans
+        _added = supplement_fragments_from_library(
+            relevant_fragments,
+            _seen,
+            _lib_sources,
+            paper_store,
+            user_library,
+            section or "",
+        )
+        if _added:
+            logger.debug(
+                "Library supplement: added %d fragments from library.db", _added
+            )
 
     # Render prompt
     prompt_path = (

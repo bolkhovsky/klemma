@@ -18,6 +18,7 @@ Shared context-loading helpers (ADR-008). Extracted from researcher.py for reuse
 - `load_research_report(section, project_root)` — read research report from `notes/research/`
 - `extract_previous_section_ending(content, section_id, max_chars=500)` — returns last paragraph of section preceding `section_id` (e.g., `"1.3"` → finds `"1.2"` ending); caps at `max_chars`; returns `""` if not found or first section of chapter
 - `load_outline_context(section, project_root)` — reads KLEMMA.md `## Outline` section + frontmatter; returns dict with `section_title`, `current_section_desc`, `current_chapter_desc`, `scientific_contributions`, `title`, `description`; falls back to `Outline_*.md` for backward compat
+- `supplement_fragments_from_library(section_fragments, seen_ids, section_sources, paper_store, user_library, section)` — adds library fragments when local count is low; deduplicates by fragment_id **and** fragment_text (cross-store text dedup); per-source try/except so transient DB errors degrade gracefully to local-only fragments; skips sources not in user_library
 
 ### drafter.py (145 lines)
 Section draft generation — general prose from research context.

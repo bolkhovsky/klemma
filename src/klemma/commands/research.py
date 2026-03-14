@@ -167,6 +167,8 @@ def research(ctx, section, no_save, force, model):
             klemma_home=kctx.klemma_home,
             project_root=kctx.project_root,
             embeddings=kctx.embeddings,
+            paper_store=kctx.paper_store,
+            user_library=kctx.user_library,
         )
 
     if not result.section_status:
@@ -325,6 +327,8 @@ def ask(ctx, query, section, chapter, model):
             project_root=kctx.project_root,
             embeddings=kctx.embeddings,
             query=query,
+            paper_store=kctx.paper_store,
+            user_library=kctx.user_library,
         )
 
     # Show RAG status

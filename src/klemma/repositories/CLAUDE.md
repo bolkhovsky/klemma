@@ -42,7 +42,7 @@ Source lifecycle, sections, Zotero key management, vault sync.
 
 ### fragments.py (~330 lines)
 Fragment CRUD, citation intent coverage, fragment-level embeddings.
-- `save_fragments()` — `INSERT OR IGNORE` (UNIQUE constraint on source_id+fragment_text prevents duplicates)
+- `save_fragments()` — `INSERT OR IGNORE` (UNIQUE constraint on source_id+fragment_text prevents duplicates); updates `fragment_count` via `COUNT(*)` subquery (not inserted count) so repeated calls never reset to 0
 - `get_fragments(section_type?)`, `get_fragment_stats()`
 - `get_intent_coverage()` — section x intent matrix
 - `get_embedded_fragment_metadata(model?)` — id, source_id, section, chapter, text_preview for fragments with embeddings
