@@ -1069,9 +1069,15 @@ def migrate_library(ctx, do_run):
     n_frags = len(fragments)
     n_secs = len(sections)
 
+    _cfg = kctx.config
+    if _cfg.library_db_path:
+        _p = _cfg.library_db_path.expanduser()
+        _lib_db_preview = _p if _p.is_absolute() else (kctx.system_home / _p)
+    else:
+        _lib_db_preview = kctx.system_home / "library.db"
     console.print(f"\n[bold]Three-tier library migration[/bold] — {'DRY RUN' if not do_run else 'LIVE'}")
     console.print(f"  Source DB   : {mono_db}")
-    console.print(f"  library.db  : {kctx.system_home / 'library.db'}")
+    console.print(f"  library.db  : {_lib_db_preview}")
     console.print(f"  project.db  : {kctx.klemma_home / 'data' / 'project.db'}")
     console.print(f"\n  [cyan]{n_sources}[/cyan] sources · [cyan]{n_frags}[/cyan] fragments · [cyan]{n_secs}[/cyan] section assignments")
 
@@ -1089,8 +1095,15 @@ def migrate_library(ctx, do_run):
     from ..models import FragmentRecord
     from ..stores import LocalPaperStore, LocalUserLibrary
 
-    paper_store = LocalPaperStore(kctx.system_home / "library.db")
-    user_lib = LocalUserLibrary(kctx.system_home / "library.db")
+    # Use configured library_db_path if set, otherwise default to system_home/library.db
+    cfg = kctx.config
+    if cfg.library_db_path:
+        _p = cfg.library_db_path.expanduser()
+        _lib_db = _p if _p.is_absolute() else (kctx.system_home / _p)
+    else:
+        _lib_db = kctx.system_home / "library.db"
+    paper_store = LocalPaperStore(_lib_db)
+    user_lib = LocalUserLibrary(_lib_db)
 
     citekey_to_paper_id: dict[str, str] = {}
     migrated_papers = 0

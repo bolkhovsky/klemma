@@ -580,6 +580,13 @@ class KlemmaConfig(BaseModel):
     tags: TagsConfig = Field(default_factory=TagsConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
     project: Optional[ProjectConfig] = None
+    library_db_path: Optional[Path] = None
+    """Override path for library.db (global corpus + user library).
+
+    Default: ~/.klemma/library.db. Set in ~/.klemmarc.yaml or
+    ~/.klemma/config.yaml to share one library.db across multiple machines
+    or place it on a faster/larger drive.
+    """
 
     @model_validator(mode="before")
     @classmethod

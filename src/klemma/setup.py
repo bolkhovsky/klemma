@@ -446,6 +446,11 @@ ai:
 # embeddings:
 #   backend: "openai"
 #   model: "text-embedding-3-small"
+
+# Override the default library.db location (default: ~/.klemma/library.db).
+# Useful for placing the shared corpus on a faster/larger drive, or on a
+# network share that multiple machines can access simultaneously.
+# library_db_path: "~/Dropbox/klemma/library.db"
 """
 
 _KLEMMARC_NAMES = (".klemmarc.yaml", ".klemmarc.yml", ".klemmarc")

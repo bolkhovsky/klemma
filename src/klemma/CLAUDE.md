@@ -36,6 +36,7 @@ Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `li
 ### config.py (~800 lines)
 Pydantic config models + Git-style project discovery + klemmarc loading.
 Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `_resolved_api_keys` PrivateAttr), `EmbeddingsConfig`, `SearchConfig` (`backend`, `throttle`), `SuggestConfig` (`max_age_years=10`, `classic_min_score=15.0`), `StateConfig` (`db_path`, `inherit_db`), `DissertationConfig`, `SystemConfig`, `ProjectConfig` (`auto_register: "mapped"|"all"` — filter new sources by chapter_mapping match).
+- `KlemmaConfig.library_db_path: Optional[Path]` — override shared library.db location (default: `~/.klemma/library.db`); set in klemmarc.yaml as `library_db_path: /custom/path`; respected by `_init_components()` and `migrate-library`.
 - `parse_klemma_md(path)` — split YAML frontmatter from KLEMMA.md body; returns `({}, full_text)` if no frontmatter. Strict: only matches `---` at file start (not mid-file horizontal rules). Integer chapter keys preserved.
 - `save_klemma_md(path, frontmatter, body)` — write `---\n{yaml}\n---\n{body}` to KLEMMA.md
 - `generate_chapter_mapping(chapters, sections?)` — auto-generate `ChapterMapping` regex patterns from chapter titles (keyword extraction, stopword filtering)
