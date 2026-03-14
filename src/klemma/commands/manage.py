@@ -1070,11 +1070,11 @@ def migrate_library(ctx, do_run):
     n_secs = len(sections)
 
     _cfg = kctx.config
-    _lib_db_preview = (
-        _cfg.library_db_path.expanduser()
-        if _cfg.library_db_path
-        else (kctx.system_home / "library.db")
-    )
+    if _cfg.library_db_path:
+        _p = _cfg.library_db_path.expanduser()
+        _lib_db_preview = _p if _p.is_absolute() else (kctx.system_home / _p)
+    else:
+        _lib_db_preview = kctx.system_home / "library.db"
     console.print(f"\n[bold]Three-tier library migration[/bold] — {'DRY RUN' if not do_run else 'LIVE'}")
     console.print(f"  Source DB   : {mono_db}")
     console.print(f"  library.db  : {_lib_db_preview}")
@@ -1097,11 +1097,11 @@ def migrate_library(ctx, do_run):
 
     # Use configured library_db_path if set, otherwise default to system_home/library.db
     cfg = kctx.config
-    _lib_db = (
-        cfg.library_db_path.expanduser()
-        if cfg.library_db_path
-        else (kctx.system_home / "library.db")
-    )
+    if cfg.library_db_path:
+        _p = cfg.library_db_path.expanduser()
+        _lib_db = _p if _p.is_absolute() else (kctx.system_home / _p)
+    else:
+        _lib_db = kctx.system_home / "library.db"
     paper_store = LocalPaperStore(_lib_db)
     user_lib = LocalUserLibrary(_lib_db)
 
