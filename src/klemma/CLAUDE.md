@@ -7,8 +7,7 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 ### cli.py (~5950 lines)
 Click CLI entry point. Defines 18 commands + hidden aliases.
 - `_auto_migrate_to_three_tier(klemma_home, lib_db)` — auto-migration from `_init_components()` when `project.db` is empty but `klemma.db` has sources; backs up `klemma.db` once, migrates sources/fragments/sections; infers chapter from section string (`"1.1"` → `1`)
-- `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery; attaches parent DB for inheritance when `inherit_db=True` and project chain > 1; triggers `_auto_migrate_to_three_tier()` when needed
-- `_resolve_parent_db(parent_root)` — reads parent's `.klemma/config.yaml` to locate its DB path
+- `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery; triggers `_auto_migrate_to_three_tier()` when needed
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
@@ -36,7 +35,7 @@ Holds: `config`, `state`, `vault`, `ai` (optional), `embeddings` (optional), `li
 
 ### config.py (~800 lines)
 Pydantic config models + Git-style project discovery + klemmarc loading.
-Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `_resolved_api_keys` PrivateAttr), `EmbeddingsConfig`, `SearchConfig` (`backend`, `throttle`), `SuggestConfig` (`max_age_years=10`, `classic_min_score=15.0`), `StateConfig` (`db_path`, `inherit_db`), `DissertationConfig`, `SystemConfig`, `ProjectConfig` (`auto_register: "mapped"|"all"` — filter new sources by chapter_mapping match).
+Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `_resolved_api_keys` PrivateAttr), `EmbeddingsConfig`, `SearchConfig` (`backend`, `throttle`), `SuggestConfig` (`max_age_years=10`, `classic_min_score=15.0`), `StateConfig` (`db_path`), `DissertationConfig`, `SystemConfig`, `ProjectConfig` (`auto_register: "mapped"|"all"` — filter new sources by chapter_mapping match).
 - `KlemmaConfig.library_db_path: Optional[Path]` — override shared library.db location (default: `~/.klemma/library.db`); set in klemmarc.yaml as `library_db_path: /custom/path`; respected by `_init_components()` and `migrate-library`.
 - `parse_klemma_md(path)` — split YAML frontmatter from KLEMMA.md body; returns `({}, full_text)` if no frontmatter. Strict: only matches `---` at file start (not mid-file horizontal rules). Integer chapter keys preserved.
 - `save_klemma_md(path, frontmatter, body)` — write `---\n{yaml}\n---\n{body}` to KLEMMA.md
@@ -79,7 +78,7 @@ Semantic section vocabulary — cross-project labels for dissertation/paper sect
 ### state.py (~965 lines)
 SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v10), auto-migrates via `_migrate_schema()`. All 70+ public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
 
-**DB inheritance (#55):** `set_parent(db_path)` attaches a read-only parent `StateManager`. Nine read methods merge parent data: `get_all_sources`, `get_by_chapter`, `get_by_section`, `get_fragments`, `get_coverage_stats`, `retrieve_similar_fragments`, `get_fragment_embeddings`, `get_all_embeddings`, `get_reference_gaps`. Child wins on key collision. Writes go only to child DB. Controlled by `StateConfig.inherit_db` (default `True`).
+**Three-tier library (ADR-014):** Shared `library.db` replaces the old parent-child DB inheritance (#55). Papers and fragments are stored globally in `~/.klemma/library.db` via `LocalPaperStore` + `LocalUserLibrary`; per-project data (sections, gaps, plans) lives in `project/.klemma/data/project.db` via `LocalProjectStore`. StateManager is a pure facade over domain repositories with no cross-DB merging.
 
 **Section type sync (#67):** `sync_section_types(config)` populates `section_type_map` table from config + chapter name inference, then backfills `section_type` columns on `source_sections`, `fragments`, and `reference_gaps`. Called from `_sync_sections()` in CLI.
 

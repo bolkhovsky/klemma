@@ -358,7 +358,6 @@ class SuggestConfig(BaseModel):
 
 class StateConfig(BaseModel):
     db_path: str = "./data/klemma.db"
-    inherit_db: bool = True  # inherit parent project's DB (read-only)
 
 
 class ChapterMapping(BaseModel):
@@ -886,8 +885,8 @@ def load_project_context(project_chain: list[Path], config: Optional[KlemmaConfi
     """Load project context from KLEMMA.md.
 
     For nested projects (chain > 1), returns ONLY the child's context.
-    Child projects are independent — they reuse parent's library via
-    inherit_db, not parent's dissertation context (ADR-012).
+    Child projects are independent — they share papers via library.db,
+    not parent's dissertation context (ADR-012).
 
     For solo projects (chain == 1), returns that project's context.
     Falls back to .klemma/context.md (legacy) and then config fields.

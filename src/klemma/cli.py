@@ -11,7 +11,6 @@ from rich.table import Table
 from . import __version__, get_banner
 from .ai import create_ai
 from .config import (
-    _load_yaml,
     discover_project_chain,
     discover_project_root,  # noqa: F401 — imported for test mocking via klemma.cli.discover_project_root
     ensure_system_home,
@@ -156,19 +155,6 @@ def _auto_migrate_to_three_tier(klemma_home: Path, lib_db: Path) -> tuple[int, i
     return len(sources), migrated_frags, n_sections
 
 
-def _resolve_parent_db(parent_root: Path) -> Path | None:
-    """Resolve parent project's DB path from its .klemma/config.yaml."""
-    parent_config_path = parent_root / ".klemma" / "config.yaml"
-    if not parent_config_path.exists():
-        return None
-    raw = _load_yaml(parent_config_path)
-    db_rel = raw.get("state", {}).get("db_path", "./data/klemma.db")
-    db_path = Path(db_rel)
-    if not db_path.is_absolute():
-        db_path = parent_root / ".klemma" / db_rel
-    return db_path
-
-
 def _init_components(config_path: str | None = None) -> KlemmaContext:
     """Initialize all components by discovering project from cwd.
 
@@ -207,18 +193,6 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
         db_path = str(klemma_home / db_path)
 
     state = StateManager(db_path)
-
-    # Attach parent DB for read-only inheritance (#55)
-    # inherit_db is deprecated: shared library.db makes parent-child DB chains unnecessary.
-    if len(project_chain) > 1 and cfg.state.inherit_db:
-        console.print(
-            "[yellow]Deprecation: inherit_db will be removed in a future release. "
-            "Shared library.db replaces parent-child DB inheritance. "
-            "Set [bold]inherit_db: false[/bold] in config.yaml to suppress this warning.[/yellow]"
-        )
-        parent_db = _resolve_parent_db(project_chain[1])
-        if parent_db and parent_db.exists():
-            state.set_parent(parent_db)
 
     vault = VaultAdapter(cfg.obsidian.vault_path, use_cli=cfg.obsidian.use_cli)
     if cfg.obsidian.vault_path and cfg.obsidian.notes_folder:
