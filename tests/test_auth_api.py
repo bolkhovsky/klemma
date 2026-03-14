@@ -272,3 +272,32 @@ def test_docs_disabled_in_production(tmp_path, monkeypatch):
     prod_client = TestClient(app)
     resp = prod_client.get("/docs")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------------
+
+
+def test_cors_allows_configured_origin(client):
+    """Dev origins should get CORS headers."""
+    resp = client.options(
+        "/auth/login",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+
+def test_cors_blocks_unknown_origin(client):
+    """Unknown origins should not get CORS allow headers."""
+    resp = client.options(
+        "/auth/login",
+        headers={
+            "Origin": "https://evil.com",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert "access-control-allow-origin" not in resp.headers
