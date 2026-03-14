@@ -41,7 +41,10 @@ def analyze_library(
     """
     # Gather context with mode-aware source filtering
     all_sources = state.get_all_sources()
+    # Bug fix: when project_store is present, verdicts live in project.db not klemma.db
     drop_ids = state.get_prune_drop_ids()
+    if project_store is not None:
+        drop_ids = drop_ids | project_store.get_prune_drop_ids()
     active_sources = [s for s in all_sources if s["id"] not in drop_ids]
 
     context = _gather_library_context(
@@ -92,7 +95,16 @@ def analyze_library(
             drop = prune_result.get("drop", [])
             maybe = prune_result.get("maybe", [])
             if project_store is not None:
-                project_store.save_prune_verdicts(drop=drop, maybe=maybe)
+                # Apply same protection as PruneRepository: skip high-quality sources
+                protected = {
+                    s["id"] for s in all_sources
+                    if (s.get("quality_score") or 0) >= 4
+                    or (s.get("relevance_nr1") or 0) >= 4
+                    or (s.get("relevance_nr2") or 0) >= 4
+                    or s.get("citation_priority") == "high"
+                }
+                drop_safe = [d for d in drop if d.get("citekey", "").lstrip("@") not in protected]
+                project_store.save_prune_verdicts(drop=drop_safe, maybe=maybe)
             else:
                 state.save_prune_verdicts(drop=drop, maybe=maybe)
 
