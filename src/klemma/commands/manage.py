@@ -19,7 +19,6 @@ from ..cli import (
     main,
 )
 from ..config import (
-    _load_yaml,
     discover_project_chain,
     discover_project_root,
     ensure_system_home,
@@ -260,39 +259,6 @@ def init(
     if result["skipped"]:
         for name in result["skipped"]:
             console.print(f"  [dim]~ {name} (already exists, skipped)[/dim]")
-
-    # Parent project detection: offer DB inheritance (#55)
-    chain = discover_project_chain(project_dir)
-    if len(chain) > 1:
-        parent_root = chain[1]
-        console.print(f"\n[cyan]Parent project detected at {parent_root}.[/cyan]")
-        if not no_input:
-            inherit = click.confirm("Inherit parent library?", default=True)
-        else:
-            inherit = True
-        if not inherit:
-            from ..config import update_project_config
-
-            update_project_config(project_dir, {})  # ensure file exists
-            # Write inherit_db: false to state section
-            cfg_path = project_dir / ".klemma" / "config.yaml"
-            raw = _load_yaml(cfg_path)
-            raw.setdefault("state", {})["inherit_db"] = False
-            import yaml
-
-            cfg_path.write_text(
-                yaml.dump(
-                    raw, default_flow_style=False, allow_unicode=True, sort_keys=False
-                ),
-                encoding="utf-8",
-            )
-            console.print(
-                "[dim]  inherit_db: false (parent library not inherited)[/dim]"
-            )
-        else:
-            console.print(
-                "[dim]  inherit_db: true (parent library will be inherited)[/dim]"
-            )
 
     # Paper: discover relevant sources from vault + BBT JSON
     if (
