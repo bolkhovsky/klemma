@@ -45,6 +45,18 @@ class FragmentRecord:
 
 
 @dataclass
+class UserRecord:
+    """A registered user account (ADR-009)."""
+
+    user_id: str
+    email: str
+    password_hash: str
+    name: str = ""
+    email_verified: bool = False
+    created_at: str = ""  # ISO 8601
+
+
+@dataclass
 class UserSource:
     """A user's source entry mapping citekey → global paper."""
 

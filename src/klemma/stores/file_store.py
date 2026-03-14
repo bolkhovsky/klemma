@@ -19,7 +19,9 @@ class LocalFileStore:
     Default location: ~/.klemma/files/ (or /data/klemma/pdfs/ on server).
     """
 
-    def __init__(self, base_dir: str | Path) -> None:
+    def __init__(self, base_dir: str | Path | None = None) -> None:
+        if base_dir is None:
+            base_dir = Path.home() / ".klemma" / "files"
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
 

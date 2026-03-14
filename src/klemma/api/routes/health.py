@@ -9,7 +9,7 @@ from klemma import __version__
 router = APIRouter(tags=["system"])
 
 
-@router.get("/health")
+@router.get("")
 async def health_check() -> dict:
     """Basic health check — returns version and status."""
     return {
