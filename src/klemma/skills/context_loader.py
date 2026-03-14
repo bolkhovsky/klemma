@@ -704,6 +704,7 @@ def supplement_fragments_from_library(
 
     Returns the number of fragments added.
     """
+    _max_per_source = 10  # cap per-source to avoid flooding the fragment list
     existing_texts = {f.get("fragment_text", "") for f in section_fragments}
     added = 0
     for src in section_sources:
@@ -720,7 +721,10 @@ def supplement_fragments_from_library(
                 "Library supplement lookup failed for %s", citekey, exc_info=True
             )
             continue
+        source_added = 0
         for frag in lib_frags:
+            if source_added >= _max_per_source:
+                break
             fid = frag.fragment_id
             ftext = frag.fragment_text
             if fid not in seen_ids and ftext not in existing_texts:
@@ -735,9 +739,11 @@ def supplement_fragments_from_library(
                         "relevance_score": 3,
                         "usage_hint": "",
                         "citation_intent": frag.citation_intent or "",
+                        "similarity": 0.0,  # library frags have no query similarity
                     }
                 )
                 seen_ids.add(fid)
                 existing_texts.add(ftext)
                 added += 1
+                source_added += 1
     return added

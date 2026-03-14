@@ -158,6 +158,39 @@ class TestSupplementFragmentsFromLibrary:
 
         assert added == 0
 
+    def test_per_source_cap_limits_fragments(self):
+        """No more than 10 fragments per source are added (unbounded load guard)."""
+        # Create 20 fragments for one source
+        frags = [_make_fragment_record(f"f{i}", "p1", f"Text number {i}.") for i in range(20)]
+        paper_store = _make_paper_store({"p1": frags})
+        user_library = _make_user_library({"alice2022": "p1"})
+
+        fragments: list[dict] = []
+        seen: set[str] = set()
+
+        added = supplement_fragments_from_library(
+            fragments, seen, [{"id": "alice2022"}], paper_store, user_library, "1.1"
+        )
+
+        assert added == 10  # capped at 10 per source
+        assert len(fragments) == 10
+
+    def test_added_fragments_have_similarity_field(self):
+        """Library-supplemented fragments include 'similarity' key for prompt rendering."""
+        frag = _make_fragment_record("f1", "p1", "Some text.")
+        paper_store = _make_paper_store({"p1": [frag]})
+        user_library = _make_user_library({"alice2022": "p1"})
+
+        fragments: list[dict] = []
+        seen: set[str] = set()
+
+        supplement_fragments_from_library(
+            fragments, seen, [{"id": "alice2022"}], paper_store, user_library, "1.1"
+        )
+
+        assert "similarity" in fragments[0]
+        assert fragments[0]["similarity"] == 0.0
+
 
 # ---------------------------------------------------------------------------
 # research_section(): library supplement integration
@@ -289,3 +322,68 @@ class TestBuildAgentContextLibrarySupplement:
             )
 
         paper_store.get_fragments.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# research_section() integration: library supplement invoked when < 10 frags
+# ---------------------------------------------------------------------------
+
+
+class TestResearchSectionLibraryIntegration:
+    """Verify research_section() calls supplement_fragments_from_library() when needed."""
+
+    def test_research_section_invokes_library_supplement(self, tmp_path):
+        """research_section() calls supplement when local fragment count < 10."""
+        from unittest.mock import patch
+
+        from klemma.config import KlemmaConfig
+        from klemma.skills.researcher import research_section
+
+        lib_frag = _make_fragment_record("libfrag1", "paper123", "Library text.")
+        paper_store = _make_paper_store({"paper123": [lib_frag]})
+        user_library = _make_user_library({"alpha2020": "paper123"})
+
+        state = MagicMock()
+        state.get_fragments.return_value = []
+        state.get_all_sources.return_value = []
+        state.get_by_section.return_value = [{"id": "alpha2020", "title": "Alpha", "authors": "A", "year": 2020, "chapter": 1}]
+        state.get_coverage_stats.return_value = {"total_sources": 1, "sections": {}, "by_section": {}}
+        state.get_gaps.return_value = []
+        state.get_fragment_stats.return_value = {"total": 0}
+        state.get_existing_source_ids.return_value = {"alpha2020"}
+        state.retrieve_similar_fragments.return_value = []
+
+        vault = MagicMock()
+        vault.read_note.return_value = None
+
+        ai = MagicMock()
+        ai.render_prompt.return_value = "test_prompt"
+        ai.call_json.return_value = {
+            "section_status": "ready",
+            "section_title": "Test",
+            "current_word_count": 0,
+            "target_word_count": 500,
+            "readiness_pct": 0,
+            "fragment_distribution": {},
+            "argument_blocks": [],
+            "citation_plan": [],
+            "missing_coverage": [],
+            "writing_suggestions": [],
+        }
+
+        cfg = KlemmaConfig()
+
+        with patch("klemma.skills.context_loader.supplement_fragments_from_library") as mock_supplement:
+            mock_supplement.return_value = 1
+            research_section(
+                section="1.1",
+                config=cfg,
+                state=state,
+                vault=vault,
+                ai=ai,
+                save_to_vault=False,
+                paper_store=paper_store,
+                user_library=user_library,
+            )
+
+        mock_supplement.assert_called_once()

@@ -138,6 +138,7 @@ class TestInitComponentsUsesLibraryDbPath:
         """Return context managers that stub out everything except the stores."""
         state_mock = MagicMock()
         state_mock.get_coverage_stats.return_value = {"total_sources": 0}
+        state_mock.get_stats.return_value = {"total": 0}
         state_cls_mock = MagicMock(return_value=state_mock)
         return (
             patch("klemma.cli.ensure_system_home", return_value=system_home),
