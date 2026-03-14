@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from jinja2 import Template
+from jinja2.sandbox import SandboxedEnvironment
 
 from ..config import KlemmaConfig, ProjectConfig, resolve_prompt
 from ..state import StateManager
@@ -284,7 +284,7 @@ def build_agent_context(
         else Path(__file__).parent.parent.parent.parent / "prompts" / "agent.md"
     )
     raw = prompt_path.read_text(encoding="utf-8")
-    context = Template(raw).render(
+    context = SandboxedEnvironment().from_string(raw).render(
         parent_context=parent_context,
         project_context=project_context,
         chapters=chapters,
