@@ -6,7 +6,8 @@ Foundation layer: config, state, AI providers, vault, library abstraction, CLI e
 
 ### cli.py (~5950 lines)
 Click CLI entry point. Defines 18 commands + hidden aliases.
-- `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery; attaches parent DB for inheritance when `inherit_db=True` and project chain > 1
+- `_auto_migrate_to_three_tier(klemma_home, lib_db)` — auto-migration from `_init_components()` when `project.db` is empty but `klemma.db` has sources; backs up `klemma.db` once, migrates sources/fragments/sections; infers chapter from section string (`"1.1"` → `1`)
+- `_init_components(config_path)` — creates `KlemmaContext` via Git-style project discovery; attaches parent DB for inheritance when `inherit_db=True` and project chain > 1; triggers `_auto_migrate_to_three_tier()` when needed
 - `_resolve_parent_db(parent_root)` — reads parent's `.klemma/config.yaml` to locate its DB path
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)

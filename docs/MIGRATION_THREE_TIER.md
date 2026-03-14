@@ -58,6 +58,21 @@ cp project/.klemma/data/klemma.db project/.klemma/data/klemma.db.manual_bak
 
 ---
 
+## Auto-migration (new in PR #159)
+
+Starting from this version klemma **auto-migrates on first run** when it detects a non-empty `klemma.db` but an empty `project.db`.  You don't need to run `klemma migrate-library --apply` manually unless you want to inspect what will be migrated first.
+
+**What happens automatically:**
+
+1. On any `klemma` command, `_init_components()` checks whether `project.db` is empty while `klemma.db` has sources.
+2. If so, it runs the same migration as `klemma migrate-library --apply` silently in the background.
+3. A `.db.bak` backup is created once (subsequent runs skip it if the backup already exists).
+4. A brief status line is printed: `✓ Auto-migrated N sources, M fragments to three-tier layout`.
+
+**Manual migration still works** — run `klemma migrate-library` (dry-run) or `klemma migrate-library --apply` (execute) if you want explicit control over when migration runs or to inspect results first.
+
+---
+
 ## Migration steps
 
 ### Single project
