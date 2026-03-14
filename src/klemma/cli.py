@@ -39,6 +39,123 @@ _CMD_TASK_MAP = {
 }
 
 
+def _auto_migrate_to_three_tier(klemma_home: Path, lib_db: Path) -> tuple[int, int, int]:
+    """Migrate monolithic klemma.db → library.db + project.db non-destructively.
+
+    Called automatically from _init_components() when project.db is empty but
+    klemma.db has sources. Creates a .db.bak backup before writing.
+
+    Returns (n_papers, n_fragments, n_sections) or (0, 0, 0) if nothing to migrate.
+    """
+    import shutil
+    import sqlite3
+
+    mono_db = klemma_home / "data" / "klemma.db"
+    if not mono_db.exists():
+        return 0, 0, 0
+
+    conn = sqlite3.connect(str(mono_db))
+    conn.row_factory = sqlite3.Row
+
+    sources = conn.execute(
+        "SELECT id, title, authors, year, abstract, doi, status, pdf_path, quality_score"
+        " FROM sources"
+    ).fetchall()
+    if not sources:
+        conn.close()
+        return 0, 0, 0
+
+    fragments = conn.execute(
+        "SELECT source_id, fragment_text, fragment_type, page_number, citation_intent"
+        " FROM fragments"
+    ).fetchall()
+
+    has_sections_tbl = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='source_sections'"
+    ).fetchone() is not None
+    sections = (
+        conn.execute("SELECT source_id, section FROM source_sections").fetchall()
+        if has_sections_tbl else []
+    )
+    conn.close()
+
+    # Backup before writing anything — skip if backup already exists from prior run
+    bak = mono_db.with_suffix(".db.bak")
+    if not bak.exists():
+        shutil.copy2(mono_db, bak)
+
+    from .hashing import compute_content_hash, compute_prompt_hash
+    from .models import FragmentRecord
+    from .stores import LocalPaperStore, LocalProjectStore, LocalUserLibrary
+
+    paper_store = LocalPaperStore(lib_db)
+    user_lib = LocalUserLibrary(lib_db)
+
+    frag_by_citekey: dict[str, list] = {}
+    for f in fragments:
+        frag_by_citekey.setdefault(f["source_id"], []).append(f)
+
+    citekey_to_paper_id: dict[str, str] = {}
+    migrated_frags = 0
+
+    for src in sources:
+        citekey = src["id"]
+        pdf_hash = f"migrated:{citekey}"
+        paper_id = paper_store.register_paper(
+            title=src["title"] or citekey,
+            authors=src["authors"] or "",
+            year=src["year"],
+            doi=src["doi"] or None,
+            abstract=src["abstract"] or "",
+            pdf_hash=pdf_hash,
+        )
+        citekey_to_paper_id[citekey] = paper_id
+        user_lib.add_source(
+            paper_id, citekey,
+            status=src["status"] or "pending",
+            pdf_path=src["pdf_path"],
+            quality_score=src["quality_score"],
+        )
+        ck_frags = frag_by_citekey.get(citekey, [])
+        if ck_frags:
+            p_hash = compute_prompt_hash("migrated")
+            records = [
+                FragmentRecord(
+                    fragment_id=compute_content_hash(paper_id, f["fragment_text"], f["page_number"]),
+                    paper_id=paper_id,
+                    fragment_text=f["fragment_text"],
+                    fragment_type=f["fragment_type"] or "key_idea",
+                    page_number=f["page_number"],
+                    citation_intent=f["citation_intent"],
+                    content_hash=compute_content_hash(paper_id, f["fragment_text"], f["page_number"]),
+                )
+                for f in ck_frags
+            ]
+            migrated_frags += paper_store.save_fragments(paper_id, records, p_hash, "migrated")
+
+    proj_store = LocalProjectStore(klemma_home / "data" / "project.db")
+    secs_by_citekey: dict[str, list[str]] = {}
+    for s in sections:
+        secs_by_citekey.setdefault(s["source_id"], []).append(s["section"])
+
+    def _section_chapter(sec: str) -> int | None:
+        """Infer chapter number from section string (e.g. '1.1' → 1)."""
+        try:
+            return int(sec.split(".")[0])
+        except (ValueError, IndexError, AttributeError):
+            return None
+
+    for citekey, paper_id in citekey_to_paper_id.items():
+        sec_list = secs_by_citekey.get(citekey, [])
+        chap_list = [c for c in (_section_chapter(s) for s in sec_list) if c is not None]
+        # Always register in project_sources (even with no sections) so
+        # count_sources() > 0 after migration and auto-migrate doesn't re-trigger
+        proj_store.set_source_sections(citekey, paper_id, sec_list, chap_list)
+
+    n_sections = sum(len(v) for v in secs_by_citekey.values())
+    return len(sources), migrated_frags, n_sections
+
+
 def _resolve_parent_db(parent_root: Path) -> Path | None:
     """Resolve parent project's DB path from its .klemma/config.yaml."""
     parent_config_path = parent_root / ".klemma" / "config.yaml"
@@ -139,12 +256,26 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     user_library = LocalUserLibrary(_lib_db)
     project_store = LocalProjectStore(klemma_home / "data" / "project.db")
 
-    # Auto-migration hint: monolithic DB has data but project.db is empty
-    if project_store.count_sources() == 0 and state.get_coverage_stats().get("total_sources", 0) > 0:
+    # Auto-migration: monolithic klemma.db has data but three-tier stores are empty
+    if project_store.count_sources() == 0 and state.get_stats().get("total", 0) > 0:
         console.print(
-            "[yellow]Hint: Run [bold]klemma migrate-library --apply[/bold] "
-            "to migrate to the three-tier layout (library.db + project.db).[/yellow]"
+            "[cyan]Auto-migrating to three-tier layout (library.db + project.db)...[/cyan]",
+            end=" ",
         )
+        try:
+            n_src, n_frag, n_sec = _auto_migrate_to_three_tier(klemma_home, _lib_db)
+            if n_src > 0:
+                console.print(
+                    f"[green]done.[/green] {n_src} sources, {n_frag} fragments, "
+                    f"{n_sec} section entries. Backup: {klemma_home}/data/klemma.db.bak"
+                )
+            else:
+                console.print("[dim]nothing to migrate.[/dim]")
+        except Exception as exc:  # noqa: BLE001
+            console.print(
+                f"[yellow]Auto-migration failed ({exc}). "
+                "Run 'klemma migrate-library --apply' manually.[/yellow]"
+            )
 
     return KlemmaContext(
         config=cfg,
