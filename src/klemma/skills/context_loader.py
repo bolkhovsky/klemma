@@ -704,24 +704,32 @@ def supplement_fragments_from_library(
 
     Returns the number of fragments added.
     """
+    existing_texts = {f.get("fragment_text", "") for f in section_fragments}
     added = 0
     for src in section_sources:
         citekey = src.get("id") or src.get("citekey")
         if not citekey:
             continue
-        paper_id = user_library.resolve_paper_id(citekey)  # type: ignore[attr-defined]
-        if not paper_id:
+        try:
+            paper_id = user_library.resolve_paper_id(citekey)  # type: ignore[attr-defined]
+            if not paper_id:
+                continue
+            lib_frags = paper_store.get_fragments(paper_id)  # type: ignore[attr-defined]
+        except Exception:
+            logger.debug(
+                "Library supplement lookup failed for %s", citekey, exc_info=True
+            )
             continue
-        lib_frags = paper_store.get_fragments(paper_id)  # type: ignore[attr-defined]
         for frag in lib_frags:
             fid = frag.fragment_id
-            if fid not in seen_ids:
+            ftext = frag.fragment_text
+            if fid not in seen_ids and ftext not in existing_texts:
                 section_fragments.append(
                     {
                         "id": fid,
                         "citekey": citekey,
                         "source_id": citekey,
-                        "fragment_text": frag.fragment_text,
+                        "fragment_text": ftext,
                         "fragment_type": frag.fragment_type or "key_idea",
                         "section": section,
                         "relevance_score": 3,
@@ -730,5 +738,6 @@ def supplement_fragments_from_library(
                     }
                 )
                 seen_ids.add(fid)
+                existing_texts.add(ftext)
                 added += 1
     return added
