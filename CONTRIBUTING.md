@@ -5,7 +5,7 @@ Thanks for your interest! Here's how to get started.
 ## Development Setup
 
 ```bash
-git clone https://github.com/bolkhovsky/klemma.git
+git clone https://github.com/klemma-ai/klemma.git
 cd klemma
 pip install -e ".[dev]"
 ```
