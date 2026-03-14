@@ -38,6 +38,7 @@ pip install klemma[embeddings]         # семантический поиск (
 pip install klemma[local-embeddings]   # офлайн SPECTER2 (sentence-transformers)
 pip install klemma[mcp]                # MCP-серверы (расширяемость)
 pip install klemma[all-ai]             # все AI-бэкенды (openai + litellm)
+pip install klemma[api]                # SaaS REST API (FastAPI + uvicorn)
 ```
 
 ## Быстрый старт

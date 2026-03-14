@@ -24,8 +24,15 @@ class LocalFileStore:
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def _file_path(self, paper_id: str, filename: str) -> Path:
-        prefix = paper_id[:2]
-        return self.base_dir / prefix / paper_id / filename
+        """Return the storage path, rejecting any traversal attempts."""
+        if not paper_id or ".." in paper_id or "/" in paper_id or "\\" in paper_id:
+            raise ValueError(f"Invalid paper_id: {paper_id!r}")
+        if not filename or ".." in filename or "/" in filename or "\\" in filename:
+            raise ValueError(f"Invalid filename: {filename!r}")
+        path = self.base_dir / paper_id[:2] / paper_id / filename
+        if not path.resolve().is_relative_to(self.base_dir.resolve()):
+            raise ValueError(f"Path traversal detected: {path}")
+        return path
 
     def save(self, paper_id: str, data: bytes, filename: str) -> str:
         """Save file data, return storage path."""
