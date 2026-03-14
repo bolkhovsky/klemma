@@ -158,6 +158,39 @@ class TestSupplementFragmentsFromLibrary:
 
         assert added == 0
 
+    def test_per_source_cap_limits_fragments(self):
+        """No more than 10 fragments per source are added (unbounded load guard)."""
+        # Create 20 fragments for one source
+        frags = [_make_fragment_record(f"f{i}", "p1", f"Text number {i}.") for i in range(20)]
+        paper_store = _make_paper_store({"p1": frags})
+        user_library = _make_user_library({"alice2022": "p1"})
+
+        fragments: list[dict] = []
+        seen: set[str] = set()
+
+        added = supplement_fragments_from_library(
+            fragments, seen, [{"id": "alice2022"}], paper_store, user_library, "1.1"
+        )
+
+        assert added == 10  # capped at 10 per source
+        assert len(fragments) == 10
+
+    def test_added_fragments_have_similarity_field(self):
+        """Library-supplemented fragments include 'similarity' key for prompt rendering."""
+        frag = _make_fragment_record("f1", "p1", "Some text.")
+        paper_store = _make_paper_store({"p1": [frag]})
+        user_library = _make_user_library({"alice2022": "p1"})
+
+        fragments: list[dict] = []
+        seen: set[str] = set()
+
+        supplement_fragments_from_library(
+            fragments, seen, [{"id": "alice2022"}], paper_store, user_library, "1.1"
+        )
+
+        assert "similarity" in fragments[0]
+        assert fragments[0]["similarity"] == 0.0
+
 
 # ---------------------------------------------------------------------------
 # research_section(): library supplement integration
