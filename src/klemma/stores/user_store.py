@@ -93,15 +93,16 @@ class LocalUserStore:
         """Create a new user. Raises ValueError if email already exists."""
         user_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
+        email_normalized = email.strip().lower()
         with self._conn() as conn:
             try:
                 conn.execute(
                     """INSERT INTO users (user_id, email, password_hash, name, created_at)
                        VALUES (?, ?, ?, ?, ?)""",
-                    (user_id, email, password_hash, name, now),
+                    (user_id, email_normalized, password_hash, name, now),
                 )
             except sqlite3.IntegrityError:
-                raise ValueError(f"User with email {email!r} already exists")
+                raise ValueError(f"User with email {email_normalized!r} already exists")
         return UserRecord(
             user_id=user_id,
             email=email,
@@ -115,7 +116,7 @@ class LocalUserStore:
         """Look up a user by email. Returns None if not found."""
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM users WHERE email = ?", (email,)
+                "SELECT * FROM users WHERE email = ?", (email.strip().lower(),)
             ).fetchone()
         if not row:
             return None

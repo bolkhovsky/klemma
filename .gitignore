@@ -21,6 +21,17 @@ exports/
 *.swo
 .claude/settings.local.json
 
+# Project data (SQLite DBs, user content)
+.klemma/
+
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.cert
+credentials.json
+
 # User-specific files (use config.example.yaml as template)
 config.yaml
 .klemmarc*
