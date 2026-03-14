@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from .models import FragmentRecord, PaperRecord, UserSource
+    from .models import FragmentRecord, PaperRecord, UserRecord, UserSource
 
 
 @runtime_checkable
@@ -137,4 +137,55 @@ class FileStore(Protocol):
 
     def get_path(self, paper_id: str, filename: str) -> str | None:
         """Get a resolvable path/URL for the file. Returns None if not found."""
+        ...
+
+
+@runtime_checkable
+class UserStore(Protocol):
+    """User account storage (ADR-009).
+
+    Manages user registration, lookup, and credential storage.
+    Local implementation uses SQLite; SaaS uses PostgreSQL.
+    """
+
+    def create_user(
+        self,
+        *,
+        email: str,
+        password_hash: str,
+        name: str = "",
+    ) -> UserRecord:
+        """Create a new user. Raises ValueError if email already exists."""
+        ...
+
+    def get_user_by_email(self, email: str) -> UserRecord | None:
+        """Look up a user by email. Returns None if not found."""
+        ...
+
+    def get_user_by_id(self, user_id: str) -> UserRecord | None:
+        """Look up a user by ID. Returns None if not found."""
+        ...
+
+    def update_user(
+        self,
+        user_id: str,
+        *,
+        name: str | None = None,
+        email_verified: bool | None = None,
+    ) -> bool:
+        """Update user fields. Returns True if user existed and was updated."""
+        ...
+
+    def store_refresh_token(
+        self, user_id: str, token_hash: str, expires_at: str
+    ) -> None:
+        """Store a hashed refresh token for a user."""
+        ...
+
+    def verify_refresh_token(self, user_id: str, token_hash: str) -> bool:
+        """Check if a refresh token hash is valid (exists and not expired)."""
+        ...
+
+    def revoke_refresh_tokens(self, user_id: str) -> int:
+        """Revoke all refresh tokens for a user. Returns count revoked."""
         ...
