@@ -201,3 +201,52 @@ class TestAutoMigrateHelper:
 
         assert n_src == 1
         assert n_sec == 0  # no sections table → no section entries
+
+    def test_chapter_inferred_from_section(self, tmp_path):
+        """Sections like '2.3' produce chapter=2 in project_source_sections."""
+        klemma_home = tmp_path / ".klemma"
+        (klemma_home / "data").mkdir(parents=True)
+        lib_db = tmp_path / "library.db"
+        _make_mono_db(
+            klemma_home / "data" / "klemma.db",
+            sections=[("alpha2021", "2.3"), ("alpha2021", "3.1")],
+        )
+
+        _auto_migrate_to_three_tier(klemma_home, lib_db)
+
+        proj_store = LocalProjectStore(klemma_home / "data" / "project.db")
+        sections = proj_store.get_source_sections("alpha2021")
+        assert "2.3" in sections
+        assert "3.1" in sections
+        # Verify chapter is stored (project_sources.primary_chapter)
+        sources_in_23 = proj_store.get_sources_by_section("2.3")
+        assert "alpha2021" in sources_in_23
+
+    def test_sources_without_sections_registered_in_project(self, tmp_path):
+        """Sources with no section assignments must still appear in project_sources
+        so count_sources() > 0 and auto-migration doesn't re-trigger on next run."""
+        klemma_home = tmp_path / ".klemma"
+        (klemma_home / "data").mkdir(parents=True)
+        lib_db = tmp_path / "library.db"
+        # No sections inserted
+        _make_mono_db(klemma_home / "data" / "klemma.db")
+
+        _auto_migrate_to_three_tier(klemma_home, lib_db)
+
+        proj_store = LocalProjectStore(klemma_home / "data" / "project.db")
+        assert proj_store.count_sources() == 1  # must be > 0 to prevent re-trigger
+
+    def test_backup_not_overwritten_on_second_run(self, tmp_path):
+        """Second migration run must not overwrite the .db.bak created on first run."""
+        klemma_home = tmp_path / ".klemma"
+        (klemma_home / "data").mkdir(parents=True)
+        lib_db = tmp_path / "library.db"
+        _make_mono_db(klemma_home / "data" / "klemma.db")
+
+        _auto_migrate_to_three_tier(klemma_home, lib_db)
+        bak = klemma_home / "data" / "klemma.db.bak"
+        assert bak.exists()
+        mtime_after_first = bak.stat().st_mtime
+
+        _auto_migrate_to_three_tier(klemma_home, lib_db)
+        assert bak.stat().st_mtime == mtime_after_first  # not overwritten

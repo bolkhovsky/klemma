@@ -79,9 +79,10 @@ def _auto_migrate_to_three_tier(klemma_home: Path, lib_db: Path) -> tuple[int, i
     )
     conn.close()
 
-    # Backup before writing anything
+    # Backup before writing anything — skip if backup already exists from prior run
     bak = mono_db.with_suffix(".db.bak")
-    shutil.copy2(mono_db, bak)
+    if not bak.exists():
+        shutil.copy2(mono_db, bak)
 
     from .hashing import compute_content_hash, compute_prompt_hash
     from .models import FragmentRecord
@@ -137,10 +138,19 @@ def _auto_migrate_to_three_tier(klemma_home: Path, lib_db: Path) -> tuple[int, i
     for s in sections:
         secs_by_citekey.setdefault(s["source_id"], []).append(s["section"])
 
+    def _section_chapter(sec: str) -> int | None:
+        """Infer chapter number from section string (e.g. '1.1' → 1)."""
+        try:
+            return int(sec.split(".")[0])
+        except (ValueError, IndexError, AttributeError):
+            return None
+
     for citekey, paper_id in citekey_to_paper_id.items():
         sec_list = secs_by_citekey.get(citekey, [])
-        if sec_list:
-            proj_store.set_source_sections(citekey, paper_id, sec_list, [])
+        chap_list = [c for c in (_section_chapter(s) for s in sec_list) if c is not None]
+        # Always register in project_sources (even with no sections) so
+        # count_sources() > 0 after migration and auto-migrate doesn't re-trigger
+        proj_store.set_source_sections(citekey, paper_id, sec_list, chap_list)
 
     n_sections = sum(len(v) for v in secs_by_citekey.values())
     return len(sources), migrated_frags, n_sections
@@ -247,7 +257,7 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     project_store = LocalProjectStore(klemma_home / "data" / "project.db")
 
     # Auto-migration: monolithic klemma.db has data but three-tier stores are empty
-    if project_store.count_sources() == 0 and state.get_coverage_stats().get("total_sources", 0) > 0:
+    if project_store.count_sources() == 0 and state.get_stats().get("total", 0) > 0:
         console.print(
             "[cyan]Auto-migrating to three-tier layout (library.db + project.db)...[/cyan]",
             end=" ",
