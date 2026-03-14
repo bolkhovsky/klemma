@@ -190,6 +190,7 @@ class ResearchResult(BaseModel):
     missing_coverage: list[str] = Field(default_factory=list)
     writing_suggestions: list[str] = Field(default_factory=list)
     filtered_citekeys: list[str] = Field(default_factory=list)
+    required_missing: list[str] = Field(default_factory=list)
     research_text: str = ""
     generated_at: datetime = Field(default_factory=datetime.now)
 

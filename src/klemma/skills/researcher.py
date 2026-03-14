@@ -395,6 +395,38 @@ def _format_research_with_history(section: str, data: dict, history: str = "") -
     return base
 
 
+def _get_required_fragments(
+    required_citekeys: list[str],
+    state: StateManager,
+    section: str,
+    chapter: Optional[int],
+) -> tuple[list[dict], list[str]]:
+    """Fetch fragments for required citekeys, returning (fragments, missing_citekeys).
+
+    For each citekey, fetches top-10 fragments assigned to the target section.
+    Citekeys with no section fragments are returned in the missing list.
+    """
+    if not required_citekeys:
+        return [], []
+
+    all_fragments: list[dict] = []
+    seen_ids: set[str] = set()
+    missing: list[str] = []
+
+    for citekey in required_citekeys:
+        frags = state.get_fragments(source_id=citekey, section=section, limit=10)
+        if frags:
+            for f in frags:
+                fid = f.get("id", "")
+                if fid not in seen_ids:
+                    all_fragments.append(f)
+                    seen_ids.add(fid)
+        else:
+            missing.append(citekey)
+
+    return all_fragments, missing
+
+
 def research_section(
     section: str,
     config: KlemmaConfig,
@@ -409,6 +441,7 @@ def research_section(
     embeddings=None,
     paper_store=None,
     user_library=None,
+    required_citekeys: Optional[list[str]] = None,
 ) -> ResearchResult:
     """Сгенерировать исследовательский брифинг для раздела диссертации.
 
@@ -520,6 +553,33 @@ def research_section(
         if _added:
             logger.debug("Library supplement: added %d fragments from library.db", _added)
 
+    # 3b. Inject required citekey fragments (before RAG results, dedup by id)
+    _req_missing: list[str] = []
+    _req_frag_count = 0  # track injected required count to avoid cap dropping them
+    if required_citekeys:
+        req_frags, _req_missing = _get_required_fragments(
+            required_citekeys, state, section, chapter
+        )
+        for ck in _req_missing:
+            logger.warning(
+                "Required citekey @%s has no fragments in section '%s' — "
+                "run 'klemma process %s' first",
+                ck,
+                section,
+                ck,
+            )
+        # Prepend required fragments, dedup against existing by fragment id
+        existing_ids = {f["id"] for f in section_fragments}
+        new_req = [f for f in req_frags if f["id"] not in existing_ids]
+        section_fragments = new_req + section_fragments
+        _req_frag_count = len(new_req)
+        logger.debug(
+            "Required: injected %d fragments (%d already present, %d missing citekeys)",
+            len(new_req),
+            len(req_frags) - len(new_req),
+            len(_req_missing),
+        )
+
     # 4. Аннотации источников из vault
     # For fragments retrieved via RAG, derive sources from fragment citekeys
     # instead of section-based lookup (avoids parent's section namespace collision)
@@ -543,8 +603,10 @@ def research_section(
     fragment_stats = state.get_fragment_stats()
 
     # 6. Подготовить фрагменты для промпта
+    # Always include required fragments; fill remaining budget with RAG results
+    _frag_cap = max(40, _req_frag_count)
     formatted_fragments = []
-    for f in section_fragments[:40]:
+    for f in section_fragments[:_frag_cap]:
         formatted_fragments.append(
             {
                 "source": f.get("citekey", f.get("source_id", "?")),
@@ -697,6 +759,7 @@ def research_section(
             section=section,
             chapter=chapter,
             section_status="Ошибка генерации — проверь подключение к Claude",
+            required_missing=_req_missing,
         )
 
     # 10. Валидировать citekeys — удалить галлюцинации
@@ -741,6 +804,7 @@ def research_section(
         missing_coverage=data.get("missing_coverage", []),
         writing_suggestions=data.get("writing_suggestions", []),
         filtered_citekeys=filtered_citekeys,
+        required_missing=_req_missing,
         research_text=research_text,
     )
 

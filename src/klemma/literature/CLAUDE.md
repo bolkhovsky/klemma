@@ -24,7 +24,7 @@ All Pydantic models for the data layer:
 - `DissertationRelevance` — chapter/section relevance scoring (NR1/NR2, 0-5)
 - `Fragment`, `ExtractionResult` — extraction output (text, type, chapter, section, relevance, page)
 - `DailyPlan` — daily briefing output
-- `CitationEntry`, `ArgumentBlock`, `ResearchResult` — research briefing output
+- `CitationEntry`, `ArgumentBlock`, `ResearchResult` — research briefing output; `ResearchResult.required_missing: list[str]` — citekeys passed via `--require` that had no fragments in the target section
 - `LibraryReport` — library analysis output
 - `AnnotationResult`, `Quote` — AI annotation output
 
