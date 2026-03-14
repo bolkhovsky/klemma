@@ -1,6 +1,6 @@
 # Tests
 
-## Current test suite (1140 tests)
+## Current test suite (1162 tests)
 - `test_paper_store.py` (~200 lines) — 22 tests: `LocalPaperStore` schema (version=1, all 6 tables, migration idempotency, new-dir creation), register/find CRUD (UUID return, idempotency by pdf_hash, find by DOI, metadata roundtrip), fragments (save/get, INSERT OR IGNORE dedup, types), paper-level embeddings (roundtrip, upsert, missing=None), fragment-level embeddings (roundtrip, empty), dual-write cache scenario (second project hits library cache)
 - `test_user_library.py` (~185 lines) — 23 tests: `LocalUserLibrary` schema (version=2, 3 tables, PaperStore coexistence on same db_path, idempotency), add_source (basic, metadata, upsert), get_source missing=None, resolve_paper_id, get_existing_citekeys (empty, multiple), update_status, count, chapters/sections replaced on upsert
 - `test_project_store.py` (~160 lines) — 20 tests: `LocalProjectStore` schema (version=1, 3 tables, idempotency, parent-dir creation), set_source_sections (basic, upserts paper_id, replaces sections, empty), get_source_sections (data, missing), get_sources_by_section (multi-source, empty), get_coverage_stats (empty, with data), get_reference_gaps (stub returns []), register_fragment (basic, INSERT OR IGNORE dedup), count_sources (empty, multiple)
@@ -49,6 +49,7 @@
 - `test_task_model_routing.py` (~166 lines) — 13 tests: `resolve_task_model()` routing (no classes, not in classes, claude returns class, class_model_map priority, litellm with/without map, openai with map), model_override forwarding (ClaudeClient subprocess args, LiteLLMClient completion kwargs), AIConfig task_classes/class_model_map parsing
 - `test_config_validation.py` (~200 lines) — 21 tests: `_warn_config_issues()` — misplaced keys at root (task_classes, model, backend, vault_path), unknown keys (top-level, inside sections, api_keys/mcp exemptions), bare Claude shorthands with litellm backend (model, task_classes without map, correct backend no warning), edge cases (empty/None/non-dict, source label, multiple issues)
 - `test_section_types.py` (~300 lines) — 50 tests: `SectionType` enum (values, str comparison, keyword coverage), `infer_section_type` (18 ru/en names, unknown, empty, case insensitive), `resolve_section_identifier` (numeric, semantic, keyword, config map, empty), config `section_type_map` (auto-infer from dissertation, explicit, weights), DB migration v7 (version, columns, table), `sync_section_types` (backfill, explicit map, idempotent), repository queries with `section_type` (sources, fragments, coverage stats, section sources)
+- `test_integration_three_tier.py` (~400 lines) — 10 tests: cross-project library.db sharing (ADR-014 Phase 1G) — process dedup (cache hit skips AI, fragments saved to state, source marked completed, cache miss calls AI), dual-write (paper+fragments in library.db after novel extraction, citekey in user_library), embed dedup (library cache skips API, no cache calls API), E2E (project A processes → library written → project B deduplicates)
 
 ## Patterns
 - pytest + `unittest.mock` (`patch`, `MagicMock`)
