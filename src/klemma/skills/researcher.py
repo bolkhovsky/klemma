@@ -754,6 +754,7 @@ def research_section(
             section=section,
             chapter=chapter,
             section_status="Ошибка генерации — проверь подключение к Claude",
+            required_missing=_req_missing,
         )
 
     # 10. Валидировать citekeys — удалить галлюцинации

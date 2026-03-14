@@ -422,3 +422,58 @@ def test_require_strips_spaces():
 def test_require_empty_tuple_returns_none():
     """No --require flag → None (not empty list)."""
     assert _parse_require(()) is None
+
+
+def test_require_dedup_preserves_order():
+    """Repeated --require key1 --require key1 deduplicates (preserving first occurrence)."""
+    # Mirror the dedup logic in research command
+    def _parse_dedup(require_tuple):
+        return list(dict.fromkeys(
+            c.strip() for r in require_tuple for c in r.split(",") if c.strip()
+        )) or None
+
+    result = _parse_dedup(("key1", "key1"))
+    assert result == ["key1"]  # no duplicate
+
+    result = _parse_dedup(("key1,key2", "key1"))
+    assert result == ["key1", "key2"]  # key1 deduplicated, order preserved
+
+
+def test_required_missing_preserved_on_ai_failure(tmp_path):
+    """required_missing is included in ResearchResult even when AI call fails."""
+    sm = _make_state(tmp_path)
+
+    from unittest.mock import patch
+
+    from klemma.config import KlemmaConfig
+    from klemma.skills.researcher import research_section
+
+    config = KlemmaConfig()
+    ai = MagicMock()
+    ai.call_json.return_value = None  # simulate AI failure
+    ai.render_prompt.return_value = "prompt"
+
+    with (
+        patch("klemma.skills.researcher._load_chapter_draft", return_value=None),
+        patch("klemma.skills.researcher._extract_section", return_value=None),
+        patch("klemma.skills.researcher._load_section_sources", return_value=[]),
+        patch("klemma.skills.researcher._fit_prompt_budget") as mock_budget,
+        patch("klemma.skills.researcher._load_previous_research", return_value=None),
+        patch("klemma.skills.researcher.resolve_prompt"),
+        patch("klemma.skills.researcher._get_required_fragments") as mock_req,
+    ):
+        mock_budget.return_value = ("", [], [], None)
+        mock_req.return_value = ([], ["ghost_paper"])  # missing
+
+        result = research_section(
+            "1.1",
+            config,
+            sm,
+            MagicMock(),
+            ai,
+            required_citekeys=["ghost_paper"],
+        )
+
+    # AI failed → error result, but required_missing must still be populated
+    assert "Ошибка" in result.section_status
+    assert "ghost_paper" in result.required_missing
