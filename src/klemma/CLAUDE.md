@@ -125,6 +125,7 @@ SQLite backends implementing the three-tier library protocols.
 `LocalPaperStore` — SQLite-backed `PaperStore` at `~/.klemma/library.db`. Content-addressable: same PDF → same paper_id → same fragments (global dedup).
 - `__init__(db_path)` — creates parent dirs, runs `_migrate_schema()` (schema version 1)
 - `find_paper(*, pdf_hash?, doi?) -> PaperRecord | None` — look up by hash or DOI
+- `get_paper_by_id(paper_id) -> PaperRecord | None` — look up by paper_id
 - `register_paper(*, title, pdf_hash, ...) -> str` — idempotent: same pdf_hash → same paper_id (UUID)
 - `get_fragments(paper_id) -> list[FragmentRecord]` — all stored fragments for a paper
 - `save_fragments(paper_id, fragments, prompt_hash, ai_model) -> int` — insert with `INSERT OR IGNORE`, creates `extractions` record
@@ -139,6 +140,7 @@ SQLite backends implementing the three-tier library protocols.
 - `get_source_by_citekey(citekey) -> UserSource | None`
 - `resolve_paper_id(citekey) -> str | None`
 - `get_existing_citekeys() -> set[str]`
+- `remove_source(citekey) -> bool` — delete from user library (keeps global corpus)
 - `update_status(citekey, status)`, `get_all_sources()`, `count()`
 - Tables: `user_sources`, `user_source_chapters`, `user_source_sections`
 - Called from `_process_single()` in `cli.py` to register citekey after successful extraction
