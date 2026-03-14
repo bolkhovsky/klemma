@@ -62,6 +62,7 @@ def mock_kctx(tmp_path):
     ctx = MagicMock()
     ctx.system_home = system_home
     ctx.klemma_home = klemma_home
+    ctx.config.library_db_path = None  # use default system_home/library.db
     return ctx
 
 
