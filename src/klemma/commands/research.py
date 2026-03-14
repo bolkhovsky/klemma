@@ -161,7 +161,10 @@ def research(ctx, section, no_save, force, model, require):
     else:
         spinner_text = f"Анализ раздела {section}"
 
-    required_citekeys = list(require) if require else None
+    # Support both --require key1 --require key2 and --require key1,key2
+    required_citekeys = [
+        c.strip() for r in require for c in r.split(",") if c.strip()
+    ] or None
 
     with console.status(spinner_text, spinner="dots"):
         result = research_section(

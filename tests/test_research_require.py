@@ -385,3 +385,40 @@ class TestResearchSectionRequire:
             mock_req.assert_not_called()
             # Result should still be valid
             assert result.section == "1.1"
+
+
+# ---------------------------------------------------------------------------
+# CLI comma-separated --require parsing (unit tests on the parsing logic)
+# ---------------------------------------------------------------------------
+
+
+def _parse_require(require_tuple):
+    """Mirror the parsing logic in research() for isolated testing."""
+    return [
+        c.strip() for r in require_tuple for c in r.split(",") if c.strip()
+    ] or None
+
+
+def test_require_comma_separated_values():
+    """--require key1,key2 splits into two citekeys."""
+    assert _parse_require(("key1,key2",)) == ["key1", "key2"]
+
+
+def test_require_comma_and_repeat():
+    """--require key1,key2 --require key3 yields three citekeys."""
+    assert set(_parse_require(("key1,key2", "key3"))) == {"key1", "key2", "key3"}
+
+
+def test_require_single_no_comma():
+    """--require key1 works without commas."""
+    assert _parse_require(("key1",)) == ["key1"]
+
+
+def test_require_strips_spaces():
+    """--require 'key1, key2' strips whitespace."""
+    assert _parse_require(("key1, key2",)) == ["key1", "key2"]
+
+
+def test_require_empty_tuple_returns_none():
+    """No --require flag → None (not empty list)."""
+    assert _parse_require(()) is None

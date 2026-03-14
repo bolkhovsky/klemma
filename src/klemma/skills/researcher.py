@@ -550,6 +550,7 @@ def research_section(
 
     # 3b. Inject required citekey fragments (before RAG results, dedup by id)
     _req_missing: list[str] = []
+    _req_frag_count = 0  # track injected required count to avoid cap dropping them
     if required_citekeys:
         req_frags, _req_missing = _get_required_fragments(
             required_citekeys, state, section, chapter
@@ -566,6 +567,7 @@ def research_section(
         existing_ids = {f["id"] for f in section_fragments}
         new_req = [f for f in req_frags if f["id"] not in existing_ids]
         section_fragments = new_req + section_fragments
+        _req_frag_count = len(new_req)
         logger.debug(
             "Required: injected %d fragments (%d already present, %d missing citekeys)",
             len(new_req),
@@ -596,8 +598,10 @@ def research_section(
     fragment_stats = state.get_fragment_stats()
 
     # 6. Подготовить фрагменты для промпта
+    # Always include required fragments; fill remaining budget with RAG results
+    _frag_cap = max(40, _req_frag_count)
     formatted_fragments = []
-    for f in section_fragments[:40]:
+    for f in section_fragments[:_frag_cap]:
         formatted_fragments.append(
             {
                 "source": f.get("citekey", f.get("source_id", "?")),

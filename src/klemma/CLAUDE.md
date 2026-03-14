@@ -24,6 +24,7 @@ Click CLI entry point. Defines 18 commands + hidden aliases.
 - `add` command: unified source ingestion — auto-detects input type (URL/citekey/PDF path) and runs full pipeline: register → section assign → process → embed. Flags: `--section`, `--no-process`, `--no-embed`, `--model`, `--title`/`--authors`/`--year` (URL mode)
 - `_detect_input_type(value) -> "url" | "citekey" | "path"` — input detection helper for `add` command
 - `--model` override available on: `research`, `ask`, `library`, `process`, `draft -s` — overrides `cfg.ai.model` per invocation
+- `research --require CITEKEY` — pin citekeys into RAG context regardless of similarity rank (repeatable; comma-separated values also accepted, e.g. `--require key1,key2`); pinned fragments prepended before RAG results, never dropped by the 40-fragment cap
 - `draft` group: `draft introduction` (ГОСТ intro), `draft -s X.X` (standalone section draft → `notes/drafts/Draft_{section}.md`), `--no-rag` flag skips per-block RAG retrieval (ablation/debugging)
 - `coach` command: methodology-driven research advisor (zero AI calls). Default: project-wide health check. `-s X.X`: section focus. `--json`: structured output. Calls `_sync_sections()` before reading (ADR-010)
 - `_coach_section_hint(state, section, project_root)` — generates 1-line hint for inline use; called from `add`, `draft -s`, `research -s`
