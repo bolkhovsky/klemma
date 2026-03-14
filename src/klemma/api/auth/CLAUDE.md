@@ -1,6 +1,6 @@
 # Auth Package
 
-JWT + argon2 authentication layer for the Klemma SaaS backend (ADR-009).
+JWT + argon2 authentication layer for the Klemma SaaS backend (ADR-009). JWT via `PyJWT[crypto]` (replaced `python-jose` due to CVE-2024-33663/33664).
 
 ## Modules
 

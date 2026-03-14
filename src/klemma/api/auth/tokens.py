@@ -9,7 +9,8 @@ import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError
 
 from .config import auth_config
 
@@ -49,7 +50,7 @@ def decode_token(token: str) -> dict | None:
             token, auth_config.secret_key, algorithms=[auth_config.algorithm]
         )
         return payload
-    except JWTError:
+    except PyJWTError:
         return None
 
 
