@@ -410,12 +410,17 @@ def _get_required_fragments(
         return [], []
 
     all_fragments: list[dict] = []
+    seen_ids: set[str] = set()
     missing: list[str] = []
 
     for citekey in required_citekeys:
         frags = state.get_fragments(source_id=citekey, section=section, limit=10)
         if frags:
-            all_fragments.extend(frags)
+            for f in frags:
+                fid = f.get("id", "")
+                if fid not in seen_ids:
+                    all_fragments.append(f)
+                    seen_ids.add(fid)
         else:
             missing.append(citekey)
 

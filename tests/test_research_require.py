@@ -147,6 +147,25 @@ class TestGetRequiredFragments:
         assert result_frags[0]["citekey"] == "found2020"
         assert missing == ["missing2021"]
 
+    def test_dedup_within_required_fragments(self):
+        """Same fragment returned by two citekeys appears only once in output."""
+        from klemma.skills.researcher import _get_required_fragments
+
+        shared_frag = _make_fragment("alpha2020", "shared_id")
+        state = MagicMock()
+        # Both citekeys return the same fragment id (cross-citekey shared fragment)
+        state.get_fragments.side_effect = [
+            [shared_frag],
+            [_make_fragment("beta2021", "shared_id")],  # same id, different source label
+        ]
+
+        result_frags, missing = _get_required_fragments(
+            ["alpha2020", "beta2021"], state, "1.1", 1
+        )
+
+        assert len(result_frags) == 1, "Duplicate fragment id should appear only once"
+        assert missing == []
+
     def test_none_chapter_passes_none(self):
         """When chapter is None, get_fragments is still called (no chapter filter)."""
         from klemma.skills.researcher import _get_required_fragments
