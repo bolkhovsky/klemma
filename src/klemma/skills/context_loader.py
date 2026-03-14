@@ -681,3 +681,54 @@ def load_research_report(
         return text if text.strip() else None
     except OSError:
         return None
+
+
+def supplement_fragments_from_library(
+    section_fragments: list[dict],
+    seen_ids: set[str],
+    section_sources: list[dict],
+    paper_store: object,
+    user_library: object,
+    section: str,
+) -> int:
+    """Add fragments from library.db for sources that have none in local state.
+
+    Called when local fragment count is low (< 10) — supplements with library
+    corpus fragments so that cross-project fragment sharing works without a
+    full StateManager refactor.
+
+    Library fragments are converted to the same dict shape as
+    ``state.get_fragments()`` results. ``section`` and ``relevance_score``
+    default to the requested section and 3 (neutral) respectively, since
+    those fields are project-specific and not stored in library.db.
+
+    Returns the number of fragments added.
+    """
+    added = 0
+    for src in section_sources:
+        citekey = src.get("id") or src.get("citekey")
+        if not citekey:
+            continue
+        paper_id = user_library.resolve_paper_id(citekey)  # type: ignore[attr-defined]
+        if not paper_id:
+            continue
+        lib_frags = paper_store.get_fragments(paper_id)  # type: ignore[attr-defined]
+        for frag in lib_frags:
+            fid = frag.fragment_id
+            if fid not in seen_ids:
+                section_fragments.append(
+                    {
+                        "id": fid,
+                        "citekey": citekey,
+                        "source_id": citekey,
+                        "fragment_text": frag.fragment_text,
+                        "fragment_type": frag.fragment_type or "key_idea",
+                        "section": section,
+                        "relevance_score": 3,
+                        "usage_hint": "",
+                        "citation_intent": frag.citation_intent or "",
+                    }
+                )
+                seen_ids.add(fid)
+                added += 1
+    return added

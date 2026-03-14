@@ -407,6 +407,8 @@ def research_section(
     klemma_home: Optional[Path] = None,
     project_root: Optional[Path] = None,
     embeddings=None,
+    paper_store=None,
+    user_library=None,
 ) -> ResearchResult:
     """Сгенерировать исследовательский брифинг для раздела диссертации.
 
@@ -503,6 +505,20 @@ def research_section(
             "Fallback: total %d fragments after section-based supplement",
             len(section_fragments),
         )
+
+    # Library supplement: when local state still has few fragments, pull from library.db
+    # Covers the cross-project scenario: project B has no local fragments but library.db
+    # has them from project A's processing run.
+    if paper_store and user_library and len(section_fragments) < 10:
+        from .context_loader import supplement_fragments_from_library
+
+        section_srcs = state.get_by_section(section)
+        _seen = {f["id"] for f in section_fragments}
+        _added = supplement_fragments_from_library(
+            section_fragments, _seen, section_srcs, paper_store, user_library, section
+        )
+        if _added:
+            logger.debug("Library supplement: added %d fragments from library.db", _added)
 
     # 4. Аннотации источников из vault
     # For fragments retrieved via RAG, derive sources from fragment citekeys
