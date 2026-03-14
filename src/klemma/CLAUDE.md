@@ -167,9 +167,9 @@ SQLite backends implementing the three-tier library protocols.
 
 #### stores/user_store.py (~210 lines)
 `LocalUserStore` — SQLite-backed `UserStore` at `~/.klemma/users.db` (separate from library.db). User accounts and refresh token storage for the SaaS auth layer (ADR-009).
-- `__init__(db_path)` — creates dirs, runs `_migrate_schema()` (schema version 1)
-- `create_user(email, password_hash, name?) -> UserRecord` — raises `ValueError` on duplicate email
-- `get_user_by_email(email) -> UserRecord | None`
+- `__init__(db_path)` — creates dirs, runs `_migrate_schema()` (schema version 2)
+- `create_user(email, password_hash, name?) -> UserRecord` — normalizes email to lowercase; raises `ValueError` on duplicate
+- `get_user_by_email(email) -> UserRecord | None` — normalizes email to lowercase before lookup
 - `get_user_by_id(user_id) -> UserRecord | None`
 - `update_email_verified(user_id) -> None`
 - `save_refresh_token(user_id, token_hash, expires_at) -> None`

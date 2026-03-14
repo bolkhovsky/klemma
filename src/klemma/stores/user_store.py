@@ -15,18 +15,18 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     user_id         TEXT PRIMARY KEY,
-    email           TEXT NOT NULL UNIQUE,
+    email           TEXT NOT NULL UNIQUE COLLATE NOCASE,
     password_hash   TEXT NOT NULL,
     name            TEXT DEFAULT '',
     email_verified  INTEGER DEFAULT 0,
     created_at      TEXT DEFAULT (datetime('now'))
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email COLLATE NOCASE);
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,8 +75,12 @@ class LocalUserStore:
 
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version < _SCHEMA_VERSION:
+        if version < 1:
             conn.executescript(_CREATE_SCHEMA)
+        if version < 2:
+            # Normalize existing emails to lowercase
+            conn.execute("UPDATE users SET email = LOWER(TRIM(email))")
+        if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
     # ------------------------------------------------------------------ #
