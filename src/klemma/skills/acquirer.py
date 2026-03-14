@@ -13,6 +13,9 @@ from urllib.parse import urlparse
 
 import requests
 
+from ..hashing import compute_pdf_hash
+from ..literature.metadata import resolve_metadata
+
 logger = logging.getLogger(__name__)
 
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB hard limit
@@ -504,6 +507,8 @@ def acquire_paper_local(
     meta: PaperMetadata,
     storage_path: str,
     state=None,
+    paper_store=None,
+    user_library=None,
 ) -> AcquireResult:
     """Local acquire: download PDF → auto-extract metadata → generate citekey → store → register in DB."""
     # 0a. Extract DOI from URL before any URL rewriting
@@ -511,7 +516,61 @@ def acquire_paper_local(
     if doi_from_url and not meta.doi:
         meta.doi = doi_from_url
 
-    # 0b. Resolve effective download URL
+    # 0b. DOI dedup check — skip download if library already has this paper
+    if meta.doi and paper_store:
+        _lib_paper = paper_store.find_paper(doi=meta.doi)
+        if _lib_paper:
+            logger.info(
+                "Library hit (DOI %s, paper_id=%s...)", meta.doi, _lib_paper.paper_id[:8]
+            )
+            if not meta.title and _lib_paper.title:
+                meta.title = _lib_paper.title
+            if not meta.authors and _lib_paper.authors:
+                meta.authors = _lib_paper.authors
+            if meta.year is None and _lib_paper.year:
+                meta.year = _lib_paper.year
+            citekey = _generate_citekey(meta)
+            _doi_resolved = {
+                "title": _lib_paper.title,
+                "authors": _lib_paper.authors,
+                "year": _lib_paper.year,
+                "doi": meta.doi,
+                "abstract": _lib_paper.abstract,
+            }
+            zotero_citekey = _try_zotero(meta, _doi_resolved, pdf_path=None)
+            if zotero_citekey:
+                citekey = zotero_citekey
+            if state:
+                state.register_sources([citekey])
+                if meta.sections:
+                    chapters = list({int(s.split(".")[0]) for s in meta.sections if "." in s})
+                    state.set_source_sections(citekey, meta.sections, chapters)
+                state.update_source_info(
+                    citekey,
+                    title=_lib_paper.title,
+                    authors=_lib_paper.authors,
+                    year=_lib_paper.year,
+                    abstract=_lib_paper.abstract,
+                    doi=meta.doi,
+                )
+            if user_library:
+                try:
+                    user_library.add_source(
+                        _lib_paper.paper_id, citekey,
+                        status="completed" if _lib_paper.pdf_hash else "pending",
+                        pdf_path="",
+                    )
+                except Exception:
+                    pass
+            return AcquireResult(
+                citekey=citekey,
+                pdf_path="",
+                status="ok_library_doi",
+                zotero_added=zotero_citekey is not None,
+                pdf_hash=_lib_paper.pdf_hash,
+            )
+
+    # 0c. Resolve effective download URL
     # Priority: --pdf override > arXiv resolve > DOI resolve > original URL
     arxiv_pdf = _resolve_arxiv_pdf_url(meta.url)
     if meta.pdf_override:
@@ -525,7 +584,7 @@ def acquire_paper_local(
         else:
             logger.warning("Could not resolve DOI %s to a PDF URL", doi_from_url)
 
-    # 0c. Handle local file:// URLs directly
+    # 0d. Handle local file:// URLs directly
     parsed_url = urlparse(meta.url)
     if parsed_url.scheme == "file":
         from urllib.parse import unquote
@@ -545,49 +604,85 @@ def acquire_paper_local(
 
     is_local_file = parsed_url.scheme == "file"
 
-    # 2. Auto-extract metadata (CLI flags win → PDF → S2 → empty)
+    # 1.5. Compute PDF hash early for content-addressable dedup (ADR-014)
+    _pdf_hash = ""
     try:
-        from ..literature.metadata import resolve_metadata
-
-        resolved = resolve_metadata(
-            pdf_path,
-            cli_title=meta.title,
-            cli_authors=meta.authors,
-            cli_year=meta.year,
-            cli_doi=meta.doi,
-        )
-        # Fill in blanks on meta from resolved data
-        if not meta.title and resolved.get("title"):
-            meta.title = resolved["title"]
-        if not meta.authors and resolved.get("authors"):
-            meta.authors = resolved["authors"]
-        if meta.year is None and resolved.get("year"):
-            meta.year = resolved["year"]
-        if not meta.doi and resolved.get("doi"):
-            meta.doi = resolved["doi"]
+        _pdf_hash = compute_pdf_hash(pdf_path)
+        logger.info("PDF hash: %s...", _pdf_hash[:12])
     except Exception as e:
-        logger.warning("Metadata extraction failed, continuing: %s", e)
-        resolved = {}
+        logger.debug("Could not compute PDF hash: %s", e)
 
-    # 2a. CrossRef fallback — when S2 is unavailable (429) and key fields missing
-    if meta.doi and (not meta.authors or meta.year is None):
+    # 1.6. Hash dedup check — library already has this exact PDF
+    _lib_resolved = None
+    _lib_paper_id = None  # paper_id from hash hit — for user_library registration below
+    if _pdf_hash and paper_store:
+        _hash_paper = paper_store.find_paper(pdf_hash=_pdf_hash)
+        if _hash_paper:
+            logger.info(
+                "Library hash hit: %s... (paper_id=%s...)",
+                _pdf_hash[:8], _hash_paper.paper_id[:8],
+            )
+            if not meta.title and _hash_paper.title:
+                meta.title = _hash_paper.title
+            if not meta.authors and _hash_paper.authors:
+                meta.authors = _hash_paper.authors
+            if meta.year is None and _hash_paper.year:
+                meta.year = _hash_paper.year
+            if not meta.doi and _hash_paper.doi:
+                meta.doi = _hash_paper.doi
+            _lib_paper_id = _hash_paper.paper_id
+            _lib_resolved = {
+                "title": _hash_paper.title,
+                "authors": _hash_paper.authors,
+                "year": _hash_paper.year,
+                "doi": _hash_paper.doi,
+                "abstract": _hash_paper.abstract,
+            }
+
+    # 2. Auto-extract metadata (CLI flags win → PDF → S2 → empty)
+    if _lib_resolved is None:
         try:
-            cr = _lookup_crossref_by_doi(meta.doi)
-            if cr:
-                # CrossRef title is authoritative — prefer over PDF-extracted
-                if cr.get("title"):
-                    meta.title = cr["title"]
-                    resolved["title"] = cr["title"]
-                if not meta.authors and cr.get("authors"):
-                    meta.authors = cr["authors"]
-                if meta.year is None and cr.get("year"):
-                    meta.year = cr["year"]
-                if not resolved.get("authors") and cr.get("authors"):
-                    resolved["authors"] = cr["authors"]
-                if not resolved.get("year") and cr.get("year"):
-                    resolved["year"] = cr["year"]
+            resolved = resolve_metadata(
+                pdf_path,
+                cli_title=meta.title,
+                cli_authors=meta.authors,
+                cli_year=meta.year,
+                cli_doi=meta.doi,
+            )
+            # Fill in blanks on meta from resolved data
+            if not meta.title and resolved.get("title"):
+                meta.title = resolved["title"]
+            if not meta.authors and resolved.get("authors"):
+                meta.authors = resolved["authors"]
+            if meta.year is None and resolved.get("year"):
+                meta.year = resolved["year"]
+            if not meta.doi and resolved.get("doi"):
+                meta.doi = resolved["doi"]
         except Exception as e:
-            logger.debug("CrossRef fallback failed: %s", e)
+            logger.warning("Metadata extraction failed, continuing: %s", e)
+            resolved = {}
+
+        # 2a. CrossRef fallback — when S2 is unavailable (429) and key fields missing
+        if meta.doi and (not meta.authors or meta.year is None):
+            try:
+                cr = _lookup_crossref_by_doi(meta.doi)
+                if cr:
+                    # CrossRef title is authoritative — prefer over PDF-extracted
+                    if cr.get("title"):
+                        meta.title = cr["title"]
+                        resolved["title"] = cr["title"]
+                    if not meta.authors and cr.get("authors"):
+                        meta.authors = cr["authors"]
+                    if meta.year is None and cr.get("year"):
+                        meta.year = cr["year"]
+                    if not resolved.get("authors") and cr.get("authors"):
+                        resolved["authors"] = cr["authors"]
+                    if not resolved.get("year") and cr.get("year"):
+                        resolved["year"] = cr["year"]
+            except Exception as e:
+                logger.debug("CrossRef fallback failed: %s", e)
+    else:
+        resolved = _lib_resolved
 
     # 2b. Add to Zotero if running
     zotero_citekey = _try_zotero(meta, resolved, pdf_path)
@@ -622,16 +717,40 @@ def acquire_paper_local(
             doi=resolved.get("doi", ""),
         )
 
-    # Compute PDF hash before temp file cleanup (ADR-014: content-addressable dedup)
-    from ..hashing import compute_pdf_hash
+    # 6. Write-through to library (ADR-014): register new paper for cross-project dedup
+    if paper_store and _pdf_hash and _lib_resolved is None:
+        try:
+            paper_id = paper_store.register_paper(
+                title=resolved.get("title", meta.title),
+                pdf_hash=_pdf_hash,
+                doi=meta.doi or resolved.get("doi", ""),
+                authors=resolved.get("authors", meta.authors),
+                year=meta.year or resolved.get("year"),
+                abstract=resolved.get("abstract", ""),
+            )
+            if user_library and paper_id:
+                try:
+                    user_library.add_source(
+                        paper_id, citekey,
+                        status="completed",
+                        pdf_path=permanent_path or None,
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug("Library write-through failed: %s", e)
 
-    hash_path = Path(permanent_path) if permanent_path else pdf_path
-    try:
-        pdf_hash = compute_pdf_hash(hash_path)
-        logger.info("PDF hash for %s: %s", citekey, pdf_hash[:12])
-    except Exception as e:
-        logger.debug("Could not compute PDF hash: %s", e)
-        pdf_hash = ""
+    # 6b. Hash-hit path: register new citekey → existing paper_id in user_library
+    # (step 6 is skipped when _lib_resolved is set, so we register here instead)
+    if user_library and _lib_paper_id:
+        try:
+            user_library.add_source(
+                _lib_paper_id, citekey,
+                status="completed",
+                pdf_path=permanent_path or None,
+            )
+        except Exception:
+            pass
 
     if not is_local_file:
         pdf_path.unlink(missing_ok=True)
@@ -640,7 +759,7 @@ def acquire_paper_local(
         pdf_path=permanent_path or str(pdf_path),
         status="ok",
         zotero_added=zotero_citekey is not None,
-        pdf_hash=pdf_hash,
+        pdf_hash=_pdf_hash,
     )
 
 

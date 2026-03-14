@@ -78,9 +78,14 @@ Project outline generation from directory contents + database context. Two modes
 - `OutlineResult` dataclass: title, description, chapters, sections, scientific_results, outline_text, update_summary
 - CLI options: `-p/--prompt` (custom directive), `--fresh` (force full regeneration)
 
-### acquirer.py (~240 lines)
-Local-only paper acquisition pipeline: download → auto-extract metadata → Zotero → local storage → DB.
-- `acquire_paper_local()` — orchestrates full pipeline; calls `resolve_metadata()` after download, then attempts Zotero integration (create item + get BBT citekey), falls back to local citekey generation
+### acquirer.py (~260 lines)
+Local-only paper acquisition pipeline: download → dedup → auto-extract metadata → Zotero → local storage → DB.
+- `acquire_paper_local(meta, storage_path, state?, paper_store?, user_library?)` — orchestrates full pipeline with three dedup gates (ADR-014 Phase 1E):
+  1. **DOI pre-check** — if `meta.url` is a DOI and `paper_store.find_paper(doi=...)` hits → returns `ok_library_doi` without downloading; registers citekey in `user_library` and `state`
+  2. **Hash dedup** — after download, `compute_pdf_hash()` then `paper_store.find_paper(pdf_hash=...)` hit → skip `resolve_metadata()`; uses library record for citekey generation; registers citekey in `user_library` via **step 6b**
+  3. **Write-through** — new paper (no dedup hit) → `resolve_metadata()` → Zotero → `paper_store.register_paper()` → `user_library.add_source()`
+  - All three paths call `user_library.add_source(paper_id, citekey, status="completed")` to map citekey → paper_id
+  - Returns `AcquireResult` with `status` (`"ok"`, `"ok_library_doi"`, `"download_failed"`, etc.), `citekey`, `pdf_hash`
 - `download_pdf()` — HTTP stream with validation (min 10KB, content-type check)
 - `_store_pdf_locally()` — copy to Zotero storage dir (skipped when Zotero has the PDF)
 - `_generate_citekey()` — generates `author2024_title_slug` from metadata (fallback when Zotero/BBT unavailable)
@@ -124,7 +129,7 @@ If vault note missing: triggers `literature.note_factory.create_vault_note()` fi
 `klemma research -s X.X` → `_sync_sections()` → `researcher.research_section()` → auto-extracts fragments (if needed) → builds context → Claude → `ResearchResult` → `project_root/notes/research/Research_{section}.md` (reads legacy `project_root/Research_{section}.md` as fallback).
 
 ### Paper acquisition
-`klemma acquire <url>` → `acquirer.acquire_paper_local()` → download PDF → `resolve_metadata()` (PDF props + S2 API) → if Zotero running: create item via Connector + get BBT citekey → else: local citekey + local PDF storage → `state.register_sources()` + `state.update_source_info()` (title/authors/year/abstract/doi).
+`klemma acquire <url>` → `acquirer.acquire_paper_local()` → **DOI pre-check** (library hit → skip download, return `ok_library_doi`) → download PDF → **hash dedup** (library hit → skip extraction, use library metadata) → `resolve_metadata()` (PDF props + S2 API) → if Zotero running: create item via Connector + get BBT citekey → else: local citekey + local PDF storage → `paper_store.register_paper()` → `user_library.add_source()` → `state.register_sources()` + `state.update_source_info()`.
 
 ### Library analysis
 `klemma library` → `librarian.analyze_library()` → `LibraryReport` → `project_root/notes/library/Library_{mode}_{date}.md`.

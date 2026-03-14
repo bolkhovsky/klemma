@@ -196,9 +196,11 @@ def acquire(
             meta,
             storage_path=cfg.zotero.storage_path,
             state=state,
+            paper_store=kctx.paper_store,
+            user_library=kctx.user_library,
         )
 
-        if result.status in ("ok", "ok_no_pdf"):
+        if result.status in ("ok", "ok_no_pdf", "ok_library_doi"):
             console.print(f"  [green]@{result.citekey}[/green]")
             if meta.title:
                 auto = " [dim](auto-extracted)[/dim]" if not title else ""
@@ -217,6 +219,8 @@ def acquire(
                     console.print(
                         "  [dim]Tip: use Zotero → Right-click → Find Available PDF[/dim]"
                     )
+            if result.status == "ok_library_doi":
+                console.print("  [dim](from library — download skipped)[/dim]")
             if meta.sections:
                 console.print(f"  [dim]sections: {', '.join(meta.sections)}[/dim]")
 
