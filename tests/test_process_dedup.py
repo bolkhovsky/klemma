@@ -192,3 +192,21 @@ class TestCitekeyFastPathDedup:
         pdf_extractor.find_pdf.assert_not_called()
         saved = state.get_fragments(source_id="jones2020")
         assert len(saved) == 3
+
+    def test_fast_path_preserves_existing_note_path(self, tmp_path):
+        """Fast-path mark_completed must not clear an existing note_path."""
+        state = StateManager(tmp_path / "test.db")
+        state.register_sources(["alice2021"])
+        # Simulate a vault note already registered for this source
+        state.sources.mark_completed("alice2021", note_path="/vault/refs/@alice2021.md")
+
+        frag = _make_frag()
+        user_library = MagicMock()
+        user_library.resolve_paper_id.return_value = "paper_id_A"
+        paper_store = MagicMock()
+        paper_store.get_fragments.return_value = [frag]
+
+        _make_call("alice2021", state, user_library=user_library, paper_store=paper_store)
+
+        src = state.sources.get_source("alice2021")
+        assert src["note_path"] == "/vault/refs/@alice2021.md"

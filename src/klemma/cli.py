@@ -1291,7 +1291,9 @@ def _process_single(
                             for f in _fast_frags
                         ]
                         n = state.fragments.save_fragments(citekey, frag_dicts)
-                        state.sources.mark_completed(citekey, note_path="")
+                        _existing_src = state.sources.get_source(citekey)
+                        _note_path = (_existing_src or {}).get("note_path") or ""
+                        state.sources.mark_completed(citekey, note_path=_note_path)
                         if not quiet:
                             console.print(
                                 f"  [green]{n} fragments[/green] "
@@ -1346,7 +1348,9 @@ def _process_single(
                             for f in lib_frags
                         ]
                         n = state.fragments.save_fragments(citekey, frag_dicts)
-                        state.sources.mark_completed(citekey, note_path="")
+                        _existing_src = state.sources.get_source(citekey)
+                        _note_path = (_existing_src or {}).get("note_path") or ""
+                        state.sources.mark_completed(citekey, note_path=_note_path)
                         if not quiet:
                             console.print(
                                 f"  [green]{n} fragments[/green] "
