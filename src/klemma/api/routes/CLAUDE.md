@@ -7,6 +7,14 @@ FastAPI route modules for the Klemma SaaS backend (ADR-009).
 ### health.py (20 lines)
 System health check endpoint — no auth required.
 - `GET /health` → `{"status": "ok", "version": "<semver>", "service": "klemma-api"}`
+- Router mounted with `prefix="/health"` in `app.py`; route decorator is `@router.get("")`
+
+### auth.py
+Auth endpoints — mounted with `prefix="/auth"`.
+- `POST /auth/register` → `TokenResponse` (201)
+- `POST /auth/login` → `TokenResponse` (200)
+- `POST /auth/refresh` → `TokenResponse` (200) — rotates refresh token
+- `GET /auth/me` → `UserResponse` (requires Bearer token)
 
 ## Adding a new router
 

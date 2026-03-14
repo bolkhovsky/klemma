@@ -165,6 +165,19 @@ SQLite backends implementing the three-tier library protocols.
 - `clear_prune_verdict(source_id) -> None` — remove single verdict
 - Tables: `project_sources`, `project_source_sections`, `project_fragments`, `prune_verdicts` (v2)
 
+#### stores/user_store.py (~210 lines)
+`LocalUserStore` — SQLite-backed `UserStore` at `~/.klemma/users.db` (separate from library.db). User accounts and refresh token storage for the SaaS auth layer (ADR-009).
+- `__init__(db_path)` — creates dirs, runs `_migrate_schema()` (schema version 1)
+- `create_user(email, password_hash, name?) -> UserRecord` — raises `ValueError` on duplicate email
+- `get_user_by_email(email) -> UserRecord | None`
+- `get_user_by_id(user_id) -> UserRecord | None`
+- `update_email_verified(user_id) -> None`
+- `save_refresh_token(user_id, token_hash, expires_at) -> None`
+- `get_refresh_token(token_hash) -> dict | None` — returns `{user_id, expires_at}` or None
+- `delete_refresh_token(token_hash) -> None` — token rotation on use
+- `delete_all_refresh_tokens(user_id) -> None` — logout-all
+- Tables: `users` (user_id PK, email UNIQUE, password_hash, name, email_verified, created_at), `refresh_tokens` (hashed, FK→users ON DELETE CASCADE)
+
 ### errors.py (32 lines)
 Klemma error taxonomy for AI backends.
 - `KlemmaAIError` — base class with `retryable` flag and optional `cause` chaining
@@ -241,7 +254,9 @@ MCP tool infrastructure for embedding and citation analysis.
 FastAPI application. Install extra: `pip install "klemma[api]"`. Entry point: `uvicorn klemma.api.app:create_app --factory`.
 - `api/app.py` — `create_app()` factory, lifespan hooks, router mounting
 - `api/routes/health.py` — `GET /health` (status/version/service — no auth)
-See [api/CLAUDE.md](api/CLAUDE.md) for full detail.
+- `api/routes/auth.py` — `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `GET /auth/me`
+- `api/auth/` — JWT (python-jose), argon2 passwords, Pydantic schemas, FastAPI deps
+See [api/CLAUDE.md](api/CLAUDE.md) and [api/auth/CLAUDE.md](api/auth/CLAUDE.md) for full detail.
 
 ## Data flows
 

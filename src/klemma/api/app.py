@@ -43,7 +43,7 @@ def create_app() -> FastAPI:
     )
 
     # Mount routers
-    app.include_router(health.router)
+    app.include_router(health.router, prefix="/health")
     app.include_router(auth.router, prefix="/auth", tags=["auth"])
 
     # Future routers (Phase 1 tasks):
