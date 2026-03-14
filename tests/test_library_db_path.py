@@ -190,6 +190,39 @@ class TestInitComponentsUsesLibraryDbPath:
         assert paper_store_calls[0] == Path(custom_db)
         assert user_library_calls[0] == Path(custom_db)
 
+    def test_resolves_relative_path_against_system_home(self, tmp_path):
+        """Relative library_db_path must be resolved against system_home, not CWD."""
+        from klemma.cli import _init_components
+
+        cfg = KlemmaConfig.model_validate({"library_db_path": "data/library.db"})
+        system_home = tmp_path / ".klemma"
+        system_home.mkdir()
+        project_root = tmp_path / "proj"
+        (project_root / ".klemma").mkdir(parents=True)
+
+        paper_store_calls = []
+
+        def fake_paper_store(db_path):
+            paper_store_calls.append(db_path)
+            m = MagicMock()
+            m.count_sources = MagicMock(return_value=0)
+            return m
+
+        store_patches = [
+            patch("klemma.stores.LocalPaperStore", fake_paper_store),
+            patch("klemma.stores.LocalUserLibrary", return_value=MagicMock()),
+            patch("klemma.stores.LocalProjectStore", return_value=MagicMock(count_sources=lambda: 0)),
+        ]
+        with ExitStack() as stack:
+            for p in self._make_context_patches(system_home, project_root, cfg):
+                stack.enter_context(p)
+            for p in store_patches:
+                stack.enter_context(p)
+            _init_components()
+
+        assert len(paper_store_calls) == 1
+        assert paper_store_calls[0] == system_home / "data" / "library.db"
+
     def test_falls_back_to_system_home_when_not_configured(self, tmp_path):
         from klemma.cli import _init_components
 
