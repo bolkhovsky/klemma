@@ -7,6 +7,8 @@ import logging
 import re
 from html.parser import HTMLParser
 
+from .url_safety import is_safe_url
+
 logger = logging.getLogger(__name__)
 
 _USER_AGENT = "Mozilla/5.0 (compatible; Klemma/1.0; +https://github.com/klemma-ai/klemma)"
@@ -85,6 +87,10 @@ def fetch_url_text(url: str, max_chars: int = 200_000) -> str:
     Handles gzip-encoded responses transparently (requests does this).
     """
     import requests
+
+    if not is_safe_url(url):
+        logger.warning("fetch_url_text: blocked unsafe URL '%s'", url[:60])
+        return ""
 
     try:
         resp = requests.get(
