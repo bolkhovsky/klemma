@@ -408,4 +408,9 @@ See [CLAUDE.md](CLAUDE.md) for detailed architecture docs, module descriptions, 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Klemma is a free tool for researchers, but **not for commercial use**.
+
+- **Core** (`src/klemma/`) — [Polyform Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/). Free for academic, research, and personal use. Commercial use is prohibited.
+- **SaaS** (`saas/`) — proprietary, all rights reserved.
+
+For commercial licensing: ilya.bolkhovsky@gmail.com

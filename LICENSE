@@ -2,6 +2,9 @@
 
 <https://polyformproject.org/licenses/noncommercial/1.0.0>
 
+Scope: This license applies to all files in this repository except those under
+`saas/`, which are governed by `saas/LICENSE` (All Rights Reserved).
+
 ## Acceptance
 
 In order to get any license under these terms, you must agree
