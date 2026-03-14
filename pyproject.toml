@@ -22,7 +22,7 @@ dependencies = [
     "Jinja2==3.1.6",
     "PyYAML==6.0.2",
     "rich==13.9.4",
-    "requests>=2.31.0",
+    "requests==2.32.3",
 ]
 
 [project.optional-dependencies]

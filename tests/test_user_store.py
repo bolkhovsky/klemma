@@ -21,13 +21,13 @@ def store(tmp_path) -> LocalUserStore:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_1(tmp_path):
+def test_schema_version_is_2(tmp_path):
     db_path = tmp_path / "users.db"
     LocalUserStore(db_path)
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 1
+    assert version == 2
 
 
 def test_creates_db_file(tmp_path):

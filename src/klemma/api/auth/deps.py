@@ -54,7 +54,9 @@ async def get_current_user(
     user = store.get_user_by_id(user_id)
     if user is None:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired access token",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
     return user

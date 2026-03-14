@@ -15,18 +15,18 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     user_id         TEXT PRIMARY KEY,
-    email           TEXT NOT NULL UNIQUE,
+    email           TEXT NOT NULL UNIQUE COLLATE NOCASE,
     password_hash   TEXT NOT NULL,
     name            TEXT DEFAULT '',
     email_verified  INTEGER DEFAULT 0,
     created_at      TEXT DEFAULT (datetime('now'))
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email COLLATE NOCASE);
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,8 +75,12 @@ class LocalUserStore:
 
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version < _SCHEMA_VERSION:
+        if version < 1:
             conn.executescript(_CREATE_SCHEMA)
+        if version < 2:
+            # Normalize existing emails to lowercase
+            conn.execute("UPDATE users SET email = LOWER(TRIM(email))")
+        if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
     # ------------------------------------------------------------------ #
@@ -93,15 +97,16 @@ class LocalUserStore:
         """Create a new user. Raises ValueError if email already exists."""
         user_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
+        email_normalized = email.strip().lower()
         with self._conn() as conn:
             try:
                 conn.execute(
                     """INSERT INTO users (user_id, email, password_hash, name, created_at)
                        VALUES (?, ?, ?, ?, ?)""",
-                    (user_id, email, password_hash, name, now),
+                    (user_id, email_normalized, password_hash, name, now),
                 )
             except sqlite3.IntegrityError:
-                raise ValueError(f"User with email {email!r} already exists")
+                raise ValueError(f"User with email {email_normalized!r} already exists")
         return UserRecord(
             user_id=user_id,
             email=email,
@@ -115,7 +120,7 @@ class LocalUserStore:
         """Look up a user by email. Returns None if not found."""
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM users WHERE email = ?", (email,)
+                "SELECT * FROM users WHERE email = ?", (email.strip().lower(),)
             ).fetchone()
         if not row:
             return None

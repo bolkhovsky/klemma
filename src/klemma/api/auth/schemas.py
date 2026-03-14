@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class UserCreate(BaseModel):
     """Registration request."""
 
     email: EmailStr
-    password: str
-    name: str = ""
+    password: str = Field(min_length=8, max_length=128)
+    name: str = Field(default="", max_length=255)
 
 
 class UserLogin(BaseModel):
     """Login request."""
 
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=128)
 
 
 class TokenResponse(BaseModel):
