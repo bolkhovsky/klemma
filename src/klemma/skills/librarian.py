@@ -4,7 +4,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from ..ai import AIProvider
 from ..config import AIConfig, KlemmaConfig, ProjectConfig, SuggestConfig, resolve_prompt
@@ -31,6 +31,7 @@ def analyze_library(
     klemma_home: Optional[Path] = None,
     project_name: str = "",
     project_root: Optional[Path] = None,
+    project_store: Optional[Any] = None,
 ) -> Optional[LibraryReport]:
     """Run AI library analysis and return structured report.
 
@@ -40,7 +41,10 @@ def analyze_library(
     """
     # Gather context with mode-aware source filtering
     all_sources = state.get_all_sources()
+    # Bug fix: when project_store is present, verdicts live in project.db not klemma.db
     drop_ids = state.get_prune_drop_ids()
+    if project_store is not None:
+        drop_ids = drop_ids | project_store.get_prune_drop_ids()
     active_sources = [s for s in all_sources if s["id"] not in drop_ids]
 
     context = _gather_library_context(
@@ -88,10 +92,21 @@ def analyze_library(
         prune_result = _run_prune_analysis(active_sources, entry_lookup, config, ai, klemma_home=klemma_home)
         if prune_result:
             report.prune = prune_result
-            state.save_prune_verdicts(
-                drop=prune_result.get("drop", []),
-                maybe=prune_result.get("maybe", []),
-            )
+            drop = prune_result.get("drop", [])
+            maybe = prune_result.get("maybe", [])
+            if project_store is not None:
+                # Apply same protection as PruneRepository: skip high-quality sources
+                protected = {
+                    s["id"] for s in all_sources
+                    if (s.get("quality_score") or 0) >= 4
+                    or (s.get("relevance_nr1") or 0) >= 4
+                    or (s.get("relevance_nr2") or 0) >= 4
+                    or s.get("citation_priority") == "high"
+                }
+                drop_safe = [d for d in drop if d.get("citekey", "").lstrip("@") not in protected]
+                project_store.save_prune_verdicts(drop=drop_safe, maybe=maybe)
+            else:
+                state.save_prune_verdicts(drop=drop, maybe=maybe)
 
     # Save report
     _save_report_to_vault(

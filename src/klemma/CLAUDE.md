@@ -140,15 +140,20 @@ SQLite backends implementing the three-tier library protocols.
 - Tables: `user_sources`, `user_source_chapters`, `user_source_sections`
 - Called from `_process_single()` in `cli.py` to register citekey after successful extraction
 
-#### stores/project_store.py (~200 lines)
-`LocalProjectStore` — SQLite-backed `ProjectStore` at `project/.klemma/data/project.db`. Per-project section assignments and coverage stats.
+#### stores/project_store.py (~310 lines)
+`LocalProjectStore` — SQLite-backed `ProjectStore` at `project/.klemma/data/project.db`. Per-project section assignments, coverage stats, and prune verdicts (schema v2).
 - `set_source_sections(citekey, paper_id, sections, chapters) -> None` — upsert + replace section assignments
 - `get_coverage_stats() -> dict` — `{total_sources, by_section: {section: count}}`
 - `get_reference_gaps(**kwargs) -> list[dict]` — returns `[]` (Phase 1D stub)
 - `get_source_sections(citekey) -> list[str]`, `get_sources_by_section(section) -> list[str]`
 - `register_fragment(fragment_id, *, citekey, section, ...) -> None` — INSERT OR IGNORE
 - `count_sources() -> int`
-- Tables: `project_sources`, `project_source_sections`, `project_fragments`
+- `save_prune_verdicts(drop, maybe) -> None` — replace all verdicts; skips blank citekeys
+- `get_prune_verdicts(verdict?, chapter?, section_type?) -> list[dict]` — filtered; expires after 14 days
+- `get_prune_drop_ids(max_age_days?) -> set[str]` — citekeys with 'drop' verdict
+- `get_prune_summary() -> dict` — `{drop, maybe, total}` counts
+- `clear_prune_verdict(source_id) -> None` — remove single verdict
+- Tables: `project_sources`, `project_source_sections`, `project_fragments`, `prune_verdicts` (v2)
 
 ### errors.py (32 lines)
 Klemma error taxonomy for AI backends.

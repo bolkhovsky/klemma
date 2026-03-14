@@ -17,13 +17,13 @@ def store(tmp_path) -> LocalProjectStore:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_1(tmp_path):
+def test_schema_version_is_2(tmp_path):
     db_path = tmp_path / "project.db"
     LocalProjectStore(db_path)
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 1
+    assert version == 2
 
 
 def test_tables_created(tmp_path):
@@ -37,7 +37,7 @@ def test_tables_created(tmp_path):
         ).fetchall()
     }
     conn.close()
-    assert {"project_sources", "project_source_sections", "project_fragments"} <= tables
+    assert {"project_sources", "project_source_sections", "project_fragments", "prune_verdicts"} <= tables
 
 
 def test_migration_idempotent(tmp_path):
@@ -202,3 +202,156 @@ def test_count_sources_multiple(store):
     store.set_source_sections("b", "p2", ["2.1"], [2])
     store.set_source_sections("c", "p3", ["3.1"], [3])
     assert store.count_sources() == 3
+
+
+# ---------------------------------------------------------------------------
+# prune_verdicts (schema v2)
+# ---------------------------------------------------------------------------
+
+
+def test_migration_v1_to_v2_idempotent(tmp_path):
+    """Existing v1 DB (no prune_verdicts table) migrates cleanly to v2."""
+    import sqlite3 as _sqlite3
+
+    db_path = tmp_path / "project.db"
+    # Manually create a v1 DB without prune_verdicts
+    conn = _sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS project_sources (
+            citekey TEXT PRIMARY KEY, paper_id TEXT NOT NULL
+        );
+        PRAGMA user_version = 1;
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # Opening via LocalProjectStore should migrate to v2
+    store2 = LocalProjectStore(db_path)
+    assert store2.count_sources() == 0  # data intact
+
+    conn2 = _sqlite3.connect(str(db_path))
+    version = conn2.execute("PRAGMA user_version").fetchone()[0]
+    tables = {r[0] for r in conn2.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    conn2.close()
+    assert version == 2
+    assert "prune_verdicts" in tables
+
+
+def test_base_schema_ensured_on_reopen(tmp_path):
+    """Opening an existing v2 DB re-applies base schema idempotently (no table loss)."""
+    db_path = tmp_path / "project.db"
+    store1 = LocalProjectStore(db_path)
+    store1.set_source_sections("ck1", "pid1", ["1.1"], [1])
+
+    # Re-open — should not corrupt existing tables
+    store2 = LocalProjectStore(db_path)
+    assert store2.count_sources() == 1
+    assert store2.get_source_sections("ck1") == ["1.1"]
+
+
+def test_save_and_get_prune_verdicts_basic(store):
+    """save_prune_verdicts stores drop and maybe; get_prune_verdicts returns all."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "old2010", "reason": "superseded"}],
+        maybe=[{"citekey": "maybe2015", "reason": "low quality"}],
+    )
+    items = store.get_prune_verdicts()
+    source_ids = {i["source_id"] for i in items}
+    assert "old2010" in source_ids
+    assert "maybe2015" in source_ids
+
+
+def test_save_prune_verdicts_strips_at_prefix(store):
+    """citekeys prefixed with @ are stored without the prefix."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "@foo2020", "reason": "test"}],
+        maybe=[],
+    )
+    items = store.get_prune_verdicts()
+    assert items[0]["source_id"] == "foo2020"
+
+
+def test_save_prune_verdicts_replaces_all(store):
+    """Second call to save_prune_verdicts replaces previous verdicts entirely."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "old2010", "reason": "first run"}],
+        maybe=[],
+    )
+    store.save_prune_verdicts(
+        drop=[{"citekey": "new2020", "reason": "second run"}],
+        maybe=[],
+    )
+    items = store.get_prune_verdicts()
+    source_ids = {i["source_id"] for i in items}
+    assert "new2020" in source_ids
+    assert "old2010" not in source_ids
+
+
+def test_get_prune_drop_ids(store):
+    """get_prune_drop_ids returns only sources with verdict='drop'."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "drop1", "reason": "old"}, {"citekey": "drop2", "reason": "dup"}],
+        maybe=[{"citekey": "maybe1", "reason": "weak"}],
+    )
+    drop_ids = store.get_prune_drop_ids()
+    assert "drop1" in drop_ids
+    assert "drop2" in drop_ids
+    assert "maybe1" not in drop_ids
+
+
+def test_get_prune_summary_counts(store):
+    """get_prune_summary returns correct drop/maybe counts."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "d1"}, {"citekey": "d2"}],
+        maybe=[{"citekey": "m1"}],
+    )
+    summary = store.get_prune_summary()
+    assert summary["drop"] == 2
+    assert summary["maybe"] == 1
+    assert summary["total"] == 3
+
+
+def test_get_prune_summary_empty(store):
+    """get_prune_summary returns zeros when no verdicts stored."""
+    summary = store.get_prune_summary()
+    assert summary == {"drop": 0, "maybe": 0, "total": 0}
+
+
+def test_get_prune_verdicts_filter_by_verdict(store):
+    """get_prune_verdicts(verdict='drop') returns only drop items."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "dropme", "reason": "old"}],
+        maybe=[{"citekey": "maybe_me"}],
+    )
+    drops = store.get_prune_verdicts(verdict="drop")
+    maybes = store.get_prune_verdicts(verdict="maybe")
+    assert all(i["verdict"] == "drop" for i in drops)
+    assert all(i["verdict"] == "maybe" for i in maybes)
+    assert len(drops) == 1
+    assert len(maybes) == 1
+
+
+def test_clear_prune_verdict(store):
+    """clear_prune_verdict removes a single source's verdict."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "todelete", "reason": "clear me"}, {"citekey": "keep"}],
+        maybe=[],
+    )
+    store.clear_prune_verdict("todelete")
+    items = store.get_prune_verdicts()
+    source_ids = {i["source_id"] for i in items}
+    assert "todelete" not in source_ids
+    assert "keep" in source_ids
+
+
+def test_prune_verdicts_empty_citekeys_skipped(store):
+    """Entries with empty citekey are silently skipped."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "", "reason": "invalid"}, {"citekey": "valid2020"}],
+        maybe=[],
+    )
+    items = store.get_prune_verdicts()
+    assert len(items) == 1
+    assert items[0]["source_id"] == "valid2020"

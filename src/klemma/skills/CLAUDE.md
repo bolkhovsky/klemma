@@ -53,11 +53,11 @@ Section research briefings. Shared helpers extracted to `context_loader.py` — 
 
 ### librarian.py (522 lines)
 Library health analysis. Three modes: `status` (health), `recommend` (section-focused), `audit` (deep quality check + citation graph + prune).
-- `analyze_library(project_root=...)` — gathers context → `prompts/librarian.md` → `LibraryReport` → `project_root/notes/library/Library_{mode}_{date}.md`
+- `analyze_library(project_root=..., project_store=None)` — gathers context → `prompts/librarian.md` → `LibraryReport` → `project_root/notes/library/Library_{mode}_{date}.md`; when `project_store` is provided, drop_ids are merged from both `state` and `project_store` for active-source filtering
 - `_gather_library_context(suggest_config?)` — summary, quality tiers, ref-gaps, sources compact list, citation graph stats; optional recency filter via `SuggestConfig` (skip old sources unless high-quality classics)
 - `_format_sources_compact()` — compact list for prompt (citekey, author, year, title, q, ch, s, f, intent)
 - `_get_citation_graph_stats()` — co-citation analysis, author network, hub scores from `citation_links`
-- Prune mode: `prompts/librarian_prune.md` → AI generates drop/maybe verdicts → `state.save_prune_verdicts()`
+- Prune mode: `prompts/librarian_prune.md` → AI generates drop/maybe verdicts → `project_store.save_prune_verdicts()` when available (with high-quality source protection from `all_sources`), else `state.save_prune_verdicts()`; drop_ids merged from both stores for active-source filtering
 - `list_prune_verdicts()` / `clear_prune_verdict()` — CLI for browsing/clearing verdicts
 
 ### agent.py (~290 lines)
