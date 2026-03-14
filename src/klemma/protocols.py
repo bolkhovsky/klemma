@@ -108,3 +108,33 @@ class ProjectStore(Protocol):
     def get_coverage_stats(self) -> dict: ...
 
     def get_reference_gaps(self, **kwargs: object) -> list[dict]: ...
+
+
+@runtime_checkable
+class FileStore(Protocol):
+    """File storage abstraction (ADR-009).
+
+    Stores uploaded PDFs and other files. Local implementation uses
+    filesystem; SaaS can swap to S3-compatible storage.
+    Files are content-addressed by paper_id.
+    """
+
+    def save(self, paper_id: str, data: bytes, filename: str) -> str:
+        """Save file data, return storage path/key."""
+        ...
+
+    def read(self, paper_id: str, filename: str) -> bytes | None:
+        """Read file data. Returns None if not found."""
+        ...
+
+    def exists(self, paper_id: str, filename: str) -> bool:
+        """Check if a file exists."""
+        ...
+
+    def delete(self, paper_id: str, filename: str) -> bool:
+        """Delete a file. Returns True if deleted, False if not found."""
+        ...
+
+    def get_path(self, paper_id: str, filename: str) -> str | None:
+        """Get a resolvable path/URL for the file. Returns None if not found."""
+        ...
