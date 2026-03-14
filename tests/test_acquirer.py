@@ -181,6 +181,33 @@ def test_acquire_hash_dedup_uses_library_metadata(tmp_path):
     assert "Brown" in result.citekey or "brown" in result.citekey.lower()
 
 
+def test_acquire_hash_dedup_registers_citekey_in_user_library(tmp_path):
+    """Hash hit: new citekey must be registered in user_library (step 6b)."""
+    fake_pdf = _make_tmp_pdf(tmp_path)
+    record = _make_paper_record(pdf_hash="existinghash", paper_id="existing-pid")
+
+    mock_paper_store = MagicMock()
+    mock_paper_store.find_paper.side_effect = lambda **kw: (
+        None if kw.get("doi") else record  # DOI miss, hash hit
+    )
+    mock_user_library = MagicMock()
+
+    meta = PaperMetadata(url="https://example.com/paper.pdf")
+    with patch("klemma.skills.acquirer.download_pdf", return_value=fake_pdf), \
+         patch("klemma.skills.acquirer.compute_pdf_hash", return_value="existinghash"), \
+         patch("klemma.skills.acquirer._try_zotero", return_value=None):
+        result = acquire_paper_local(
+            meta, storage_path="",
+            paper_store=mock_paper_store, user_library=mock_user_library,
+        )
+
+    assert result.status == "ok"
+    mock_user_library.add_source.assert_called_once()
+    call_args = mock_user_library.add_source.call_args
+    assert call_args[0][0] == "existing-pid"   # paper_id
+    assert call_args[0][1] == result.citekey    # citekey
+
+
 # ── Write-through (new paper → library) ───────────────────────────────────
 
 

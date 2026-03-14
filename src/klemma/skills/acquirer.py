@@ -614,6 +614,7 @@ def acquire_paper_local(
 
     # 1.6. Hash dedup check — library already has this exact PDF
     _lib_resolved = None
+    _lib_paper_id = None  # paper_id from hash hit — for user_library registration below
     if _pdf_hash and paper_store:
         _hash_paper = paper_store.find_paper(pdf_hash=_pdf_hash)
         if _hash_paper:
@@ -629,6 +630,7 @@ def acquire_paper_local(
                 meta.year = _hash_paper.year
             if not meta.doi and _hash_paper.doi:
                 meta.doi = _hash_paper.doi
+            _lib_paper_id = _hash_paper.paper_id
             _lib_resolved = {
                 "title": _hash_paper.title,
                 "authors": _hash_paper.authors,
@@ -731,12 +733,24 @@ def acquire_paper_local(
                     user_library.add_source(
                         paper_id, citekey,
                         status="completed",
-                        pdf_path=permanent_path or "",
+                        pdf_path=permanent_path or None,
                     )
                 except Exception:
                     pass
         except Exception as e:
             logger.debug("Library write-through failed: %s", e)
+
+    # 6b. Hash-hit path: register new citekey → existing paper_id in user_library
+    # (step 6 is skipped when _lib_resolved is set, so we register here instead)
+    if user_library and _lib_paper_id:
+        try:
+            user_library.add_source(
+                _lib_paper_id, citekey,
+                status="completed",
+                pdf_path=permanent_path or None,
+            )
+        except Exception:
+            pass
 
     if not is_local_file:
         pdf_path.unlink(missing_ok=True)
