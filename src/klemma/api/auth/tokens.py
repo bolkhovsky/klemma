@@ -20,10 +20,14 @@ def create_access_token(user_id: str, email: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=auth_config.access_token_expire_minutes
     )
+    now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "email": email,
         "exp": expire,
+        "iat": now,
+        "iss": "klemma-api",
+        "aud": "klemma",
         "type": "access",
     }
     return jwt.encode(payload, auth_config.secret_key, algorithm=auth_config.algorithm)
@@ -31,12 +35,14 @@ def create_access_token(user_id: str, email: str) -> str:
 
 def create_refresh_token(user_id: str) -> str:
     """Create a long-lived refresh token."""
-    expire = datetime.now(timezone.utc) + timedelta(
-        days=auth_config.refresh_token_expire_days
-    )
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(days=auth_config.refresh_token_expire_days)
     payload = {
         "sub": user_id,
         "exp": expire,
+        "iat": now,
+        "iss": "klemma-api",
+        "aud": "klemma",
         "type": "refresh",
         "jti": uuid.uuid4().hex,
     }
@@ -47,7 +53,11 @@ def decode_token(token: str) -> dict | None:
     """Decode and validate a JWT token. Returns payload or None if invalid."""
     try:
         payload = jwt.decode(
-            token, auth_config.secret_key, algorithms=[auth_config.algorithm]
+            token,
+            auth_config.secret_key,
+            algorithms=[auth_config.algorithm],
+            audience="klemma",
+            issuer="klemma-api",
         )
         return payload
     except PyJWTError:

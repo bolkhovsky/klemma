@@ -33,13 +33,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     """Application factory — creates and configures the FastAPI app."""
+    is_production = os.getenv("KLEMMA_ENV") == "production"
     app = FastAPI(
         title="Klemma API",
         description="AI-powered academic research assistant — SaaS backend",
         version=__version__,
         lifespan=lifespan,
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url=None if is_production else "/docs",
+        redoc_url=None if is_production else "/redoc",
+        openapi_url=None if is_production else "/openapi.json",
     )
 
     # Mount routers

@@ -226,3 +226,49 @@ def test_login_rate_limit(client):
         json={"email": "nobody5@example.com", "password": "secret123"},
     )
     assert resp.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# JWT claims
+# ---------------------------------------------------------------------------
+
+
+def test_access_token_contains_standard_claims(client):
+    """Access tokens must include iat, iss, aud claims."""
+    from klemma.api.auth.tokens import decode_token
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "claims@example.com", "password": "secret123"},
+    )
+    token = reg.json()["access_token"]
+    payload = decode_token(token)
+    assert payload is not None
+    assert "iat" in payload
+    assert payload["iss"] == "klemma-api"
+    assert payload["aud"] == "klemma"
+    assert payload["type"] == "access"
+
+
+# ---------------------------------------------------------------------------
+# OpenAPI docs gating
+# ---------------------------------------------------------------------------
+
+
+def test_docs_available_in_development(client):
+    """OpenAPI docs should be available when KLEMMA_ENV is not 'production'."""
+    resp = client.get("/docs")
+    assert resp.status_code == 200
+
+
+def test_docs_disabled_in_production(tmp_path, monkeypatch):
+    """OpenAPI docs should return 404 when KLEMMA_ENV=production."""
+    monkeypatch.setenv("KLEMMA_ENV", "production")
+    from klemma.stores.user_store import LocalUserStore
+
+    store = LocalUserStore(tmp_path / "users.db")
+    app = create_app()
+    set_user_store(store)
+    prod_client = TestClient(app)
+    resp = prod_client.get("/docs")
+    assert resp.status_code == 404
