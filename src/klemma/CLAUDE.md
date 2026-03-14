@@ -104,12 +104,13 @@ Content-addressable hashing utilities for the three-tier library (ADR-014). Pure
 - `compute_content_hash(paper_id, text, page)` — SHA256 fragment ID (deterministic: same PDF + extraction = same IDs)
 - `compute_prompt_hash(prompt_text)` — first 16 hex chars of SHA256 for extraction prompt versioning
 
-### protocols.py (100 lines)
-Protocol interfaces for the three-tier library split (ADR-014). Defines the boundary between tiers.
+### protocols.py (141 lines)
+Protocol interfaces for the three-tier library split (ADR-014) and file storage (ADR-009). Defines the boundary between tiers.
 - `PaperStore` — content-addressable paper storage (Global Corpus): find/register papers, save/get fragments and embeddings
 - `UserLibrary` — user's personal collection: citekey→paper_id mapping, source status
 - `ProjectStore` — per-project data: section assignments, coverage stats, reference gaps
-All three are `@runtime_checkable`. Skills do NOT import this module.
+- `FileStore` — pluggable file storage: `save(paper_id, data, filename) -> str`, `read`, `exists`, `delete`, `get_path`. Local impl uses filesystem; SaaS can swap to S3-compatible storage.
+All four are `@runtime_checkable`. Skills do NOT import this module.
 
 ### models.py (60 lines)
 Data classes for the three-tier storage layer (ADR-014). Distinct from `literature/models.py` (AI extraction output).
@@ -141,6 +142,13 @@ SQLite backends implementing the three-tier library protocols.
 - `update_status(citekey, status)`, `get_all_sources()`, `count()`
 - Tables: `user_sources`, `user_source_chapters`, `user_source_sections`
 - Called from `_process_single()` in `cli.py` to register citekey after successful extraction
+
+#### stores/file_store.py (~80 lines)
+`LocalFileStore` — filesystem-backed `FileStore` (ADR-009). Default location: `~/.klemma/files/`.
+- `__init__(base_dir)` — creates directory, stores resolved `base_dir`
+- `_file_path(paper_id, filename) -> Path` — content-addressed path `{base_dir}/{prefix}/{paper_id}/{filename}`; validates both args (rejects `..`, `/`, `\\`, empty) and confirms resolved path stays inside `base_dir`
+- `save/read/exists/delete/get_path` — CRUD operations; `delete` cleans up empty parent dir
+- `get_paper_dir(paper_id)` / `delete_paper_files(paper_id)` — bulk paper-level operations
 
 #### stores/project_store.py (~310 lines)
 `LocalProjectStore` — SQLite-backed `ProjectStore` at `project/.klemma/data/project.db`. Per-project section assignments, coverage stats, and prune verdicts (schema v2).
@@ -229,6 +237,12 @@ MCP tool infrastructure for embedding and citation analysis.
 ### app.py (124 lines)
 `KlemmaApp` — Textual TUI application. Mounts screens from `tui/` package.
 
+### api/ (SaaS backend — ADR-009)
+FastAPI application. Install extra: `pip install "klemma[api]"`. Entry point: `uvicorn klemma.api.app:create_app --factory`.
+- `api/app.py` — `create_app()` factory, lifespan hooks, router mounting
+- `api/routes/health.py` — `GET /health` (status/version/service — no auth)
+See [api/CLAUDE.md](api/CLAUDE.md) for full detail.
+
 ## Data flows
 
 ### Auto-sync sections
@@ -243,4 +257,4 @@ Frontmatter `sections: [1.1, 1.4.1, 3.2.2]` → `source_sections` table → `get
 ## Maintaining this file
 Update when: adding/removing/renaming root-level modules in `src/klemma/`, changing key class/function signatures, adding SQLite tables to `state.py`, modifying `KlemmaContext` fields, or adding new CLI commands to `cli.py`. Line counts should be refreshed after significant changes.
 
-See: [Repositories](repositories/CLAUDE.md) | [Evaluation](evaluation/CLAUDE.md) | [AI Skills](skills/CLAUDE.md) | [Literature](literature/CLAUDE.md) | [TUI](tui/CLAUDE.md) | [Prompts](../../prompts/CLAUDE.md) | [Tests](../../tests/CLAUDE.md) | [Root](../../CLAUDE.md)
+See: [Repositories](repositories/CLAUDE.md) | [Evaluation](evaluation/CLAUDE.md) | [AI Skills](skills/CLAUDE.md) | [Literature](literature/CLAUDE.md) | [TUI](tui/CLAUDE.md) | [API](api/CLAUDE.md) | [Prompts](../../prompts/CLAUDE.md) | [Tests](../../tests/CLAUDE.md) | [Root](../../CLAUDE.md)

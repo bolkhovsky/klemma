@@ -1,10 +1,11 @@
-"""Security hardening tests for vault path boundaries and acquire limits."""
+"""Security hardening tests for vault path boundaries, acquire limits, and file store."""
 
 from pathlib import Path
 
 import pytest
 
 from klemma.skills import acquirer
+from klemma.stores.file_store import LocalFileStore
 from klemma.vault import VaultAdapter
 
 
@@ -97,4 +98,44 @@ def test_download_pdf_removes_temp_file_when_stream_exceeds_limit(monkeypatch, t
     result = acquirer.download_pdf("https://example.com/file.pdf", max_bytes=10_000)
     assert result is None
     assert not tmp_file.exists()
+
+
+# --- LocalFileStore path traversal ---
+
+
+def test_file_store_rejects_dotdot_in_paper_id(tmp_path: Path):
+    store = LocalFileStore(tmp_path / "files")
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        store.save("../evil", b"data", "file.pdf")
+
+
+def test_file_store_rejects_slash_in_paper_id(tmp_path: Path):
+    store = LocalFileStore(tmp_path / "files")
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        store.save("ab/cd", b"data", "file.pdf")
+
+
+def test_file_store_rejects_dotdot_in_filename(tmp_path: Path):
+    store = LocalFileStore(tmp_path / "files")
+    with pytest.raises(ValueError, match="Invalid filename"):
+        store.save("abcdef12", b"data", "../outside.pdf")
+
+
+def test_file_store_rejects_slash_in_filename(tmp_path: Path):
+    store = LocalFileStore(tmp_path / "files")
+    with pytest.raises(ValueError, match="Invalid filename"):
+        store.save("abcdef12", b"data", "sub/file.pdf")
+
+
+def test_file_store_rejects_empty_paper_id(tmp_path: Path):
+    store = LocalFileStore(tmp_path / "files")
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        store.save("", b"data", "file.pdf")
+
+
+def test_file_store_allows_valid_ids(tmp_path: Path):
+    store = LocalFileStore(tmp_path / "files")
+    result = store.save("abcdef1234567890", b"hello", "paper.pdf")
+    assert Path(result).is_file()
+    assert store.read("abcdef1234567890", "paper.pdf") == b"hello"
 
