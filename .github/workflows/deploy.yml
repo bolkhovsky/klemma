@@ -40,20 +40,22 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
         run: |
           # Setup SSH
           mkdir -p ~/.ssh
           echo "$VPS_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new"
+          SSH_PORT="${VPS_SSH_PORT:-2222}"
+          SSH_OPTS="-i ~/.ssh/deploy_key -p $SSH_PORT -o StrictHostKeyChecking=accept-new"
+          SCP_OPTS="-i ~/.ssh/deploy_key -P $SSH_PORT -o StrictHostKeyChecking=accept-new"
 
           # Transfer image
-          scp $SSH_OPTS klemma-api.tar.gz "${VPS_USER}@${VPS_HOST}:/tmp/"
+          scp $SCP_OPTS klemma-api.tar.gz "${VPS_USER}@${VPS_HOST}:/tmp/"
 
           # Transfer compose files
-          scp $SSH_OPTS -r saas/deploy/ "${VPS_USER}@${VPS_HOST}:/opt/klemma/"
+          scp $SCP_OPTS -r saas/deploy/ "${VPS_USER}@${VPS_HOST}:/opt/klemma/"
 
           # Deploy on VPS
           ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" << 'DEPLOY_SCRIPT'
@@ -61,19 +63,19 @@ jobs:
             cd /opt/klemma/deploy
 
             # Load new image
-            docker load < /tmp/klemma-api.tar.gz
+            sudo docker load < /tmp/klemma-api.tar.gz
             rm /tmp/klemma-api.tar.gz
 
-            # Pull latest Redis/nginx images
-            docker compose pull redis nginx
+            # Pull latest Redis/Caddy images
+            sudo docker compose pull redis caddy
 
-            # Restart with new image (zero-downtime: nginx healthcheck waits)
-            docker compose up -d --force-recreate api
-            docker compose up -d
+            # Restart with new image
+            sudo docker compose up -d --force-recreate api worker
+            sudo docker compose up -d
 
             # Verify health
             sleep 5
-            curl -sf http://localhost:8000/health || exit 1
+            curl -sf http://localhost/health || exit 1
             echo "Deploy successful"
           DEPLOY_SCRIPT
 
