@@ -15,13 +15,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from klemma import __version__
+from klemma.stores.file_store import LocalFileStore
 from klemma.stores.paper_store import LocalPaperStore
 from klemma.stores.project_store import LocalProjectStore
 from klemma.stores.user_library import LocalUserLibrary
 from klemma.stores.user_store import LocalUserStore
 
 from .auth.deps import set_user_store
-from .deps import set_paper_store, set_project_store, set_user_library
+from .deps import set_file_store, set_paper_store, set_project_store, set_user_library
 from .routes import analyze, auth, health, library, process, projects, write
 
 
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     set_paper_store(LocalPaperStore(library_db))
     set_user_library(LocalUserLibrary(library_db))
     set_project_store(LocalProjectStore(data_dir / "project.db"))
+    set_file_store(LocalFileStore(data_dir / "files"))
     yield
     # Shutdown: close connections, flush caches
 

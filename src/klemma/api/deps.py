@@ -5,12 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from klemma.protocols import PaperStore, ProjectStore, UserLibrary
+    from klemma.protocols import FileStore, PaperStore, ProjectStore, UserLibrary
 
 # Module-level store references, set during app startup via lifespan.
 _paper_store: PaperStore | None = None
 _user_library: UserLibrary | None = None
 _project_store: ProjectStore | None = None
+_file_store: FileStore | None = None
 
 
 def set_paper_store(store: PaperStore) -> None:
@@ -50,3 +51,16 @@ def get_project_store() -> ProjectStore:
     if _project_store is None:
         raise RuntimeError("ProjectStore not configured — call set_project_store() at startup")
     return _project_store
+
+
+def set_file_store(store: FileStore) -> None:
+    """Set the FileStore instance."""
+    global _file_store  # noqa: PLW0603
+    _file_store = store
+
+
+def get_file_store() -> FileStore:
+    """Return the configured FileStore, or raise if not set."""
+    if _file_store is None:
+        raise RuntimeError("FileStore not configured — call set_file_store() at startup")
+    return _file_store
