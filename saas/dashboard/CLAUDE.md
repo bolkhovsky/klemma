@@ -13,11 +13,14 @@ saas/dashboard/
 ├── src/
 │   ├── api/client.ts      — typed API client, JWT management, token refresh
 │   ├── router/index.ts    — routes + auth guard
+│   ├── components/        — shared components
+│   │   └── AppLayout      — nav header (Обзор / Библиотека) + logout
 │   ├── views/             — page components
 │   │   ├── LandingView    — public landing page (Russian)
 │   │   ├── LoginView      — email/password login
 │   │   ├── RegisterView   — registration form
-│   │   └── DashboardView  — status cards + coverage
+│   │   ├── DashboardView  — status cards + coverage (uses AppLayout)
+│   │   └── LibraryView    — source table + add form + delete (uses AppLayout)
 │   └── assets/main.css    — Tailwind entry point
 ├── vite.config.ts         — Tailwind plugin + /api proxy
 └── package.json
