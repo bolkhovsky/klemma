@@ -244,11 +244,12 @@ class AIProviderBase:
         )
 
     def render_prompt(self, template_path: Path, **kwargs) -> str:
-        """Load a prompt template and render with Jinja2."""
-        from jinja2 import Template
+        """Load a prompt template and render with Jinja2 (sandboxed)."""
+        from jinja2.sandbox import SandboxedEnvironment
 
         raw = template_path.read_text(encoding="utf-8")
-        return Template(raw).render(**kwargs)
+        env = SandboxedEnvironment()
+        return env.from_string(raw).render(**kwargs)
 
     @property
     def interactive_available(self) -> bool:
