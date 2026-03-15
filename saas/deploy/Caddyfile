@@ -1,23 +1,19 @@
 {
-	# Global options
 	email ilya.bolkhovsky@gmail.com
 }
 
-# Default: HTTP-only mode (no domain yet)
-# Replace :80 with your domain (e.g. citeq.app) to enable automatic HTTPS
-:80 {
-	# API proxy
+litresearch.ru {
 	reverse_proxy api:8000 {
 		header_up X-Real-IP {remote_host}
 		header_up X-Forwarded-For {remote_host}
 		header_up X-Forwarded-Proto {scheme}
 	}
 
-	# Security headers
 	header {
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		-Server
 	}
 }
