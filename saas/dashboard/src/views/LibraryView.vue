@@ -22,6 +22,12 @@ const form = ref({ citekey: '', title: '', authors: '', year: '', doi: '' })
 const formError = ref('')
 const formLoading = ref(false)
 
+// Upload state
+const uploading = ref(false)
+const uploadError = ref('')
+const uploadSuccess = ref('')
+const dragOver = ref(false)
+
 async function loadSources() {
   loading.value = true
   try {
@@ -65,6 +71,54 @@ async function deleteSource(citekey: string) {
   }
 }
 
+async function handleUpload(files: FileList | null) {
+  if (!files || files.length === 0) return
+  uploadError.value = ''
+  uploadSuccess.value = ''
+  uploading.value = true
+
+  let uploaded = 0
+  let errors = 0
+  for (const file of Array.from(files)) {
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      errors++
+      continue
+    }
+    try {
+      const result = await library.upload(file)
+      uploaded++
+      if (result.deduplicated) {
+        uploadSuccess.value = `${file.name} — уже в библиотеке (дедупликация)`
+      }
+    } catch (e) {
+      errors++
+      uploadError.value = e instanceof ApiError ? e.message : `Ошибка загрузки ${file.name}`
+    }
+  }
+
+  if (uploaded > 0) {
+    uploadSuccess.value = uploadSuccess.value || `Загружено: ${uploaded} файл(ов)`
+    await loadSources()
+  }
+  if (errors > 0 && !uploadError.value) {
+    uploadError.value = `Пропущено: ${errors} (не PDF)`
+  }
+  uploading.value = false
+  dragOver.value = false
+}
+
+function onDrop(e: DragEvent) {
+  e.preventDefault()
+  dragOver.value = false
+  handleUpload(e.dataTransfer?.files ?? null)
+}
+
+function onFileInput(e: Event) {
+  const input = e.target as HTMLInputElement
+  handleUpload(input.files)
+  input.value = ''  // reset so same file can be selected again
+}
+
 onMounted(loadSources)
 </script>
 
@@ -79,6 +133,29 @@ onMounted(loadSources)
       >
         {{ showAddForm ? 'Отмена' : '+ Добавить источник' }}
       </button>
+    </div>
+
+    <!-- Upload zone -->
+    <div
+      class="mt-6 rounded-lg border-2 border-dashed p-8 text-center transition-colors"
+      :class="dragOver ? 'border-indigo-400 bg-indigo-50' : 'border-gray-300 bg-white'"
+      @dragover.prevent="dragOver = true"
+      @dragleave.prevent="dragOver = false"
+      @drop="onDrop"
+    >
+      <div v-if="uploading" class="text-sm text-gray-500">Загрузка...</div>
+      <div v-else>
+        <div class="text-3xl">📄</div>
+        <p class="mt-2 text-sm text-gray-600">
+          Перетащите PDF сюда или
+          <label class="cursor-pointer text-indigo-600 hover:text-indigo-500">
+            выберите файл
+            <input type="file" accept=".pdf" multiple class="hidden" @change="onFileInput" />
+          </label>
+        </p>
+      </div>
+      <div v-if="uploadError" class="mt-3 text-sm text-red-600">{{ uploadError }}</div>
+      <div v-if="uploadSuccess" class="mt-3 text-sm text-green-600">{{ uploadSuccess }}</div>
     </div>
 
     <!-- Add form -->
