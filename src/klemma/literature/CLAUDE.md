@@ -44,6 +44,13 @@ Vault note creation pipeline — largest module in the package:
 4. `create_vault_note()` — renders structured note with frontmatter + sections
 5. Reference gap extraction — bibliography cross-check against library
 
+### draft_parser.py (~170 lines)
+Parse structure and bibliography from draft PDFs for CiteQ `--from-draft` onboarding (#76). Uses PyMuPDF.
+- `DraftParseResult` — dataclass: title, sections, references, full_text, page_count
+- `DetectedSection` — dataclass: heading, level (1-3), text, page_start
+- `parse_draft_pdf(pdf_path) -> DraftParseResult` — extract title (font-size heuristic), numbered sections, bibliography entries
+- `_extract_bibliography(full_text)` — find bib section marker (EN/RU), parse entries via `reference_parser.parse_references()`
+
 ### reference_parser.py (~140 lines)
 Parse bibliography strings into structured `ParsedReference` dataclass. Pure string processing, no AI, no external deps. Foundation for CiteQ `--from-draft` onboarding (#76).
 - `ParsedReference` — dataclass: raw, authors, year, title, journal, doi, url
