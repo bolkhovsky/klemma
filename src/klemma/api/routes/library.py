@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import hashlib
+import re
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
 from klemma.models import UserRecord
 
 from ..auth.deps import get_current_user
-from ..deps import get_paper_store, get_user_library
+from ..deps import get_file_store, get_paper_store, get_user_library
 
 router = APIRouter()
 
@@ -213,5 +216,112 @@ async def delete_source(
         )
 
     library.remove_source(citekey)
+
+
+class UploadResponse(BaseModel):
+    """Response from PDF upload."""
+
+    citekey: str
+    paper_id: str
+    pdf_hash: str
+    status: str
+    deduplicated: bool = False
+
+
+MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
+
+
+@router.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
+async def upload_pdf(
+    file: UploadFile,
+    user: UserRecord = Depends(get_current_user),
+) -> UploadResponse:
+    """Upload a PDF and register it in the library.
+
+    Deduplicates by pdf_hash: if the same PDF already exists in the global
+    corpus, reuses the existing paper_id (no re-extraction needed).
+    Generates a citekey from the filename.
+    """
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only PDF files are accepted",
+        )
+
+    data = await file.read()
+    if len(data) < 1024:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File too small to be a valid PDF",
+        )
+    if len(data) > MAX_PDF_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds {MAX_PDF_BYTES // (1024 * 1024)} MB limit",
+        )
+
+    pdf_hash = hashlib.sha256(data).hexdigest()
+    paper_store = get_paper_store()
+    file_store = get_file_store()
+    library = get_user_library()
+
+    # Dedup: check if this PDF already exists in the global corpus
+    existing = paper_store.find_paper(pdf_hash=pdf_hash)
+    if existing:
+        citekey = _citekey_from_filename(file.filename)
+        # Check citekey conflict
+        if library.get_source_by_citekey(citekey):
+            citekey = f"{citekey}_{pdf_hash[:6]}"
+        library.add_source(existing.paper_id, citekey, status="completed")
+        return UploadResponse(
+            citekey=citekey,
+            paper_id=existing.paper_id,
+            pdf_hash=pdf_hash,
+            status="completed",
+            deduplicated=True,
+        )
+
+    # New paper: register + store file
+    citekey = _citekey_from_filename(file.filename)
+    if library.get_source_by_citekey(citekey):
+        citekey = f"{citekey}_{pdf_hash[:6]}"
+
+    paper_id = paper_store.register_paper(
+        title=file.filename.rsplit(".", 1)[0],
+        pdf_hash=pdf_hash,
+    )
+    # Sanitize filename for storage (FileStore validates, but give a clean 400)
+    safe_filename = re.sub(r"[^\w.\-]", "_", file.filename)
+    try:
+        file_store.save(paper_id, data, safe_filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    library.add_source(paper_id, citekey, status="pending")
+
+    return UploadResponse(
+        citekey=citekey,
+        paper_id=paper_id,
+        pdf_hash=pdf_hash,
+        status="pending",
+    )
+
+
+def _citekey_from_filename(filename: str) -> str:
+    """Generate a citekey from a PDF filename.
+
+    'Smith_2020_Machine_Learning.pdf' → 'smith2020machineLearning'
+    """
+    name = filename.rsplit(".", 1)[0]  # remove .pdf
+    # Split on common separators
+    parts = re.split(r"[_\-\s]+", name)
+    if not parts:
+        return "unknown"
+    # lowercase first part, camelCase rest
+    result = parts[0].lower()
+    for p in parts[1:]:
+        if p:
+            result += p[0].upper() + p[1:].lower() if len(p) > 1 else p.upper()
+    # Remove non-alphanumeric
+    return re.sub(r"[^a-zA-Z0-9]", "", result) or "unknown"
 
 

@@ -22,7 +22,8 @@ Library CRUD endpoints — mounted with `prefix="/library"`. All require Bearer 
 - `GET /library/sources/{citekey}` → `SourceDetailResponse` — source details + fragments
 - `POST /library/sources` → `SourceResponse` (201) — add source by metadata (DOI dedup)
 - `DELETE /library/sources/{citekey}` → 204 — remove from user library (keeps global corpus)
-- Schemas: `SourceResponse`, `SourceListResponse`, `SourceCreateRequest`, `FragmentResponse`, `SourceDetailResponse`
+- `POST /library/upload` → `UploadResponse` (201) — upload PDF file with content-addressable dedup (pdf_hash)
+- Schemas: `SourceResponse`, `SourceListResponse`, `SourceCreateRequest`, `FragmentResponse`, `SourceDetailResponse`, `UploadResponse`
 
 ### projects.py (~110 lines)
 Project endpoints — mounted with `prefix="/projects"`. All require Bearer auth.

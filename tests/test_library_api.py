@@ -7,9 +7,11 @@ from fastapi.testclient import TestClient
 
 from klemma.api.app import create_app
 from klemma.api.auth.deps import set_user_store
-from klemma.api.deps import set_paper_store, set_user_library
+from klemma.api.deps import set_file_store, set_paper_store, set_project_store, set_user_library
 from klemma.api.rate_limit import reset_rate_limiter
+from klemma.stores.file_store import LocalFileStore
 from klemma.stores.paper_store import LocalPaperStore
+from klemma.stores.project_store import LocalProjectStore
 from klemma.stores.user_library import LocalUserLibrary
 from klemma.stores.user_store import LocalUserStore
 
@@ -20,16 +22,20 @@ def stores(tmp_path):
     library_db = tmp_path / "library.db"
     paper_store = LocalPaperStore(library_db)
     user_library = LocalUserLibrary(library_db)
-    return user_store, paper_store, user_library
+    project_store = LocalProjectStore(tmp_path / "project.db")
+    file_store = LocalFileStore(tmp_path / "files")
+    return user_store, paper_store, user_library, project_store, file_store
 
 
 @pytest.fixture
 def client(stores) -> TestClient:
-    user_store, paper_store, user_library = stores
+    user_store, paper_store, user_library, project_store, file_store = stores
     app = create_app()
     set_user_store(user_store)
     set_paper_store(paper_store)
     set_user_library(user_library)
+    set_project_store(project_store)
+    set_file_store(file_store)
     reset_rate_limiter()
     return TestClient(app)
 
@@ -174,3 +180,77 @@ def test_delete_source_not_found(client):
     token = _register_and_get_token(client)
     resp = client.delete("/library/sources/nonexistent", headers=_auth_headers(token))
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# PDF Upload
+# ---------------------------------------------------------------------------
+
+
+def _fake_pdf(size: int = 2048) -> bytes:
+    """Create minimal bytes that pass the size check."""
+    return b"%PDF-1.4 " + b"x" * (size - 9)
+
+
+def test_upload_pdf(client):
+    token = _register_and_get_token(client)
+    resp = client.post(
+        "/library/upload",
+        files={"file": ("smith2020_ml.pdf", _fake_pdf(), "application/pdf")},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["citekey"]  # generated from filename
+    assert data["paper_id"]
+    assert data["pdf_hash"]
+    assert data["status"] == "pending"
+    assert data["deduplicated"] is False
+
+
+def test_upload_dedup(client):
+    token = _register_and_get_token(client)
+    pdf = _fake_pdf()
+    r1 = client.post(
+        "/library/upload",
+        files={"file": ("paper_a.pdf", pdf, "application/pdf")},
+        headers=_auth_headers(token),
+    )
+    r2 = client.post(
+        "/library/upload",
+        files={"file": ("paper_b.pdf", pdf, "application/pdf")},
+        headers=_auth_headers(token),
+    )
+    assert r1.status_code == 201
+    assert r2.status_code == 201
+    # Same PDF → same paper_id
+    assert r1.json()["paper_id"] == r2.json()["paper_id"]
+    assert r2.json()["deduplicated"] is True
+
+
+def test_upload_rejects_non_pdf(client):
+    token = _register_and_get_token(client)
+    resp = client.post(
+        "/library/upload",
+        files={"file": ("readme.txt", b"hello world", "text/plain")},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 400
+
+
+def test_upload_rejects_tiny_file(client):
+    token = _register_and_get_token(client)
+    resp = client.post(
+        "/library/upload",
+        files={"file": ("tiny.pdf", b"%PDF", "application/pdf")},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 400
+
+
+def test_upload_requires_auth(client):
+    resp = client.post(
+        "/library/upload",
+        files={"file": ("test.pdf", _fake_pdf(), "application/pdf")},
+    )
+    assert resp.status_code == 403
