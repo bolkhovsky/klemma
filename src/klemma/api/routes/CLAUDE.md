@@ -16,6 +16,14 @@ Auth endpoints — mounted with `prefix="/auth"`.
 - `POST /auth/refresh` → `TokenResponse` (200) — rotates refresh token
 - `GET /auth/me` → `UserResponse` (requires Bearer token)
 
+### library.py (~210 lines)
+Library CRUD endpoints — mounted with `prefix="/library"`. All require Bearer auth.
+- `GET /library/sources` → `SourceListResponse` — list all user sources with paper metadata
+- `GET /library/sources/{citekey}` → `SourceDetailResponse` — source details + fragments
+- `POST /library/sources` → `SourceResponse` (201) — add source by metadata (DOI dedup)
+- `DELETE /library/sources/{citekey}` → 204 — remove from user library (keeps global corpus)
+- Schemas: `SourceResponse`, `SourceListResponse`, `SourceCreateRequest`, `FragmentResponse`, `SourceDetailResponse`
+
 ## Adding a new router
 
 1. Create `<domain>.py` with `router = APIRouter(tags=["<domain>"])` and route handlers.

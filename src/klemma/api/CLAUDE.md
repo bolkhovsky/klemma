@@ -13,6 +13,12 @@ Application factory — creates and configures the FastAPI app.
 - `create_app() -> FastAPI` — mounts all routers, sets title/version/lifespan
 - `lifespan(app)` — async context manager: startup (DB init, config checks) + shutdown (close connections)
 
+### deps.py (38 lines)
+Shared FastAPI dependencies for data store access.
+- `set_paper_store(store)` / `get_paper_store()` — module-level `PaperStore` singleton
+- `set_user_library(lib)` / `get_user_library()` — module-level `UserLibrary` singleton
+- Both set in `app.py` lifespan, used by route handlers via `Depends()`
+
 ### routes/
 Route modules. See [routes/CLAUDE.md](routes/CLAUDE.md).
 

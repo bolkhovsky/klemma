@@ -160,6 +160,18 @@ class LocalPaperStore:
                     return _row_to_paper(row, PaperRecord)
         return None
 
+    def get_paper_by_id(self, paper_id: str) -> Optional["PaperRecord"]:
+        """Look up a paper by its paper_id. Returns None if not found."""
+        from ..models import PaperRecord
+
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM papers WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+        if not row:
+            return None
+        return _row_to_paper(row, PaperRecord)
+
     def register_paper(
         self,
         *,

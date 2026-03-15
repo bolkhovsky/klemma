@@ -187,6 +187,14 @@ class LocalUserLibrary:
     # Additional helpers (beyond Protocol minimum)                        #
     # ------------------------------------------------------------------ #
 
+    def remove_source(self, citekey: str) -> bool:
+        """Remove a source from the user's library. Returns True if existed."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM user_source_chapters WHERE citekey = ?", (citekey,))
+            conn.execute("DELETE FROM user_source_sections WHERE citekey = ?", (citekey,))
+            cursor = conn.execute("DELETE FROM user_sources WHERE citekey = ?", (citekey,))
+        return cursor.rowcount > 0
+
     def update_status(self, citekey: str, status: str) -> None:
         """Update processing status for citekey."""
         with self._conn() as conn:
