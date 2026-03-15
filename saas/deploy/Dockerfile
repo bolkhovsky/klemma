@@ -7,13 +7,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libmupdf-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python deps
+# Copy source first (required by hatchling build)
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e ".[api,recommended]"
-
-# Copy source
 COPY src/ ./src/
 COPY prompts/ ./prompts/
+
+# Install Python deps (non-editable for production)
+RUN pip install --no-cache-dir ".[api,recommended]"
 
 # Create data directory
 RUN mkdir -p /data/klemma

@@ -10,8 +10,9 @@ services:
       - KLEMMA_CORS_ORIGINS=${KLEMMA_CORS_ORIGINS:-}
     volumes:
       - klemma-data:/data/klemma
-    ports:
-      - "8000:8000"
+    # No host port — only nginx reaches the API via Docker network
+    expose:
+      - "8000"
     depends_on:
       redis:
         condition: service_started
