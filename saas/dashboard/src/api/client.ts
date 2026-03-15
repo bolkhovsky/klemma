@@ -147,6 +147,24 @@ export const analyze = {
     }>('/analyze/status'),
 }
 
+// Projects
+export const projects = {
+  coverage: () =>
+    request<{ total_sources: number; sections: Record<string, number>; chapters: Record<string, number> }>('/projects/coverage'),
+
+  sectionSources: (section: string) =>
+    request<{ section: string; citekeys: string[]; count: number }>(`/projects/sections/${section}/sources`),
+
+  assignSections: (citekey: string, sections: string[], chapters: number[] = []) =>
+    request<{ citekey: string; sections: string[] }>('/projects/sections/assign', {
+      method: 'POST',
+      body: JSON.stringify({ citekey, sections, chapters }),
+    }),
+
+  sourceSections: (citekey: string) =>
+    request<{ citekey: string; sections: string[] }>(`/projects/sources/${citekey}/sections`),
+}
+
 // Process
 export const process = {
   submit: (citekey: string) =>
