@@ -52,11 +52,20 @@ function logout() {
             <RouterLink
               to="/library"
               class="relative rounded-md px-3.5 py-2 text-sm font-medium transition-colors"
-              :class="route.path === '/library'
+              :class="route.path.startsWith('/library')
                 ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
                 : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
             >
               Библиотека
+            </RouterLink>
+            <RouterLink
+              to="/coverage"
+              class="relative rounded-md px-3.5 py-2 text-sm font-medium transition-colors"
+              :class="route.path === '/coverage'
+                ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
+                : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
+            >
+              Покрытие
             </RouterLink>
           </nav>
         </div>

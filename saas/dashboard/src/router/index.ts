@@ -36,6 +36,12 @@ const router = createRouter({
       component: () => import('../views/SourceView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/coverage',
+      name: 'coverage',
+      component: () => import('../views/CoverageView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 

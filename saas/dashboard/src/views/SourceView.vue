@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import { library, process, ApiError } from '@/api/client'
+import { library, process, projects, ApiError } from '@/api/client'
 import AppLayout from '@/components/AppLayout.vue'
 
 interface Fragment {
@@ -77,6 +77,51 @@ const fragmentsByType = computed(() => {
   return groups
 })
 
+// Section assignment state
+const assignedSections = ref<string[]>([])
+const newSection = ref('')
+const assignLoading = ref(false)
+const assignError = ref('')
+
+async function loadSections() {
+  try {
+    const resp = await projects.sourceSections(citekey)
+    assignedSections.value = resp.sections
+  } catch {
+    assignedSections.value = []
+  }
+}
+
+async function addSection() {
+  const section = newSection.value.trim()
+  if (!section || assignedSections.value.includes(section)) return
+  assignLoading.value = true
+  assignError.value = ''
+  try {
+    const updated = [...assignedSections.value, section]
+    await projects.assignSections(citekey, updated)
+    assignedSections.value = updated
+    newSection.value = ''
+  } catch (e) {
+    assignError.value = e instanceof ApiError ? e.message : 'Ошибка назначения'
+  } finally {
+    assignLoading.value = false
+  }
+}
+
+async function removeSection(section: string) {
+  assignLoading.value = true
+  try {
+    const updated = assignedSections.value.filter(s => s !== section)
+    await projects.assignSections(citekey, updated)
+    assignedSections.value = updated
+  } catch {
+    // ignore
+  } finally {
+    assignLoading.value = false
+  }
+}
+
 async function loadSource() {
   loading.value = true
   error.value = ''
@@ -137,7 +182,10 @@ function stopPolling() {
   }
 }
 
-onMounted(loadSource)
+onMounted(() => {
+  loadSource()
+  loadSections()
+})
 onUnmounted(stopPolling)
 </script>
 
@@ -234,6 +282,51 @@ onUnmounted(stopPolling)
           Аннотация
         </h2>
         <p class="text-sm text-[var(--color-ink-light)] leading-relaxed">{{ source.abstract }}</p>
+      </div>
+
+      <!-- Section assignment -->
+      <div class="animate-in animate-in-delay-3 rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] p-6">
+        <h2 class="font-[var(--font-display)] text-sm font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider mb-4">
+          Разделы диссертации
+        </h2>
+
+        <!-- Assigned sections -->
+        <div v-if="assignedSections.length > 0" class="flex flex-wrap gap-2 mb-4">
+          <span
+            v-for="section in assignedSections"
+            :key="section"
+            class="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-accent-pale)] px-3 py-1 text-sm font-medium text-[var(--color-accent-deep)]"
+          >
+            {{ section }}
+            <button
+              @click="removeSection(section)"
+              class="text-[var(--color-accent)] hover:text-[var(--color-err)] transition-colors"
+              :disabled="assignLoading"
+            >
+              &times;
+            </button>
+          </span>
+        </div>
+        <p v-else class="text-sm text-[var(--color-ink-muted)] mb-4">
+          Не назначен ни одному разделу.
+        </p>
+
+        <!-- Add section form -->
+        <form @submit.prevent="addSection" class="flex items-center gap-2">
+          <input
+            v-model="newSection"
+            placeholder="Номер раздела (например: 1.2.3)"
+            class="flex-1 rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper)] px-3 py-2 text-sm text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+          />
+          <button
+            type="submit"
+            :disabled="assignLoading || !newSection.trim()"
+            class="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] disabled:opacity-50 transition-colors"
+          >
+            Назначить
+          </button>
+        </form>
+        <div v-if="assignError" class="mt-2 text-sm text-[var(--color-err)]">{{ assignError }}</div>
       </div>
 
       <!-- Fragments -->
