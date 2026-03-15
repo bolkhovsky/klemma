@@ -19,6 +19,13 @@ Shared FastAPI dependencies for data store access.
 - `set_user_library(lib)` / `get_user_library()` — module-level `UserLibrary` singleton
 - Both set in `app.py` lifespan, used by route handlers via `Depends()`
 
+### tasks.py (~60 lines)
+Async task definitions for rq worker. Tasks receive primitive args (worker runs in separate process).
+- `process_source(paper_id, citekey, data_dir)` — extraction task stub (initializes own stores)
+
+### worker.py (~25 lines)
+RQ worker entry point: `python -m klemma.api.worker`
+
 ### routes/
 Route modules. See [routes/CLAUDE.md](routes/CLAUDE.md).
 
@@ -32,7 +39,7 @@ Route modules. See [routes/CLAUDE.md](routes/CLAUDE.md).
 
 Docker Compose stack in `saas/deploy/`:
 - `Dockerfile` — Python 3.12, installs `[api,recommended]`, uvicorn 2 workers
-- `docker-compose.yml` — 4 services: api, redis, nginx, certbot
+- `docker-compose.yml` — 5 services: api, worker, redis, nginx, certbot
 - `nginx/default.conf` — reverse proxy, security headers, XFF override
 - `.env.example` — required secrets (JWT secret)
 

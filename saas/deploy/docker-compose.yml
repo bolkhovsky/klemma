@@ -8,6 +8,7 @@ services:
       - KLEMMA_DATA_DIR=/data/klemma
       - KLEMMA_JWT_SECRET=${KLEMMA_JWT_SECRET}
       - KLEMMA_CORS_ORIGINS=${KLEMMA_CORS_ORIGINS:-}
+      - REDIS_URL=redis://redis:6379
     volumes:
       - klemma-data:/data/klemma
     # No host port — only nginx reaches the API via Docker network
@@ -22,6 +23,21 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: saas/deploy/Dockerfile
+    command: ["python", "-m", "klemma.api.worker"]
+    environment:
+      - KLEMMA_DATA_DIR=/data/klemma
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - klemma-data:/data/klemma
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine

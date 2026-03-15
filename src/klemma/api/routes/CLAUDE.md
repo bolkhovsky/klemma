@@ -31,6 +31,13 @@ Project endpoints — mounted with `prefix="/projects"`. All require Bearer auth
 - `POST /projects/sections/assign` → assign source to sections (validates source exists in library)
 - `GET /projects/sources/{citekey}/sections` → sections assigned to a source
 
+### process.py (~120 lines)
+Process endpoints — mounted with `prefix="/process"`. All require Bearer auth.
+- `POST /process/sources/{citekey}` → `JobSubmitResponse` (202) — enqueue async extraction job
+- `GET /process/jobs/{job_id}` → `JobStatusResponse` — poll job status (queued/started/finished/failed)
+- Requires Redis + rq; returns 503 if unavailable
+- Worker entry point: `python -m klemma.api.worker`
+
 ### analyze.py (~90 lines)
 Analyze endpoints — mounted with `prefix="/analyze"`. All require Bearer auth.
 - `GET /analyze/status` → `StatusResponse` — source counts (total/completed/pending/failed), coverage by section, total fragment count. SaaS equivalent of `klemma status`.
