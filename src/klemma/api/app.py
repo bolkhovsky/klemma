@@ -22,7 +22,7 @@ from klemma.stores.user_store import LocalUserStore
 
 from .auth.deps import set_user_store
 from .deps import set_paper_store, set_project_store, set_user_library
-from .routes import auth, health, library, projects
+from .routes import analyze, auth, health, library, projects
 
 
 @asynccontextmanager
@@ -79,8 +79,8 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/auth", tags=["auth"])
     app.include_router(library.router, prefix="/library", tags=["library"])
     app.include_router(projects.router, prefix="/projects", tags=["projects"])
+    app.include_router(analyze.router, prefix="/analyze", tags=["analyze"])
     # app.include_router(process.router, prefix="/process", tags=["process"])
-    # app.include_router(analyze.router, prefix="/analyze", tags=["analyze"])
     # app.include_router(write.router, prefix="/write", tags=["write"])
 
     return app

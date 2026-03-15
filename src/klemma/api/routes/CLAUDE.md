@@ -31,6 +31,10 @@ Project endpoints — mounted with `prefix="/projects"`. All require Bearer auth
 - `POST /projects/sections/assign` → assign source to sections (validates source exists in library)
 - `GET /projects/sources/{citekey}/sections` → sections assigned to a source
 
+### analyze.py (~90 lines)
+Analyze endpoints — mounted with `prefix="/analyze"`. All require Bearer auth.
+- `GET /analyze/status` → `StatusResponse` — source counts (total/completed/pending/failed), coverage by section, total fragment count. SaaS equivalent of `klemma status`.
+
 ## Adding a new router
 
 1. Create `<domain>.py` with `router = APIRouter(tags=["<domain>"])` and route handlers.
