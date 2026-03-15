@@ -290,7 +290,12 @@ async def upload_pdf(
         title=file.filename.rsplit(".", 1)[0],
         pdf_hash=pdf_hash,
     )
-    file_store.save(paper_id, data, file.filename)
+    # Sanitize filename for storage (FileStore validates, but give a clean 400)
+    safe_filename = re.sub(r"[^\w.\-]", "_", file.filename)
+    try:
+        file_store.save(paper_id, data, safe_filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     library.add_source(paper_id, citekey, status="pending")
 
     return UploadResponse(
