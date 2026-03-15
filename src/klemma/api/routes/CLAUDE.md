@@ -24,6 +24,13 @@ Library CRUD endpoints — mounted with `prefix="/library"`. All require Bearer 
 - `DELETE /library/sources/{citekey}` → 204 — remove from user library (keeps global corpus)
 - Schemas: `SourceResponse`, `SourceListResponse`, `SourceCreateRequest`, `FragmentResponse`, `SourceDetailResponse`
 
+### projects.py (~110 lines)
+Project endpoints — mounted with `prefix="/projects"`. All require Bearer auth.
+- `GET /projects/coverage` → `CoverageStatsResponse` — total sources, per-section/chapter counts
+- `GET /projects/sections/{section}/sources` → `SectionSourcesResponse` — citekeys assigned to a section
+- `POST /projects/sections/assign` → assign source to sections (validates source exists in library)
+- `GET /projects/sources/{citekey}/sections` → sections assigned to a source
+
 ## Adding a new router
 
 1. Create `<domain>.py` with `router = APIRouter(tags=["<domain>"])` and route handlers.
