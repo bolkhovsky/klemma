@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from klemma.api.app import create_app
 from klemma.api.auth.deps import set_user_store
 from klemma.api.deps import set_paper_store, set_user_library
+from klemma.api.rate_limit import reset_rate_limiter
 from klemma.stores.paper_store import LocalPaperStore
 from klemma.stores.user_library import LocalUserLibrary
 from klemma.stores.user_store import LocalUserStore
@@ -29,6 +30,7 @@ def client(stores) -> TestClient:
     set_user_store(user_store)
     set_paper_store(paper_store)
     set_user_library(user_library)
+    reset_rate_limiter()
     return TestClient(app)
 
 
