@@ -1,0 +1,82 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - production
+          - staging
+
+# Only one deploy at a time
+concurrency:
+  group: deploy-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t klemma-api:${{ github.sha }} \
+            -t klemma-api:latest \
+            -f saas/deploy/Dockerfile \
+            .
+
+      - name: Save Docker image
+        run: docker save klemma-api:latest | gzip > klemma-api.tar.gz
+
+      - name: Deploy to VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          # Setup SSH
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new"
+
+          # Transfer image
+          scp $SSH_OPTS klemma-api.tar.gz "${VPS_USER}@${VPS_HOST}:/tmp/"
+
+          # Transfer compose files
+          scp $SSH_OPTS -r saas/deploy/ "${VPS_USER}@${VPS_HOST}:/opt/klemma/"
+
+          # Deploy on VPS
+          ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" << 'DEPLOY_SCRIPT'
+            set -e
+            cd /opt/klemma/deploy
+
+            # Load new image
+            docker load < /tmp/klemma-api.tar.gz
+            rm /tmp/klemma-api.tar.gz
+
+            # Pull latest Redis/nginx images
+            docker compose pull redis nginx
+
+            # Restart with new image (zero-downtime: nginx healthcheck waits)
+            docker compose up -d --force-recreate api
+            docker compose up -d
+
+            # Verify health
+            sleep 5
+            curl -sf http://localhost:8000/health || exit 1
+            echo "Deploy successful"
+          DEPLOY_SCRIPT
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
