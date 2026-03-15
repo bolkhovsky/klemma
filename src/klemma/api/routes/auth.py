@@ -22,12 +22,16 @@ from ..auth.tokens import (
     hash_token,
     refresh_token_expires_at,
 )
+from ..rate_limit import rate_limit
 
 router = APIRouter()
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(body: UserCreate) -> TokenResponse:
+async def register(
+    body: UserCreate,
+    _rate=Depends(rate_limit(3, 60)),
+) -> TokenResponse:
     """Create a new user account and return token pair."""
     store = get_user_store()
     pw_hash = hash_password(body.password)
@@ -47,7 +51,10 @@ async def register(body: UserCreate) -> TokenResponse:
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: UserLogin) -> TokenResponse:
+async def login(
+    body: UserLogin,
+    _rate=Depends(rate_limit(5, 60)),
+) -> TokenResponse:
     """Authenticate with email/password and return token pair."""
     store = get_user_store()
     user = store.get_user_by_email(body.email)
@@ -65,7 +72,10 @@ async def login(body: UserLogin) -> TokenResponse:
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(body: RefreshRequest) -> TokenResponse:
+async def refresh(
+    body: RefreshRequest,
+    _rate=Depends(rate_limit(10, 60)),
+) -> TokenResponse:
     """Exchange a valid refresh token for a new token pair (rotation)."""
     payload = decode_token(body.refresh_token)
     if payload is None or payload.get("type") != "refresh":

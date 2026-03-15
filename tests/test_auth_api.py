@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from klemma.api.app import create_app
 from klemma.api.auth.deps import set_user_store
+from klemma.api.rate_limit import reset_rate_limiter
 from klemma.stores.user_store import LocalUserStore
 
 
@@ -20,6 +21,7 @@ def client(user_store) -> TestClient:
     app = create_app()
     # Override the lifespan-set store with our test store
     set_user_store(user_store)
+    reset_rate_limiter()
     return TestClient(app)
 
 
@@ -188,3 +190,39 @@ def test_refresh_reuse_revokes_all(client):
 def test_refresh_invalid_token(client):
     resp = client.post("/auth/refresh", json={"refresh_token": "garbage"})
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+
+def test_register_rate_limit(client):
+    """Registration is limited to 3 requests per minute per IP."""
+    for i in range(3):
+        client.post(
+            "/auth/register",
+            json={"email": f"rate{i}@example.com", "password": "secret123"},
+        )
+    # 4th request should be throttled
+    resp = client.post(
+        "/auth/register",
+        json={"email": "rate3@example.com", "password": "secret123"},
+    )
+    assert resp.status_code == 429
+    assert "Retry-After" in resp.headers
+
+
+def test_login_rate_limit(client):
+    """Login is limited to 5 requests per minute per IP."""
+    for i in range(5):
+        client.post(
+            "/auth/login",
+            json={"email": f"nobody{i}@example.com", "password": "secret123"},
+        )
+    # 6th request should be throttled
+    resp = client.post(
+        "/auth/login",
+        json={"email": "nobody5@example.com", "password": "secret123"},
+    )
+    assert resp.status_code == 429
