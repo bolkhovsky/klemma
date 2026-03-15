@@ -38,3 +38,5 @@ config.yaml
 PROJECT_LOG.md
 *.code-workspace
 secure-ai-assistant-roadmap.md
+saas/dashboard/node_modules/
+saas/dashboard/dist/
