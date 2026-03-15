@@ -7,7 +7,7 @@ import { RouterLink } from 'vue-router'
     <!-- Hero -->
     <header class="mx-auto max-w-4xl px-6 py-24 text-center">
       <h1 class="text-5xl font-bold tracking-tight text-gray-900">
-        CiteQ
+        LitResearch
       </h1>
       <p class="mt-4 text-xl text-gray-600">
         AI-ассистент для академического письма
@@ -54,7 +54,7 @@ import { RouterLink } from 'vue-router'
 
     <!-- Footer -->
     <footer class="border-t border-gray-100 py-8 text-center text-sm text-gray-400">
-      CiteQ &copy; 2026. Powered by Klemma.
+      LitResearch &copy; 2026. Powered by Klemma.
     </footer>
   </div>
 </template>

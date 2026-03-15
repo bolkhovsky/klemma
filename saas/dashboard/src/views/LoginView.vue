@@ -28,7 +28,7 @@ async function handleLogin() {
 <template>
   <div class="flex min-h-screen items-center justify-center bg-gray-50 px-4">
     <div class="w-full max-w-sm">
-      <h1 class="text-center text-2xl font-bold text-gray-900">Вход в CiteQ</h1>
+      <h1 class="text-center text-2xl font-bold text-gray-900">Вход в LitResearch</h1>
 
       <form class="mt-8 space-y-4" @submit.prevent="handleLogin">
         <div v-if="error" class="rounded-md bg-red-50 p-3 text-sm text-red-700">
