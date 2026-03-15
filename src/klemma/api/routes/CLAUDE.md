@@ -42,6 +42,13 @@ Process endpoints — mounted with `prefix="/process"`. All require Bearer auth.
 Analyze endpoints — mounted with `prefix="/analyze"`. All require Bearer auth.
 - `GET /analyze/status` → `StatusResponse` — source counts (total/completed/pending/failed), coverage by section, total fragment count. SaaS equivalent of `klemma status`.
 
+### write.py (~110 lines)
+Write endpoints — mounted with `prefix="/write"`. All require Bearer auth.
+- `POST /write/research` → `WriteJobResponse` (202) — enqueue research briefing job
+- `POST /write/draft` → `WriteJobResponse` (202) — enqueue section draft job
+- Jobs polled via shared `GET /process/jobs/{job_id}`
+- Task stubs in `api/tasks.py` (AI pipeline not yet wired for headless SaaS)
+
 ## Adding a new router
 
 1. Create `<domain>.py` with `router = APIRouter(tags=["<domain>"])` and route handlers.
