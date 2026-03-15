@@ -29,14 +29,17 @@ from .routes import auth, health, library, projects
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup and shutdown hooks."""
     # Startup: initialize stores
+    # SaaS Phase 1: SQLite backends via Protocol interfaces.
+    # Phase 2 swaps to PostgreSQL — same Protocols, different implementations.
+    # project.db lives in KLEMMA_DATA_DIR (not per-directory) because the SaaS
+    # API has no concept of filesystem project directories — one project per user.
     data_dir = Path(os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma")))
     user_store = LocalUserStore(data_dir / "users.db")
     set_user_store(user_store)
     library_db = data_dir / "library.db"
     set_paper_store(LocalPaperStore(library_db))
     set_user_library(LocalUserLibrary(library_db))
-    project_db = data_dir / "project.db"
-    set_project_store(LocalProjectStore(project_db))
+    set_project_store(LocalProjectStore(data_dir / "project.db"))
     yield
     # Shutdown: close connections, flush caches
 

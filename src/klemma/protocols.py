@@ -107,6 +107,14 @@ class ProjectStore(Protocol):
 
     def get_coverage_stats(self) -> dict: ...
 
+    def get_sources_by_section(self, section: str) -> list[str]:
+        """Return citekeys assigned to a section."""
+        ...
+
+    def get_source_sections(self, citekey: str) -> list[str]:
+        """Return section list for a citekey."""
+        ...
+
     def get_reference_gaps(self, **kwargs: object) -> list[dict]: ...
 
 
