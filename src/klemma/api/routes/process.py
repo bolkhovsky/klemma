@@ -78,21 +78,27 @@ async def submit_process_job(
             detail=f"Source '{citekey}' not found in library",
         )
 
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-    redis_conn = Redis.from_url(redis_url)
-    q = Queue(connection=redis_conn)
+    try:
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        redis_conn = Redis.from_url(redis_url)
+        q = Queue(connection=redis_conn)
 
-    from ..tasks import process_source
+        from ..tasks import process_source
 
-    data_dir = os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma"))
-    job = q.enqueue(
-        process_source,
-        src.paper_id,
-        citekey,
-        data_dir,
-        job_timeout=300,
-    )
-    return JobSubmitResponse(job_id=job.id, status="queued", citekey=citekey)
+        data_dir = os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma"))
+        job = q.enqueue(
+            process_source,
+            src.paper_id,
+            citekey,
+            data_dir,
+            job_timeout=300,
+        )
+        return JobSubmitResponse(job_id=job.id, status="queued", citekey=citekey)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Redis unavailable: {type(exc).__name__}",
+        )
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
@@ -107,6 +113,8 @@ async def get_job_status(
             detail="Redis/rq not available",
         )
 
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
     try:
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
         redis_conn = Redis.from_url(redis_url)
@@ -116,6 +124,11 @@ async def get_job_status(
             job_id=job_id,
             status=job.get_status(),
             result=job.result if job.is_finished else None,
+        )
+    except RedisConnectionError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Redis unavailable",
         )
     except Exception:
         raise HTTPException(
