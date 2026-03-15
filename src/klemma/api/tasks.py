@@ -59,3 +59,40 @@ def process_source(paper_id: str, citekey: str, data_dir: str) -> dict:
         "citekey": citekey,
         "detail": "Extraction pipeline not yet wired for SaaS",
     }
+
+
+def generate_research(section: str, data_dir: str) -> dict:
+    """Generate a research briefing for a section.
+
+    This is the rq task equivalent of `klemma research -s <section>`.
+    Runs in the worker process — initializes its own stores.
+
+    Returns a dict with status and content.
+    """
+    # TODO: wire to researcher.research_section() when adapted for headless mode.
+    # Requires: AI backend config, fragment RAG, outline context — none available
+    # in SaaS context yet.
+    logger.info("generate_research: section %s — not yet wired", section)
+    return {
+        "status": "pending",
+        "section": section,
+        "detail": "Research pipeline not yet wired for SaaS",
+    }
+
+
+def generate_draft(section: str, data_dir: str) -> dict:
+    """Generate a section draft.
+
+    This is the rq task equivalent of `klemma draft -s <section>`.
+    Runs in the worker process — initializes its own stores.
+
+    Returns a dict with status and content.
+    """
+    # TODO: wire to drafter.generate_draft() when adapted for headless mode.
+    # Requires: AI backend config, research report, RAG fragments, outline context.
+    logger.info("generate_draft: section %s — not yet wired", section)
+    return {
+        "status": "pending",
+        "section": section,
+        "detail": "Draft pipeline not yet wired for SaaS",
+    }
