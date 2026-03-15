@@ -1,6 +1,5 @@
 """Acquire papers: download PDF → generate citekey → register in klemma."""
 
-import ipaddress
 import json
 import logging
 import re
@@ -15,6 +14,7 @@ import requests
 
 from ..hashing import compute_pdf_hash
 from ..literature.metadata import resolve_metadata
+from ..literature.url_safety import is_safe_url
 
 logger = logging.getLogger(__name__)
 
@@ -51,25 +51,11 @@ class AcquireResult:
 
 
 def _is_allowed_download_url(url: str) -> bool:
-    """Allow only safe external HTTP(S) URLs."""
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return False
+    """Allow only safe external HTTP(S) URLs.
 
-    host = (parsed.hostname or "").lower()
-    if not host or host == "localhost" or host.endswith(".local"):
-        return False
-
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return True
-
-    blocked = (
-        ip.is_private or ip.is_loopback or ip.is_link_local
-        or ip.is_multicast or ip.is_reserved or ip.is_unspecified
-    )
-    return not blocked
+    Delegates to shared ``is_safe_url`` (literature/url_safety.py).
+    """
+    return is_safe_url(url)
 
 
 def download_pdf(

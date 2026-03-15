@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from klemma.literature.url_safety import is_safe_url
+from klemma.literature.web import fetch_url_text
 from klemma.skills import acquirer
 from klemma.stores.file_store import LocalFileStore
 from klemma.vault import VaultAdapter
@@ -54,6 +56,31 @@ def test_vault_create_note_allows_valid_path(tmp_path: Path):
     assert path.exists()
     assert path.read_text(encoding="utf-8") == "ok"
     assert path.parent == (tmp_path / "vault" / "Notes").resolve()
+
+
+def test_is_safe_url_blocks_private_ips():
+    assert not is_safe_url("http://localhost/data")
+    assert not is_safe_url("http://127.0.0.1/data")
+    assert not is_safe_url("http://192.168.1.1/data")
+    assert not is_safe_url("http://10.0.0.1/data")
+    assert not is_safe_url("ftp://example.com/data")
+    assert not is_safe_url("file:///etc/passwd")
+    assert is_safe_url("https://example.com/data")
+    assert is_safe_url("https://arxiv.org/pdf/2101.12345.pdf")
+
+
+def test_fetch_url_text_rejects_unsafe_url(monkeypatch):
+    """fetch_url_text must block SSRF-prone URLs without making a request."""
+    import requests as requests_mod
+
+    def _never_called(*args, **kwargs):
+        raise AssertionError("requests.get must not be called for blocked URL")
+
+    monkeypatch.setattr(requests_mod, "get", _never_called)
+    assert fetch_url_text("http://localhost/secret") == ""
+    assert fetch_url_text("http://127.0.0.1/secret") == ""
+    assert fetch_url_text("http://192.168.1.1/internal") == ""
+    assert fetch_url_text("ftp://example.com/file") == ""
 
 
 def test_download_pdf_rejects_unsafe_url(monkeypatch):
