@@ -30,6 +30,12 @@ const router = createRouter({
       component: () => import('../views/LibraryView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/library/:citekey',
+      name: 'source',
+      component: () => import('../views/SourceView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 

@@ -1,1 +1,62 @@
 @import "tailwindcss";
+
+@theme {
+  /* Academic palette — warm, not clinical */
+  --color-ink: #1a1a2e;
+  --color-ink-light: #3d3d5c;
+  --color-ink-muted: #6b6b8a;
+  --color-paper: #faf9f7;
+  --color-paper-warm: #f5f3ef;
+  --color-paper-white: #ffffff;
+
+  /* Teal accent — scholarly, not corporate */
+  --color-accent: #0d7377;
+  --color-accent-light: #14919b;
+  --color-accent-pale: #e0f4f4;
+  --color-accent-deep: #065a5e;
+
+  /* Status */
+  --color-ok: #2d6a4f;
+  --color-ok-bg: #d8f3dc;
+  --color-warn: #b45309;
+  --color-warn-bg: #fef3c7;
+  --color-err: #991b1b;
+  --color-err-bg: #fee2e2;
+
+  /* Borders */
+  --color-rule: #e8e5df;
+  --color-rule-light: #f0ede8;
+
+  /* Fonts */
+  --font-display: 'Literata', 'Georgia', serif;
+  --font-body: 'Source Sans 3', 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* Base */
+body {
+  font-family: var(--font-body);
+  color: var(--color-ink);
+  background: var(--color-paper);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-rule); border-radius: 3px; }
+
+/* Subtle entry animation */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-in {
+  animation: fade-up 0.4s ease-out both;
+}
+
+.animate-in-delay-1 { animation-delay: 0.08s; }
+.animate-in-delay-2 { animation-delay: 0.16s; }
+.animate-in-delay-3 { animation-delay: 0.24s; }
+.animate-in-delay-4 { animation-delay: 0.32s; }

@@ -31,6 +31,9 @@ services:
     environment:
       - KLEMMA_DATA_DIR=/data/klemma
       - REDIS_URL=redis://redis:6379
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - KLEMMA_AI_MODEL=${KLEMMA_AI_MODEL:-anthropic/claude-sonnet-4-20250514}
     volumes:
       - klemma-data:/data/klemma
     depends_on:
