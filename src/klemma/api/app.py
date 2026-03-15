@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from klemma import __version__
 from klemma.stores.user_store import LocalUserStore
@@ -42,6 +43,23 @@ def create_app() -> FastAPI:
         docs_url=None if is_production else "/docs",
         redoc_url=None if is_production else "/redoc",
         openapi_url=None if is_production else "/openapi.json",
+    )
+
+    # CORS — explicit origins from env, deny-all default in production
+    cors_origins_raw = os.getenv("KLEMMA_CORS_ORIGINS", "")
+    is_production = os.getenv("KLEMMA_ENV") == "production"
+    if cors_origins_raw:
+        allowed_origins = [o.strip() for o in cors_origins_raw.split(",") if o.strip()]
+    elif is_production:
+        allowed_origins = []
+    else:
+        allowed_origins = ["http://localhost:3000", "http://localhost:5173"]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     # Mount routers
