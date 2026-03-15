@@ -28,6 +28,21 @@ Route modules. See [routes/CLAUDE.md](routes/CLAUDE.md).
 2. Mount it in `app.py` under the commented-out future routers block.
 3. Document it in `routes/CLAUDE.md`.
 
+## Deployment
+
+Docker Compose stack in `saas/deploy/`:
+- `Dockerfile` — Python 3.12, installs `[api,recommended]`, uvicorn 2 workers
+- `docker-compose.yml` — 4 services: api, redis, nginx, certbot
+- `nginx/default.conf` — reverse proxy, security headers, XFF override
+- `.env.example` — required secrets (JWT secret)
+
+```bash
+cp saas/deploy/.env.example saas/deploy/.env  # edit with real secret
+cd saas/deploy && docker compose up -d
+```
+
+API binds to Docker network only (not host) — nginx is the sole public entry point.
+
 ## Maintaining this file
 Update when adding new modules to `src/klemma/api/` or changing the entry point / install extra.
 
