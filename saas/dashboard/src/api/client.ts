@@ -113,6 +113,28 @@ export const library = {
 
   remove: (citekey: string) =>
     request<void>(`/library/sources/${citekey}`, { method: 'DELETE' }),
+
+  upload: async (file: File) => {
+    const token = localStorage.getItem('access_token')
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await fetch(`${API_BASE}/library/upload`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new ApiError(res.status, body.detail || res.statusText)
+    }
+    return res.json() as Promise<{
+      citekey: string
+      paper_id: string
+      pdf_hash: string
+      status: string
+      deduplicated: boolean
+    }>
+  },
 }
 
 // Analyze
