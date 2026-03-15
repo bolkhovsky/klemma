@@ -1,0 +1,61 @@
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: saas/deploy/Dockerfile
+    environment:
+      - KLEMMA_ENV=production
+      - KLEMMA_DATA_DIR=/data/klemma
+      - KLEMMA_JWT_SECRET=${KLEMMA_JWT_SECRET}
+      - KLEMMA_CORS_ORIGINS=${KLEMMA_CORS_ORIGINS:-}
+    volumes:
+      - klemma-data:/data/klemma
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - certbot-conf:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - certbot-conf:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+
+volumes:
+  klemma-data:
+  redis-data:
+  certbot-conf:
+  certbot-www:
