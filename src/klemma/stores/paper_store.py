@@ -294,6 +294,35 @@ class LocalPaperStore:
         return inserted
 
     # ------------------------------------------------------------------ #
+    # Citation graph — reference gaps                                      #
+    # ------------------------------------------------------------------ #
+
+    def get_reference_gaps(self, limit: int = 50) -> list[dict]:
+        """Return cited papers not in the library, sorted by citation frequency.
+
+        A "gap" is a paper referenced by sources in the library but not itself
+        present as a paper. Identified by cited_title_hash not matching any
+        paper's title hash.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT
+                     cg.cited_title as title,
+                     cg.cited_authors as authors,
+                     cg.cited_year as year,
+                     COUNT(DISTINCT cg.citing_paper_id) as cited_by_count,
+                     GROUP_CONCAT(DISTINCT cg.citation_intent) as intents
+                   FROM citation_graph cg
+                   LEFT JOIN papers p ON cg.cited_title_hash = p.paper_id
+                   WHERE p.paper_id IS NULL
+                   GROUP BY cg.cited_title_hash
+                   ORDER BY cited_by_count DESC
+                   LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------ #
     # Paper-level embeddings                                               #
     # ------------------------------------------------------------------ #
 

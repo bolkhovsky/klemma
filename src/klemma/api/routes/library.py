@@ -326,6 +326,22 @@ async def upload_pdf(
     )
 
 
+@router.get("/gaps")
+async def list_reference_gaps(
+    user: UserRecord = Depends(get_current_user),
+) -> dict:
+    """Return reference gaps — papers cited by library sources but not in the library."""
+    paper_store = get_paper_store()
+    library = get_user_library()
+
+    source_count = library.count()
+    if source_count < 3:
+        return {"gaps": [], "total": 0, "detail": "Загрузите больше источников (минимум 3) для анализа пробелов"}
+
+    gaps = paper_store.get_reference_gaps(limit=30)
+    return {"gaps": gaps, "total": len(gaps)}
+
+
 def _enqueue_processing(paper_id: str, citekey: str, user_id: str, project_id: str | None = None) -> str | None:
     """Enqueue a process_source job. Returns job_id or None if Redis unavailable."""
     if not _RQ_AVAILABLE:

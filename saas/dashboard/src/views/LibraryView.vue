@@ -30,6 +30,27 @@ const dragOver = ref(false)
 // Processing state per source
 const processingJobs = ref<Record<string, string>>({})
 
+// Reference gaps
+interface Gap {
+  title: string
+  authors: string | null
+  year: number | null
+  cited_by_count: number
+  intents: string | null
+}
+const gaps = ref<Gap[]>([])
+const gapsDetail = ref('')
+
+async function loadGaps() {
+  try {
+    const data = await library.gaps()
+    gaps.value = data.gaps
+    gapsDetail.value = data.detail ?? ''
+  } catch {
+    gaps.value = []
+  }
+}
+
 async function loadSources() {
   loading.value = true
   try {
@@ -134,8 +155,8 @@ function onFileInput(e: Event) {
   input.value = ''
 }
 
-onMounted(loadSources)
-watch(() => projectStore.activeProjectId, loadSources)
+onMounted(() => { loadSources(); loadGaps() })
+watch(() => projectStore.activeProjectId, () => { loadSources(); loadGaps() })
 </script>
 
 <template>
@@ -279,6 +300,41 @@ watch(() => projectStore.activeProjectId, loadSources)
           </tbody>
         </table>
       </div>
+    </div>
+
+    <!-- Reference gaps -->
+    <div v-if="gaps.length > 0" class="mt-8 animate-in animate-in-delay-3">
+      <h2 class="font-[var(--font-display)] text-sm font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider mb-3">
+        Рекомендуемая литература
+      </h2>
+      <p class="text-xs text-[var(--color-ink-muted)] mb-4">
+        Источники, которые часто цитируются вашими статьями, но отсутствуют в библиотеке.
+      </p>
+
+      <div class="rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] divide-y divide-[var(--color-rule-light)]">
+        <div
+          v-for="(gap, i) in gaps"
+          :key="i"
+          class="px-5 py-3.5"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-[var(--color-ink)]">{{ gap.title }}</p>
+              <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--color-ink-muted)]">
+                <span v-if="gap.authors">{{ gap.authors }}</span>
+                <span v-if="gap.year" class="font-[var(--font-mono)]">{{ gap.year }}</span>
+              </div>
+            </div>
+            <span class="shrink-0 inline-flex items-center rounded-full bg-[var(--color-warn-bg)] text-[var(--color-warn)] px-2.5 py-0.5 text-xs font-medium">
+              {{ gap.cited_by_count }} цит.
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-else-if="gapsDetail && sources.length >= 3" class="mt-8">
+      <p class="text-xs text-[var(--color-ink-muted)]">{{ gapsDetail }}</p>
     </div>
   </AppLayout>
 </template>
