@@ -134,11 +134,12 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         )
 
         # Render extraction prompt
+        # Dev (editable): 4 levels up from tasks.py → repo root / prompts/
+        # Installed (Docker): KLEMMA_PROMPTS_DIR env var or /app/prompts (Dockerfile default)
         prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "extract.md"
         if not prompt_path.exists():
-            # Installed package — prompts shipped alongside
-            import importlib.resources
-            prompt_path = Path(importlib.resources.files("klemma").parent.parent / "prompts" / "extract.md")
+            prompts_dir = os.environ.get("KLEMMA_PROMPTS_DIR", "/app/prompts")
+            prompt_path = Path(prompts_dir) / "extract.md"
 
         user_prompt = ai.render_prompt(
             prompt_path,
