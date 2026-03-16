@@ -173,3 +173,18 @@ export const process = {
   jobStatus: (jobId: string) =>
     request<{ job_id: string; status: string; result: any }>(`/process/jobs/${jobId}`),
 }
+
+// Write
+export const write = {
+  research: (section: string) =>
+    request<{ job_id: string; status: string; section: string; task_type: string }>('/write/research', {
+      method: 'POST',
+      body: JSON.stringify({ section }),
+    }),
+
+  draft: (section: string) =>
+    request<{ job_id: string; status: string; section: string; task_type: string }>('/write/draft', {
+      method: 'POST',
+      body: JSON.stringify({ section }),
+    }),
+}
