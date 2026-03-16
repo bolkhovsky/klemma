@@ -104,7 +104,10 @@ export const auth = {
 
 // Library
 export const library = {
-  list: () => request<{ sources: any[]; total: number }>('/library/sources'),
+  list: (projectId?: string) => {
+    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
+    return request<{ sources: any[]; total: number }>(`/library/sources${qs}`)
+  },
 
   get: (citekey: string) => request<any>(`/library/sources/${citekey}`),
 
@@ -114,10 +117,11 @@ export const library = {
   remove: (citekey: string) =>
     request<void>(`/library/sources/${citekey}`, { method: 'DELETE' }),
 
-  upload: async (file: File) => {
+  upload: async (file: File, projectId?: string) => {
     const token = localStorage.getItem('access_token')
     const formData = new FormData()
     formData.append('file', file)
+    if (projectId) formData.append('project_id', projectId)
     const res = await fetch(`${API_BASE}/library/upload`, {
       method: 'POST',
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -133,8 +137,51 @@ export const library = {
       pdf_hash: string
       status: string
       deduplicated: boolean
+      job_id: string | null
     }>
   },
+}
+
+// User projects (CRUD)
+export interface OutlineSection {
+  id: string
+  name: string
+}
+
+export interface Project {
+  project_id: string
+  name: string
+  type: string
+  created_at: string
+  outline: OutlineSection[] | null
+}
+
+export const userProjects = {
+  list: () => request<{ projects: Project[] }>('/projects'),
+
+  create: (name: string, type = 'dissertation') =>
+    request<Project>('/projects', {
+      method: 'POST',
+      body: JSON.stringify({ name, type }),
+    }),
+
+  rename: (projectId: string, name: string) =>
+    request<Project>(`/projects/${projectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+
+  updateOutline: (projectId: string, sections: OutlineSection[]) =>
+    request<Project>(`/projects/${projectId}/outline`, {
+      method: 'PATCH',
+      body: JSON.stringify({ sections }),
+    }),
+
+  generateOutline: (projectId: string, contextText: string) =>
+    request<{ job_id: string; status: string }>(`/projects/${projectId}/outline/generate`, {
+      method: 'POST',
+      body: JSON.stringify({ context_text: contextText }),
+    }),
 }
 
 // Analyze
@@ -167,8 +214,13 @@ export const projects = {
 
 // Process
 export const process = {
-  submit: (citekey: string) =>
-    request<{ job_id: string; status: string }>(`/process/sources/${citekey}`, { method: 'POST' }),
+  submit: (citekey: string, opts?: { projectId?: string; force?: boolean }) => {
+    const params = new URLSearchParams()
+    if (opts?.projectId) params.set('project_id', opts.projectId)
+    if (opts?.force) params.set('force', 'true')
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return request<{ job_id: string; status: string }>(`/process/sources/${citekey}${qs}`, { method: 'POST' })
+  },
 
   jobStatus: (jobId: string) =>
     request<{ job_id: string; status: string; result: any }>(`/process/jobs/${jobId}`),
@@ -185,17 +237,21 @@ export const usage = {
     }>('/usage/me'),
 }
 
-// Write
-export const write = {
-  research: (section: string) =>
+// Research (literature review generation + stored reports)
+export const research = {
+  generate: (section: string, projectId?: string) =>
     request<{ job_id: string; status: string; section: string; task_type: string }>('/write/research', {
       method: 'POST',
-      body: JSON.stringify({ section }),
+      body: JSON.stringify({ section, project_id: projectId }),
     }),
 
-  draft: (section: string) =>
-    request<{ job_id: string; status: string; section: string; task_type: string }>('/write/draft', {
-      method: 'POST',
-      body: JSON.stringify({ section }),
-    }),
+  getReport: (projectId: string, section: string) =>
+    request<{ section: string; report_text: string; model: string; created_at: string }>(
+      `/projects/${projectId}/research/${encodeURIComponent(section)}`
+    ),
+
+  listReports: (projectId: string) =>
+    request<{ project_id: string; reports: { section: string; created_at: string }[] }>(
+      `/projects/${projectId}/research`
+    ),
 }

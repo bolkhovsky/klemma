@@ -18,46 +18,56 @@ const router = createRouter({
       name: 'register',
       component: () => import('../views/RegisterView.vue'),
     },
+    // Global library — all sources across projects (top-level, no projectId)
     {
-      path: '/dashboard',
+      path: '/library',
+      name: 'global-library',
+      component: () => import('../views/GlobalLibraryView.vue'),
+      meta: { requiresAuth: true },
+    },
+    // Project-scoped routes
+    {
+      path: '/:projectId/dashboard',
       name: 'dashboard',
       component: () => import('../views/DashboardView.vue'),
       meta: { requiresAuth: true },
     },
     {
-      path: '/library',
+      path: '/:projectId/library',
       name: 'library',
       component: () => import('../views/LibraryView.vue'),
       meta: { requiresAuth: true },
     },
     {
-      path: '/library/:citekey',
+      path: '/:projectId/library/:citekey',
       name: 'source',
       component: () => import('../views/SourceView.vue'),
       meta: { requiresAuth: true },
     },
     {
-      path: '/coverage',
+      path: '/:projectId/coverage',
       name: 'coverage',
       component: () => import('../views/CoverageView.vue'),
       meta: { requiresAuth: true },
     },
     {
-      path: '/write',
-      name: 'write',
-      component: () => import('../views/WriteView.vue'),
+      path: '/:projectId/outline',
+      name: 'outline',
+      component: () => import('../views/OutlineView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/:projectId/research',
+      name: 'research',
+      component: () => import('../views/ResearchView.vue'),
       meta: { requiresAuth: true },
     },
   ],
 })
 
-// Auth guard
 router.beforeEach((to) => {
-  if (to.meta.requiresAuth) {
-    const token = localStorage.getItem('access_token')
-    if (!token) {
-      return { name: 'login' }
-    }
+  if (to.meta.requiresAuth && !localStorage.getItem('access_token')) {
+    return { name: 'login' }
   }
 })
 

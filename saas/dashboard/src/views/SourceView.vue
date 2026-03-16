@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { library, process, projects, ApiError } from '@/api/client'
 import AppLayout from '@/components/AppLayout.vue'
+import { useProjectStore } from '@/stores/project'
 
 interface Fragment {
   fragment_id: string
@@ -27,6 +28,7 @@ interface SourceDetail {
 const route = useRoute()
 const router = useRouter()
 const citekey = route.params.citekey as string
+const projectStore = useProjectStore()
 
 const source = ref<SourceDetail | null>(null)
 const loading = ref(true)
@@ -80,8 +82,19 @@ const fragmentsByType = computed(() => {
 // Section assignment state
 const assignedSections = ref<string[]>([])
 const newSection = ref('')
+const selectedSection = ref('')
 const assignLoading = ref(false)
 const assignError = ref('')
+
+const availableSections = computed(() =>
+  (projectStore.activeOutline ?? []).filter(s => !assignedSections.value.includes(s.id)),
+)
+
+async function onSectionSelect() {
+  if (!selectedSection.value) return
+  await addSection(selectedSection.value)
+  selectedSection.value = ''
+}
 
 async function loadSections() {
   try {
@@ -92,8 +105,8 @@ async function loadSections() {
   }
 }
 
-async function addSection() {
-  const section = newSection.value.trim()
+async function addSection(sectionId?: string) {
+  const section = (sectionId ?? newSection.value).trim()
   if (!section || assignedSections.value.includes(section)) return
   assignLoading.value = true
   assignError.value = ''
@@ -101,7 +114,7 @@ async function addSection() {
     const updated = [...assignedSections.value, section]
     await projects.assignSections(citekey, updated)
     assignedSections.value = updated
-    newSection.value = ''
+    if (!sectionId) newSection.value = ''
   } catch (e) {
     assignError.value = e instanceof ApiError ? e.message : 'Ошибка назначения'
   } finally {
@@ -138,12 +151,13 @@ async function loadSource() {
   }
 }
 
-async function startProcessing() {
+async function startProcessing(force = false) {
   processing.value = true
   jobError.value = ''
   jobStatus.value = 'queued'
   try {
-    const resp = await process.submit(citekey)
+    const projectId = route.params.projectId as string | undefined
+    const resp = await process.submit(citekey, { projectId, force })
     jobId.value = resp.job_id
     startPolling()
   } catch (e) {
@@ -199,7 +213,7 @@ onUnmounted(stopPolling)
     <!-- Error -->
     <div v-else-if="error" class="py-12 text-center">
       <p class="text-sm text-[var(--color-err)]">{{ error }}</p>
-      <RouterLink to="/library" class="mt-4 inline-block text-sm text-[var(--color-accent)]">
+      <RouterLink :to="`/${route.params.projectId}/library`" class="mt-4 inline-block text-sm text-[var(--color-accent)]">
         &larr; Вернуться в библиотеку
       </RouterLink>
     </div>
@@ -208,7 +222,7 @@ onUnmounted(stopPolling)
     <div v-else-if="source" class="space-y-8">
       <!-- Breadcrumb -->
       <div class="animate-in">
-        <RouterLink to="/library" class="text-sm text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] transition-colors">
+        <RouterLink :to="`/${route.params.projectId}/library`" class="text-sm text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] transition-colors">
           &larr; Библиотека
         </RouterLink>
       </div>
@@ -250,11 +264,19 @@ onUnmounted(stopPolling)
 
             <button
               v-if="source.status === 'pending' || source.status === 'failed'"
-              @click="startProcessing"
+              @click="startProcessing(false)"
               :disabled="processing"
               class="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] disabled:opacity-50 transition-colors"
             >
               {{ processing ? 'Обработка...' : 'Обработать' }}
+            </button>
+            <button
+              v-if="source.status === 'completed' && !processing"
+              @click="startProcessing(true)"
+              class="rounded-lg border border-[var(--color-rule)] px-4 py-2 text-sm font-medium text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] transition-colors"
+              title="Переобработать с учётом текущей структуры"
+            >
+              Переобработать
             </button>
           </div>
         </div>
@@ -311,21 +333,50 @@ onUnmounted(stopPolling)
           Не назначен ни одному разделу.
         </p>
 
-        <!-- Add section form -->
-        <form @submit.prevent="addSection" class="flex items-center gap-2">
-          <input
-            v-model="newSection"
-            placeholder="Номер раздела (например: 1.2.3)"
-            class="flex-1 rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper)] px-3 py-2 text-sm text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
-          />
-          <button
-            type="submit"
-            :disabled="assignLoading || !newSection.trim()"
-            class="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] disabled:opacity-50 transition-colors"
+        <!-- Dropdown when outline is defined -->
+        <div v-if="projectStore.activeOutline !== null">
+          <div v-if="availableSections.length === 0 && assignedSections.length > 0" class="text-sm text-[var(--color-ink-muted)]">
+            Все разделы уже назначены.
+          </div>
+          <div v-else-if="availableSections.length === 0" class="text-sm text-[var(--color-ink-muted)]">
+            Нет разделов в структуре.
+            <RouterLink :to="`/${route.params.projectId}/outline`" class="text-[var(--color-accent)] hover:underline ml-1">Добавить разделы →</RouterLink>
+          </div>
+          <select
+            v-else
+            v-model="selectedSection"
+            @change="onSectionSelect"
+            :disabled="assignLoading"
+            class="w-full rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper)] px-3 py-2 text-sm text-[var(--color-ink)] focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-50"
           >
-            Назначить
-          </button>
-        </form>
+            <option value="">— выберите раздел для назначения —</option>
+            <option v-for="s in availableSections" :key="s.id" :value="s.id">
+              {{ s.id }} · {{ s.name }}
+            </option>
+          </select>
+        </div>
+
+        <!-- Free-text fallback when no outline defined -->
+        <div v-else>
+          <p class="mb-3 text-xs text-[var(--color-ink-muted)]">
+            Структура не определена.
+            <RouterLink :to="`/${route.params.projectId}/outline`" class="text-[var(--color-accent)] hover:underline">Определить структуру →</RouterLink>
+          </p>
+          <form @submit.prevent="addSection()" class="flex items-center gap-2">
+            <input
+              v-model="newSection"
+              placeholder="Номер раздела (например: 1.2.3)"
+              class="flex-1 rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper)] px-3 py-2 text-sm text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+            />
+            <button
+              type="submit"
+              :disabled="assignLoading || !newSection.trim()"
+              class="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] disabled:opacity-50 transition-colors"
+            >
+              Назначить
+            </button>
+          </form>
+        </div>
         <div v-if="assignError" class="mt-2 text-sm text-[var(--color-err)]">{{ assignError }}</div>
       </div>
 
@@ -394,7 +445,7 @@ onUnmounted(stopPolling)
           Нажмите «Обработать», чтобы извлечь ключевые фрагменты из PDF.
         </p>
         <button
-          @click="startProcessing"
+          @click="startProcessing(false)"
           :disabled="processing"
           class="mt-5 inline-flex items-center gap-2 rounded-lg bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] disabled:opacity-50 transition-colors"
         >

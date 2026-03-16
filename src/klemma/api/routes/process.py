@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from klemma.models import UserRecord
@@ -59,10 +59,13 @@ class JobStatusResponse(BaseModel):
 async def submit_process_job(
     citekey: str,
     user: UserRecord = Depends(get_current_user),
+    project_id: str | None = Query(default=None, description="Project for section assignment context"),
+    force: bool = Query(default=False, description="Force reprocess even if already completed"),
 ) -> JobSubmitResponse:
     """Enqueue a source for async extraction processing.
 
     Returns 202 with a job_id that can be polled via GET /process/jobs/{job_id}.
+    Pass force=true to re-extract with current outline context.
     """
     if not _RQ_AVAILABLE:
         raise HTTPException(
@@ -92,6 +95,8 @@ async def submit_process_job(
             citekey,
             data_dir,
             user.user_id,
+            project_id,
+            force,
             job_timeout=300,
         )
         return JobSubmitResponse(job_id=job.id, status="queued", citekey=citekey)

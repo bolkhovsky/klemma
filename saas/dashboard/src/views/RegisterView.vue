@@ -17,7 +17,7 @@ async function handleRegister() {
     const data = await auth.register(email.value, password.value, name.value)
     localStorage.setItem('access_token', data.access_token)
     localStorage.setItem('refresh_token', data.refresh_token)
-    router.push('/dashboard')
+    router.push('/library')
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : 'Ошибка регистрации'
   } finally {

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRouter, RouterLink } from 'vue-router'
+import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { analyze, library } from '@/api/client'
 import AppLayout from '@/components/AppLayout.vue'
 
+const route = useRoute()
 const router = useRouter()
 
 const status = ref<{
@@ -221,7 +222,7 @@ onMounted(async () => {
             Недавние источники
           </h2>
           <RouterLink
-            to="/library"
+            :to="`/${route.params.projectId}/library`"
             class="text-sm text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] transition-colors"
           >
             Все источники &rarr;
@@ -272,7 +273,7 @@ onMounted(async () => {
           оценит покрытие по разделам и поможет написать обзор литературы.
         </p>
         <RouterLink
-          to="/library"
+          :to="`/${route.params.projectId}/library`"
           class="mt-6 inline-flex items-center gap-2 rounded-lg bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] transition-colors shadow-sm"
         >
           Перейти в библиотеку

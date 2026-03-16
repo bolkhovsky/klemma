@@ -21,13 +21,13 @@ def store(tmp_path) -> LocalUserStore:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_4(tmp_path):
+def test_schema_version_is_6(tmp_path):
     db_path = tmp_path / "users.db"
     LocalUserStore(db_path)
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 4
+    assert version == 6
 
 
 def test_creates_db_file(tmp_path):
@@ -195,3 +195,30 @@ def test_projects_isolated_between_users(store):
     u2 = store.create_user(email="u2@example.com", password_hash="h")
     store.create_project(u1.user_id, "User1 Project")
     assert store.get_projects(u2.user_id) == []
+
+
+def test_project_outline_default_null(store):
+    user = store.create_user(email="outline@example.com", password_hash="h")
+    project = store.create_project(user.user_id, "Test")
+    assert project.get("outline") is None
+    fetched = store.get_project_by_id(project["project_id"])
+    assert fetched["outline"] is None
+
+
+def test_update_project_outline(store):
+    user = store.create_user(email="outline2@example.com", password_hash="h")
+    project = store.create_project(user.user_id, "Test")
+    sections = [{"id": "1.1", "name": "Введение"}, {"id": "1.2", "name": "Обзор"}]
+    result = store.update_project_outline(project["project_id"], sections)
+    assert result is True
+    fetched = store.get_project_by_id(project["project_id"])
+    assert fetched["outline"] == sections
+
+
+def test_outline_in_project_list(store):
+    user = store.create_user(email="outline3@example.com", password_hash="h")
+    project = store.create_project(user.user_id, "Test")
+    sections = [{"id": "2.1", "name": "Методология"}]
+    store.update_project_outline(project["project_id"], sections)
+    projects = store.get_projects(user.user_id)
+    assert projects[0]["outline"] == sections

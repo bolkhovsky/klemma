@@ -215,7 +215,7 @@ class LocalUserLibrary:
         with self._conn() as conn:
             if project_id is not None:
                 rows = conn.execute(
-                    "SELECT citekey FROM user_sources WHERE project_id = ? ORDER BY added_at",
+                    "SELECT citekey FROM user_sources WHERE project_id = ? OR project_id IS NULL ORDER BY added_at",
                     (project_id,),
                 ).fetchall()
             else:

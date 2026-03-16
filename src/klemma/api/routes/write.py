@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from klemma.models import UserRecord
 
-from ..auth.deps import get_current_user
+from ..auth.deps import get_current_user, get_user_store
 
 try:
     from redis import Redis
@@ -32,6 +32,7 @@ class WriteJobRequest(BaseModel):
     """Request to generate research briefing or draft for a section."""
 
     section: str
+    project_id: str | None = None
 
 
 class WriteJobResponse(BaseModel):
@@ -61,7 +62,13 @@ async def submit_research_job(
 
     Returns 202 with a job_id. Poll status via GET /process/jobs/{job_id}.
     """
-    return _enqueue_write_task("generate_research", body.section)
+    # Validate project ownership
+    if body.project_id:
+        store = get_user_store()
+        project = store.get_project_by_id(body.project_id)
+        if not project or project["user_id"] != user.user_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return _enqueue_write_task("generate_research", body.section, body.project_id, user.user_id)
 
 
 @router.post(
@@ -85,7 +92,9 @@ async def submit_draft_job(
 # ---------------------------------------------------------------------------
 
 
-def _enqueue_write_task(task_name: str, section: str) -> WriteJobResponse:
+def _enqueue_write_task(
+    task_name: str, section: str, project_id: str | None = None, user_id: str = ""
+) -> WriteJobResponse:
     """Enqueue a write task (research or draft) via rq."""
     if not _RQ_AVAILABLE:
         raise HTTPException(
@@ -100,10 +109,16 @@ def _enqueue_write_task(task_name: str, section: str) -> WriteJobResponse:
 
         from ..tasks import generate_draft, generate_research
 
-        task_fn = generate_research if task_name == "generate_research" else generate_draft
         data_dir = os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma"))
 
-        job = q.enqueue(task_fn, section, data_dir, job_timeout=600)
+        if task_name == "generate_research":
+            job = q.enqueue(
+                generate_research, section, project_id or "", data_dir, user_id,
+                job_timeout=600,
+            )
+        else:
+            job = q.enqueue(generate_draft, section, data_dir, job_timeout=600)
+
         return WriteJobResponse(
             job_id=job.id, status="queued", section=section, task_type=task_name
         )
