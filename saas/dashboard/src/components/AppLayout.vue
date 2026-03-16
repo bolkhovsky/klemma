@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RouterLink, useRouter, useRoute } from 'vue-router'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { auth, usage } from '@/api/client'
 import { useProjectStore } from '@/stores/project'
 
@@ -9,6 +9,20 @@ const route = useRoute()
 const userName = ref('')
 
 const projectStore = useProjectStore()
+
+// Sync project store ↔ URL query param
+function setActiveAndUpdateUrl(id: string | null) {
+  projectStore.setActive(id)
+  router.replace({ query: { ...route.query, project: id ?? undefined } })
+}
+
+// When URL ?project= changes externally (browser back/forward), sync to store
+watch(() => route.query.project, (id) => {
+  const projectId = typeof id === 'string' ? id : null
+  if (projectId !== projectStore.activeProjectId) {
+    projectStore.setActive(projectId)
+  }
+})
 
 // Token balance
 const tokenBalance = ref<{ total_granted: number; total_used: number; remaining: number } | null>(null)
@@ -46,7 +60,17 @@ onMounted(async () => {
   } catch {
     /* ignore */
   }
+
+  // URL is source of truth: ?project= overrides localStorage
+  const urlProjectId = typeof route.query.project === 'string' ? route.query.project : null
+  if (urlProjectId) projectStore.setActive(urlProjectId)
+
   await projectStore.loadProjects()
+
+  // After loading, reflect active project in URL if not already there
+  if (projectStore.activeProjectId && !route.query.project) {
+    router.replace({ query: { ...route.query, project: projectStore.activeProjectId } })
+  }
 })
 
 function logout() {
@@ -66,6 +90,9 @@ async function createProject() {
   creating.value = true
   try {
     await projectStore.createProject(newProjectName.value.trim(), newProjectType.value)
+    if (projectStore.activeProjectId) {
+      router.replace({ query: { ...route.query, project: projectStore.activeProjectId } })
+    }
     showCreateModal.value = false
     newProjectName.value = ''
     newProjectType.value = 'dissertation'
@@ -116,7 +143,7 @@ async function createProject() {
         <button
           v-for="project in projectStore.projects"
           :key="project.project_id"
-          @click="projectStore.setActive(project.project_id)"
+          @click="setActiveAndUpdateUrl(project.project_id)"
           class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors"
           :class="projectStore.activeProjectId === project.project_id
             ? 'bg-[var(--color-accent-pale)] text-[var(--color-accent-deep)] font-medium'

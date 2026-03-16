@@ -51,12 +51,16 @@ const router = createRouter({
   ],
 })
 
-// Auth guard
-router.beforeEach((to) => {
+// Auth guard + preserve ?project= query param across navigation
+router.beforeEach((to, from) => {
   if (to.meta.requiresAuth) {
     const token = localStorage.getItem('access_token')
     if (!token) {
       return { name: 'login' }
+    }
+    // Carry over ?project= when navigating between authenticated pages
+    if (!to.query.project && from.query.project) {
+      return { ...to, query: { ...to.query, project: from.query.project } }
     }
   }
 })
