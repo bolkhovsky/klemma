@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from klemma.models import UserRecord
 
-from ..auth.deps import get_current_user
+from ..auth.deps import get_current_user, get_user_store
 
 try:
     from redis import Redis
@@ -62,6 +62,12 @@ async def submit_research_job(
 
     Returns 202 with a job_id. Poll status via GET /process/jobs/{job_id}.
     """
+    # Validate project ownership
+    if body.project_id:
+        store = get_user_store()
+        project = store.get_project_by_id(body.project_id)
+        if not project or project["user_id"] != user.user_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     return _enqueue_write_task("generate_research", body.section, body.project_id, user.user_id)
 
 

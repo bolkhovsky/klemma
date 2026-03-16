@@ -304,4 +304,6 @@ async def get_research_report(
         "report_text": report["report_text"],
         "model": report["model"],
         "created_at": report["created_at"],
+        "input_tokens": report.get("input_tokens", 0),
+        "output_tokens": report.get("output_tokens", 0),
     }

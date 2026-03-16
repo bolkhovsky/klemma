@@ -419,6 +419,9 @@ def generate_research(section: str, project_id: str, data_dir: str, user_id: str
             user_library=user_library,
         )
 
+        # Token counts: research_section() uses call_json() internally which
+        # doesn't expose token metadata. Recording 0 for now — fix requires
+        # refactoring researcher.py to use call_with_meta(). Tracked as known limitation.
         if user_id:
             user_store.record_usage(
                 user_id=user_id,
