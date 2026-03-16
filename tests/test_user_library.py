@@ -190,10 +190,10 @@ def test_project_id_filter(lib):
     lib.add_source("pid3", "src_c")  # no project
 
     in_proj1 = lib.get_all_sources(project_id="proj1")
-    assert [s.citekey for s in in_proj1] == ["src_a"]
+    assert {s.citekey for s in in_proj1} == {"src_a", "src_c"}  # includes NULL-project sources
 
     in_proj2 = lib.get_all_sources(project_id="proj2")
-    assert [s.citekey for s in in_proj2] == ["src_b"]
+    assert {s.citekey for s in in_proj2} == {"src_b", "src_c"}  # includes NULL-project sources
 
     all_sources = lib.get_all_sources()
     assert len(all_sources) == 3

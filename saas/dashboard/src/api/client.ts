@@ -117,10 +117,11 @@ export const library = {
   remove: (citekey: string) =>
     request<void>(`/library/sources/${citekey}`, { method: 'DELETE' }),
 
-  upload: async (file: File) => {
+  upload: async (file: File, projectId?: string) => {
     const token = localStorage.getItem('access_token')
     const formData = new FormData()
     formData.append('file', file)
+    if (projectId) formData.append('project_id', projectId)
     const res = await fetch(`${API_BASE}/library/upload`, {
       method: 'POST',
       headers: token ? { Authorization: `Bearer ${token}` } : {},

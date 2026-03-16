@@ -118,7 +118,7 @@ async function handleUpload(files: FileList | null) {
       continue
     }
     try {
-      const result = await library.upload(file)
+      const result = await library.upload(file, projectStore.activeProjectId ?? undefined)
       uploaded++
       if (result.deduplicated) {
         uploadSuccess.value = `${file.name} — уже в библиотеке (дедупликация)`
