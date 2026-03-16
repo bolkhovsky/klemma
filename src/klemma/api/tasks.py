@@ -35,7 +35,7 @@ def _create_ai_provider():
     return create_ai(config), config
 
 
-def process_source(paper_id: str, citekey: str, data_dir: str) -> dict:
+def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = "") -> dict:
     """Extract fragments from a paper's PDF.
 
     This is the rq task equivalent of `klemma process <citekey>`.
@@ -48,12 +48,19 @@ def process_source(paper_id: str, citekey: str, data_dir: str) -> dict:
     from klemma.stores.file_store import LocalFileStore
     from klemma.stores.paper_store import LocalPaperStore
     from klemma.stores.user_library import LocalUserLibrary
+    from klemma.stores.user_store import LocalUserStore
 
     data_path = Path(data_dir)
     library_db = data_path / "library.db"
     paper_store = LocalPaperStore(library_db)
     user_library = LocalUserLibrary(library_db)
     file_store = LocalFileStore(data_path / "files")
+    user_store = LocalUserStore(data_path / "users.db") if user_id else None
+
+    # Check token limit
+    if user_store and user_id and not user_store.check_token_limit(user_id):
+        user_library.update_status(citekey, "pending")
+        return {"status": "error", "detail": "Token limit exhausted"}
 
     # Check paper exists
     paper = paper_store.get_paper_by_id(paper_id)
@@ -153,10 +160,28 @@ def process_source(paper_id: str, citekey: str, data_dir: str) -> dict:
             "Output only valid JSON with fragments array."
         )
 
-        data = ai.call_json(system, user_prompt, max_tokens=4096)
-        if not data:
+        result = ai.call_with_meta(system, user_prompt, max_tokens=4096)
+        if not result or not result.text:
             user_library.update_status(citekey, "failed")
             return {"status": "error", "detail": "AI extraction returned no data"}
+
+        # Record token usage
+        if user_store and user_id:
+            user_store.record_usage(
+                user_id=user_id,
+                operation="process_source",
+                model=ai_config.model,
+                input_tokens=result.input_tokens or 0,
+                output_tokens=result.output_tokens or 0,
+                citekey=citekey,
+            )
+
+        # Parse JSON from response
+        from klemma.ai import extract_json
+        data = extract_json(result.text)
+        if not data:
+            user_library.update_status(citekey, "failed")
+            return {"status": "error", "detail": "Failed to parse AI response as JSON"}
 
         # Parse and save fragments
         fragments = []

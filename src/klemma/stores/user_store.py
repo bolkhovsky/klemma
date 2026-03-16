@@ -15,7 +15,7 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -80,6 +80,28 @@ class LocalUserStore:
         if version < 2:
             # Normalize existing emails to lowercase
             conn.execute("UPDATE users SET email = LOWER(TRIM(email))")
+        if version < 3:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS user_token_balance (
+                    user_id       TEXT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+                    total_granted INTEGER NOT NULL DEFAULT 0,
+                    total_used    INTEGER NOT NULL DEFAULT 0,
+                    updated_at    TEXT DEFAULT (datetime('now'))
+                );
+                CREATE TABLE IF NOT EXISTS usage_log (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id       TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    operation     TEXT NOT NULL,
+                    citekey       TEXT,
+                    section       TEXT,
+                    model         TEXT NOT NULL,
+                    input_tokens  INTEGER NOT NULL,
+                    output_tokens INTEGER NOT NULL,
+                    cost_usd      REAL,
+                    created_at    TEXT DEFAULT (datetime('now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_usage_log_user ON usage_log(user_id);
+            """)
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -191,6 +213,94 @@ class LocalUserStore:
                 "DELETE FROM refresh_tokens WHERE user_id = ?", (user_id,)
             )
         return cursor.rowcount
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers                                                     #
+    # ------------------------------------------------------------------ #
+
+    # ------------------------------------------------------------------ #
+    # Token balance & usage tracking                                       #
+    # ------------------------------------------------------------------ #
+
+    def get_token_balance(self, user_id: str) -> dict:
+        """Get token balance for a user."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT total_granted, total_used FROM user_token_balance WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        if not row:
+            return {"total_granted": 0, "total_used": 0, "remaining": 0}
+        return {
+            "total_granted": row["total_granted"],
+            "total_used": row["total_used"],
+            "remaining": max(0, row["total_granted"] - row["total_used"]),
+        }
+
+    def grant_tokens(self, user_id: str, amount: int) -> dict:
+        """Grant tokens to a user (admin operation). Adds to total_granted."""
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO user_token_balance (user_id, total_granted, total_used, updated_at)
+                   VALUES (?, ?, 0, datetime('now'))
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     total_granted = total_granted + ?,
+                     updated_at = datetime('now')""",
+                (user_id, amount, amount),
+            )
+        return self.get_token_balance(user_id)
+
+    def check_token_limit(self, user_id: str) -> bool:
+        """Return True if user has tokens remaining."""
+        bal = self.get_token_balance(user_id)
+        return bal["remaining"] > 0
+
+    def record_usage(
+        self,
+        user_id: str,
+        operation: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        *,
+        citekey: str | None = None,
+        section: str | None = None,
+        cost_usd: float | None = None,
+    ) -> None:
+        """Record a token usage event and update balance."""
+        total = input_tokens + output_tokens
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO usage_log
+                   (user_id, operation, citekey, section, model, input_tokens, output_tokens, cost_usd)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, operation, citekey, section, model, input_tokens, output_tokens, cost_usd),
+            )
+            conn.execute(
+                """INSERT INTO user_token_balance (user_id, total_granted, total_used, updated_at)
+                   VALUES (?, 0, ?, datetime('now'))
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     total_used = total_used + ?,
+                     updated_at = datetime('now')""",
+                (user_id, total, total),
+            )
+
+    def get_usage_summary(self, user_id: str) -> dict:
+        """Get usage summary grouped by operation."""
+        balance = self.get_token_balance(user_id)
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT operation, COUNT(*) as count,
+                   SUM(input_tokens + output_tokens) as tokens
+                   FROM usage_log WHERE user_id = ?
+                   GROUP BY operation""",
+                (user_id,),
+            ).fetchall()
+        operations = [
+            {"operation": r["operation"], "count": r["count"], "tokens": r["tokens"]}
+            for r in rows
+        ]
+        return {**balance, "operations": operations}
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #

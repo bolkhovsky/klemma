@@ -174,6 +174,17 @@ export const process = {
     request<{ job_id: string; status: string; result: any }>(`/process/jobs/${jobId}`),
 }
 
+// Usage
+export const usage = {
+  me: () =>
+    request<{
+      total_granted: number
+      total_used: number
+      remaining: number
+      operations: { operation: string; count: number; tokens: number }[]
+    }>('/usage/me'),
+}
+
 // Write
 export const write = {
   research: (section: string) =>

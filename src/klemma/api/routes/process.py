@@ -91,6 +91,7 @@ async def submit_process_job(
             src.paper_id,
             citekey,
             data_dir,
+            user.user_id,
             job_timeout=300,
         )
         return JobSubmitResponse(job_id=job.id, status="queued", citekey=citekey)

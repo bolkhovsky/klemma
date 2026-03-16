@@ -1,18 +1,47 @@
 <script setup lang="ts">
 import { RouterLink, useRouter, useRoute } from 'vue-router'
-import { ref, onMounted } from 'vue'
-import { auth } from '@/api/client'
+import { ref, computed, onMounted } from 'vue'
+import { auth, usage } from '@/api/client'
 
 const router = useRouter()
 const route = useRoute()
 const userName = ref('')
 
+// Token balance
+const tokenBalance = ref<{ total_granted: number; total_used: number; remaining: number } | null>(null)
+
+const tokenPercent = computed(() => {
+  if (!tokenBalance.value || tokenBalance.value.total_granted === 0) return 0
+  return Math.round((tokenBalance.value.total_used / tokenBalance.value.total_granted) * 100)
+})
+
+const tokenColor = computed(() => {
+  const p = tokenPercent.value
+  if (p >= 90) return 'text-[var(--color-err)]'
+  if (p >= 50) return 'text-[var(--color-warn)]'
+  return 'text-[var(--color-ok)]'
+})
+
+const tokenBarColor = computed(() => {
+  const p = tokenPercent.value
+  if (p >= 90) return 'bg-[var(--color-err)]'
+  if (p >= 50) return 'bg-[var(--color-warn)]'
+  return 'bg-[var(--color-ok)]'
+})
+
+function formatTokens(n: number): string {
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`
+  if (n >= 1000) return `${Math.round(n / 1000)}K`
+  return String(n)
+}
+
 onMounted(async () => {
   try {
-    const me = await auth.me()
+    const [me, bal] = await Promise.all([auth.me(), usage.me()])
     userName.value = me.name ?? me.email.split('@')[0]
+    tokenBalance.value = bal
   } catch {
-    /* ignore — header still works without name */
+    /* ignore — header still works without data */
   }
 })
 
@@ -79,8 +108,40 @@ function logout() {
           </nav>
         </div>
 
-        <!-- User -->
-        <div class="flex items-center gap-4">
+        <!-- Token balance + User -->
+        <div class="flex items-center gap-5">
+          <!-- Token meter -->
+          <div
+            v-if="tokenBalance && tokenBalance.total_granted > 0"
+            class="flex items-center gap-2"
+            :title="`Использовано ${tokenBalance.total_used.toLocaleString('ru-RU')} из ${tokenBalance.total_granted.toLocaleString('ru-RU')} токенов`"
+          >
+            <div class="flex items-center gap-1.5">
+              <span class="font-[var(--font-mono)] text-xs" :class="tokenColor">
+                {{ formatTokens(tokenBalance.total_used) }}
+              </span>
+              <span class="text-xs text-[var(--color-ink-muted)]">/</span>
+              <span class="font-[var(--font-mono)] text-xs text-[var(--color-ink-muted)]">
+                {{ formatTokens(tokenBalance.total_granted) }}
+              </span>
+            </div>
+            <div class="w-16 h-1.5 rounded-full bg-[var(--color-rule-light)] overflow-hidden">
+              <div
+                class="h-full rounded-full transition-all duration-500"
+                :class="tokenBarColor"
+                :style="{ width: `${Math.min(tokenPercent, 100)}%` }"
+              ></div>
+            </div>
+          </div>
+
+          <!-- Low balance warning -->
+          <span
+            v-if="tokenBalance && tokenBalance.total_granted > 0 && tokenPercent >= 90"
+            class="text-xs text-[var(--color-err)] font-medium"
+          >
+            Мало токенов
+          </span>
+
           <span v-if="userName" class="text-sm text-[var(--color-ink-muted)]">{{ userName }}</span>
           <button
             @click="logout"
@@ -91,6 +152,16 @@ function logout() {
         </div>
       </div>
     </header>
+
+    <!-- Low balance banner -->
+    <div
+      v-if="tokenBalance && tokenBalance.total_granted > 0 && tokenBalance.remaining <= 0"
+      class="bg-[var(--color-err-bg)] border-b border-[var(--color-err)] px-8 py-2 text-center"
+    >
+      <span class="text-sm font-medium text-[var(--color-err)]">
+        Токены закончились. Обработка и генерация текста недоступны. Свяжитесь с администратором.
+      </span>
+    </div>
 
     <!-- Content -->
     <main class="mx-auto max-w-6xl px-8 py-8">
