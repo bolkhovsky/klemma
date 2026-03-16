@@ -10,17 +10,26 @@ const userName = ref('')
 
 const projectStore = useProjectStore()
 
-// Sync project store ↔ URL query param
-function setActiveAndUpdateUrl(id: string | null) {
-  projectStore.setActive(id)
-  router.replace({ query: { ...route.query, project: id ?? undefined } })
+// Switch project, preserve current module (outline/library/etc.)
+function switchProject(projectId: string) {
+  projectStore.setActive(projectId)
+  const currentParam = route.params.projectId as string | undefined
+  if (currentParam) {
+    // Navigate to same module within new project
+    const modules = ['dashboard', 'outline', 'library', 'coverage', 'research']
+    const suffix = route.path.slice(currentParam.length + 2) // strip /projectId/
+    const module = modules.find(m => suffix === m || suffix.startsWith(m + '/')) ?? 'outline'
+    router.push(`/${projectId}/${module}`)
+  } else {
+    // Currently on global page — go to outline of new project
+    router.push(`/${projectId}/outline`)
+  }
 }
 
-// When URL ?project= changes externally (browser back/forward), sync to store
-watch(() => route.query.project, (id) => {
-  const projectId = typeof id === 'string' ? id : null
-  if (projectId !== projectStore.activeProjectId) {
-    projectStore.setActive(projectId)
+// Sync store when route projectId changes (browser back/forward, direct URL)
+watch(() => route.params.projectId, (id) => {
+  if (typeof id === 'string' && id !== projectStore.activeProjectId) {
+    projectStore.setActive(id)
   }
 })
 
@@ -61,16 +70,11 @@ onMounted(async () => {
     /* ignore */
   }
 
-  // URL is source of truth: ?project= overrides localStorage
-  const urlProjectId = typeof route.query.project === 'string' ? route.query.project : null
-  if (urlProjectId) projectStore.setActive(urlProjectId)
+  // Sync store from URL (route params are source of truth)
+  const projectId = route.params.projectId as string | undefined
+  if (projectId) projectStore.setActive(projectId)
 
   await projectStore.loadProjects()
-
-  // After loading, reflect active project in URL if not already there
-  if (projectStore.activeProjectId && !route.query.project) {
-    router.replace({ query: { ...route.query, project: projectStore.activeProjectId } })
-  }
 })
 
 function logout() {
@@ -90,10 +94,10 @@ async function createProject() {
   creating.value = true
   try {
     await projectStore.createProject(newProjectName.value.trim(), newProjectType.value)
-    if (projectStore.activeProjectId) {
-      router.replace({ query: { ...route.query, project: projectStore.activeProjectId } })
-    }
     showCreateModal.value = false
+    if (projectStore.activeProjectId) {
+      router.push(`/${projectStore.activeProjectId}/outline`)
+    }
     newProjectName.value = ''
     newProjectType.value = 'dissertation'
   } finally {
@@ -116,8 +120,27 @@ async function createProject() {
         </span>
       </div>
 
+      <!-- Global: Моя библиотека -->
+      <div class="px-2 pt-3 pb-1">
+        <RouterLink
+          to="/library"
+          class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
+          :class="route.path === '/library' || route.path.startsWith('/library/')
+            ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
+            : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-4 w-4 flex-shrink-0">
+            <path d="M3.5 2A1.5 1.5 0 0 0 2 3.5v9A1.5 1.5 0 0 0 3.5 14h9a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 12.5 2h-9Zm0 1.5h9v9h-9v-9Zm3 1a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1h-3Zm0 2.5a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1h-3Zm0 2.5a.5.5 0 0 0 0 1H9a.5.5 0 0 0 0-1H6.5Z" />
+          </svg>
+          Моя библиотека
+        </RouterLink>
+      </div>
+
+      <!-- Divider -->
+      <div class="mx-3 my-1 border-t border-[var(--color-rule)]"></div>
+
       <!-- Projects section -->
-      <div class="flex flex-col gap-0.5 px-2 pt-3 pb-1">
+      <div class="flex flex-col gap-0.5 px-2 pt-2 pb-1">
         <div class="flex items-center justify-between px-2 pb-1">
           <span class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">
             Проекты
@@ -143,9 +166,9 @@ async function createProject() {
         <button
           v-for="project in projectStore.projects"
           :key="project.project_id"
-          @click="setActiveAndUpdateUrl(project.project_id)"
+          @click="switchProject(project.project_id)"
           class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors"
-          :class="projectStore.activeProjectId === project.project_id
+          :class="route.params.projectId === project.project_id
             ? 'bg-[var(--color-accent-pale)] text-[var(--color-accent-deep)] font-medium'
             : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)] hover:text-[var(--color-ink)]'"
         >
@@ -154,14 +177,14 @@ async function createProject() {
       </div>
 
       <!-- Divider -->
-      <div class="mx-3 my-2 border-t border-[var(--color-rule)]"></div>
+      <div class="mx-3 my-1 border-t border-[var(--color-rule)]"></div>
 
-      <!-- Nav links -->
-      <nav class="flex flex-col gap-0.5 px-2">
+      <!-- Project nav links (shown only when a project is active in the URL) -->
+      <nav v-if="route.params.projectId" class="flex flex-col gap-0.5 px-2">
         <RouterLink
-          to="/dashboard"
+          :to="`/${route.params.projectId}/dashboard`"
           class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-          :class="route.path === '/dashboard'
+          :class="route.path === `/${route.params.projectId}/dashboard`
             ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
             : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
         >
@@ -171,9 +194,21 @@ async function createProject() {
           Обзор
         </RouterLink>
         <RouterLink
-          to="/library"
+          :to="`/${route.params.projectId}/outline`"
           class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-          :class="route.path.startsWith('/library')
+          :class="route.path === `/${route.params.projectId}/outline`
+            ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
+            : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-4 w-4 flex-shrink-0">
+            <path d="M2.75 2a.75.75 0 0 0 0 1.5h10.5a.75.75 0 0 0 0-1.5H2.75ZM2.75 5.5a.75.75 0 0 0 0 1.5h5.5a.75.75 0 0 0 0-1.5h-5.5ZM2 9.75A.75.75 0 0 1 2.75 9h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 2 9.75ZM2.75 12.5a.75.75 0 0 0 0 1.5h4a.75.75 0 0 0 0-1.5h-4Z" />
+          </svg>
+          Структура
+        </RouterLink>
+        <RouterLink
+          :to="`/${route.params.projectId}/library`"
+          class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
+          :class="route.path.startsWith(`/${route.params.projectId}/library`)
             ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
             : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
         >
@@ -183,9 +218,9 @@ async function createProject() {
           Библиотека
         </RouterLink>
         <RouterLink
-          to="/coverage"
+          :to="`/${route.params.projectId}/coverage`"
           class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-          :class="route.path === '/coverage'
+          :class="route.path === `/${route.params.projectId}/coverage`
             ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
             : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
         >
@@ -195,18 +230,22 @@ async function createProject() {
           Покрытие
         </RouterLink>
         <RouterLink
-          to="/write"
+          :to="`/${route.params.projectId}/research`"
           class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-          :class="route.path === '/write'
+          :class="route.path === `/${route.params.projectId}/research`
             ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
             : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-4 w-4 flex-shrink-0">
-            <path d="M13.488 2.513a1.75 1.75 0 0 0-2.475 0L6.75 6.774a2.75 2.75 0 0 0-.699 1.193l-.661 2.319a.75.75 0 0 0 .926.926l2.319-.661a2.75 2.75 0 0 0 1.193-.699l4.261-4.263a1.75 1.75 0 0 0 0-2.476ZM3.75 4.5a.75.75 0 0 0 0 1.5h1.5a.75.75 0 0 0 0-1.5h-1.5Zm0 3a.75.75 0 0 0 0 1.5h1.5a.75.75 0 0 0 0-1.5h-1.5Zm0 3a.75.75 0 0 0 0 1.5h5.5a.75.75 0 0 0 0-1.5h-5.5Z" />
+            <path fill-rule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clip-rule="evenodd" />
           </svg>
-          Написать
+          Исследование
         </RouterLink>
       </nav>
+      <!-- Hint when no project selected -->
+      <div v-else class="px-4 py-2">
+        <p class="text-xs text-[var(--color-ink-muted)]">Выберите проект выше</p>
+      </div>
 
       <!-- Spacer -->
       <div class="flex-1"></div>

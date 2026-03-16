@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
 import re
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
@@ -12,6 +15,16 @@ from klemma.models import UserRecord
 
 from ..auth.deps import get_current_user
 from ..deps import get_file_store, get_paper_store, get_user_library
+
+try:
+    from redis import Redis
+    from rq import Queue
+
+    _RQ_AVAILABLE = True
+except ImportError:
+    _RQ_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -228,6 +241,7 @@ class UploadResponse(BaseModel):
     pdf_hash: str
     status: str
     deduplicated: bool = False
+    job_id: str | None = None  # Set when auto-processing is enqueued
 
 
 MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
@@ -301,12 +315,32 @@ async def upload_pdf(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     library.add_source(paper_id, citekey, status="pending", project_id=project_id)
 
+    job_id = _enqueue_processing(paper_id, citekey, user.user_id, project_id)
+
     return UploadResponse(
         citekey=citekey,
         paper_id=paper_id,
         pdf_hash=pdf_hash,
-        status="pending",
+        status="queued" if job_id else "pending",
+        job_id=job_id,
     )
+
+
+def _enqueue_processing(paper_id: str, citekey: str, user_id: str, project_id: str | None = None) -> str | None:
+    """Enqueue a process_source job. Returns job_id or None if Redis unavailable."""
+    if not _RQ_AVAILABLE:
+        return None
+    try:
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        redis_conn = Redis.from_url(redis_url)
+        q = Queue(connection=redis_conn)
+        from ..tasks import process_source
+        data_dir = os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma"))
+        job = q.enqueue(process_source, paper_id, citekey, data_dir, user_id, project_id, job_timeout=300)
+        return job.id
+    except Exception as exc:
+        logger.warning("Auto-processing enqueue failed for %s: %s", citekey, exc)
+        return None
 
 
 def _citekey_from_filename(filename: str) -> str:

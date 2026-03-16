@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import { library, process, ApiError } from '@/api/client'
 import AppLayout from '@/components/AppLayout.vue'
 import { useProjectStore } from '@/stores/project'
 
+const route = useRoute()
 const projectStore = useProjectStore()
 
 interface Source {
@@ -18,13 +19,7 @@ interface Source {
 
 const sources = ref<Source[]>([])
 const loading = ref(true)
-const showAddForm = ref(false)
 const deleteConfirm = ref<string | null>(null)
-
-// Add form state
-const form = ref({ citekey: '', title: '', authors: '', year: '', doi: '' })
-const formError = ref('')
-const formLoading = ref(false)
 
 // Upload state
 const uploading = ref(false)
@@ -47,26 +42,6 @@ async function loadSources() {
   }
 }
 
-async function addSource() {
-  formError.value = ''
-  formLoading.value = true
-  try {
-    await library.add({
-      citekey: form.value.citekey,
-      title: form.value.title,
-      authors: form.value.authors || undefined,
-      year: form.value.year ? parseInt(form.value.year) : undefined,
-      doi: form.value.doi || undefined,
-    })
-    form.value = { citekey: '', title: '', authors: '', year: '', doi: '' }
-    showAddForm.value = false
-    await loadSources()
-  } catch (e) {
-    formError.value = e instanceof ApiError ? e.message : 'Ошибка добавления'
-  } finally {
-    formLoading.value = false
-  }
-}
 
 async function deleteSource(citekey: string) {
   try {
@@ -78,9 +53,12 @@ async function deleteSource(citekey: string) {
   }
 }
 
-async function processSource(citekey: string) {
+async function processSource(citekey: string, force = false) {
   try {
-    const resp = await process.submit(citekey)
+    const resp = await process.submit(citekey, {
+      projectId: projectStore.activeProjectId ?? undefined,
+      force,
+    })
     processingJobs.value[citekey] = resp.job_id
     pollJob(citekey, resp.job_id)
   } catch {
@@ -122,6 +100,10 @@ async function handleUpload(files: FileList | null) {
       uploaded++
       if (result.deduplicated) {
         uploadSuccess.value = `${file.name} — уже в библиотеке (дедупликация)`
+      } else if (result.job_id) {
+        processingJobs.value[result.citekey] = result.job_id
+        pollJob(result.citekey, result.job_id)
+        uploadSuccess.value = `${file.name} — загружен, обработка запущена`
       }
     } catch (e) {
       errors++
@@ -159,17 +141,9 @@ watch(() => projectStore.activeProjectId, loadSources)
 <template>
   <AppLayout>
     <!-- Header -->
-    <div class="flex items-center justify-between animate-in">
-      <div>
-        <h1 class="font-[var(--font-display)] text-2xl font-bold text-[var(--color-ink)] tracking-tight">Библиотека</h1>
-        <p class="mt-1 text-sm text-[var(--color-ink-muted)]">Источники для вашего исследования</p>
-      </div>
-      <button
-        @click="showAddForm = !showAddForm"
-        class="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] transition-colors"
-      >
-        {{ showAddForm ? 'Отмена' : '+ Добавить' }}
-      </button>
+    <div class="animate-in">
+      <h1 class="font-[var(--font-display)] text-2xl font-bold text-[var(--color-ink)] tracking-tight">Библиотека</h1>
+      <p class="mt-1 text-sm text-[var(--color-ink-muted)]">Источники для вашего исследования</p>
     </div>
 
     <!-- Upload zone -->
@@ -202,54 +176,6 @@ watch(() => projectStore.activeProjectId, loadSources)
       <div v-if="uploadSuccess" class="mt-3 text-sm text-[var(--color-ok)]">{{ uploadSuccess }}</div>
     </div>
 
-    <!-- Add form -->
-    <div v-if="showAddForm" class="mt-6 rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] p-6">
-      <h2 class="font-[var(--font-display)] text-sm font-semibold text-[var(--color-ink)] mb-4">Новый источник</h2>
-      <form class="grid grid-cols-1 gap-4 sm:grid-cols-2" @submit.prevent="addSource">
-        <div v-if="formError" class="col-span-full rounded-lg bg-[var(--color-err-bg)] p-3 text-sm text-[var(--color-err)]">
-          {{ formError }}
-        </div>
-        <input
-          v-model="form.citekey"
-          placeholder="Citekey (например: smithML2020)"
-          required
-          class="rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper)] px-3 py-2.5 text-sm text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
-        />
-        <input
-          v-model="form.title"
-          placeholder="Название статьи"
-          required
-          class="rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper)] px-3 py-2.5 text-sm text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
-        />
-        <input
-          v-model="form.authors"
-          placeholder="Авторы (необязательно)"
-          class="rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper)] px-3 py-2.5 text-sm text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
-        />
-        <input
-          v-model="form.year"
-          type="number"
-          placeholder="Год"
-          min="1900"
-          max="2099"
-          class="rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper)] px-3 py-2.5 text-sm text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
-        />
-        <input
-          v-model="form.doi"
-          placeholder="DOI (необязательно)"
-          class="col-span-full rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper)] px-3 py-2.5 text-sm text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
-        />
-        <div class="col-span-full">
-          <button
-            type="submit"
-            :disabled="formLoading"
-            class="rounded-lg bg-[var(--color-accent)] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] disabled:opacity-50 transition-colors"
-          >
-            {{ formLoading ? 'Добавляем...' : 'Добавить' }}
-          </button>
-        </div>
-      </form>
-    </div>
 
     <!-- Sources list -->
     <div class="mt-6 animate-in animate-in-delay-2">
@@ -265,13 +191,7 @@ watch(() => projectStore.activeProjectId, loadSources)
           </svg>
         </div>
         <h3 class="font-[var(--font-display)] text-xl font-semibold text-[var(--color-ink)]">Библиотека пуста</h3>
-        <p class="mt-2 text-sm text-[var(--color-ink-muted)]">Добавьте первый источник, чтобы начать работу.</p>
-        <button
-          @click="showAddForm = true"
-          class="mt-5 inline-flex items-center gap-2 rounded-lg bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] transition-colors"
-        >
-          + Добавить источник
-        </button>
+        <p class="mt-2 text-sm text-[var(--color-ink-muted)]">Загрузите PDF-файл выше, чтобы добавить первый источник.</p>
       </div>
 
       <!-- Sources table -->
@@ -290,7 +210,7 @@ watch(() => projectStore.activeProjectId, loadSources)
           <tbody class="divide-y divide-[var(--color-rule-light)]">
             <tr v-for="src in sources" :key="src.citekey" class="hover:bg-[var(--color-paper-warm)] transition-colors">
               <td class="px-5 py-3.5 text-sm">
-                <RouterLink :to="`/library/${src.citekey}`" class="font-[var(--font-mono)] text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] hover:underline transition-colors">
+                <RouterLink :to="`/${route.params.projectId}/library/${src.citekey}`" class="font-[var(--font-mono)] text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] hover:underline transition-colors">
                   {{ src.citekey }}
                 </RouterLink>
               </td>
@@ -312,11 +232,19 @@ watch(() => projectStore.activeProjectId, loadSources)
                   <!-- Inline process button -->
                   <button
                     v-if="(src.status === 'pending' || src.status === 'failed') && !processingJobs[src.citekey]"
-                    @click.stop="processSource(src.citekey)"
+                    @click.stop="processSource(src.citekey, false)"
                     class="text-xs text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] transition-colors"
                     title="Обработать источник"
                   >
                     обработать
+                  </button>
+                  <button
+                    v-if="src.status === 'completed' && !processingJobs[src.citekey]"
+                    @click.stop="processSource(src.citekey, true)"
+                    class="text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] transition-colors"
+                    title="Переобработать с учётом структуры"
+                  >
+                    переобработать
                   </button>
                   <div
                     v-if="processingJobs[src.citekey]"

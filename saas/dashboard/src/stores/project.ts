@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { userProjects, type Project } from '@/api/client'
+import { userProjects, type Project, type OutlineSection } from '@/api/client'
 
 const ACTIVE_KEY = 'active_project_id'
 
@@ -11,6 +11,10 @@ export const useProjectStore = defineStore('project', () => {
 
   const activeProject = computed(() =>
     projects.value.find((p) => p.project_id === activeProjectId.value) ?? null,
+  )
+
+  const activeOutline = computed<OutlineSection[] | null>(
+    () => activeProject.value?.outline ?? null,
   )
 
   async function loadProjects() {
@@ -50,5 +54,12 @@ export const useProjectStore = defineStore('project', () => {
     else localStorage.removeItem(ACTIVE_KEY)
   }
 
-  return { projects, activeProjectId, activeProject, loading, loadProjects, createProject, renameProject, setActive }
+  async function updateOutline(sections: OutlineSection[]) {
+    if (!activeProjectId.value) return
+    const updated = await userProjects.updateOutline(activeProjectId.value, sections)
+    const idx = projects.value.findIndex((p) => p.project_id === updated.project_id)
+    if (idx !== -1) projects.value[idx] = updated
+  }
+
+  return { projects, activeProjectId, activeProject, activeOutline, loading, loadProjects, createProject, renameProject, setActive, updateOutline }
 })

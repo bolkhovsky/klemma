@@ -16,7 +16,7 @@ async function handleLogin() {
     const data = await auth.login(email.value, password.value)
     localStorage.setItem('access_token', data.access_token)
     localStorage.setItem('refresh_token', data.refresh_token)
-    router.push('/dashboard')
+    router.push('/library')
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : 'Ошибка входа'
   } finally {

@@ -211,6 +211,16 @@ class LocalPaperStore:
     # Fragments                                                            #
     # ------------------------------------------------------------------ #
 
+    def delete_fragments(self, paper_id: str) -> int:
+        """Delete all fragments and extractions for paper_id. Returns count deleted."""
+        with self._conn() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM fragments WHERE paper_id = ?", (paper_id,)
+            ).fetchone()[0]
+            conn.execute("DELETE FROM fragments WHERE paper_id = ?", (paper_id,))
+            conn.execute("DELETE FROM extractions WHERE paper_id = ?", (paper_id,))
+        return count
+
     def get_fragments(self, paper_id: str) -> list["FragmentRecord"]:
         """Return all fragments stored for paper_id."""
         from ..models import FragmentRecord

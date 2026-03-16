@@ -6,6 +6,7 @@ Separate DB file (users.db) from the library data.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -15,7 +16,7 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 6
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -112,6 +113,24 @@ class LocalUserStore:
                     created_at  TEXT DEFAULT (datetime('now'))
                 );
                 CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
+            """)
+        if version < 5:
+            conn.execute("ALTER TABLE projects ADD COLUMN outline TEXT DEFAULT NULL")
+        if version < 6:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS research_reports (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id    TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+                    section       TEXT NOT NULL,
+                    report_json   TEXT NOT NULL,
+                    report_text   TEXT NOT NULL,
+                    model         TEXT,
+                    input_tokens  INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
+                    created_at    TEXT DEFAULT (datetime('now')),
+                    UNIQUE(project_id, section)
+                );
+                CREATE INDEX IF NOT EXISTS idx_rr_project ON research_reports(project_id);
             """)
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
@@ -235,19 +254,38 @@ class LocalUserStore:
         """List all projects for a user, ordered by creation date."""
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT project_id, name, type, created_at FROM projects WHERE user_id = ? ORDER BY created_at",
+                "SELECT project_id, name, type, created_at, outline FROM projects WHERE user_id = ? ORDER BY created_at",
                 (user_id,),
             ).fetchall()
-        return [dict(r) for r in rows]
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["outline"] = json.loads(d["outline"]) if d["outline"] else None
+            result.append(d)
+        return result
 
     def get_project_by_id(self, project_id: str) -> Optional[dict]:
         """Return project dict or None if not found."""
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT project_id, user_id, name, type, created_at FROM projects WHERE project_id = ?",
+                "SELECT project_id, user_id, name, type, created_at, outline FROM projects WHERE project_id = ?",
                 (project_id,),
             ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        d = dict(row)
+        d["outline"] = json.loads(d["outline"]) if d["outline"] else None
+        return d
+
+    def update_project_outline(self, project_id: str, sections: list[dict]) -> bool:
+        """Save the outline (section list) for a project. Returns True if project existed."""
+        outline_json = json.dumps(sections, ensure_ascii=False)
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE projects SET outline = ? WHERE project_id = ?",
+                (outline_json, project_id),
+            )
+        return cursor.rowcount > 0
 
     def rename_project(self, project_id: str, name: str) -> bool:
         """Rename a project. Returns True if it existed."""
@@ -256,6 +294,57 @@ class LocalUserStore:
                 "UPDATE projects SET name = ? WHERE project_id = ?", (name, project_id)
             )
         return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------ #
+    # Research reports                                                      #
+    # ------------------------------------------------------------------ #
+
+    def save_research_report(
+        self,
+        project_id: str,
+        section: str,
+        report_json: str,
+        report_text: str,
+        model: str = "",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> None:
+        """Save or replace a research report for a project section."""
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO research_reports
+                   (project_id, section, report_json, report_text, model, input_tokens, output_tokens)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(project_id, section) DO UPDATE SET
+                     report_json = excluded.report_json,
+                     report_text = excluded.report_text,
+                     model = excluded.model,
+                     input_tokens = excluded.input_tokens,
+                     output_tokens = excluded.output_tokens,
+                     created_at = datetime('now')""",
+                (project_id, section, report_json, report_text, model, input_tokens, output_tokens),
+            )
+
+    def get_research_report(self, project_id: str, section: str) -> dict | None:
+        """Get the latest research report for a project section."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM research_reports WHERE project_id = ? AND section = ?",
+                (project_id, section),
+            ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def get_project_research_reports(self, project_id: str) -> list[dict]:
+        """Get all research reports for a project, ordered by section."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT section, created_at, model, input_tokens, output_tokens
+                   FROM research_reports WHERE project_id = ? ORDER BY section""",
+                (project_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def revoke_refresh_tokens(self, user_id: str) -> int:
         """Revoke all refresh tokens for a user. Returns count revoked."""

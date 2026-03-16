@@ -1,31 +1,24 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRouter, RouterLink } from 'vue-router'
+import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { projects, library } from '@/api/client'
 import AppLayout from '@/components/AppLayout.vue'
+import { useProjectStore } from '@/stores/project'
 
+const route = useRoute()
 const router = useRouter()
+const projectStore = useProjectStore()
 
-// Section name labels — edit to match your dissertation outline
-const SECTION_NAMES: Record<string, string> = {
-  '1': 'Глава 1',
-  '1.1': 'Введение в проблему',
-  '1.2': 'Обзор литературы',
-  '1.3': 'Анализ методов',
-  '2': 'Глава 2',
-  '2.1': 'Методология',
-  '2.2': 'Данные и эксперименты',
-  '2.3': 'Реализация',
-  '3': 'Глава 3',
-  '3.1': 'Результаты',
-  '3.2': 'Обсуждение',
-  '3.3': 'Выводы',
-  '4': 'Глава 4',
-  '4.1': 'Заключение',
-}
+const outlineMap = computed<Record<string, string>>(() => {
+  const map: Record<string, string> = {}
+  for (const s of projectStore.activeOutline ?? []) {
+    map[s.id] = s.name
+  }
+  return map
+})
 
 function sectionLabel(id: string): string {
-  return SECTION_NAMES[id] ?? ''
+  return outlineMap.value[id] ?? ''
 }
 
 function chapterOf(sectionId: string): string {
@@ -157,7 +150,7 @@ onMounted(async () => {
             Откройте источник в библиотеке и назначьте его разделам диссертации.
           </p>
           <RouterLink
-            to="/library"
+            :to="`/${route.params.projectId}/library`"
             class="mt-5 inline-flex items-center gap-2 rounded-lg bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] transition-colors"
           >
             Перейти в библиотеку
@@ -174,7 +167,7 @@ onMounted(async () => {
             <!-- Chapter header -->
             <div class="px-5 py-2.5 bg-[var(--color-paper-warm)] border-b border-[var(--color-rule-light)] flex items-center gap-3">
               <span class="font-[var(--font-mono)] text-xs font-semibold text-[var(--color-accent)]">Гл. {{ group.chapter }}</span>
-              <span class="text-sm font-medium text-[var(--color-ink)]">{{ SECTION_NAMES[group.chapter] ?? `Глава ${group.chapter}` }}</span>
+              <span class="text-sm font-medium text-[var(--color-ink)]">{{ outlineMap[group.chapter] ?? `Глава ${group.chapter}` }}</span>
             </div>
 
             <!-- Section rows -->
@@ -231,7 +224,7 @@ onMounted(async () => {
                   <RouterLink
                     v-for="ck in sectionSources[section]"
                     :key="ck"
-                    :to="`/library/${ck}`"
+                    :to="`/${route.params.projectId}/library/${ck}`"
                     class="block font-[var(--font-mono)] text-sm text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] hover:underline transition-colors py-0.5"
                   >
                     {{ ck }}
