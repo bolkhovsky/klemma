@@ -42,6 +42,12 @@ const router = createRouter({
       component: () => import('../views/CoverageView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/write',
+      name: 'write',
+      component: () => import('../views/WriteView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 
