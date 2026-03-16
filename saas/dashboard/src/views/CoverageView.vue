@@ -6,6 +6,32 @@ import AppLayout from '@/components/AppLayout.vue'
 
 const router = useRouter()
 
+// Section name labels — edit to match your dissertation outline
+const SECTION_NAMES: Record<string, string> = {
+  '1': 'Глава 1',
+  '1.1': 'Введение в проблему',
+  '1.2': 'Обзор литературы',
+  '1.3': 'Анализ методов',
+  '2': 'Глава 2',
+  '2.1': 'Методология',
+  '2.2': 'Данные и эксперименты',
+  '2.3': 'Реализация',
+  '3': 'Глава 3',
+  '3.1': 'Результаты',
+  '3.2': 'Обсуждение',
+  '3.3': 'Выводы',
+  '4': 'Глава 4',
+  '4.1': 'Заключение',
+}
+
+function sectionLabel(id: string): string {
+  return SECTION_NAMES[id] ?? ''
+}
+
+function chapterOf(sectionId: string): string {
+  return sectionId.split('.')[0] ?? sectionId
+}
+
 const coverage = ref<{ total_sources: number; sections: Record<string, number>; chapters: Record<string, number> } | null>(null)
 const sectionSources = ref<Record<string, string[]>>({})
 const expandedSection = ref<string | null>(null)
@@ -24,6 +50,21 @@ const sortedSections = computed(() => {
       }
       return 0
     })
+})
+
+// Group sections by chapter for display
+const sectionsByChapter = computed(() => {
+  const groups: { chapter: string; sections: [string, number][] }[] = []
+  const seen = new Map<string, [string, number][]>()
+  for (const [id, count] of sortedSections.value) {
+    const ch = chapterOf(id)
+    if (!seen.has(ch)) {
+      seen.set(ch, [])
+      groups.push({ chapter: ch, sections: seen.get(ch)! })
+    }
+    seen.get(ch)!.push([id, count])
+  }
+  return groups
 })
 
 const maxCount = computed(() => {
@@ -123,62 +164,79 @@ onMounted(async () => {
           </RouterLink>
         </div>
 
-        <!-- Sections list -->
-        <div v-else class="rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] overflow-hidden">
+        <!-- Sections grouped by chapter -->
+        <div v-else class="space-y-4">
           <div
-            v-for="([section, count], i) in sortedSections"
-            :key="section"
-            :class="{ 'border-t border-[var(--color-rule-light)]': i > 0 }"
+            v-for="group in sectionsByChapter"
+            :key="group.chapter"
+            class="rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] overflow-hidden"
           >
-            <!-- Section row -->
-            <button
-              @click="toggleSection(section)"
-              class="w-full flex items-center gap-4 px-5 py-4 hover:bg-[var(--color-paper-warm)] transition-colors text-left"
+            <!-- Chapter header -->
+            <div class="px-5 py-2.5 bg-[var(--color-paper-warm)] border-b border-[var(--color-rule-light)] flex items-center gap-3">
+              <span class="font-[var(--font-mono)] text-xs font-semibold text-[var(--color-accent)]">Гл. {{ group.chapter }}</span>
+              <span class="text-sm font-medium text-[var(--color-ink)]">{{ SECTION_NAMES[group.chapter] ?? `Глава ${group.chapter}` }}</span>
+            </div>
+
+            <!-- Section rows -->
+            <div
+              v-for="([section, count], i) in group.sections"
+              :key="section"
+              :class="{ 'border-t border-[var(--color-rule-light)]': i > 0 }"
             >
-              <!-- Section number -->
-              <span class="font-[var(--font-mono)] text-sm font-medium text-[var(--color-accent)] w-16 shrink-0">
-                {{ section }}
-              </span>
-
-              <!-- Bar -->
-              <div class="flex-1">
-                <div class="h-3 w-full rounded-full bg-[var(--color-rule-light)] overflow-hidden">
-                  <div
-                    class="h-full rounded-full transition-all duration-500"
-                    :class="count >= 10 ? 'bg-[var(--color-ok)]' : count >= 5 ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-warn)]'"
-                    :style="{ width: `${(count / maxCount) * 100}%` }"
-                  ></div>
-                </div>
-              </div>
-
-              <!-- Count -->
-              <span class="font-[var(--font-mono)] text-sm text-[var(--color-ink-muted)] w-8 text-right shrink-0">
-                {{ count }}
-              </span>
-
-              <!-- Expand indicator -->
-              <svg
-                class="w-4 h-4 text-[var(--color-ink-muted)] transition-transform shrink-0"
-                :class="{ 'rotate-180': expandedSection === section }"
-                fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
+              <button
+                @click="toggleSection(section)"
+                class="w-full flex items-center gap-4 px-5 py-3.5 hover:bg-[var(--color-paper-warm)] transition-colors text-left"
               >
-                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-              </svg>
-            </button>
+                <!-- Section number -->
+                <span class="font-[var(--font-mono)] text-sm font-medium text-[var(--color-accent)] w-10 shrink-0">
+                  {{ section }}
+                </span>
 
-            <!-- Expanded: sources in this section -->
-            <div v-if="expandedSection === section" class="bg-[var(--color-paper-warm)] px-5 py-3 border-t border-[var(--color-rule-light)]">
-              <div v-if="!sectionSources[section]" class="text-sm text-[var(--color-ink-muted)]">Загрузка...</div>
-              <div v-else-if="sectionSources[section].length === 0" class="text-sm text-[var(--color-ink-muted)]">Нет источников</div>
-              <div v-else class="space-y-1">
-                <RouterLink
-                  v-for="ck in sectionSources[section]"
-                  :key="ck"
-                  :to="`/library/${ck}`"
-                  class="block font-[var(--font-mono)] text-sm text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] hover:underline transition-colors py-0.5"
+                <!-- Section name -->
+                <span class="text-sm text-[var(--color-ink-muted)] w-48 shrink-0 truncate">
+                  {{ sectionLabel(section) }}
+                </span>
+
+                <!-- Bar -->
+                <div class="flex-1">
+                  <div class="h-2.5 w-full rounded-full bg-[var(--color-rule-light)] overflow-hidden">
+                    <div
+                      class="h-full rounded-full transition-all duration-500"
+                      :class="count >= 10 ? 'bg-[var(--color-ok)]' : count >= 5 ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-warn)]'"
+                      :style="{ width: `${(count / maxCount) * 100}%` }"
+                    ></div>
+                  </div>
+                </div>
+
+                <!-- Count -->
+                <span class="font-[var(--font-mono)] text-sm text-[var(--color-ink-muted)] w-8 text-right shrink-0">
+                  {{ count }}
+                </span>
+
+                <!-- Expand indicator -->
+                <svg
+                  class="w-4 h-4 text-[var(--color-ink-muted)] transition-transform shrink-0"
+                  :class="{ 'rotate-180': expandedSection === section }"
+                  fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
                 >
-                  {{ ck }}
-                </RouterLink>
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                </svg>
+              </button>
+
+              <!-- Expanded: sources in this section -->
+              <div v-if="expandedSection === section" class="bg-[var(--color-paper-warm)] px-5 py-3 border-t border-[var(--color-rule-light)]">
+                <div v-if="!sectionSources[section]" class="text-sm text-[var(--color-ink-muted)]">Загрузка...</div>
+                <div v-else-if="sectionSources[section].length === 0" class="text-sm text-[var(--color-ink-muted)]">Нет источников</div>
+                <div v-else class="space-y-1">
+                  <RouterLink
+                    v-for="ck in sectionSources[section]"
+                    :key="ck"
+                    :to="`/library/${ck}`"
+                    class="block font-[var(--font-mono)] text-sm text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] hover:underline transition-colors py-0.5"
+                  >
+                    {{ ck }}
+                  </RouterLink>
+                </div>
               </div>
             </div>
           </div>
