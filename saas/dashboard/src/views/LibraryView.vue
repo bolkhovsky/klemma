@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { library, process, ApiError } from '@/api/client'
 import AppLayout from '@/components/AppLayout.vue'
+import { useProjectStore } from '@/stores/project'
+
+const projectStore = useProjectStore()
 
 interface Source {
   citekey: string
@@ -35,7 +38,7 @@ const processingJobs = ref<Record<string, string>>({})
 async function loadSources() {
   loading.value = true
   try {
-    const data = await library.list()
+    const data = await library.list(projectStore.activeProjectId ?? undefined)
     sources.value = data.sources
   } catch {
     sources.value = []
@@ -150,6 +153,7 @@ function onFileInput(e: Event) {
 }
 
 onMounted(loadSources)
+watch(() => projectStore.activeProjectId, loadSources)
 </script>
 
 <template>

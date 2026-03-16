@@ -104,7 +104,10 @@ export const auth = {
 
 // Library
 export const library = {
-  list: () => request<{ sources: any[]; total: number }>('/library/sources'),
+  list: (projectId?: string) => {
+    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
+    return request<{ sources: any[]; total: number }>(`/library/sources${qs}`)
+  },
 
   get: (citekey: string) => request<any>(`/library/sources/${citekey}`),
 
@@ -135,6 +138,30 @@ export const library = {
       deduplicated: boolean
     }>
   },
+}
+
+// User projects (CRUD)
+export interface Project {
+  project_id: string
+  name: string
+  type: string
+  created_at: string
+}
+
+export const userProjects = {
+  list: () => request<{ projects: Project[] }>('/projects'),
+
+  create: (name: string, type = 'dissertation') =>
+    request<Project>('/projects', {
+      method: 'POST',
+      body: JSON.stringify({ name, type }),
+    }),
+
+  rename: (projectId: string, name: string) =>
+    request<Project>(`/projects/${projectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
 }
 
 // Analyze

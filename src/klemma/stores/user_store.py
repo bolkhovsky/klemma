@@ -229,7 +229,7 @@ class LocalUserStore:
                 "INSERT INTO projects (project_id, user_id, name, type) VALUES (?, ?, ?, ?)",
                 (project_id, user_id, name, type_),
             )
-        return {"project_id": project_id, "user_id": user_id, "name": name, "type": type_}
+        return self.get_project_by_id(project_id)  # type: ignore[return-value]
 
     def get_projects(self, user_id: str) -> list[dict]:
         """List all projects for a user, ordered by creation date."""
