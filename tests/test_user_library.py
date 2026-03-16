@@ -17,13 +17,13 @@ def lib(tmp_path) -> LocalUserLibrary:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_2(tmp_path):
+def test_schema_version_is_3(tmp_path):
     db_path = tmp_path / "library.db"
     LocalUserLibrary(db_path)
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 2
+    assert version == 3
 
 
 def test_tables_created(tmp_path):
@@ -57,7 +57,7 @@ def test_paper_store_schema_coexists(tmp_path):
         ).fetchall()
     }
     conn.close()
-    assert version == 2
+    assert version == 3
     # Both sets of tables present
     assert "papers" in tables
     assert "user_sources" in tables
@@ -182,3 +182,26 @@ def test_sections_replaced_on_upsert(lib):
     lib.add_source("pid", "src2", sections=["2.1", "3.2"])
     src = lib.get_source_by_citekey("src2")
     assert set(src.sections) == {"2.1", "3.2"}
+
+
+def test_project_id_filter(lib):
+    lib.add_source("pid1", "src_a", project_id="proj1")
+    lib.add_source("pid2", "src_b", project_id="proj2")
+    lib.add_source("pid3", "src_c")  # no project
+
+    in_proj1 = lib.get_all_sources(project_id="proj1")
+    assert [s.citekey for s in in_proj1] == ["src_a"]
+
+    in_proj2 = lib.get_all_sources(project_id="proj2")
+    assert [s.citekey for s in in_proj2] == ["src_b"]
+
+    all_sources = lib.get_all_sources()
+    assert len(all_sources) == 3
+
+
+def test_project_id_preserved_on_status_upsert(lib):
+    """project_id is not overwritten when updating status without project_id."""
+    lib.add_source("pid1", "src_x", project_id="proj1")
+    lib.add_source("pid1", "src_x", status="completed")  # no project_id
+    src = lib.get_source_by_citekey("src_x")
+    assert src.status == "completed"

@@ -21,13 +21,13 @@ def store(tmp_path) -> LocalUserStore:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_2(tmp_path):
+def test_schema_version_is_4(tmp_path):
     db_path = tmp_path / "users.db"
     LocalUserStore(db_path)
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 2
+    assert version == 4
 
 
 def test_creates_db_file(tmp_path):
@@ -139,3 +139,59 @@ def test_revoke_refresh_tokens(store):
     assert count == 2
     assert not store.verify_refresh_token(user.user_id, "t1")
     assert not store.verify_refresh_token(user.user_id, "t2")
+
+
+# ---------------------------------------------------------------------------
+# Project management
+# ---------------------------------------------------------------------------
+
+
+def test_create_project(store):
+    user = store.create_user(email="p@example.com", password_hash="h")
+    project = store.create_project(user.user_id, "My Dissertation")
+    assert project["project_id"]
+    assert project["name"] == "My Dissertation"
+    assert project["type"] == "dissertation"
+    assert project["user_id"] == user.user_id
+
+
+def test_get_projects_empty(store):
+    user = store.create_user(email="p@example.com", password_hash="h")
+    assert store.get_projects(user.user_id) == []
+
+
+def test_get_projects_multiple(store):
+    user = store.create_user(email="p@example.com", password_hash="h")
+    store.create_project(user.user_id, "Dissertation", "dissertation")
+    store.create_project(user.user_id, "Paper 1", "article")
+    projects = store.get_projects(user.user_id)
+    assert len(projects) == 2
+    names = {p["name"] for p in projects}
+    assert names == {"Dissertation", "Paper 1"}
+
+
+def test_get_project_by_id(store):
+    user = store.create_user(email="p@example.com", password_hash="h")
+    created = store.create_project(user.user_id, "Test Project")
+    fetched = store.get_project_by_id(created["project_id"])
+    assert fetched is not None
+    assert fetched["name"] == "Test Project"
+
+
+def test_get_project_by_id_missing(store):
+    assert store.get_project_by_id("nonexistent") is None
+
+
+def test_rename_project(store):
+    user = store.create_user(email="p@example.com", password_hash="h")
+    project = store.create_project(user.user_id, "Old Name")
+    assert store.rename_project(project["project_id"], "New Name") is True
+    updated = store.get_project_by_id(project["project_id"])
+    assert updated["name"] == "New Name"
+
+
+def test_projects_isolated_between_users(store):
+    u1 = store.create_user(email="u1@example.com", password_hash="h")
+    u2 = store.create_user(email="u2@example.com", password_hash="h")
+    store.create_project(u1.user_id, "User1 Project")
+    assert store.get_projects(u2.user_id) == []

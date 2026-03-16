@@ -1,4 +1,4 @@
-"""Project endpoints: coverage stats and section assignments (ADR-009, #99)."""
+"""Project endpoints: user project CRUD + coverage stats + section assignments (ADR-009, #204)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from klemma.models import UserRecord
 
-from ..auth.deps import get_current_user
+from ..auth.deps import get_current_user, get_user_store
 from ..deps import get_project_store, get_user_library
 
 router = APIRouter()
@@ -16,6 +16,28 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+
+
+class ProjectResponse(BaseModel):
+    """A user project."""
+
+    project_id: str
+    name: str
+    type: str
+    created_at: str = ""
+
+
+class ProjectListResponse(BaseModel):
+    projects: list[ProjectResponse]
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str
+    type: str = "dissertation"
+
+
+class ProjectRenameRequest(BaseModel):
+    name: str
 
 
 class CoverageStatsResponse(BaseModel):
@@ -43,7 +65,51 @@ class AssignSectionRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Endpoints
+# Endpoints — Project CRUD
+# ---------------------------------------------------------------------------
+
+
+@router.get("", response_model=ProjectListResponse)
+async def list_projects(
+    user: UserRecord = Depends(get_current_user),
+) -> ProjectListResponse:
+    """List all projects for the current user."""
+    store = get_user_store()
+    rows = store.get_projects(user.user_id)
+    return ProjectListResponse(
+        projects=[ProjectResponse(**r) for r in rows]
+    )
+
+
+@router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
+async def create_project(
+    body: ProjectCreateRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> ProjectResponse:
+    """Create a new project."""
+    store = get_user_store()
+    project = store.create_project(user.user_id, body.name, body.type)
+    return ProjectResponse(**project)
+
+
+@router.patch("/{project_id}", response_model=ProjectResponse)
+async def rename_project(
+    project_id: str,
+    body: ProjectRenameRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> ProjectResponse:
+    """Rename a project. Only the owner can rename it."""
+    store = get_user_store()
+    project = store.get_project_by_id(project_id)
+    if not project or project["user_id"] != user.user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    store.rename_project(project_id, body.name)
+    project["name"] = body.name
+    return ProjectResponse(**project)
+
+
+# ---------------------------------------------------------------------------
+# Endpoints — Coverage & Sections
 # ---------------------------------------------------------------------------
 
 

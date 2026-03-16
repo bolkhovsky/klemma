@@ -15,7 +15,7 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -101,6 +101,17 @@ class LocalUserStore:
                     created_at    TEXT DEFAULT (datetime('now'))
                 );
                 CREATE INDEX IF NOT EXISTS idx_usage_log_user ON usage_log(user_id);
+            """)
+        if version < 4:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS projects (
+                    project_id  TEXT PRIMARY KEY,
+                    user_id     TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    name        TEXT NOT NULL,
+                    type        TEXT NOT NULL DEFAULT 'dissertation',
+                    created_at  TEXT DEFAULT (datetime('now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
             """)
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
@@ -205,6 +216,46 @@ class LocalUserStore:
                 (user_id, token_hash, now),
             ).fetchone()
         return row is not None
+
+    # ------------------------------------------------------------------ #
+    # Project management                                                  #
+    # ------------------------------------------------------------------ #
+
+    def create_project(self, user_id: str, name: str, type_: str = "dissertation") -> dict:
+        """Create a new project for a user. Returns the project dict."""
+        project_id = uuid.uuid4().hex
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO projects (project_id, user_id, name, type) VALUES (?, ?, ?, ?)",
+                (project_id, user_id, name, type_),
+            )
+        return {"project_id": project_id, "user_id": user_id, "name": name, "type": type_}
+
+    def get_projects(self, user_id: str) -> list[dict]:
+        """List all projects for a user, ordered by creation date."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT project_id, name, type, created_at FROM projects WHERE user_id = ? ORDER BY created_at",
+                (user_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_project_by_id(self, project_id: str) -> Optional[dict]:
+        """Return project dict or None if not found."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT project_id, user_id, name, type, created_at FROM projects WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def rename_project(self, project_id: str, name: str) -> bool:
+        """Rename a project. Returns True if it existed."""
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE projects SET name = ? WHERE project_id = ?", (name, project_id)
+            )
+        return cursor.rowcount > 0
 
     def revoke_refresh_tokens(self, user_id: str) -> int:
         """Revoke all refresh tokens for a user. Returns count revoked."""

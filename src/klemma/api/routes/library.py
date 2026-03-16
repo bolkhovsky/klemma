@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 
 from klemma.models import UserRecord
@@ -52,6 +52,7 @@ class SourceCreateRequest(BaseModel):
     year: int | None = None
     doi: str | None = None
     abstract: str = ""
+    project_id: str | None = None
 
 
 class FragmentResponse(BaseModel):
@@ -78,12 +79,13 @@ class SourceDetailResponse(SourceResponse):
 @router.get("/sources", response_model=SourceListResponse)
 async def list_sources(
     user: UserRecord = Depends(get_current_user),
+    project_id: str | None = Query(default=None, description="Filter by project"),
 ) -> SourceListResponse:
-    """List all sources in the user's library."""
+    """List sources in the user's library, optionally filtered by project."""
     library = get_user_library()
     paper_store = get_paper_store()
 
-    all_sources = library.get_all_sources()
+    all_sources = library.get_all_sources(project_id=project_id)
     results: list[SourceResponse] = []
     for src in all_sources:
         paper = paper_store.get_paper_by_id(src.paper_id)
@@ -183,7 +185,7 @@ async def add_source(
         )
 
     # Register in user's library
-    library.add_source(paper_id, body.citekey, status="pending")
+    library.add_source(paper_id, body.citekey, status="pending", project_id=body.project_id)
 
     return SourceResponse(
         citekey=body.citekey,
@@ -235,6 +237,7 @@ MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
 async def upload_pdf(
     file: UploadFile,
     user: UserRecord = Depends(get_current_user),
+    project_id: str | None = Form(default=None),
 ) -> UploadResponse:
     """Upload a PDF and register it in the library.
 
@@ -272,7 +275,7 @@ async def upload_pdf(
         # Check citekey conflict
         if library.get_source_by_citekey(citekey):
             citekey = f"{citekey}_{pdf_hash[:6]}"
-        library.add_source(existing.paper_id, citekey, status="completed")
+        library.add_source(existing.paper_id, citekey, status="completed", project_id=project_id)
         return UploadResponse(
             citekey=citekey,
             paper_id=existing.paper_id,
@@ -296,7 +299,7 @@ async def upload_pdf(
         file_store.save(paper_id, data, safe_filename)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    library.add_source(paper_id, citekey, status="pending")
+    library.add_source(paper_id, citekey, status="pending", project_id=project_id)
 
     return UploadResponse(
         citekey=citekey,

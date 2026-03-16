@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Generator, Optional
 if TYPE_CHECKING:
     from ..models import UserSource
 
-_SCHEMA_VERSION = 2  # library.db version after adding user_sources
+_SCHEMA_VERSION = 3  # library.db version after adding project_id to user_sources
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS user_sources (
@@ -81,8 +81,13 @@ class LocalUserLibrary:
 
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version < _SCHEMA_VERSION:
+        if version < 2:
             conn.executescript(_CREATE_SCHEMA)
+        if version < 3:
+            conn.execute(
+                "ALTER TABLE user_sources ADD COLUMN project_id TEXT"
+            )
+        if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
     # ------------------------------------------------------------------ #
@@ -100,22 +105,24 @@ class LocalUserLibrary:
         quality_score: Optional[int] = None,
         chapters: Optional[list[int]] = None,
         sections: Optional[list[str]] = None,
+        project_id: Optional[str] = None,
         **_: object,
     ) -> None:
         """Register citekey → paper_id mapping. Upserts on citekey conflict."""
         with self._conn() as conn:
             conn.execute(
                 """INSERT INTO user_sources
-                   (citekey, paper_id, status, pdf_path, note_path, quality_score)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                   (citekey, paper_id, status, pdf_path, note_path, quality_score, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(citekey) DO UPDATE SET
                        paper_id=excluded.paper_id,
                        status=excluded.status,
                        pdf_path=excluded.pdf_path,
                        note_path=excluded.note_path,
                        quality_score=excluded.quality_score,
+                       project_id=COALESCE(excluded.project_id, user_sources.project_id),
                        updated_at=datetime('now')""",
-                (citekey, paper_id, status, pdf_path, note_path, quality_score),
+                (citekey, paper_id, status, pdf_path, note_path, quality_score, project_id),
             )
             if chapters:
                 conn.execute(
@@ -203,13 +210,18 @@ class LocalUserLibrary:
                 (status, citekey),
             )
 
-    def get_all_sources(self) -> list["UserSource"]:
-        """Return all UserSource entries."""
-
+    def get_all_sources(self, project_id: Optional[str] = None) -> list["UserSource"]:
+        """Return all UserSource entries, optionally filtered by project."""
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT citekey FROM user_sources ORDER BY added_at"
-            ).fetchall()
+            if project_id is not None:
+                rows = conn.execute(
+                    "SELECT citekey FROM user_sources WHERE project_id = ? ORDER BY added_at",
+                    (project_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT citekey FROM user_sources ORDER BY added_at"
+                ).fetchall()
         return [self.get_source_by_citekey(row["citekey"]) for row in rows]  # type: ignore[return-value]
 
     def count(self) -> int:
