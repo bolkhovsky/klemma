@@ -140,6 +140,9 @@ export const library = {
       job_id: string | null
     }>
   },
+
+  gaps: () =>
+    request<{ gaps: { title: string; authors: string | null; year: number | null; cited_by_count: number; intents: string | null }[]; total: number; detail?: string }>('/library/gaps'),
 }
 
 // User projects (CRUD)
