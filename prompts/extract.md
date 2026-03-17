@@ -75,7 +75,14 @@ Return a JSON object:
       "citation_intent": "method"
     }
   ],
-  "summary": "2-3 sentence summary of the paper's contribution to the project"
+  "summary": "2-3 sentence summary of the paper's contribution to the project",
+  "key_references": [
+    {
+      "title": "Title of a key paper cited in the bibliography",
+      "authors": "First Author et al.",
+      "year": 2020
+    }
+  ]
 }
 ```
 
@@ -89,8 +96,9 @@ Guidelines:
 7. Usage hints should be in {{ language }}
 8. Fragments text stays in original paper language
 9. citation_intent must be one of: background, method, result_comparison, extends, contrasts, uses_data
+10. key_references: extract 5-15 most important papers from the bibliography/references section. Include title, authors, year. These are used to identify gaps in the user's library
 {% if section_types %}
-10. When assigning section, prefer semantic section types: {{ section_types }}
+11. When assigning section, prefer semantic section types: {{ section_types }}
 {% endif %}
 
 Respond with ONLY valid JSON.
