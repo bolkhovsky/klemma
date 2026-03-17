@@ -9,8 +9,8 @@ import { useProjectStore } from '@/stores/project'
 const route = useRoute()
 const projectStore = useProjectStore()
 
-const projectId = route.params.projectId as string
-const section = route.params.section as string
+const projectId = computed(() => route.params.projectId as string)
+const section = computed(() => route.params.section as string)
 
 interface ArgumentBlock {
   order: number
@@ -54,7 +54,7 @@ const showRawText = ref(false)
 // Outline
 const outline = ref<OutlineSection[]>([])
 const sectionName = computed(() => {
-  const entry = outline.value.find(s => s.id === section)
+  const entry = outline.value.find(s => s.id === section.value)
   if (entry) return entry.name
   return reportData.value?.section_title || ''
 })
@@ -115,7 +115,7 @@ const actionableRecs = computed(() => {
     const topics = reportData.value.missing_coverage.slice(0, 2).join('; ')
     recs.push({
       text: `Не хватает источников: ${topics}`,
-      link: `/${projectId}/library`,
+      link: `/${projectId.value}/library`,
       linkText: 'Перейти в библиотеку',
     })
   }
@@ -135,7 +135,7 @@ async function loadOutline() {
   } else {
     try {
       const data = await userProjects.list()
-      const p = data.projects.find(pr => pr.project_id === projectId)
+      const p = data.projects.find(pr => pr.project_id === projectId.value)
       outline.value = p?.outline ?? []
     } catch { /* ignore */ }
   }
@@ -149,7 +149,7 @@ async function loadReport() {
   loading.value = true
   error.value = ''
   try {
-    const data = await researchApi.getReport(projectId, section)
+    const data = await researchApi.getReport(projectId.value, section.value)
     reportText.value = data.report_text
     reportMeta.value = { created_at: data.created_at, model: data.model }
     reportData.value = (data as any).report_data ?? null
@@ -166,7 +166,7 @@ async function regenerate() {
   regenStatus.value = 'queued'
   error.value = ''
   try {
-    const resp = await researchApi.generate(section, projectId)
+    const resp = await researchApi.generate(section.value, projectId.value)
     regenJobId.value = resp.job_id
     startPolling()
   } catch (e: any) {
@@ -224,6 +224,9 @@ function formatDate(iso: string) {
   try { return new Date(iso + 'Z').toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) }
   catch { return iso }
 }
+
+// Reload on route param change (component reuse)
+watch(() => route.params.section, () => { stopPolling(); loadReport() })
 
 onMounted(() => { loadOutline(); loadReport() })
 onUnmounted(stopPolling)
