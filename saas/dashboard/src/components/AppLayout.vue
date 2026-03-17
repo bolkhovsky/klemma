@@ -142,7 +142,7 @@ async function createProject() {
       <!-- Projects section -->
       <div class="flex flex-col gap-0.5 px-2 pt-2 pb-1">
         <div class="flex items-center justify-between px-2 pb-1">
-          <span class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">
+          <span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">
             Проекты
           </span>
           <button
@@ -259,8 +259,8 @@ async function createProject() {
           :title="`Использовано ${tokenBalance.total_used.toLocaleString('ru-RU')} из ${tokenBalance.total_granted.toLocaleString('ru-RU')} токенов`"
         >
           <div class="flex items-center justify-between">
-            <span class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Токены</span>
-            <span class="font-[var(--font-mono)] text-[10px]" :class="tokenColor">
+            <span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Токены</span>
+            <span class="font-[var(--font-mono)] text-xs" :class="tokenColor">
               {{ formatTokens(tokenBalance.remaining) }} ост.
             </span>
           </div>

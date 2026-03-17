@@ -240,8 +240,8 @@ function applyTemplate() {
         <div class="rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] overflow-hidden">
           <!-- Column headers -->
           <div class="grid grid-cols-[80px_1fr_36px] gap-3 px-4 py-2 bg-[var(--color-paper-warm)] border-b border-[var(--color-rule-light)]">
-            <span class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Номер</span>
-            <span class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Название</span>
+            <span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Номер</span>
+            <span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Название</span>
             <span></span>
           </div>
 
