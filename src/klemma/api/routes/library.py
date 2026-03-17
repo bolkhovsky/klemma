@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from klemma.models import UserRecord
 
 from ..auth.deps import get_current_user
-from ..deps import get_file_store, get_paper_store, get_user_library
+from ..deps import get_file_store, get_paper_store, get_project_store, get_user_library
 
 try:
     from redis import Redis
@@ -97,11 +97,15 @@ async def list_sources(
     """List sources in the user's library, optionally filtered by project."""
     library = get_user_library()
     paper_store = get_paper_store()
+    project_store = get_project_store()
 
     all_sources = library.get_all_sources(project_id=project_id)
     results: list[SourceResponse] = []
     for src in all_sources:
         paper = paper_store.get_paper_by_id(src.paper_id)
+        # Sections from project_store (where auto-assignment writes)
+        project_sections = project_store.get_source_sections(src.citekey)
+        sections = project_sections if project_sections else src.sections
         results.append(
             SourceResponse(
                 citekey=src.citekey,
@@ -113,7 +117,7 @@ async def list_sources(
                 doi=paper.doi if paper else None,
                 abstract=paper.abstract if paper else "",
                 chapters=src.chapters,
-                sections=src.sections,
+                sections=sections,
             )
         )
 

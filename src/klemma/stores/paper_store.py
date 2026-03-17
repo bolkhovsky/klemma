@@ -207,6 +207,44 @@ class LocalPaperStore:
             )
         return paper_id
 
+    def update_paper_metadata(
+        self,
+        paper_id: str,
+        *,
+        title: str = "",
+        authors: str = "",
+        year: Optional[int] = None,
+        doi: Optional[str] = None,
+        abstract: str = "",
+    ) -> bool:
+        """Update metadata for an existing paper. Only non-empty fields are updated."""
+        updates: list[str] = []
+        params: list[object] = []
+        if title:
+            updates.append("title = ?")
+            params.append(title)
+        if authors:
+            updates.append("authors = ?")
+            params.append(authors)
+        if year is not None:
+            updates.append("year = ?")
+            params.append(year)
+        if doi:
+            updates.append("doi = ?")
+            params.append(doi)
+        if abstract:
+            updates.append("abstract = ?")
+            params.append(abstract)
+        if not updates:
+            return False
+        params.append(paper_id)
+        with self._conn() as conn:
+            cursor = conn.execute(
+                f"UPDATE papers SET {', '.join(updates)} WHERE paper_id = ?",
+                tuple(params),
+            )
+        return cursor.rowcount > 0
+
     # ------------------------------------------------------------------ #
     # Fragments                                                            #
     # ------------------------------------------------------------------ #

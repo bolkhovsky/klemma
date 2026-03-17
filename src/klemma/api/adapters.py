@@ -183,7 +183,7 @@ class _SaaSStateAdapter:
             for f in frags:
                 ft = f.fragment_type or "key_idea"
                 by_type[ft] = by_type.get(ft, 0) + 1
-        return {"total": total, "by_type": by_type}
+        return {"total": total, "by_type": by_type, "by_chapter": {}, "by_section": {}}
 
     # ── internal helpers ──────────────────────────────────────────────
 

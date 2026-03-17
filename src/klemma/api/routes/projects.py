@@ -299,9 +299,15 @@ async def get_research_report(
     report = store.get_research_report(project_id, section)
     if not report:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No report for this section")
+    import json as _json
+    try:
+        report_data = _json.loads(report["report_json"])
+    except Exception:
+        report_data = None
     return {
         "section": report["section"],
         "report_text": report["report_text"],
+        "report_data": report_data,
         "model": report["model"],
         "created_at": report["created_at"],
         "input_tokens": report.get("input_tokens", 0),
