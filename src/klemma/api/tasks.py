@@ -151,13 +151,9 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             abstract=paper.abstract or "",
         )
 
-        # Render extraction prompt
-        # Dev (editable): 4 levels up from tasks.py → repo root / prompts/
-        # Installed (Docker): KLEMMA_PROMPTS_DIR env var or /app/prompts (Dockerfile default)
-        prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "extract.md"
-        if not prompt_path.exists():
-            prompts_dir = os.environ.get("KLEMMA_PROMPTS_DIR", "/app/prompts")
-            prompt_path = Path(prompts_dir) / "extract.md"
+        # Render extraction prompt — uses _SHIPPED_PROMPTS_DIR (respects KLEMMA_PROMPTS_DIR env)
+        from klemma.config import _SHIPPED_PROMPTS_DIR
+        prompt_path = _SHIPPED_PROMPTS_DIR / "extract.md"
 
         user_prompt = ai.render_prompt(
             prompt_path,
@@ -293,10 +289,8 @@ def generate_outline_saas(
     try:
         ai, ai_config = _create_ai_provider()
 
-        prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "outline.md"
-        if not prompt_path.exists():
-            prompts_dir = os.environ.get("KLEMMA_PROMPTS_DIR", "/app/prompts")
-            prompt_path = Path(prompts_dir) / "outline.md"
+        from klemma.config import _SHIPPED_PROMPTS_DIR
+        prompt_path = _SHIPPED_PROMPTS_DIR / "outline.md"
 
         user_prompt = ai.render_prompt(
             prompt_path,
@@ -405,7 +399,11 @@ def generate_research(section: str, project_id: str, data_dir: str, user_id: str
         vault = _NullVault()
         config = KlemmaConfig()
 
+        from klemma.config import _SHIPPED_PROMPTS_DIR
         from klemma.skills.researcher import research_section
+
+        # klemma_home enables resolve_prompt() in researcher.py to find prompts
+        klemma_home = _SHIPPED_PROMPTS_DIR.parent
 
         result = research_section(
             section=section,
@@ -415,6 +413,7 @@ def generate_research(section: str, project_id: str, data_dir: str, user_id: str
             ai=ai,
             save_to_vault=False,
             dissertation_context=dissertation_context,
+            klemma_home=klemma_home,
             paper_store=paper_store,
             user_library=user_library,
         )

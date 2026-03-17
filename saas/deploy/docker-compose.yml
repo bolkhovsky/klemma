@@ -6,6 +6,7 @@ services:
     environment:
       - KLEMMA_ENV=production
       - KLEMMA_DATA_DIR=/data/klemma
+      - KLEMMA_PROMPTS_DIR=/app/prompts
       - KLEMMA_JWT_SECRET=${KLEMMA_JWT_SECRET}
       - KLEMMA_CORS_ORIGINS=${KLEMMA_CORS_ORIGINS:-}
       - REDIS_URL=redis://redis:6379
@@ -30,6 +31,7 @@ services:
     command: ["python", "-m", "klemma.api.worker"]
     environment:
       - KLEMMA_DATA_DIR=/data/klemma
+      - KLEMMA_PROMPTS_DIR=/app/prompts
       - REDIS_URL=redis://redis:6379
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

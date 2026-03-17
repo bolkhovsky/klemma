@@ -19,8 +19,12 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 logger = logging.getLogger(__name__)
 
-# Shipped prompts directory (relative to this file → repo root / prompts)
-_SHIPPED_PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+# Shipped prompts directory: KLEMMA_PROMPTS_DIR env var (Docker), or dev layout (repo root / prompts)
+_SHIPPED_PROMPTS_DIR = (
+    Path(os.environ["KLEMMA_PROMPTS_DIR"])
+    if os.environ.get("KLEMMA_PROMPTS_DIR")
+    else Path(__file__).parent.parent.parent / "prompts"
+)
 
 # Config keys inherited from parent project (shared resources)
 _INHERITED_KEYS = {"obsidian", "zotero", "ai", "embeddings", "search"}

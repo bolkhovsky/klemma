@@ -351,3 +351,17 @@ class TestAblationParams:
         assert p.prompt_variant == "fewshot"
         assert p.max_recs_per_section == 3
         assert len(p.examples) > 0
+
+
+class TestShippedPromptsDir:
+    """Verify _SHIPPED_PROMPTS_DIR resolves to a directory with all required prompts."""
+
+    def test_shipped_prompts_dir_has_all_templates(self):
+        from klemma.config import _SHIPPED_PROMPTS_DIR
+
+        required = ["extract.md", "research.md", "outline.md", "section_draft.md"]
+        for name in required:
+            assert (_SHIPPED_PROMPTS_DIR / name).exists(), (
+                f"Missing prompt: {_SHIPPED_PROMPTS_DIR / name}. "
+                "Set KLEMMA_PROMPTS_DIR env var in Docker."
+            )
