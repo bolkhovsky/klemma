@@ -42,6 +42,8 @@ const gaps = ref<Gap[]>([])
 const gapsDetail = ref('')
 
 async function loadGaps() {
+  gaps.value = []
+  gapsDetail.value = ''
   try {
     const data = await library.gaps()
     gaps.value = data.gaps
@@ -333,8 +335,8 @@ watch(() => projectStore.activeProjectId, () => { loadSources(); loadGaps() })
       </div>
     </div>
 
-    <div v-else-if="gapsDetail && sources.length >= 3" class="mt-8">
-      <p class="text-xs text-[var(--color-ink-muted)]">{{ gapsDetail }}</p>
+    <div v-else-if="gapsDetail" class="mt-8">
+      <p class="text-sm text-[var(--color-ink-muted)]">{{ gapsDetail }}</p>
     </div>
   </AppLayout>
 </template>
