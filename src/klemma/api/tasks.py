@@ -109,6 +109,27 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         user_library.update_status(citekey, "failed")
         return {"status": "error", "detail": f"PDF extraction failed: {exc}"}
 
+    # Extract and enrich metadata (title, authors, year, DOI, abstract)
+    try:
+        from klemma.literature.metadata import resolve_metadata
+
+        meta = resolve_metadata(pdf_path)
+        if any(meta.get(k) for k in ("title", "authors", "year", "doi", "abstract")):
+            paper_store.update_paper_metadata(
+                paper_id,
+                title=meta.get("title", ""),
+                authors=meta.get("authors", ""),
+                year=meta.get("year"),
+                doi=meta.get("doi", ""),
+                abstract=meta.get("abstract", ""),
+            )
+            logger.info(
+                "Metadata enriched for %s: title=%s, authors=%s, year=%s",
+                citekey, meta.get("title", "")[:50], meta.get("authors", "")[:30], meta.get("year"),
+            )
+    except Exception as exc:
+        logger.warning("Metadata extraction failed for %s (non-fatal): %s", citekey, exc)
+
     # Check AI config
     if not os.getenv("ANTHROPIC_API_KEY") and not os.getenv("OPENAI_API_KEY"):
         user_library.update_status(citekey, "pending")
