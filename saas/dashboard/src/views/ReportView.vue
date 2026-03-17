@@ -148,11 +148,25 @@ watch(() => projectStore.activeOutline, (v) => {
 async function loadReport() {
   loading.value = true
   error.value = ''
+  reportData.value = null
+  reportText.value = ''
   try {
     const data = await researchApi.getReport(projectId.value, section.value)
     reportText.value = data.report_text
     reportMeta.value = { created_at: data.created_at, model: data.model }
-    reportData.value = (data as any).report_data ?? null
+    const rd = (data as any).report_data
+    if (rd) {
+      // Safe defaults for partial JSON
+      rd.argument_blocks = rd.argument_blocks ?? []
+      rd.citation_plan = rd.citation_plan ?? []
+      rd.fragment_distribution = rd.fragment_distribution ?? {}
+      rd.missing_coverage = rd.missing_coverage ?? []
+      rd.writing_suggestions = rd.writing_suggestions ?? []
+      rd.available_sources = rd.available_sources ?? 0
+      rd.available_fragments = rd.available_fragments ?? 0
+      rd.readiness_pct = rd.readiness_pct ?? 0
+    }
+    reportData.value = rd ?? null
   } catch {
     error.value = 'Обзор не найден'
   } finally {
@@ -205,9 +219,9 @@ function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
 }
 
-function copyToClipboard() {
+async function copyToClipboard() {
   if (!reportText.value) return
-  try { navigator.clipboard.writeText(reportText.value) } catch {
+  try { await navigator.clipboard.writeText(reportText.value) } catch {
     const ta = document.createElement('textarea')
     ta.value = reportText.value
     ta.style.cssText = 'position:fixed;opacity:0'
@@ -226,7 +240,7 @@ function formatDate(iso: string) {
 }
 
 // Reload on route param change (component reuse)
-watch(() => route.params.section, () => { stopPolling(); loadReport() })
+watch(() => [route.params.projectId, route.params.section], () => { stopPolling(); loadReport() })
 
 onMounted(() => { loadOutline(); loadReport() })
 onUnmounted(stopPolling)
