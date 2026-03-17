@@ -246,7 +246,7 @@ export const research = {
     }),
 
   getReport: (projectId: string, section: string) =>
-    request<{ section: string; report_text: string; model: string; created_at: string }>(
+    request<{ section: string; report_text: string; report_data: any; model: string; created_at: string }>(
       `/projects/${projectId}/research/${encodeURIComponent(section)}`
     ),
 

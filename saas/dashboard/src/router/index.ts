@@ -62,6 +62,12 @@ const router = createRouter({
       component: () => import('../views/ResearchView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/:projectId/research/:section',
+      name: 'research-report',
+      component: () => import('../views/ReportView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 

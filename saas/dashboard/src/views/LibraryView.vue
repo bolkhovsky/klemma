@@ -15,6 +15,7 @@ interface Source {
   year: number | null
   status: string
   doi: string
+  sections: string[]
 }
 
 const sources = ref<Source[]>([])
@@ -203,6 +204,7 @@ watch(() => projectStore.activeProjectId, loadSources)
               <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Название</th>
               <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Авторы</th>
               <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Год</th>
+              <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Разделы</th>
               <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Статус</th>
               <th class="px-5 py-3"></th>
             </tr>
@@ -217,6 +219,16 @@ watch(() => projectStore.activeProjectId, loadSources)
               <td class="max-w-xs truncate px-5 py-3.5 text-sm text-[var(--color-ink)]">{{ src.title || '—' }}</td>
               <td class="max-w-[150px] truncate px-5 py-3.5 text-sm text-[var(--color-ink-muted)]">{{ src.authors || '—' }}</td>
               <td class="px-5 py-3.5 text-sm font-[var(--font-mono)] text-[var(--color-ink-muted)]">{{ src.year || '—' }}</td>
+              <td class="px-5 py-3.5">
+                <div v-if="src.sections && src.sections.length > 0" class="flex flex-wrap gap-1">
+                  <span
+                    v-for="sec in src.sections"
+                    :key="sec"
+                    class="inline-block rounded-full bg-[var(--color-accent-pale)] px-2 py-0.5 text-xs font-medium text-[var(--color-accent-deep)]"
+                  >{{ sec }}</span>
+                </div>
+                <span v-else class="text-sm text-[var(--color-ink-muted)]">—</span>
+              </td>
               <td class="px-5 py-3.5">
                 <div class="flex items-center gap-2">
                   <span
@@ -237,14 +249,6 @@ watch(() => projectStore.activeProjectId, loadSources)
                     title="Обработать источник"
                   >
                     обработать
-                  </button>
-                  <button
-                    v-if="src.status === 'completed' && !processingJobs[src.citekey]"
-                    @click.stop="processSource(src.citekey, true)"
-                    class="text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] transition-colors"
-                    title="Переобработать с учётом структуры"
-                  >
-                    переобработать
                   </button>
                   <div
                     v-if="processingJobs[src.citekey]"

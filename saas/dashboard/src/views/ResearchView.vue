@@ -1,180 +1,135 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
-import { research as researchApi, process as processApi, projects, library } from '@/api/client'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { research as researchApi, process as processApi, userProjects } from '@/api/client'
+import type { OutlineSection } from '@/api/client'
 import AppLayout from '@/components/AppLayout.vue'
 import { useProjectStore } from '@/stores/project'
 
 const route = useRoute()
+const router = useRouter()
 const projectStore = useProjectStore()
 const projectId = computed(() => route.params.projectId as string)
 
-// Section data
-interface SectionData {
-  id: string
-  name: string
-  sourceCount: number
-  sources: { citekey: string; title: string; fragmentCount: number }[]
-  report: { text: string; created_at: string; model: string } | null
-  reportLoading: boolean
+// Reports loaded from API
+interface ReportItem {
+  section: string
+  sectionName: string
+  created_at: string
 }
 
-const sections = ref<SectionData[]>([])
+const reports = ref<ReportItem[]>([])
 const loading = ref(true)
-const expandedSection = ref<string | null>(null)
 
-// Stored report index: which sections have reports
-const reportIndex = ref<Record<string, string>>({}) // section → created_at
+// Outline sections (fetched independently to survive page reload)
+const outline = ref<OutlineSection[]>([])
 
-// Research generation
-const activeJob = ref<{ id: string; section: string } | null>(null)
-const jobStatus = ref('')
-const jobError = ref('')
+// Generation form
+const showForm = ref(false)
+const selectedSection = ref('')
+const generating = ref(false)
+const genJobId = ref<string | null>(null)
+const genStatus = ref('')
+const genError = ref('')
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
-async function loadSections() {
+// Available sections for generation: second-level only, exclude already generated
+const availableSections = computed(() => {
+  const existing = new Set(reports.value.map(r => r.section))
+  return outline.value.filter(s => /^\d+\.\d+$/.test(s.id) && !existing.has(s.id))
+})
+
+function resolveName(sectionId: string): string {
+  const entry = outline.value.find(s => s.id === sectionId)
+  return entry?.name ?? sectionId
+}
+
+async function loadData() {
   loading.value = true
   try {
-    const [cov, reportList] = await Promise.all([
-      projects.coverage(),
-      researchApi.listReports(projectId.value).catch(() => ({ reports: [] })),
-    ])
-    const outline = projectStore.activeOutline ?? []
-
-    // Build report index
-    const idx: Record<string, string> = {}
-    for (const r of reportList.reports) {
-      idx[r.section] = r.created_at
+    // Load outline: try store first, fall back to API
+    if (projectStore.activeOutline && projectStore.activeOutline.length > 0) {
+      outline.value = projectStore.activeOutline
+    } else {
+      const project = await userProjects.list()
+      const p = project.projects.find(pr => pr.project_id === projectId.value)
+      outline.value = p?.outline ?? []
     }
-    reportIndex.value = idx
 
-    // Build section data
-    const sectionIds = Object.keys(cov.sections).sort((a, b) => {
-      const ap = a.split('.').map(Number)
-      const bp = b.split('.').map(Number)
-      for (let i = 0; i < Math.max(ap.length, bp.length); i++) {
-        const diff = (ap[i] || 0) - (bp[i] || 0)
-        if (diff !== 0) return diff
-      }
-      return 0
-    })
-
-    const sectionData: SectionData[] = []
-    for (const sid of sectionIds) {
-      const outlineEntry = outline.find(s => s.id === sid)
-      sectionData.push({
-        id: sid,
-        name: outlineEntry?.name ?? sid,
-        sourceCount: cov.sections[sid] ?? 0,
-        sources: [],
-        report: null,
-        reportLoading: false,
+    // Load existing reports
+    const data = await researchApi.listReports(projectId.value)
+    reports.value = data.reports
+      .map(r => ({
+        section: r.section,
+        sectionName: resolveName(r.section),
+        created_at: r.created_at,
+      }))
+      .sort((a, b) => {
+        const ap = a.section.split('.').map(Number)
+        const bp = b.section.split('.').map(Number)
+        for (let i = 0; i < Math.max(ap.length, bp.length); i++) {
+          const diff = (ap[i] || 0) - (bp[i] || 0)
+          if (diff !== 0) return diff
+        }
+        return 0
       })
-    }
-
-    for (const s of outline) {
-      if (!sectionData.find(sd => sd.id === s.id)) {
-        sectionData.push({ id: s.id, name: s.name, sourceCount: 0, sources: [], report: null, reportLoading: false })
-      }
-    }
-
-    sectionData.sort((a, b) => {
-      const ap = a.id.split('.').map(Number)
-      const bp = b.id.split('.').map(Number)
-      for (let i = 0; i < Math.max(ap.length, bp.length); i++) {
-        const diff = (ap[i] || 0) - (bp[i] || 0)
-        if (diff !== 0) return diff
-      }
-      return 0
-    })
-
-    sections.value = sectionData
   } catch {
-    sections.value = []
+    reports.value = []
   } finally {
     loading.value = false
   }
 }
 
-async function toggleSection(sectionId: string) {
-  if (expandedSection.value === sectionId) {
-    expandedSection.value = null
-    return
+// Re-resolve names when store loads (navigation case)
+watch(() => projectStore.activeOutline, (newOutline) => {
+  if (newOutline && newOutline.length > 0) {
+    outline.value = newOutline
+    // Update names in existing reports
+    reports.value = reports.value.map(r => ({ ...r, sectionName: resolveName(r.section) }))
   }
-  expandedSection.value = sectionId
-  const sec = sections.value.find(s => s.id === sectionId)
-  if (!sec) return
+})
 
-  // Load report if available and not yet loaded
-  if (reportIndex.value[sectionId] && !sec.report && !sec.reportLoading) {
-    sec.reportLoading = true
-    try {
-      const report = await researchApi.getReport(projectId.value, sectionId)
-      sec.report = { text: report.report_text, created_at: report.created_at, model: report.model }
-    } catch {
-      // no report
-    } finally {
-      sec.reportLoading = false
-    }
-  }
-
-  // Load sources
-  if (sec.sources.length === 0 && sec.sourceCount > 0) {
-    try {
-      const resp = await projects.sectionSources(sectionId)
-      const sources = []
-      for (const ck of resp.citekeys) {
-        try {
-          const src = await library.get(ck)
-          sources.push({ citekey: ck, title: src.title || ck, fragmentCount: src.fragments?.length ?? 0 })
-        } catch {
-          sources.push({ citekey: ck, title: ck, fragmentCount: 0 })
-        }
-      }
-      sec.sources = sources
-    } catch { /* ignore */ }
-  }
-}
-
-async function generateReport(sectionId: string) {
-  jobError.value = ''
-  jobStatus.value = 'queued'
+async function generate() {
+  if (!selectedSection.value) return
+  generating.value = true
+  genError.value = ''
+  genStatus.value = 'queued'
 
   try {
-    const resp = await researchApi.generate(sectionId, projectId.value)
-    activeJob.value = { id: resp.job_id, section: sectionId }
+    const resp = await researchApi.generate(selectedSection.value, projectId.value)
+    genJobId.value = resp.job_id
     startPolling()
   } catch (e: any) {
-    jobError.value = e.message || 'Ошибка запуска'
+    genError.value = e.message || 'Ошибка запуска'
+    generating.value = false
   }
 }
 
 function startPolling() {
   stopPolling()
   pollTimer = setInterval(async () => {
-    if (!activeJob.value) return
+    if (!genJobId.value) return
     try {
-      const resp = await processApi.jobStatus(activeJob.value.id)
-      jobStatus.value = resp.status
+      const resp = await processApi.jobStatus(genJobId.value)
+      genStatus.value = resp.status
       if (resp.status === 'finished') {
         stopPolling()
-        const job = activeJob.value
-        activeJob.value = null
-        // Reload the report for this section
-        if (job) {
-          const sec = sections.value.find(s => s.id === job.section)
-          if (sec) {
-            try {
-              const report = await researchApi.getReport(projectId.value, job.section)
-              sec.report = { text: report.report_text, created_at: report.created_at, model: report.model }
-              reportIndex.value[job.section] = report.created_at
-            } catch { /* ignore */ }
-          }
+        generating.value = false
+        const sec = selectedSection.value
+        genJobId.value = null
+        // Check if result is actually success (task may return {status: "error"})
+        if (resp.result?.status === 'error') {
+          genError.value = resp.result.detail || 'Генерация завершилась с ошибкой'
+        } else {
+          selectedSection.value = ''
+          showForm.value = false
+          router.push(`/${projectId.value}/research/${sec}`)
         }
       } else if (resp.status === 'failed') {
         stopPolling()
-        jobError.value = resp.result?.detail || 'Генерация завершилась с ошибкой'
-        activeJob.value = null
+        generating.value = false
+        genJobId.value = null
+        genError.value = resp.result?.detail || 'Генерация завершилась с ошибкой'
       }
     } catch { /* keep polling */ }
   }, 3000)
@@ -184,20 +139,12 @@ function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
 }
 
-function copyToClipboard(text: string) {
-  navigator.clipboard.writeText(text)
-}
-
 function formatDate(iso: string) {
   try { return new Date(iso + 'Z').toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) }
   catch { return iso }
 }
 
-const totalSources = computed(() => sections.value.reduce((sum, s) => sum + s.sourceCount, 0))
-const coveredSections = computed(() => sections.value.filter(s => s.sourceCount > 0).length)
-const reportCount = computed(() => Object.keys(reportIndex.value).length)
-
-onMounted(loadSections)
+onMounted(loadData)
 onUnmounted(stopPolling)
 </script>
 
@@ -209,181 +156,117 @@ onUnmounted(stopPolling)
 
     <div v-else class="space-y-8">
       <!-- Header -->
-      <div class="animate-in">
-        <h1 class="font-[var(--font-display)] text-2xl font-bold text-[var(--color-ink)] tracking-tight">
-          Исследование
-        </h1>
-        <p class="mt-1 text-sm text-[var(--color-ink-muted)]">
-          Обзоры литературы и структура цитирования по разделам
-        </p>
+      <div class="animate-in flex items-start justify-between">
+        <div>
+          <h1 class="font-[var(--font-display)] text-2xl font-bold text-[var(--color-ink)] tracking-tight">
+            Исследование
+          </h1>
+          <p class="mt-1 text-sm text-[var(--color-ink-muted)]">
+            Обзоры литературы по разделам вашей работы
+          </p>
+        </div>
+        <button
+          v-if="reports.length > 0 && availableSections.length > 0"
+          @click="showForm = !showForm"
+          class="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] transition-colors"
+        >
+          + Добавить обзор
+        </button>
       </div>
 
-      <!-- Summary stats -->
-      <div v-if="sections.length > 0" class="animate-in animate-in-delay-1 grid grid-cols-4 gap-4">
-        <div class="rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] px-5 py-4">
-          <span class="text-xs font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Разделов</span>
-          <div class="mt-1 font-[var(--font-mono)] text-2xl font-medium text-[var(--color-ink)]">{{ sections.length }}</div>
+      <!-- Generation form -->
+      <div v-if="showForm" class="animate-in rounded-xl border border-[var(--color-accent)] bg-[var(--color-accent-pale)] p-5">
+        <h3 class="text-sm font-semibold text-[var(--color-accent-deep)] mb-3">Новый обзор литературы</h3>
+        <div class="flex items-end gap-4">
+          <div class="flex-1">
+            <label class="block text-sm font-medium text-[var(--color-ink-muted)] mb-1.5">Раздел</label>
+            <select
+              v-model="selectedSection"
+              :disabled="generating"
+              class="w-full rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper-white)] px-3 py-2.5 text-sm text-[var(--color-ink)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] disabled:opacity-50"
+            >
+              <option value="">-- выберите раздел --</option>
+              <option v-for="s in availableSections" :key="s.id" :value="s.id">
+                {{ s.id }} &middot; {{ s.name }}
+              </option>
+            </select>
+          </div>
+          <button
+            @click="generate"
+            :disabled="!selectedSection || generating"
+            class="rounded-lg bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] disabled:opacity-50 transition-colors"
+          >
+            {{ generating ? 'Генерация...' : 'Сгенерировать' }}
+          </button>
+          <button
+            v-if="!generating"
+            @click="showForm = false; selectedSection = ''"
+            class="rounded-lg px-4 py-2.5 text-sm text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)] transition-colors"
+          >
+            Отмена
+          </button>
         </div>
-        <div class="rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] px-5 py-4">
-          <span class="text-xs font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">С источниками</span>
-          <div class="mt-1 font-[var(--font-mono)] text-2xl font-medium text-[var(--color-ok)]">{{ coveredSections }}</div>
+
+        <div v-if="generating" class="mt-4 flex items-center gap-3">
+          <div class="h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent"></div>
+          <span class="text-sm font-medium text-[var(--color-accent-deep)]">Генерируем обзор для {{ selectedSection }}...</span>
+          <span class="text-xs text-[var(--color-ink-muted)]">{{ genStatus }}</span>
         </div>
-        <div class="rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] px-5 py-4">
-          <span class="text-xs font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Привязок</span>
-          <div class="mt-1 font-[var(--font-mono)] text-2xl font-medium text-[var(--color-accent)]">{{ totalSources }}</div>
-        </div>
-        <div class="rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] px-5 py-4">
-          <span class="text-xs font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Обзоров</span>
-          <div class="mt-1 font-[var(--font-mono)] text-2xl font-medium text-[var(--color-accent)]">{{ reportCount }}</div>
-        </div>
+
+        <div v-if="genError" class="mt-3 text-sm text-[var(--color-err)]">{{ genError }}</div>
       </div>
 
-      <!-- Empty state -->
-      <div v-if="sections.length === 0" class="animate-in animate-in-delay-1 rounded-xl border-2 border-dashed border-[var(--color-rule)] p-16 text-center">
-        <div class="mx-auto w-14 h-14 rounded-2xl bg-[var(--color-accent-pale)] flex items-center justify-center mb-4">
-          <svg class="w-7 h-7 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+      <!-- Empty state: no reports yet -->
+      <div v-if="reports.length === 0 && !showForm" class="animate-in animate-in-delay-1 rounded-xl border-2 border-dashed border-[var(--color-rule)] p-16 text-center">
+        <div class="mx-auto w-16 h-16 rounded-2xl bg-[var(--color-accent-pale)] flex items-center justify-center mb-5">
+          <svg class="w-8 h-8 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
           </svg>
         </div>
-        <h3 class="font-[var(--font-display)] text-lg font-semibold text-[var(--color-ink)]">Нет данных для исследования</h3>
-        <p class="mt-2 text-sm text-[var(--color-ink-muted)] max-w-md mx-auto">
-          Определите структуру работы и загрузите источники — система автоматически привяжет их к разделам.
+        <h3 class="font-[var(--font-display)] text-xl font-semibold text-[var(--color-ink)]">
+          Начните исследование
+        </h3>
+        <p class="mt-2 text-sm text-[var(--color-ink-muted)] max-w-md mx-auto leading-relaxed">
+          Сгенерируйте первый обзор литературы — система проанализирует ваши источники, составит план аргументации и покажет, чего не хватает.
+        </p>
+        <button
+          v-if="availableSections.length > 0"
+          @click="showForm = true"
+          class="mt-6 inline-flex items-center gap-2 rounded-lg bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] transition-colors shadow-sm"
+        >
+          Сгенерировать первый обзор
+        </button>
+        <p v-else class="mt-4 text-xs text-[var(--color-ink-muted)]">
+          Определите структуру работы и загрузите источники, чтобы начать.
         </p>
       </div>
 
-      <!-- Active job indicator -->
-      <div v-if="activeJob" class="animate-in rounded-xl border border-[var(--color-accent)] bg-[var(--color-accent-pale)] p-5">
-        <div class="flex items-center gap-3">
-          <div class="h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent"></div>
-          <span class="text-sm font-medium text-[var(--color-accent-deep)]">
-            Генерируем обзор для раздела {{ activeJob.section }}...
-          </span>
-          <span class="text-xs text-[var(--color-ink-muted)]">{{ jobStatus }}</span>
-        </div>
-      </div>
-
-      <!-- Job error -->
-      <div v-if="jobError" class="rounded-xl border border-[var(--color-err)] bg-[var(--color-err-bg)] p-4">
-        <p class="text-sm text-[var(--color-err)]">{{ jobError }}</p>
-      </div>
-
-      <!-- Section-by-section structure with reports -->
-      <div v-if="sections.length > 0" class="animate-in animate-in-delay-2 space-y-3">
-        <h2 class="font-[var(--font-display)] text-sm font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">
-          Разделы
-        </h2>
-
-        <div class="rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] overflow-hidden divide-y divide-[var(--color-rule-light)]">
-          <div v-for="sec in sections" :key="sec.id">
-            <!-- Section row -->
-            <button
-              @click="toggleSection(sec.id)"
-              class="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-[var(--color-paper-warm)] transition-colors"
-            >
-              <span class="font-[var(--font-mono)] text-sm text-[var(--color-accent)] w-12 shrink-0">{{ sec.id }}</span>
-              <span class="text-sm font-medium text-[var(--color-ink)] flex-1 truncate">{{ sec.name }}</span>
-              <!-- Report badge -->
-              <span
-                v-if="reportIndex[sec.id]"
-                class="inline-flex items-center rounded-full bg-blue-50 text-blue-600 px-2 py-0.5 text-[10px] font-medium shrink-0"
-              >
-                обзор
-              </span>
-              <span
-                class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium shrink-0"
-                :class="sec.sourceCount > 0
-                  ? 'bg-[var(--color-ok-bg)] text-[var(--color-ok)]'
-                  : 'bg-[var(--color-rule-light)] text-[var(--color-ink-muted)]'"
-              >
-                {{ sec.sourceCount }} ист.
-              </span>
-              <svg
-                class="w-4 h-4 text-[var(--color-ink-muted)] transition-transform shrink-0"
-                :class="{ 'rotate-90': expandedSection === sec.id }"
-                fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
-              >
-                <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-              </svg>
-            </button>
-
-            <!-- Expanded section -->
-            <div v-if="expandedSection === sec.id" class="border-t border-[var(--color-rule-light)]">
-              <!-- Report block -->
-              <div v-if="sec.reportLoading" class="px-5 py-6 flex items-center gap-2">
-                <div class="h-3 w-3 animate-spin rounded-full border border-[var(--color-accent)] border-t-transparent"></div>
-                <span class="text-sm text-[var(--color-ink-muted)]">Загрузка обзора...</span>
+      <!-- Report list (flat, only generated reports) -->
+      <div v-if="reports.length > 0" class="animate-in animate-in-delay-1 space-y-3">
+        <RouterLink
+          v-for="r in reports"
+          :key="r.section"
+          :to="`/${projectId}/research/${r.section}`"
+          class="block rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] px-6 py-5 hover:border-[var(--color-accent)] hover:shadow-sm transition-all group"
+        >
+          <div class="flex items-center justify-between">
+            <div class="min-w-0">
+              <div class="flex items-center gap-3">
+                <span class="font-[var(--font-mono)] text-sm text-[var(--color-accent)] font-medium">{{ r.section }}</span>
+                <span class="text-sm font-semibold text-[var(--color-ink)] truncate">{{ r.sectionName }}</span>
               </div>
-
-              <div v-else-if="sec.report" class="px-5 py-5">
-                <div class="flex items-center justify-between mb-3">
-                  <div class="flex items-center gap-2">
-                    <span class="text-xs font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Обзор литературы</span>
-                    <span class="text-[10px] text-[var(--color-ink-muted)]">{{ formatDate(sec.report.created_at) }}</span>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <button
-                      @click.stop="copyToClipboard(sec.report!.text)"
-                      class="text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] transition-colors"
-                      title="Скопировать"
-                    >
-                      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
-                      </svg>
-                    </button>
-                    <button
-                      @click.stop="generateReport(sec.id)"
-                      :disabled="!!activeJob"
-                      class="text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] disabled:opacity-50 transition-colors"
-                    >
-                      Обновить
-                    </button>
-                  </div>
-                </div>
-                <div class="rounded-lg border border-[var(--color-rule-light)] bg-[var(--color-paper)] p-5 max-h-[600px] overflow-y-auto">
-                  <div class="prose prose-sm max-w-none text-[var(--color-ink-light)] leading-relaxed whitespace-pre-wrap font-[var(--font-body)]">{{ sec.report.text }}</div>
-                </div>
-              </div>
-
-              <!-- Generate button when no report -->
-              <div v-else-if="sec.sourceCount > 0" class="px-5 py-4 flex items-center justify-between bg-[var(--color-paper-warm)]">
-                <span class="text-sm text-[var(--color-ink-muted)]">Обзор литературы ещё не сгенерирован</span>
-                <button
-                  @click.stop="generateReport(sec.id)"
-                  :disabled="!!activeJob"
-                  class="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-accent-deep)] disabled:opacity-50 transition-colors"
-                >
-                  Сгенерировать обзор
-                </button>
-              </div>
-
-              <!-- Sources list -->
-              <div class="bg-[var(--color-paper-warm)] px-5 py-4">
-                <div v-if="sec.sourceCount === 0" class="text-sm text-[var(--color-ink-muted)] italic">
-                  Нет привязанных источников.
-                </div>
-                <div v-else-if="sec.sources.length === 0" class="flex items-center gap-2">
-                  <div class="h-3 w-3 animate-spin rounded-full border border-[var(--color-accent)] border-t-transparent"></div>
-                  <span class="text-sm text-[var(--color-ink-muted)]">Загрузка источников...</span>
-                </div>
-                <div v-else>
-                  <h4 class="text-xs font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider mb-2">Источники</h4>
-                  <div class="space-y-1.5">
-                    <RouterLink
-                      v-for="src in sec.sources"
-                      :key="src.citekey"
-                      :to="`/${route.params.projectId}/library/${src.citekey}`"
-                      class="flex items-center gap-3 rounded-lg border border-[var(--color-rule-light)] bg-[var(--color-paper-white)] px-4 py-2 hover:border-[var(--color-accent)] transition-colors"
-                    >
-                      <span class="font-[var(--font-mono)] text-xs text-[var(--color-accent)] shrink-0">{{ src.citekey }}</span>
-                      <span class="text-sm text-[var(--color-ink)] flex-1 truncate">{{ src.title }}</span>
-                      <span v-if="src.fragmentCount > 0" class="text-xs text-[var(--color-ink-muted)] shrink-0">{{ src.fragmentCount }} фрагм.</span>
-                    </RouterLink>
-                  </div>
-                </div>
-              </div>
+              <p class="mt-1 text-xs text-[var(--color-ink-muted)]">
+                Обзор литературы &middot; {{ formatDate(r.created_at) }}
+              </p>
             </div>
+            <svg
+              class="w-5 h-5 text-[var(--color-ink-muted)] group-hover:text-[var(--color-accent)] transition-colors shrink-0"
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+            </svg>
           </div>
-        </div>
+        </RouterLink>
       </div>
     </div>
   </AppLayout>

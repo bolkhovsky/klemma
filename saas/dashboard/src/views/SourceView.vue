@@ -237,12 +237,12 @@ onUnmounted(stopPolling)
             <div class="mt-2 flex flex-wrap items-center gap-3 text-sm text-[var(--color-ink-muted)]">
               <span v-if="source.authors">{{ source.authors }}</span>
               <span v-if="source.year" class="font-[var(--font-mono)]">{{ source.year }}</span>
-              <span class="font-[var(--font-mono)] text-xs text-[var(--color-accent)]">{{ source.citekey }}</span>
+              <span class="font-[var(--font-mono)] text-sm text-[var(--color-accent)]">{{ source.citekey }}</span>
               <a
                 v-if="source.doi"
                 :href="`https://doi.org/${source.doi}`"
                 target="_blank"
-                class="text-xs text-[var(--color-accent)] hover:underline"
+                class="text-sm text-[var(--color-accent)] hover:underline"
               >
                 DOI: {{ source.doi }}
               </a>
@@ -393,7 +393,7 @@ onUnmounted(stopPolling)
 
         <!-- Fragment groups by type -->
         <div v-for="(frags, type) in fragmentsByType" :key="type" class="space-y-3">
-          <h3 class="text-xs font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">
+          <h3 class="text-sm font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">
             {{ typeLabel[type] || type }}
           </h3>
 
@@ -404,13 +404,13 @@ onUnmounted(stopPolling)
               class="rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)] p-4 hover:border-[var(--color-rule)] transition-colors"
             >
               <p class="text-sm text-[var(--color-ink)] leading-relaxed">{{ f.text }}</p>
-              <div class="mt-3 flex flex-wrap items-center gap-2">
-                <span v-if="f.page_number" class="font-[var(--font-mono)] text-xs text-[var(--color-ink-muted)]">
+              <div class="mt-3 flex flex-wrap items-center gap-3">
+                <span v-if="f.page_number" class="font-[var(--font-mono)] text-sm text-[var(--color-ink-muted)]">
                   стр. {{ f.page_number }}
                 </span>
                 <span
                   v-if="f.citation_intent"
-                  class="rounded-full px-2 py-0.5 text-xs font-medium"
+                  class="rounded-full px-2.5 py-0.5 text-sm font-medium"
                   :class="intentColor[f.citation_intent] || 'bg-gray-100 text-gray-600'"
                 >
                   {{ intentLabel[f.citation_intent] || f.citation_intent }}
