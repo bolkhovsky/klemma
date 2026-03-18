@@ -52,7 +52,7 @@ from ..config import (
     "plan_path",
     default=None,
     type=click.Path(exists=True),
-    help="Path to dissertation plan-prospect .docx \u2014 auto-fills project from it",
+    help="Path to project outline (.docx, .md, .txt) \u2014 auto-fills structure from it",
 )
 @click.option(
     "--name", "project_name", default=None, help="Project title (non-interactive)"
@@ -155,30 +155,33 @@ def init(
     if not force and config_path.exists():
         no_input = True
 
-    # --- --plan: initialize from dissertation plan-prospect .docx ---
+    # --- --plan: initialize from project outline file ---
     plan_data = None
     if plan_path:
-        from ..plan_parser import parse as parse_plan
+        from ..plan_parser import parse_file
 
         try:
-            plan_data = parse_plan(plan_path)
+            plan_data = parse_file(plan_path)
         except ImportError as e:
             console.print(f"[red]{e}[/red]")
             return
         except (FileNotFoundError, ValueError) as e:
-            console.print(f"[red]Cannot parse plan: {e}[/red]")
+            console.print(f"[red]Cannot parse outline: {e}[/red]")
             return
 
-        console.print(f"\n[green]Parsed plan-prospect:[/green] {plan_path}")
-        console.print(f"  Title: {plan_data.title[:80]}...")
+        console.print(f"\n[green]Parsed project outline:[/green] {plan_path}")
+        if plan_data.title:
+            console.print(f"  Title: {plan_data.title[:80]}...")
         console.print(f"  Chapters: {len(plan_data.chapters)}")
-        console.print(f"  Scientific results: {len(plan_data.results)}")
-        console.print(f"  Research tasks: {len(plan_data.tasks)}")
+        if plan_data.results:
+            console.print(f"  Scientific results: {len(plan_data.results)}")
+        if plan_data.tasks:
+            console.print(f"  Research tasks: {len(plan_data.tasks)}")
 
         # Pre-fill from plan (user can still override via wizard)
         project_name = project_name or plan_data.title
-        description = description or plan_data.description[:200]
-        project_type = "dissertation"
+        if plan_data.description:
+            description = description or plan_data.description[:200]
         # Auto-enable outline
         outline = True
 
@@ -187,11 +190,11 @@ def init(
         # --plan mode: run wizard but pre-fill from plan, pass plan_data through
         prefill = prefill or {}
         prefill["title"] = plan_data.title
-        prefill["description"] = plan_data.description[:200]
-        prefill["project_type"] = "dissertation"
+        if plan_data.description:
+            prefill["description"] = plan_data.description[:200]
+        prefill["project_type"] = project_type
         prefill["_plan_data"] = plan_data
         values = _interactive_init(project_type, prefill=prefill)
-        values.project_type = "dissertation"
         if not values.plan_data:
             values.plan_data = plan_data
     elif not no_input:
@@ -200,8 +203,6 @@ def init(
         # Plan may have been provided interactively
         if values.plan_data:
             plan_data = values.plan_data
-            project_type = "dissertation"
-            values.project_type = "dissertation"
             outline = True
     elif has_value_flags:
         # Build InitValues from CLI flags

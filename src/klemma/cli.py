@@ -948,6 +948,70 @@ def _discover_paper_sources(project_dir: Path, values):
     click.echo(f"  {len(citekeys)} sources registered.")
 
 
+def _read_multiline_input() -> str:
+    """Read multi-line input until double-Enter or EOF."""
+    lines: list[str] = []
+    empty_count = 0
+    try:
+        while True:
+            line = input("    ")
+            if not line.strip():
+                empty_count += 1
+                if empty_count >= 2:
+                    break
+                lines.append("")
+            else:
+                empty_count = 0
+                lines.append(line)
+    except EOFError:
+        pass
+    return "\n".join(lines).rstrip()
+
+
+def _detect_openai_key(prefill: dict | None) -> str:
+    """Auto-detect OpenAI API key from env vars, klemmarc, or parent config.
+
+    Returns the key string if found, empty string otherwise.
+    """
+    import os
+
+    # 1. Check environment variable
+    env_key = os.environ.get("OPENAI_API_KEY", "")
+    if env_key:
+        return env_key
+
+    # 2. Check klemmarc
+    try:
+        import yaml as _yaml
+
+        from .setup import _find_klemmarc
+
+        klemmarc = _find_klemmarc(Path.home())
+        if klemmarc:
+            krc = _yaml.safe_load(klemmarc.read_text(encoding="utf-8")) or {}
+            krc_key = krc.get("api_keys", {}).get("openai", "")
+            if krc_key:
+                return krc_key
+    except Exception:
+        pass
+
+    # 3. Check parent project config (config cascade)
+    try:
+        from .config import discover_project_chain, resolve_effective_config
+
+        chain = discover_project_chain(Path.cwd())
+        if chain:
+            cfg = resolve_effective_config(chain)
+            resolved = getattr(cfg.ai, "_resolved_api_keys", {})
+            parent_key = resolved.get("openai", "")
+            if parent_key:
+                return parent_key
+    except Exception:
+        pass
+
+    return ""
+
+
 def _interactive_init(project_type: str, prefill: dict | None = None):
     """Run interactive setup wizard, return collected values.
 
@@ -964,60 +1028,24 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
 
     click.echo("\nKlemma project setup\n")
 
-    # --- Plan-prospect (first question) ---
-    plan_data = pf.get("_plan_data")  # set when --plan was passed
-    if not plan_data:
-        plan_path_str = click.prompt(
-            "  Dissertation plan (.docx) — path or empty to skip",
-            default="",
-            show_default=False,
-        )
-        if plan_path_str:
-            plan_file = Path(plan_path_str.strip())
-            if plan_file.exists():
-                try:
-                    from .plan_parser import parse as parse_plan
-
-                    plan_data = parse_plan(plan_file)
-                    click.echo(f"    Parsed: {plan_data.title[:70]}...")
-                    click.echo(
-                        f"    Chapters: {len(plan_data.chapters)}, "
-                        f"НР: {len(plan_data.results)}, "
-                        f"Tasks: {len(plan_data.tasks)}"
-                    )
-                except ImportError:
-                    click.echo(
-                        "    [warning] python-docx not installed: pip install python-docx"
-                    )
-                except Exception as e:
-                    click.echo(f"    [warning] Could not parse: {e}")
-            else:
-                click.echo(f"    [warning] File not found: {plan_file}")
-
-    # --- Project basics (pre-filled from plan if available) ---
-    if plan_data:
-        project_type = "dissertation"
-        title = plan_data.title
-        click.echo(f"\n  Project type: {project_type}")
-        click.echo(f"  Title: {title[:80]}...")
-    else:
-        project_type = click.prompt(
-            "  Project type",
-            type=click.Choice(
-                ["dissertation", "paper", "thesis"], case_sensitive=False
-            ),
-            default=pf.get("project_type", project_type),
-        )
-        title = click.prompt(
-            "  Project title",
-            default=pf.get("title", ""),
-            show_default=bool(pf.get("title")),
-        )
+    # --- Step 1: Project type ---
+    project_type = click.prompt(
+        "  Project type",
+        type=click.Choice(
+            ["dissertation", "paper", "thesis"], case_sensitive=False
+        ),
+        default=pf.get("project_type", project_type),
+    )
+    title = click.prompt(
+        "  Project title",
+        default=pf.get("title", ""),
+        show_default=bool(pf.get("title")),
+    )
 
     # Paper-specific: description and keywords are essential for source discovery
     description = ""
     keywords: list[str] = []
-    if project_type == "paper" and not plan_data:
+    if project_type == "paper":
         description = click.prompt(
             "  Research description (1-2 sentences)",
             default=pf.get("description", ""),
@@ -1031,23 +1059,106 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
         )
         keywords = [k.strip() for k in kw_str.split(",") if k.strip()] if kw_str else []
 
+    # --- Step 2: Project outline ---
+    click.echo()
+    click.echo("  Project outline")
+    click.echo("  " + "─" * 50)
+    click.echo("  Klemma uses the outline to build chapter/section")
+    click.echo("  structure for your project. All subsequent commands")
+    click.echo("  (research, process, draft) use this structure to")
+    click.echo("  filter sources and generate section-targeted content.")
+    click.echo("  Formats: .docx, .md, .txt — or type text directly.")
+    click.echo()
+
+    plan_data = pf.get("_plan_data")  # set when --plan was passed
+    if plan_data:
+        click.echo(f"  Outline loaded: {plan_data.title[:70]}...")
+        click.echo(
+            f"    Chapters: {len(plan_data.chapters)}, "
+            f"НР: {len(plan_data.results)}, "
+            f"Tasks: {len(plan_data.tasks)}"
+        )
+    else:
+        outline_path_str = click.prompt(
+            "  File path (.docx, .md, .txt) — or empty to type/skip",
+            default="",
+            show_default=False,
+        )
+        if outline_path_str:
+            outline_file = Path(outline_path_str.strip()).expanduser()
+            if outline_file.exists():
+                try:
+                    from .plan_parser import parse_file
+
+                    plan_data = parse_file(outline_file)
+                    if plan_data.title:
+                        click.echo(f"    Parsed: {plan_data.title[:70]}...")
+                    if plan_data.chapters:
+                        click.echo(
+                            f"    Chapters: {len(plan_data.chapters)}, "
+                            f"НР: {len(plan_data.results)}, "
+                            f"Tasks: {len(plan_data.tasks)}"
+                        )
+                    else:
+                        click.echo("    No chapter structure detected — stored as context")
+                except ImportError:
+                    click.echo(
+                        "    [warning] python-docx not installed: pip install python-docx"
+                    )
+                except Exception as e:
+                    click.echo(f"    [warning] Could not parse: {e}")
+            else:
+                click.echo(f"    [warning] File not found: {outline_file}")
+
+        if not plan_data:
+            if click.confirm("  Type or paste outline text?", default=False):
+                click.echo("    Enter text below. Press Enter twice to finish.")
+                raw_text = _read_multiline_input()
+                if raw_text:
+                    from .plan_parser import parse_text
+
+                    plan_data = parse_text(raw_text)
+                    if plan_data.chapters:
+                        click.echo(f"    Parsed: {len(plan_data.chapters)} chapters")
+                    elif plan_data.title:
+                        click.echo(f"    Title: {plan_data.title[:70]}")
+                    else:
+                        click.echo("    Stored as project context")
+                    # If no chapters detected, store raw text as description
+                    if not plan_data.chapters and not description:
+                        description = raw_text[:500]
+
+    # Use plan title if available and user didn't provide one
+    if plan_data and plan_data.title and not title:
+        title = plan_data.title
+        click.echo(f"  Title (from outline): {title[:80]}")
+
     language = click.prompt(
         "  AI language",
         default=pf.get("language", "ru"),
     )
 
-    # --- AI setup ---
-    # Step 1: OpenAI key (needed for embeddings; optionally for LLM too)
+    # --- Step 3: AI setup ---
+    # Auto-detect OpenAI key from env / klemmarc / parent config
     click.echo("\n  AI setup")
+    detected_key = _detect_openai_key(pf)
     openai_api_key = ""
-    has_openai = click.confirm(
-        "  Do you have an OpenAI API key? (needed for embeddings)",
-        default=bool(pf.get("openai_api_key")),
-    )
-    if has_openai:
-        openai_api_key = click.prompt("  OpenAI API key", hide_input=True)
-        if not openai_api_key.startswith("sk-"):
-            click.echo("    [warning] Key doesn't start with sk- — saving anyway")
+
+    if detected_key:
+        # Key found — show masked version and skip the question
+        masked = detected_key[:7] + "..." + detected_key[-4:]
+        click.echo(f"  + OpenAI API key detected: {masked}")
+        openai_api_key = detected_key
+        has_openai = True
+    else:
+        has_openai = click.confirm(
+            "  Do you have an OpenAI API key? (needed for embeddings)",
+            default=bool(pf.get("openai_api_key")),
+        )
+        if has_openai:
+            openai_api_key = click.prompt("  OpenAI API key", hide_input=True)
+            if not openai_api_key.startswith("sk-"):
+                click.echo("    [warning] Key doesn't start with sk- — saving anyway")
 
     # Step 2: LLM backend
     backend = ""
