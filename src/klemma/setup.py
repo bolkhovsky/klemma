@@ -170,6 +170,93 @@ def _build_dissertation_config(plan_data) -> dict:
     return diss
 
 
+# ── Type-aware default structures for klemma init ────────────────────────
+
+_DEFAULT_STRUCTURES: dict[tuple[str, str], dict] = {
+    # Dissertation: ГОСТ Р 7.0.11-2011, ВАК (Dunleavy 2003, Evans et al. 2014)
+    ("dissertation", "ru"): {
+        "current_focus": "1.1",
+        "chapters": {1: "Обзор литературы", 2: "Методология", 3: "Результаты и обсуждение"},
+        "scientific_results": {"nr1": "Первый научный результат", "nr2": "Второй научный результат"},
+        "min_sources_per_section": 3,
+        "auto_register": "mapped",
+    },
+    ("dissertation", "en"): {
+        "current_focus": "1.1",
+        "chapters": {1: "Literature review", 2: "Methodology", 3: "Results and discussion"},
+        "scientific_results": {"nr1": "First scientific result", "nr2": "Second scientific result"},
+        "min_sources_per_section": 3,
+        "auto_register": "mapped",
+    },
+    # Paper: IMRaD (Sollaci & Pereira 2004, ICMJE, Day & Gastel)
+    ("paper", "ru"): {
+        "current_focus": "1",
+        "chapters": {1: "Введение", 2: "Методы", 3: "Результаты", 4: "Обсуждение"},
+        "min_sources_per_section": 2,
+        "auto_register": "none",
+    },
+    ("paper", "en"): {
+        "current_focus": "1",
+        "chapters": {1: "Introduction", 2: "Methods", 3: "Results", 4: "Discussion"},
+        "min_sources_per_section": 2,
+        "auto_register": "none",
+    },
+    # Thesis/Тезисы: compact structure (conference-specific, 2-3 pages)
+    ("thesis", "ru"): {
+        "current_focus": "1",
+        "chapters": {1: "Постановка задачи", 2: "Результаты"},
+        "min_sources_per_section": 1,
+        "auto_register": "mapped",
+    },
+    ("thesis", "en"): {
+        "current_focus": "1",
+        "chapters": {1: "Problem statement", 2: "Results"},
+        "min_sources_per_section": 1,
+        "auto_register": "mapped",
+    },
+}
+
+
+def _get_default_structure(project_type: str, language: str) -> dict:
+    """Return default structure for (project_type, language) with fallback to English."""
+    key = (project_type, language)
+    if key in _DEFAULT_STRUCTURES:
+        return _DEFAULT_STRUCTURES[key]
+    # Fallback to English
+    en_key = (project_type, "en")
+    if en_key in _DEFAULT_STRUCTURES:
+        return _DEFAULT_STRUCTURES[en_key]
+    # Ultimate fallback: dissertation/en
+    return _DEFAULT_STRUCTURES[("dissertation", "en")]
+
+
+def _validate_outline_for_type(project_type: str, plan_data) -> None:
+    """Warn if plan_data has unusual chapter count for the project type."""
+    import warnings
+
+    if not plan_data or not plan_data.chapters:
+        return
+    n = len(plan_data.chapters)
+    if project_type == "paper" and n > 6:
+        warnings.warn(
+            f"Paper with {n} sections — typical IMRaD structure has 4-6. "
+            "Consider splitting into multiple papers or using 'dissertation' type.",
+            stacklevel=3,
+        )
+    elif project_type == "thesis" and n > 4:
+        warnings.warn(
+            f"Thesis with {n} sections — conference abstracts typically have 2-3. "
+            "Consider using 'paper' type for longer works.",
+            stacklevel=3,
+        )
+    elif project_type == "dissertation" and n < 2:
+        warnings.warn(
+            f"Dissertation with only {n} chapter(s) — typical structure has 3+. "
+            "Consider adding more chapters or using 'thesis' type.",
+            stacklevel=3,
+        )
+
+
 def _build_klemma_md(values: InitValues) -> str:
     """Build KLEMMA.md content with YAML frontmatter from wizard values.
 
@@ -187,73 +274,106 @@ def _build_klemma_md(values: InitValues) -> str:
     if values.keywords:
         frontmatter["priority_terms"] = values.keywords
 
-    # Dissertation structure from plan-prospect → into frontmatter
-    if values.plan_data and values.project_type == "dissertation":
-        diss = _build_dissertation_config(values.plan_data)
-        if "chapters" in diss:
-            frontmatter["chapters"] = diss["chapters"]
-        if "section_type_map" in diss:
-            frontmatter["section_type_map"] = diss["section_type_map"]
-        if "scientific_results" in diss:
-            frontmatter["scientific_results"] = diss["scientific_results"]
-        if "current_section" in diss:
-            frontmatter["current_focus"] = diss["current_section"]
-        if "min_sources_per_section" in diss:
-            frontmatter["min_sources_per_section"] = diss["min_sources_per_section"]
-        if "chapter_mapping" in diss:
-            frontmatter["chapter_mapping"] = diss["chapter_mapping"]
-        if not frontmatter.get("title") and "title" in diss:
-            frontmatter["title"] = diss["title"]
-    else:
-        # Defaults for non-plan projects
-        frontmatter["current_focus"] = "1.1"
-        frontmatter["chapters"] = {
-            1: "Literature review",
-            2: "Methodology",
-            3: "Results and discussion",
-        }
-        frontmatter["scientific_results"] = {
-            "nr1": "First scientific result",
-            "nr2": "Second scientific result",
-        }
+    # Structure from plan_data or type-aware defaults
+    if values.plan_data:
+        _validate_outline_for_type(values.project_type, values.plan_data)
 
-    frontmatter["min_sources_per_section"] = frontmatter.get("min_sources_per_section", 3)
-    frontmatter["auto_register"] = "mapped"
+        if values.project_type == "dissertation":
+            # Dissertation: full config with scientific_results, chapter_mapping
+            diss = _build_dissertation_config(values.plan_data)
+            if "chapters" in diss:
+                frontmatter["chapters"] = diss["chapters"]
+            if "section_type_map" in diss:
+                frontmatter["section_type_map"] = diss["section_type_map"]
+            if "scientific_results" in diss:
+                frontmatter["scientific_results"] = diss["scientific_results"]
+            if "current_section" in diss:
+                frontmatter["current_focus"] = diss["current_section"]
+            if "min_sources_per_section" in diss:
+                frontmatter["min_sources_per_section"] = diss["min_sources_per_section"]
+            if "chapter_mapping" in diss:
+                frontmatter["chapter_mapping"] = diss["chapter_mapping"]
+            if not frontmatter.get("title") and "title" in diss:
+                frontmatter["title"] = diss["title"]
+        else:
+            # Paper/thesis: extract chapters + section_type_map, skip scientific_results
+            from .section_types import infer_section_type
+
+            if values.plan_data.chapters:
+                chapters = {ch.number: ch.title for ch in values.plan_data.chapters}
+                frontmatter["chapters"] = chapters
+                stm: dict[str, str] = {}
+                for ch in values.plan_data.chapters:
+                    inferred = infer_section_type(ch.title)
+                    if inferred:
+                        stm[str(ch.number)] = inferred.value
+                if stm:
+                    frontmatter["section_type_map"] = stm
+                frontmatter["current_focus"] = str(values.plan_data.chapters[0].number)
+            # Type-specific defaults for fields not set by plan_data
+            defaults = _get_default_structure(values.project_type, values.language)
+            frontmatter.setdefault("min_sources_per_section", defaults.get("min_sources_per_section", 2))
+            frontmatter.setdefault("auto_register", defaults.get("auto_register", "none"))
+    else:
+        # No plan_data — use type-aware defaults
+        defaults = _get_default_structure(values.project_type, values.language)
+        frontmatter["current_focus"] = defaults["current_focus"]
+        frontmatter["chapters"] = defaults["chapters"]
+        if "scientific_results" in defaults:
+            frontmatter["scientific_results"] = defaults["scientific_results"]
+
+        # Auto-infer section_type_map from chapter names
+        from .section_types import infer_section_type
+
+        stm = {}
+        for ch_num, ch_name in defaults["chapters"].items():
+            inferred = infer_section_type(ch_name)
+            if inferred:
+                stm[str(ch_num)] = inferred.value
+        if stm:
+            frontmatter["section_type_map"] = stm
+
+        frontmatter["min_sources_per_section"] = defaults.get("min_sources_per_section", 3)
+        frontmatter["auto_register"] = defaults.get("auto_register", "mapped")
+
+    # Ensure these are always set (setdefault won't overwrite if already present)
+    defaults_fallback = _get_default_structure(values.project_type, values.language)
+    frontmatter.setdefault("min_sources_per_section", defaults_fallback.get("min_sources_per_section", 3))
+    frontmatter.setdefault("auto_register", defaults_fallback.get("auto_register", "mapped"))
 
     fm_text = _yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
     # Build markdown body (prose context for AI)
-    nr_lines = ""
-    if "scientific_results" in frontmatter:
-        nrs = frontmatter["scientific_results"]
-        nr_lines = "\n".join(f"- {k.upper()}: {v}" for k, v in nrs.items())
-
-    ch_lines = ""
-    if "chapters" in frontmatter:
-        ch_lines = "\n".join(
-            f"{num}. {name}" for num, name in sorted(frontmatter["chapters"].items())
-        )
-
-    kw_line = ""
-    if values.keywords:
-        kw_line = f"\nKey terms: {', '.join(values.keywords)}"
-
     desc_line = f"\nDescription: {values.description}" if values.description else ""
 
-    body = (
+    body_parts = [
         "# Project Context\n\n"
         "<!-- This file describes your project for AI. It is passed as context to all\n"
         "     AI-powered commands (plan, research, process, ask, etc.).\n\n"
         "     YAML frontmatter above holds structured project data. The markdown body\n"
         "     below is free-form context shown to AI. Keep both in sync. -->\n\n"
         f'Topic: "{title}"\n'
-        f"{desc_line}\n\n"
-        "## Scientific Results\n\n"
-        f"{nr_lines}\n\n"
-        "## Structure\n\n"
-        f"{ch_lines}\n"
-        f"{kw_line}\n"
-    )
+        f"{desc_line}\n",
+    ]
+
+    # Scientific Results — only for dissertation
+    if "scientific_results" in frontmatter:
+        nrs = frontmatter["scientific_results"]
+        nr_lines = "\n".join(f"- {k.upper()}: {v}" for k, v in nrs.items())
+        body_parts.append(f"\n## Scientific Results\n\n{nr_lines}\n")
+
+    # Structure/Sections
+    if "chapters" in frontmatter:
+        ch_lines = "\n".join(
+            f"{num}. {name}" for num, name in sorted(frontmatter["chapters"].items())
+        )
+        heading = "## Structure" if values.project_type == "dissertation" else "## Sections"
+        body_parts.append(f"\n{heading}\n\n{ch_lines}\n")
+
+    if values.keywords:
+        body_parts.append(f"\nKey terms: {', '.join(values.keywords)}\n")
+
+    body = "".join(body_parts)
 
     return f"---\n{fm_text}---\n{body}"
 

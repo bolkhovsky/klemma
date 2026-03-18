@@ -2,31 +2,22 @@
 
 __version__ = "0.14.0"
 
-# Two mascot variants — user picks one later, both shipped for now.
-# Each is a list of (mascot_line, info_line) tuples for side-by-side rendering.
-
-_SQUIRREL = [
-    ("[red]    /\\  /\\ [/red]", ""),
-    ("[red]   ([/red] o  o [red])[/red]", "  [bold]Klemma[/bold] [dim]v{version}[/dim]"),
-    ("[red]   ( ^_^  )[/red]", "  AI Academic Assistant"),
-    ("[red]    \\    / [/red]", "  [dim]{cwd}[/dim]"),
-    ("[red]   (_/  \\_)[/red]", ""),
-]
-
-_GIRL = [
-    ("[red]    .---.[/red]", ""),
-    ("[red]   /[/red] o=o [red]\\ [/red]", "  [bold]Klemma[/bold] [dim]v{version}[/dim]"),
-    ("[red]   |[/red]  <  [red]|[/red]", "  AI Academic Assistant"),
-    ("[red]   |[/red] '-' [red]|[/red]", "  [dim]{cwd}[/dim]"),
-    ("[red]    '---'[/red]", ""),
+_BANNER_LINES = [
+    ("#e0f2fe", "██  ██  ██      ██████  ██    ██  ██    ██   ████ "),
+    ("#7dd3fc", "██ ██   ██      ██      ███  ███  ███  ███  ██  ██"),
+    ("#38bdf8", "████    ██      █████   ████████  ████████  ██████"),
+    ("#0369a1", "██ ██   ██      ██      ██ ██ ██  ██ ██ ██  ██  ██"),
+    ("#1e3a5f", "██  ██  ██████  ██████  ██    ██  ██    ██  ██  ██"),
 ]
 
 
-def get_banner(variant: str = "squirrel", cwd: str = "") -> str:
-    """Return Rich-formatted banner string with mascot + app info."""
-    mascot = _SQUIRREL if variant == "squirrel" else _GIRL
+def get_banner(cwd: str = "", **_kw) -> str:
+    """Return Rich-formatted banner string with gradient block-letter logo."""
     lines = []
-    for art, info in mascot:
-        line = art + info.format(version=__version__, cwd=cwd)
-        lines.append(line)
+    for color, text in _BANNER_LINES:
+        lines.append(f"[{color}]{text}[/{color}]")
+    lines.append("")
+    lines.append(f"   AI Academic Assistant — [dim]v{__version__}[/dim]")
+    if cwd:
+        lines.append(f"   [dim]{cwd}[/dim]")
     return "\n".join(lines)
