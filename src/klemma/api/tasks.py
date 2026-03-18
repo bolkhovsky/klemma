@@ -269,6 +269,12 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 sorted(predicted_sections), citekey, project_id,
             )
 
+        # Save citation links from bibliography (for reference gap analysis)
+        key_refs = data.get("key_references", [])
+        if key_refs:
+            links_saved = paper_store.save_citation_links(paper_id, key_refs)
+            logger.info("Saved %d citation links for %s", links_saved, citekey)
+
         user_library.update_status(citekey, "completed")
         logger.info("Extracted %d fragments for %s (%s)", saved, citekey, paper_id)
 

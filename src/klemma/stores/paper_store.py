@@ -332,6 +332,42 @@ class LocalPaperStore:
         return inserted
 
     # ------------------------------------------------------------------ #
+    # Citation graph                                                       #
+    # ------------------------------------------------------------------ #
+
+    def save_citation_links(self, paper_id: str, references: list[dict]) -> int:
+        """Save citation links from a paper's bibliography to citation_graph.
+
+        Each reference: {"title": str, "authors": str, "year": int|None}.
+        Returns count of links saved.
+        """
+        import hashlib
+
+        saved = 0
+        with self._conn() as conn:
+            for ref in references:
+                title = (ref.get("title") or "").strip()
+                if not title:
+                    continue
+                title_hash = hashlib.md5(title.lower().encode()).hexdigest()
+                conn.execute(
+                    """INSERT OR IGNORE INTO citation_graph
+                       (citing_paper_id, cited_title_hash, cited_title,
+                        cited_authors, cited_year, citation_intent)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        paper_id,
+                        title_hash,
+                        title,
+                        ref.get("authors", ""),
+                        ref.get("year"),
+                        ref.get("citation_intent", "background"),
+                    ),
+                )
+                saved += 1
+        return saved
+
+    # ------------------------------------------------------------------ #
     # Citation graph — reference gaps                                      #
     # ------------------------------------------------------------------ #
 
