@@ -5,7 +5,12 @@ import warnings
 import pytest
 
 from klemma.config import parse_klemma_md
-from klemma.setup import InitValues, _build_klemma_md, _get_default_structure, _validate_outline_for_type
+from klemma.setup import (
+    InitValues,
+    _build_klemma_md,
+    _get_default_structure,
+    _validate_outline_for_type,
+)
 
 
 def _parse_built_md(values: InitValues) -> tuple[dict, str]:
