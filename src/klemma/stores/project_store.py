@@ -12,9 +12,9 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Optional
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS project_sources (
@@ -108,6 +108,14 @@ class LocalProjectStore:
         conn.executescript(_CREATE_SCHEMA)
         if version < 2:
             conn.executescript(_MIGRATE_V2)
+        if version < 3:
+            # Multi-user support: scope project data to a specific SaaS user.
+            conn.execute(
+                "ALTER TABLE project_sources ADD COLUMN user_id TEXT"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ps_user ON project_sources(user_id)"
+            )
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -121,6 +129,7 @@ class LocalProjectStore:
         paper_id: str,
         sections: list[str],
         chapters: list[int],
+        user_id: Optional[str] = None,
     ) -> None:
         """Upsert project_sources row and replace section assignments."""
         primary_section = sections[0] if sections else None
@@ -128,13 +137,14 @@ class LocalProjectStore:
         with self._conn() as conn:
             conn.execute(
                 """INSERT INTO project_sources
-                   (citekey, paper_id, primary_chapter, primary_section)
-                   VALUES (?, ?, ?, ?)
+                   (citekey, paper_id, primary_chapter, primary_section, user_id)
+                   VALUES (?, ?, ?, ?, ?)
                    ON CONFLICT(citekey) DO UPDATE SET
                        paper_id=excluded.paper_id,
                        primary_chapter=excluded.primary_chapter,
-                       primary_section=excluded.primary_section""",
-                (citekey, paper_id, primary_chapter, primary_section),
+                       primary_section=excluded.primary_section,
+                       user_id=COALESCE(excluded.user_id, project_sources.user_id)""",
+                (citekey, paper_id, primary_chapter, primary_section, user_id),
             )
             conn.execute(
                 "DELETE FROM project_source_sections WHERE citekey = ?", (citekey,)
@@ -148,27 +158,48 @@ class LocalProjectStore:
                 ],
             )
 
-    def get_coverage_stats(self) -> dict:
+    def get_coverage_stats(self, user_id: Optional[str] = None) -> dict:
         """Return coverage stats in the same shape as StateManager.get_coverage_stats().
 
         Keys: total_sources, sections, chapters, by_section (alias),
         section_type_lookup, section_types.
         """
         with self._conn() as conn:
-            total = conn.execute(
-                "SELECT COUNT(*) FROM project_sources"
-            ).fetchone()[0]
-            by_section = conn.execute(
-                """SELECT section, COUNT(DISTINCT citekey) as cnt
-                   FROM project_source_sections
-                   GROUP BY section ORDER BY section"""
-            ).fetchall()
-            by_chapter = conn.execute(
-                """SELECT chapter, COUNT(DISTINCT citekey) as cnt
-                   FROM project_source_sections
-                   WHERE chapter IS NOT NULL
-                   GROUP BY chapter ORDER BY chapter"""
-            ).fetchall()
+            if user_id is not None:
+                total = conn.execute(
+                    "SELECT COUNT(*) FROM project_sources WHERE user_id = ?", (user_id,)
+                ).fetchone()[0]
+                by_section = conn.execute(
+                    """SELECT pss.section, COUNT(DISTINCT pss.citekey) as cnt
+                       FROM project_source_sections pss
+                       JOIN project_sources ps ON ps.citekey = pss.citekey
+                       WHERE ps.user_id = ?
+                       GROUP BY pss.section ORDER BY pss.section""",
+                    (user_id,),
+                ).fetchall()
+                by_chapter = conn.execute(
+                    """SELECT pss.chapter, COUNT(DISTINCT pss.citekey) as cnt
+                       FROM project_source_sections pss
+                       JOIN project_sources ps ON ps.citekey = pss.citekey
+                       WHERE pss.chapter IS NOT NULL AND ps.user_id = ?
+                       GROUP BY pss.chapter ORDER BY pss.chapter""",
+                    (user_id,),
+                ).fetchall()
+            else:
+                total = conn.execute(
+                    "SELECT COUNT(*) FROM project_sources"
+                ).fetchone()[0]
+                by_section = conn.execute(
+                    """SELECT section, COUNT(DISTINCT citekey) as cnt
+                       FROM project_source_sections
+                       GROUP BY section ORDER BY section"""
+                ).fetchall()
+                by_chapter = conn.execute(
+                    """SELECT chapter, COUNT(DISTINCT citekey) as cnt
+                       FROM project_source_sections
+                       WHERE chapter IS NOT NULL
+                       GROUP BY chapter ORDER BY chapter"""
+                ).fetchall()
         sections = {row["section"]: row["cnt"] for row in by_section}
         chapters = {row["chapter"]: row["cnt"] for row in by_chapter}
         return {
@@ -189,13 +220,24 @@ class LocalProjectStore:
     # Additional helpers                                                  #
     # ------------------------------------------------------------------ #
 
-    def get_source_sections(self, citekey: str) -> list[str]:
-        """Return section list for citekey."""
+    def get_source_sections(
+        self, citekey: str, user_id: Optional[str] = None
+    ) -> list[str]:
+        """Return section list for citekey, optionally scoped to a user."""
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT section FROM project_source_sections WHERE citekey=? ORDER BY section",
-                (citekey,),
-            ).fetchall()
+            if user_id is not None:
+                rows = conn.execute(
+                    """SELECT pss.section FROM project_source_sections pss
+                       JOIN project_sources ps ON ps.citekey = pss.citekey
+                       WHERE pss.citekey = ? AND ps.user_id = ?
+                       ORDER BY pss.section""",
+                    (citekey, user_id),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT section FROM project_source_sections WHERE citekey=? ORDER BY section",
+                    (citekey,),
+                ).fetchall()
         return [row["section"] for row in rows]
 
     def register_fragment(
@@ -217,17 +259,32 @@ class LocalProjectStore:
                 (fragment_id, citekey, section, section_type, chapter, relevance_score),
             )
 
-    def get_sources_by_section(self, section: str) -> list[str]:
-        """Return citekeys assigned to a section."""
+    def get_sources_by_section(
+        self, section: str, user_id: Optional[str] = None
+    ) -> list[str]:
+        """Return citekeys assigned to a section, optionally scoped to a user."""
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT citekey FROM project_source_sections WHERE section=? ORDER BY citekey",
-                (section,),
-            ).fetchall()
+            if user_id is not None:
+                rows = conn.execute(
+                    """SELECT pss.citekey FROM project_source_sections pss
+                       JOIN project_sources ps ON ps.citekey = pss.citekey
+                       WHERE pss.section = ? AND ps.user_id = ?
+                       ORDER BY pss.citekey""",
+                    (section, user_id),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT citekey FROM project_source_sections WHERE section=? ORDER BY citekey",
+                    (section,),
+                ).fetchall()
         return [row["citekey"] for row in rows]
 
-    def count_sources(self) -> int:
+    def count_sources(self, user_id: Optional[str] = None) -> int:
         with self._conn() as conn:
+            if user_id is not None:
+                return conn.execute(
+                    "SELECT COUNT(*) FROM project_sources WHERE user_id = ?", (user_id,)
+                ).fetchone()[0]
             return conn.execute("SELECT COUNT(*) FROM project_sources").fetchone()[0]
 
     # ------------------------------------------------------------------ #

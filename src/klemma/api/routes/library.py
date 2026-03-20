@@ -94,17 +94,16 @@ async def list_sources(
     user: UserRecord = Depends(get_current_user),
     project_id: str | None = Query(default=None, description="Filter by project"),
 ) -> SourceListResponse:
-    """List sources in the user's library, optionally filtered by project."""
+    """List sources in the authenticated user's library."""
     library = get_user_library()
     paper_store = get_paper_store()
     project_store = get_project_store()
 
-    all_sources = library.get_all_sources(project_id=project_id)
+    all_sources = library.get_all_sources(project_id=project_id, user_id=user.user_id)
     results: list[SourceResponse] = []
     for src in all_sources:
         paper = paper_store.get_paper_by_id(src.paper_id)
-        # Sections from project_store (where auto-assignment writes)
-        project_sections = project_store.get_source_sections(src.citekey)
+        project_sections = project_store.get_source_sections(src.citekey, user_id=user.user_id)
         sections = project_sections if project_sections else src.sections
         results.append(
             SourceResponse(
@@ -129,11 +128,11 @@ async def get_source(
     citekey: str,
     user: UserRecord = Depends(get_current_user),
 ) -> SourceDetailResponse:
-    """Get a source with its fragments."""
+    """Get a source with its fragments. Only accessible if owned by the authenticated user."""
     library = get_user_library()
     paper_store = get_paper_store()
 
-    src = library.get_source_by_citekey(citekey)
+    src = library.get_source_by_citekey(citekey, user_id=user.user_id)
     if src is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -172,12 +171,11 @@ async def add_source(
     body: SourceCreateRequest,
     user: UserRecord = Depends(get_current_user),
 ) -> SourceResponse:
-    """Add a source to the user's library (metadata only, no PDF upload)."""
+    """Add a source to the authenticated user's library (metadata only, no PDF upload)."""
     library = get_user_library()
     paper_store = get_paper_store()
 
-    # Check if citekey already exists
-    existing = library.get_source_by_citekey(body.citekey)
+    existing = library.get_source_by_citekey(body.citekey, user_id=user.user_id)
     if existing is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -201,8 +199,12 @@ async def add_source(
             pdf_hash="",  # No PDF uploaded yet
         )
 
-    # Register in user's library
-    library.add_source(paper_id, body.citekey, status="pending", project_id=body.project_id)
+    library.add_source(
+        paper_id, body.citekey,
+        status="pending",
+        project_id=body.project_id,
+        user_id=user.user_id,
+    )
 
     return SourceResponse(
         citekey=body.citekey,
@@ -221,20 +223,21 @@ async def delete_source(
     citekey: str,
     user: UserRecord = Depends(get_current_user),
 ):
-    """Remove a source from the user's library.
+    """Remove a source from the authenticated user's library.
 
     Does NOT delete the paper from the global corpus (other users may reference it).
+    Returns 404 if the source doesn't exist or belongs to another user.
     """
     library = get_user_library()
 
-    src = library.get_source_by_citekey(citekey)
+    src = library.get_source_by_citekey(citekey, user_id=user.user_id)
     if src is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source '{citekey}' not found",
         )
 
-    library.remove_source(citekey)
+    library.remove_source(citekey, user_id=user.user_id)
 
 
 class UploadResponse(BaseModel):
@@ -257,7 +260,7 @@ async def upload_pdf(
     user: UserRecord = Depends(get_current_user),
     project_id: str | None = Form(default=None),
 ) -> UploadResponse:
-    """Upload a PDF and register it in the library.
+    """Upload a PDF and register it in the authenticated user's library.
 
     Deduplicates by pdf_hash: if the same PDF already exists in the global
     corpus, reuses the existing paper_id (no re-extraction needed).
@@ -290,10 +293,14 @@ async def upload_pdf(
     existing = paper_store.find_paper(pdf_hash=pdf_hash)
     if existing:
         citekey = _citekey_from_filename(file.filename)
-        # Check citekey conflict
-        if library.get_source_by_citekey(citekey):
+        if library.get_source_by_citekey(citekey, user_id=user.user_id):
             citekey = f"{citekey}_{pdf_hash[:6]}"
-        library.add_source(existing.paper_id, citekey, status="completed", project_id=project_id)
+        library.add_source(
+            existing.paper_id, citekey,
+            status="completed",
+            project_id=project_id,
+            user_id=user.user_id,
+        )
         return UploadResponse(
             citekey=citekey,
             paper_id=existing.paper_id,
@@ -304,20 +311,25 @@ async def upload_pdf(
 
     # New paper: register + store file
     citekey = _citekey_from_filename(file.filename)
-    if library.get_source_by_citekey(citekey):
+    if library.get_source_by_citekey(citekey, user_id=user.user_id):
         citekey = f"{citekey}_{pdf_hash[:6]}"
 
     paper_id = paper_store.register_paper(
         title=file.filename.rsplit(".", 1)[0],
         pdf_hash=pdf_hash,
     )
-    # Sanitize filename for storage (FileStore validates, but give a clean 400)
     safe_filename = re.sub(r"[^\w.\-]", "_", file.filename)
     try:
         file_store.save(paper_id, data, safe_filename)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    library.add_source(paper_id, citekey, status="pending", project_id=project_id)
+
+    library.add_source(
+        paper_id, citekey,
+        status="pending",
+        project_id=project_id,
+        user_id=user.user_id,
+    )
 
     job_id = _enqueue_processing(paper_id, citekey, user.user_id, project_id)
 
@@ -338,7 +350,7 @@ async def list_reference_gaps(
     paper_store = get_paper_store()
     library = get_user_library()
 
-    source_count = library.count()
+    source_count = library.count(user_id=user.user_id)
     if source_count < 3:
         return {"gaps": [], "total": 0, "detail": "Загрузите больше источников (минимум 3) для анализа пробелов"}
 
@@ -369,16 +381,11 @@ def _citekey_from_filename(filename: str) -> str:
     'Smith_2020_Machine_Learning.pdf' → 'smith2020machineLearning'
     """
     name = filename.rsplit(".", 1)[0]  # remove .pdf
-    # Split on common separators
     parts = re.split(r"[_\-\s]+", name)
     if not parts:
         return "unknown"
-    # lowercase first part, camelCase rest
     result = parts[0].lower()
     for p in parts[1:]:
         if p:
             result += p[0].upper() + p[1:].lower() if len(p) > 1 else p.upper()
-    # Remove non-alphanumeric
     return re.sub(r"[^a-zA-Z0-9]", "", result) or "unknown"
-
-
