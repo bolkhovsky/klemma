@@ -59,7 +59,7 @@ const chapterAssessment = computed<ChapterAssessment[]>(() => {
   })
 
   for (const s of sorted) {
-    const ch = s.id.split('.')[0]
+    const ch = s.id.split('.')[0] ?? s.id
     // Sections without a dot (e.g. "1", "2") are chapter-level entries — use as chapter name
     if (!s.id.includes('.')) {
       chapterNames.set(ch, s.name)

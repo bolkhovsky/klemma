@@ -27,10 +27,14 @@ const router = createRouter({
     },
     // Project-scoped routes
     {
-      path: '/:projectId/dashboard',
-      name: 'dashboard',
-      component: () => import('../views/DashboardView.vue'),
+      path: '/:projectId/health',
+      name: 'health',
+      component: () => import('../views/HealthView.vue'),
       meta: { requiresAuth: true },
+    },
+    {
+      path: '/:projectId/dashboard',
+      redirect: (to) => `/${to.params.projectId}/health`,
     },
     {
       path: '/:projectId/library',

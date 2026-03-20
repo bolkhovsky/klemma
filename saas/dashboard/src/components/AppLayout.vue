@@ -16,13 +16,13 @@ function switchProject(projectId: string) {
   const currentParam = route.params.projectId as string | undefined
   if (currentParam) {
     // Navigate to same module within new project
-    const modules = ['dashboard', 'outline', 'library', 'coverage', 'research']
+    const modules = ['health', 'outline', 'library', 'coverage', 'research']
     const suffix = route.path.slice(currentParam.length + 2) // strip /projectId/
-    const module = modules.find(m => suffix === m || suffix.startsWith(m + '/')) ?? 'outline'
+    const module = modules.find(m => suffix === m || suffix.startsWith(m + '/')) ?? 'health'
     router.push(`/${projectId}/${module}`)
   } else {
-    // Currently on global page — go to outline of new project
-    router.push(`/${projectId}/outline`)
+    // Currently on global page — go to health of new project
+    router.push(`/${projectId}/health`)
   }
 }
 
@@ -163,47 +163,49 @@ async function createProject() {
         <div v-else-if="projectStore.projects.length === 0" class="px-2 py-1 text-xs text-[var(--color-ink-muted)]">
           Нет проектов
         </div>
-        <button
+        <div
           v-for="project in projectStore.projects"
           :key="project.project_id"
-          @click="switchProject(project.project_id)"
-          class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors"
-          :class="route.params.projectId === project.project_id
-            ? 'bg-[var(--color-accent-pale)] text-[var(--color-accent-deep)] font-medium'
-            : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)] hover:text-[var(--color-ink)]'"
+          class="flex w-full items-center gap-1"
         >
-          <span class="truncate">{{ project.name }}</span>
-        </button>
+          <button
+            @click="switchProject(project.project_id)"
+            class="flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors min-w-0"
+            :class="route.params.projectId === project.project_id
+              ? 'bg-[var(--color-accent-pale)] text-[var(--color-accent-deep)] font-medium'
+              : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)] hover:text-[var(--color-ink)]'"
+          >
+            <span class="truncate">{{ project.name }}</span>
+          </button>
+          <RouterLink
+            v-if="route.params.projectId === project.project_id"
+            :to="`/${project.project_id}/outline`"
+            class="flex h-6 w-6 items-center justify-center rounded text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-accent-pale)] transition-colors flex-shrink-0"
+            title="Структура проекта"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-3.5 w-3.5">
+              <path fill-rule="evenodd" d="M6.955 1.45A.5.5 0 0 1 7.452 1h1.096a.5.5 0 0 1 .497.45l.17 1.699c.484.12.94.312 1.356.562l1.321-.839a.5.5 0 0 1 .67.033l.774.775a.5.5 0 0 1 .034.67l-.839 1.32c.25.417.443.873.563 1.357l1.699.17a.5.5 0 0 1 .45.497v1.096a.5.5 0 0 1-.45.497l-1.7.17c-.12.484-.312.94-.562 1.356l.839 1.321a.5.5 0 0 1-.034.67l-.774.774a.5.5 0 0 1-.67.033l-1.32-.839c-.417.25-.873.443-1.357.563l-.17 1.699a.5.5 0 0 1-.497.45H7.452a.5.5 0 0 1-.497-.45l-.17-1.7c-.484-.12-.94-.312-1.356-.562l-1.321.839a.5.5 0 0 1-.67-.033l-.774-.775a.5.5 0 0 1-.034-.67l.839-1.32a5.518 5.518 0 0 1-.563-1.357l-1.699-.17A.5.5 0 0 1 1 8.548V7.452a.5.5 0 0 1 .45-.497l1.7-.17c.12-.484.312-.94.562-1.356l-.839-1.321a.5.5 0 0 1 .034-.67l.774-.774a.5.5 0 0 1 .67-.033l1.32.839c.417-.25.873-.443 1.357-.563l.17-1.699ZM11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" clip-rule="evenodd" />
+            </svg>
+          </RouterLink>
+        </div>
       </div>
 
       <!-- Divider -->
       <div class="mx-3 my-1 border-t border-[var(--color-rule)]"></div>
 
-      <!-- Project nav links (shown only when a project is active in the URL) -->
+      <!-- Project nav links: 3 items (Здоровье, Библиотека, Исследование) -->
       <nav v-if="route.params.projectId" class="flex flex-col gap-0.5 px-2">
         <RouterLink
-          :to="`/${route.params.projectId}/dashboard`"
+          :to="`/${route.params.projectId}/health`"
           class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-          :class="route.path === `/${route.params.projectId}/dashboard`
+          :class="route.path === `/${route.params.projectId}/health`
             ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
             : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-4 w-4 flex-shrink-0">
-            <path d="M8.543 2.232a.75.75 0 0 0-1.085 0l-5.25 5.5A.75.75 0 0 0 2.75 9H4v4a1 1 0 0 0 1 1h1.5a.5.5 0 0 0 .5-.5V11h2v2.5a.5.5 0 0 0 .5.5H11a1 1 0 0 0 1-1V9h1.25a.75.75 0 0 0 .543-1.268l-5.25-5.5Z" />
+            <path d="M2.5 7.5c0-3.1 2.4-5.5 5.5-5.5s5.5 2.4 5.5 5.5c0 1-.3 2-.7 2.8L8 15l-4.8-4.7c-.4-.8-.7-1.8-.7-2.8Zm5.5-3a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm0 1.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z" />
           </svg>
-          Обзор
-        </RouterLink>
-        <RouterLink
-          :to="`/${route.params.projectId}/outline`"
-          class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-          :class="route.path === `/${route.params.projectId}/outline`
-            ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
-            : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-4 w-4 flex-shrink-0">
-            <path d="M2.75 2a.75.75 0 0 0 0 1.5h10.5a.75.75 0 0 0 0-1.5H2.75ZM2.75 5.5a.75.75 0 0 0 0 1.5h5.5a.75.75 0 0 0 0-1.5h-5.5ZM2 9.75A.75.75 0 0 1 2.75 9h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 2 9.75ZM2.75 12.5a.75.75 0 0 0 0 1.5h4a.75.75 0 0 0 0-1.5h-4Z" />
-          </svg>
-          Структура
+          Здоровье
         </RouterLink>
         <RouterLink
           :to="`/${route.params.projectId}/library`"
@@ -218,21 +220,9 @@ async function createProject() {
           Библиотека
         </RouterLink>
         <RouterLink
-          :to="`/${route.params.projectId}/coverage`"
-          class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-          :class="route.path === `/${route.params.projectId}/coverage`
-            ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
-            : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-4 w-4 flex-shrink-0">
-            <path d="M1.75 2a.75.75 0 0 0 0 1.5h.75v9.25A1.5 1.5 0 0 0 4 14.25h8A1.5 1.5 0 0 0 13.5 12.75V3.5h.75a.75.75 0 0 0 0-1.5H1.75ZM12 12.75H4V3.5h8v9.25ZM6.5 6a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1h-3Zm0 2.5a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1h-3Z" />
-          </svg>
-          Покрытие
-        </RouterLink>
-        <RouterLink
           :to="`/${route.params.projectId}/research`"
           class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-          :class="route.path === `/${route.params.projectId}/research`
+          :class="route.path.startsWith(`/${route.params.projectId}/research`)
             ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
             : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
         >

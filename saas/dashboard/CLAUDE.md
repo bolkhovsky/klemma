@@ -14,13 +14,20 @@ saas/dashboard/
 │   ├── api/client.ts      — typed API client, JWT management, token refresh
 │   ├── router/index.ts    — routes + auth guard
 │   ├── components/        — shared components
-│   │   └── AppLayout      — nav header (Обзор / Библиотека) + logout
+│   │   └── AppLayout      — sidebar nav (Здоровье / Библиотека / Исследование) + project switcher + token meter
 │   ├── views/             — page components
 │   │   ├── LandingView    — public landing page (Russian)
 │   │   ├── LoginView      — email/password login
 │   │   ├── RegisterView   — registration form
-│   │   ├── DashboardView  — status cards + coverage (uses AppLayout)
-│   │   └── LibraryView    — source table + add form + delete (uses AppLayout)
+│   │   ├── HealthView     — library health diagnostics: health score, chapter verdicts, gaps, stats
+│   │   ├── LibraryView    — source table + PDF upload + reference gaps
+│   │   ├── SourceView     — source detail: fragments, section assignment, processing
+│   │   ├── ResearchView   — research roadmap: section readiness statuses + generation
+│   │   ├── ReportView     — structured research report: argument blocks, citations
+│   │   ├── OutlineView    — structure editor (accessible via settings icon, not in primary nav)
+│   │   ├── CoverageView   — coverage heatmap (accessible via direct URL, not in primary nav)
+│   │   ├── DashboardView  — legacy, redirects to HealthView
+│   │   └── GlobalLibraryView — all sources across projects
 │   └── assets/main.css    — Tailwind entry point
 ├── vite.config.ts         — Tailwind plugin + /api proxy
 └── package.json
