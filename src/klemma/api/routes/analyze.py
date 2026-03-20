@@ -60,14 +60,14 @@ async def get_status(
     project_store = get_project_store()
     paper_store = get_paper_store()
 
-    # Source counts by status
-    all_sources = library.get_all_sources()
+    # Source counts by status — scoped to the authenticated user
+    all_sources = library.get_all_sources(user_id=user.user_id)
     completed = sum(1 for s in all_sources if s.status == "completed")
     pending = sum(1 for s in all_sources if s.status == "pending")
     failed = sum(1 for s in all_sources if s.status == "failed")
 
-    # Coverage by section from ProjectStore
-    stats = project_store.get_coverage_stats()
+    # Coverage by section from ProjectStore — scoped to the authenticated user
+    stats = project_store.get_coverage_stats(user_id=user.user_id)
     sections = stats.get("sections", {})
     coverage = [
         SectionCoverage(section=str(sec), source_count=cnt)

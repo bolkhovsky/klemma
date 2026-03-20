@@ -209,7 +209,7 @@ async def get_coverage(
 ) -> CoverageStatsResponse:
     """Get coverage statistics for the project."""
     store = get_project_store()
-    stats = store.get_coverage_stats()
+    stats = store.get_coverage_stats(user_id=user.user_id)
     return CoverageStatsResponse(
         total_sources=stats["total_sources"],
         sections={str(k): v for k, v in stats.get("sections", {}).items()},
@@ -224,7 +224,7 @@ async def get_section_sources(
 ) -> SectionSourcesResponse:
     """List sources assigned to a specific section."""
     store = get_project_store()
-    citekeys = store.get_sources_by_section(section)
+    citekeys = store.get_sources_by_section(section, user_id=user.user_id)
     return SectionSourcesResponse(
         section=section,
         citekeys=citekeys,
@@ -241,8 +241,8 @@ async def assign_source_sections(
     store = get_project_store()
     library = get_user_library()
 
-    # Verify source exists in user's library
-    src = library.get_source_by_citekey(body.citekey)
+    # Verify source exists in the authenticated user's library
+    src = library.get_source_by_citekey(body.citekey, user_id=user.user_id)
     if src is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -250,7 +250,7 @@ async def assign_source_sections(
         )
 
     store.set_source_sections(
-        body.citekey, src.paper_id, body.sections, body.chapters
+        body.citekey, src.paper_id, body.sections, body.chapters, user_id=user.user_id
     )
     return {"citekey": body.citekey, "sections": body.sections}
 
@@ -262,7 +262,7 @@ async def get_source_sections(
 ) -> dict:
     """Get sections assigned to a source in the project."""
     store = get_project_store()
-    sections = store.get_source_sections(citekey)
+    sections = store.get_source_sections(citekey, user_id=user.user_id)
     return {"citekey": citekey, "sections": sections}
 
 
