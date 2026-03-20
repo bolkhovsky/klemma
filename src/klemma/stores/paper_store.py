@@ -397,6 +397,19 @@ class LocalPaperStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def count_citation_gaps(self) -> int:
+        """Count unique cited papers not in the library."""
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT COUNT(DISTINCT cg.cited_title_hash)
+                   FROM citation_graph cg
+                   WHERE NOT EXISTS (
+                     SELECT 1 FROM papers p
+                     WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
+                   )"""
+            ).fetchone()
+        return row[0] if row else 0
+
     # ------------------------------------------------------------------ #
     # Paper-level embeddings                                               #
     # ------------------------------------------------------------------ #
