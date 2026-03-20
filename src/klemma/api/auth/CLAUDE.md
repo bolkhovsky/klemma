@@ -25,6 +25,7 @@ JWT creation and verification.
 
 ### schemas.py (45 lines)
 Pydantic request/response models: `UserCreate`, `UserLogin`, `TokenResponse`, `RefreshRequest`, `UserResponse`.
+- `TokenResponse` includes `user_id` — returned on register, login, and refresh
 - `UserCreate.password`: min 8, max 128 characters
 - `UserCreate.name`: max 255 characters
 - `UserLogin.password`: min 1, max 128 characters

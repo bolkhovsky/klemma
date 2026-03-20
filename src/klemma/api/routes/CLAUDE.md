@@ -10,11 +10,18 @@ System health check endpoint — no auth required.
 - Router mounted with `prefix="/health"` in `app.py`; route decorator is `@router.get("")`
 
 ### auth.py
-Auth endpoints — mounted with `prefix="/auth"`.
+Auth endpoints — mounted with `prefix="/auth"`. `TokenResponse` includes `user_id` in all endpoints.
 - `POST /auth/register` → `TokenResponse` (201)
 - `POST /auth/login` → `TokenResponse` (200)
 - `POST /auth/refresh` → `TokenResponse` (200) — rotates refresh token
 - `GET /auth/me` → `UserResponse` (requires Bearer token)
+
+### Admin: create users via CLI
+Registration disabled on frontend. Use `scripts/create_user.sh`:
+```bash
+./scripts/create_user.sh <email> <password> [name] [token_amount]
+# Set CITEQ_ADMIN_EMAIL + CITEQ_ADMIN_PASSWORD to auto-grant tokens
+```
 
 ### library.py (~210 lines)
 Library CRUD endpoints — mounted with `prefix="/library"`. All require Bearer auth.

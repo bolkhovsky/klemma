@@ -23,6 +23,7 @@ class UserLogin(BaseModel):
 class TokenResponse(BaseModel):
     """Token pair returned on login/register/refresh."""
 
+    user_id: str
     access_token: str
     refresh_token: str
     token_type: str = "bearer"

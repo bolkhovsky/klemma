@@ -47,7 +47,7 @@ async def register(
     refresh = create_refresh_token(user.user_id)
     store.store_refresh_token(user.user_id, hash_token(refresh), refresh_token_expires_at())
 
-    return TokenResponse(access_token=access, refresh_token=refresh)
+    return TokenResponse(user_id=user.user_id, access_token=access, refresh_token=refresh)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -68,7 +68,7 @@ async def login(
     refresh = create_refresh_token(user.user_id)
     store.store_refresh_token(user.user_id, hash_token(refresh), refresh_token_expires_at())
 
-    return TokenResponse(access_token=access, refresh_token=refresh)
+    return TokenResponse(user_id=user.user_id, access_token=access, refresh_token=refresh)
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -110,7 +110,7 @@ async def refresh(
         user.user_id, hash_token(new_refresh), refresh_token_expires_at()
     )
 
-    return TokenResponse(access_token=access, refresh_token=new_refresh)
+    return TokenResponse(user_id=user.user_id, access_token=access, refresh_token=new_refresh)
 
 
 @router.get("/me", response_model=UserResponse)
