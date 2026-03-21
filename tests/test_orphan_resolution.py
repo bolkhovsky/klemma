@@ -184,3 +184,24 @@ class TestAuthorYearCollision:
         # If this orphan IS the same citekey as in BBT, skip
         result = resolve_orphan("smithDeepLearning2023", bbt_index)
         assert result is None
+
+    def test_two_orphans_same_target_resolve_identically(self):
+        """Both orphans resolve to the same new citekey when BBT has one wang/2023.
+
+        resolve_orphan() itself cannot prevent this collision — it only sees
+        one orphan at a time.  The caller loop in _sync_sections() uses a
+        claimed_new_keys guard (bug #230) to skip the second orphan instead of
+        deleting it.  This test documents the raw resolve_orphan behavior so
+        the guard can be tested at the unit level.
+        """
+        lookup = {
+            "wangSelfConsistencyImprovesChain2023": _entry("KEY1"),
+            # Survey paper NOT in Zotero — only one wang/2023 entry in BBT
+        }
+        bbt_index = build_bbt_index(lookup)
+        result_a = resolve_orphan("Wang2023_Self-Consistency_Improves_Chai", bbt_index)
+        result_b = resolve_orphan("Wang2023_A_Survey_on_Large_Language_Mod", bbt_index)
+        # Both resolve to the same target — identical new_ck
+        assert result_a is not None
+        assert result_b is not None
+        assert result_a[0] == result_b[0] == "wangSelfConsistencyImprovesChain2023"
