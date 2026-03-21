@@ -103,3 +103,92 @@ def test_status_with_coverage(client):
 def test_status_requires_auth(client):
     resp = client.get("/analyze/status")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+
+
+def test_health_empty(client):
+    """Health endpoint returns score 0 and generic diagnosis for empty project."""
+    token = _auth_token(client)
+    resp = client.get("/analyze/health", headers=_headers(token))
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["score"] == 0
+    assert "chapters" in data
+    assert len(data["chapters"]) == 0
+    assert data["stats"]["total_sources"] == 0
+    assert data["stats"]["total_fragments"] == 0
+    assert isinstance(data["recommendations"], list)
+    assert "diagnosis" in data
+
+
+def test_health_with_sources_no_coverage(client):
+    """Sources added but no section assignments → pending processing recommendation."""
+    token = _auth_token(client)
+    client.post(
+        "/library/sources",
+        json={"citekey": "smithML2020", "title": "ML Paper", "authors": "Smith"},
+        headers=_headers(token),
+    )
+    resp = client.get("/analyze/health", headers=_headers(token))
+    data = resp.json()
+    assert data["stats"]["total_sources"] == 1
+    # Should have a recommendation about pending processing
+    actions = [r["action"] for r in data["recommendations"]]
+    assert "process" in actions
+
+
+def test_health_with_coverage(client):
+    """Sources assigned to sections → chapter health assessment populated."""
+    token = _auth_token(client)
+    # Add source
+    client.post(
+        "/library/sources",
+        json={"citekey": "jonesNLP2019", "title": "NLP Paper"},
+        headers=_headers(token),
+    )
+    # Assign to section
+    client.post(
+        "/projects/sections/assign",
+        json={"citekey": "jonesNLP2019", "sections": ["2.1"], "chapters": [2]},
+        headers=_headers(token),
+    )
+    resp = client.get("/analyze/health", headers=_headers(token))
+    data = resp.json()
+    # Should have chapter 2 in assessment
+    chapters = {ch["number"]: ch for ch in data["chapters"]}
+    assert "2" in chapters
+    assert chapters["2"]["source_count"] == 1
+    assert chapters["2"]["verdict"] == "low"  # only 1 source, need 3+
+
+
+def test_health_well_covered(client, stores):
+    """Chapter with 3+ sources gets 'well_covered' verdict."""
+    token = _auth_token(client)
+    # Add 3 sources to same chapter
+    for i, key in enumerate(["src1", "src2", "src3"]):
+        client.post(
+            "/library/sources",
+            json={"citekey": key, "title": f"Paper {i}"},
+            headers=_headers(token),
+        )
+        client.post(
+            "/projects/sections/assign",
+            json={"citekey": key, "sections": ["1.1"], "chapters": [1]},
+            headers=_headers(token),
+        )
+    resp = client.get("/analyze/health", headers=_headers(token))
+    data = resp.json()
+    chapters = {ch["number"]: ch for ch in data["chapters"]}
+    assert "1" in chapters
+    assert chapters["1"]["source_count"] == 3
+    assert chapters["1"]["verdict"] == "well_covered"
+    assert data["score"] == 100  # all chapters covered
+
+
+def test_health_requires_auth(client):
+    resp = client.get("/analyze/health")
+    assert resp.status_code == 403
