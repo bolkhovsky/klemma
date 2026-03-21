@@ -1,13 +1,16 @@
-"""Parser for dissertation plan-prospect .docx files.
+"""Parser for project plan / outline files.
 
-Extracts structured data from a standard Russian dissertation plan-prospect:
+Extracts structured data from academic project outlines:
 title, description (актуальность), research objectives, scientific results,
 and full chapter structure.
 
+Supported formats:
+- .docx — full structured parsing from dissertation plan-prospect (python-docx required)
+- .md / .txt — text-based structure extraction from headings and numbered lists
+- Raw text — same extraction via parse_text()
+
 Designed as a pure module — no CLI dependencies. Works with file paths
 or BytesIO for SaaS use.
-
-Requires: python-docx (optional dependency).
 """
 
 import re
@@ -152,6 +155,133 @@ def parse(source: Union[str, Path, BytesIO]) -> PlanData:
             data.chapters = _parse_chapters(body_paragraphs)
 
     return data
+
+
+# --- Alternative chapter heading patterns for text/markdown ---
+_RE_CHAPTER_EN = re.compile(r"^(?:Chapter|Раздел)\s+(\d+)[\.:\s]\s*(.+)", re.IGNORECASE)
+_RE_CHAPTER_PLAIN = re.compile(r"^(\d+)[\.:\s]\s+(.+)")
+
+
+def parse_text(text: str) -> PlanData:
+    """Parse outline structure from plain text or markdown.
+
+    Extracts chapter/section structure from headings and numbered patterns.
+    Supports Russian (Глава N.) and English (Chapter N.) formats,
+    as well as plain numbered lists (1. Title, 1.1. Section).
+
+    Args:
+        text: outline text (plain or markdown).
+
+    Returns:
+        PlanData with extracted fields (may have empty chapters if
+        no structure detected — the raw text is still useful as context).
+    """
+    data = PlanData()
+    lines = text.strip().split("\n")
+
+    if not lines:
+        return data
+
+    current_chapter: Optional[Chapter] = None
+    title_found = False
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Remove markdown heading markers for pattern matching
+        clean = stripped.lstrip("#").strip()
+
+        # First significant heading → title
+        if not title_found and stripped.startswith("#") and not stripped.startswith("##"):
+            data.title = clean
+            title_found = True
+            continue
+
+        # Try chapter patterns: "Глава N. Title"
+        ch_match = _RE_CHAPTER.match(clean)
+        if not ch_match:
+            ch_match = _RE_CHAPTER_EN.match(clean)
+        if not ch_match:
+            # "N. Title" (single number, not "N.N. Title")
+            m = _RE_CHAPTER_PLAIN.match(clean)
+            if m and "." not in m.group(1):
+                ch_match = m
+
+        if ch_match:
+            num = int(ch_match.group(1))
+            title = ch_match.group(2).strip()
+            if title.upper() in _STRUCTURAL_LINES:
+                continue
+            current_chapter = Chapter(number=num, title=title)
+            data.chapters.append(current_chapter)
+            continue
+
+        # Section: "N.N. Title" or "- N.N. Title"
+        sec_match = _RE_SECTION.match(clean)
+        if sec_match and current_chapter is not None:
+            sec_num = sec_match.group(1)
+            sec_title = sec_match.group(2).strip()
+            if _RE_CONCLUSIONS.match(clean):
+                continue
+            level = sec_num.count(".") + 1
+            section = Section(number=sec_num, title=sec_title, level=level)
+            current_chapter.sections.append(section)
+            continue
+
+        # Scientific results: "НР N. Title"
+        nr_match = _RE_NR.match(clean)
+        if nr_match:
+            data.results.append(ScientificResult(
+                number=int(nr_match.group(1)),
+                title=nr_match.group(2).strip(),
+                description="",
+            ))
+
+    # Fallback title: first non-empty line
+    if not data.title:
+        for line in lines:
+            s = line.strip().lstrip("#").strip()
+            if s:
+                data.title = s
+                break
+
+    return data
+
+
+def parse_file(source: Union[str, Path]) -> PlanData:
+    """Parse plan/outline from file, auto-detecting format by extension.
+
+    Supported formats:
+    - .docx — full structured parsing (python-docx required)
+    - .md, .txt, .text, .markdown — text-based structure extraction
+
+    Args:
+        source: file path.
+
+    Returns:
+        PlanData with extracted fields.
+
+    Raises:
+        FileNotFoundError: if file doesn't exist.
+        ValueError: if format is not supported.
+        ImportError: if .docx and python-docx not installed.
+    """
+    path = Path(source)
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+
+    ext = path.suffix.lower()
+    if ext == ".docx":
+        return parse(path)
+    elif ext in (".md", ".txt", ".text", ".markdown"):
+        text = path.read_text(encoding="utf-8")
+        return parse_text(text)
+    else:
+        raise ValueError(
+            f"Unsupported format: {ext}. Use .docx, .md, or .txt"
+        )
 
 
 def _extract_title(paragraphs) -> str:
