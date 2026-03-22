@@ -66,6 +66,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/klemma"]
+exclude = ["src/klemma/api"]
 
 [tool.ruff]
 line-length = 100
