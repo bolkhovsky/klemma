@@ -167,7 +167,12 @@ def generate_briefing(
     )
 
     # Call LLM
-    result = ai.call_json(prompt)
+    user_prompt = (
+        f"Analyze the source @{source_citekey} and generate a briefing "
+        f"with key claims, connections, niches, and 2-3 fork options. "
+        f"Respond with JSON only."
+    )
+    result = ai.call_json(prompt, user_prompt, max_tokens=4096)
     if not result:
         return BriefingResult(
             source_citekey=source_citekey,

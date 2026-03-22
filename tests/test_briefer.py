@@ -106,7 +106,7 @@ class TestGenerateBriefing:
         assert len(result.forks) == 2
         assert result.forks[0]["key"] == "A"
         assert result.recommended_sections == ["3.2"]
-        ai.call_json.assert_called_once()
+        assert ai.call_json.call_count == 1
 
     def test_llm_returns_none(self, state):
         ai = MagicMock()
