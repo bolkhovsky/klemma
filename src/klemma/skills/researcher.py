@@ -254,10 +254,16 @@ def pre_extract_sources(
         if len(citekeys) >= max_sources:
             break
 
-    # 2. Отфильтровать: пропустить уже извлечённые (если не force)
+    # 2. Отфильтровать: пропустить уже извлечённые и pruned (если не force)
+    prune_drops = state.get_prune_drop_ids()
     to_extract = []
     skipped = 0
     for ck in citekeys:
+        if not force and ck in prune_drops:
+            skipped += 1
+            if on_progress:
+                on_progress(ck, "pruned (drop)", skipped, len(citekeys))
+            continue
         source = state.get_source(ck)
         if not force and source and source.get("fragment_count", 0) > 0:
             skipped += 1

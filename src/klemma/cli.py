@@ -518,11 +518,24 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
         orphans = existing - bbt_citekeys
         if orphans:
             bbt_index = build_bbt_index(entry_lookup)
+            # Track citekeys claimed by a rename in this run to prevent
+            # a second orphan from resolving to the same target and being
+            # silently deleted (data-loss bug #230).
+            claimed_new_keys: set[str] = set()
             for old_ck in list(orphans):
                 result = resolve_orphan(old_ck, bbt_index)
                 if not result:
                     continue
                 new_ck, item_key = result
+                if new_ck in claimed_new_keys:
+                    # Another orphan already claimed this target in this run —
+                    # skip rather than delete (verbose-mutations: must be visible).
+                    if not quiet:
+                        console.print(
+                            f"  [yellow]Skip:[/yellow] @{old_ck} → @{new_ck}"
+                            " (collision with earlier rename, left unchanged)"
+                        )
+                    continue
                 if new_ck in existing:
                     state.delete_source(old_ck)
                     existing.discard(old_ck)
@@ -531,6 +544,7 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
                     state.rename_source(old_ck, new_ck, item_key)
                     existing.discard(old_ck)
                     existing.add(new_ck)
+                    claimed_new_keys.add(new_ck)
                     renames.append((old_ck, new_ck))
 
     # 3. Sync to DB

@@ -81,4 +81,10 @@ router.beforeEach((to) => {
   }
 })
 
+router.afterEach((to) => {
+  if (typeof window.ym === 'function') {
+    window.ym(108182650, 'hit', window.location.origin + to.fullPath)
+  }
+})
+
 export default router
