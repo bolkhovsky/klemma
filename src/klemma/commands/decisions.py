@@ -190,18 +190,20 @@ def decide(ctx, decision_id, option, reason):
 
 @main.command()
 @click.argument("citekey", required=False)
-@click.option("--pending", is_flag=True, help="Process all sources without briefings")
+@click.option("--pending", is_flag=True, help="Process sources without briefings (most relevant first)")
+@click.option("--limit", "-n", default=10, help="Max sources to brief in --pending mode")
 @click.option("--model", default=None, help="Override AI model")
 @click.pass_context
-def briefing(ctx, citekey, pending, model):
+def briefing(ctx, citekey, pending, limit, model):
     """Generate a Guided Serendipity briefing for a source.
 
     Analyzes a newly added source, finds connections in your library,
     and proposes 2-3 research directions (forks) for you to choose from.
 
     Usage:
-      klemma briefing <citekey>     — briefing for specific source
-      klemma briefing --pending     — process sources without briefings
+      klemma briefing <citekey>        — briefing for specific source
+      klemma briefing --pending        — top 10 most relevant unbriefed sources
+      klemma briefing --pending -n 5   — top 5
     """
     from ..skills.briefer import generate_briefing, save_briefing_as_decision
 
@@ -228,15 +230,29 @@ def briefing(ctx, citekey, pending, model):
             for d in state.decisions.get_decisions(trigger_type="briefing", limit=9999)
             if d.get("trigger_source")
         }
-        targets = [
-            s["id"] for s in all_sources
+        unbriefed = [
+            s for s in all_sources
             if s["id"] not in existing_briefings
             and s.get("fragment_count", 0) > 0
         ]
-        if not targets:
+        if not unbriefed:
             console.print("[dim]No sources pending briefing.[/dim]")
             return
-        console.print(f"[blue]{len(targets)} source(s) pending briefing[/blue]\n")
+
+        # Sort by relevance: quality_score desc, fragment_count desc, year desc
+        unbriefed.sort(
+            key=lambda s: (
+                s.get("quality_score") or 0,
+                s.get("fragment_count") or 0,
+                s.get("year") or 0,
+            ),
+            reverse=True,
+        )
+        targets = [s["id"] for s in unbriefed[:limit]]
+        console.print(
+            f"[blue]{len(unbriefed)} source(s) pending briefing, "
+            f"processing top {len(targets)}[/blue]\n"
+        )
     else:
         targets = [citekey]
 
