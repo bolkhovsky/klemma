@@ -126,7 +126,7 @@ class TestMigration:
         conn = sqlite3.connect(state.db_path)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.close()
-        assert version == 12
+        assert version == 13
 
 
 class TestBuildResultsSummary:
