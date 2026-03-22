@@ -152,7 +152,7 @@ def generate_briefing(
         else Path(__file__).parent.parent.parent.parent / "prompts" / "briefing.md"
     )
     prompt = ai.render_prompt(
-        str(prompt_path),
+        prompt_path,
         language=language,
         dissertation_context=dissertation_context,
         outline_summary=outline_summary,
