@@ -202,6 +202,21 @@ TEMPLATE_CONTEXTS = {
         "source_summaries": [],
         "language": "ru",
     },
+    "briefing.md": {
+        "language": "Russian",
+        "dissertation_context": "Test context",
+        "outline_summary": "",
+        "source_citekey": "goessling2016",
+        "source_title": "Evaluating sea ice forecasts with IIEE",
+        "source_authors": "Goessling H.F.",
+        "source_year": 2016,
+        "abstract": "IIEE separates errors into components.",
+        "fragments": [
+            {"citation_intent": "method", "fragment_text": "IIEE decomposes errors"},
+        ],
+        "similar_sources": [],
+        "previous_decisions": [],
+    },
     "reconstruct.md": {
         "paper_title": "Test Paper",
         "abstract": "An abstract",

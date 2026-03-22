@@ -1,10 +1,12 @@
 """Guided Serendipity: decisions and briefing commands."""
 
+import sys
+
 import click
 from rich.panel import Panel
 from rich.table import Table
 
-from ..cli import _get_context, console, main
+from ..cli import _get_context, _init_ai, console, main
 
 
 @main.group(invoke_without_command=True)
@@ -184,6 +186,178 @@ def decide(ctx, decision_id, option, reason):
             console.print(f"  Rationale: {reason}")
     else:
         console.print(f"[red]Failed to update decision #{decision_id}[/red]")
+
+
+@main.command()
+@click.argument("citekey", required=False)
+@click.option("--pending", is_flag=True, help="Process sources without briefings (most relevant first)")
+@click.option("--limit", "-n", default=10, help="Max sources to brief in --pending mode")
+@click.option("--model", default=None, help="Override AI model")
+@click.pass_context
+def briefing(ctx, citekey, pending, limit, model):
+    """Generate a Guided Serendipity briefing for a source.
+
+    Analyzes a newly added source, finds connections in your library,
+    and proposes 2-3 research directions (forks) for you to choose from.
+
+    Usage:
+      klemma briefing <citekey>        — briefing for specific source
+      klemma briefing --pending        — top 10 most relevant unbriefed sources
+      klemma briefing --pending -n 5   — top 5
+    """
+    from ..skills.briefer import generate_briefing, save_briefing_as_decision
+
+    kctx = _get_context(ctx)
+    cfg, state = kctx.config, kctx.state
+
+    if not citekey and not pending:
+        console.print("[red]Provide a citekey or use --pending[/red]")
+        return
+
+    if model:
+        cfg.ai.model = model
+    ai = _init_ai(cfg)
+    if not ai:
+        console.print("[red]AI backend required for briefing. Configure in klemmarc.[/red]")
+        return
+
+    # Determine which sources to brief
+    if pending:
+        # Find sources that have fragments but no briefing decision
+        all_sources = state.sources.get_all_sources()
+        existing_briefings = {
+            d["trigger_source"]
+            for d in state.decisions.get_decisions(trigger_type="briefing", limit=9999)
+            if d.get("trigger_source")
+        }
+        unbriefed = [
+            s for s in all_sources
+            if s["id"] not in existing_briefings
+            and s.get("fragment_count", 0) > 0
+        ]
+        if not unbriefed:
+            console.print("[dim]No sources pending briefing.[/dim]")
+            return
+
+        # Sort by relevance: quality_score desc, fragment_count desc, year desc
+        unbriefed.sort(
+            key=lambda s: (
+                s.get("quality_score") or 0,
+                s.get("fragment_count") or 0,
+                s.get("year") or 0,
+            ),
+            reverse=True,
+        )
+        targets = [s["id"] for s in unbriefed[:limit]]
+        console.print(
+            f"[blue]{len(unbriefed)} source(s) pending briefing, "
+            f"processing top {len(targets)}[/blue]\n"
+        )
+    else:
+        targets = [citekey]
+
+    for target_citekey in targets:
+        console.print(f"\n[bold]Briefing: @{target_citekey}[/bold]")
+        console.print("[dim]Analyzing source, finding connections...[/dim]")
+
+        result = generate_briefing(
+            source_citekey=target_citekey,
+            config=cfg,
+            state=state,
+            ai=ai,
+            dissertation_context=kctx.dissertation_context,
+            embeddings=kctx.embeddings,
+            klemma_home=kctx.klemma_home,
+            project_root=kctx.project_root,
+            language=getattr(cfg.dissertation, "language", "Russian") if cfg.dissertation else "Russian",
+        )
+
+        if result.error:
+            console.print(f"[red]Error: {result.error}[/red]")
+            continue
+
+        # Display briefing
+        _display_briefing(result)
+
+        # Save as decision
+        decision_id = save_briefing_as_decision(result, state)
+        if decision_id is None:
+            console.print("[yellow]No forks generated — skipping decision.[/yellow]")
+            continue
+
+        # Interactive choice if TTY
+        if sys.stdin.isatty() and len(targets) <= 3:
+            _interactive_decide(state, decision_id, result)
+        else:
+            console.print(
+                f"\n[yellow]Decision #{decision_id} saved as pending.[/yellow]"
+                f"\nDecide later: klemma decide {decision_id} A|B|C"
+            )
+
+
+def _display_briefing(result):
+    """Display briefing results in the terminal."""
+    # Key claims
+    if result.key_claims:
+        console.print("\n[bold]Key claims:[/bold]")
+        for claim in result.key_claims:
+            console.print(f"  • {claim}")
+
+    # Connections
+    if result.connections:
+        console.print("\n[bold]Connections:[/bold]")
+        for conn in result.connections:
+            rel = conn.get("relationship", "related")
+            ckey = conn.get("related_citekey", "?")
+            desc = conn.get("description", "")
+            console.print(f"  {rel}: {ckey} — {desc}")
+
+    # Niches
+    if result.niches:
+        console.print("\n[bold]Niches/gaps:[/bold]")
+        for niche in result.niches:
+            console.print(f"  → {niche}")
+
+    # Forks
+    if result.forks:
+        console.print("\n[bold]── Fork ──[/bold]")
+        for fork in result.forks:
+            key = fork.get("key", "?")
+            title = fork.get("title", "")
+            desc = fork.get("description", "")
+            sections = fork.get("sections", [])
+            sec_str = f" (sections: {', '.join(sections)})" if sections else ""
+            console.print(f"  [{key}] [bold]{title}[/bold]{sec_str}")
+            if desc:
+                console.print(f"      {desc}")
+
+
+def _interactive_decide(state, decision_id, result):
+    """Prompt the user to choose a fork interactively."""
+    valid_keys = [f.get("key", "?") for f in result.forks]
+    keys_str = "/".join(valid_keys)
+
+    console.print(f"\n[yellow]Choose direction [{keys_str}/skip]:[/yellow] ", end="")
+    try:
+        choice = input().strip().upper()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[dim]Skipped[/dim]")
+        return
+
+    if choice in ("SKIP", "S", ""):
+        state.decisions.skip_decision(decision_id)
+        console.print("[dim]Skipped — you can revisit later with 'klemma decisions --pending'[/dim]")
+    elif choice in valid_keys:
+        # Ask for rationale
+        console.print("[dim]Why? (optional, press Enter to skip):[/dim] ", end="")
+        try:
+            reason = input().strip() or None
+        except (EOFError, KeyboardInterrupt):
+            reason = None
+        state.decisions.decide(decision_id, choice, reason)
+        console.print(f"[green]✓ Decision #{decision_id} → {choice}[/green]")
+    else:
+        console.print(f"[red]Invalid choice. Saved as pending (decide later: klemma decide {decision_id} {keys_str})[/red]")
 
 
 @decisions.command("trail")
