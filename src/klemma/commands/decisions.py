@@ -360,6 +360,74 @@ def _interactive_decide(state, decision_id, result):
         console.print(f"[red]Invalid choice. Saved as pending (decide later: klemma decide {decision_id} {keys_str})[/red]")
 
 
+@main.command()
+@click.pass_context
+def insights(ctx):
+    """Analyze your library for blind spots and hidden connections.
+
+    Detects:
+    - Blind spots: sections with significantly fewer sources than average
+    - Hidden clusters: semantically similar sources in different sections
+
+    No AI calls — uses SQL stats and embeddings only.
+    """
+    from ..skills.insights import generate_insights, save_insights_as_decisions
+
+    kctx = _get_context(ctx)
+    state = kctx.state
+
+    console.print("[dim]Scanning library for patterns...[/dim]\n")
+    result = generate_insights(state, kctx.project_store)
+
+    if not result.blind_spots and not result.hidden_clusters:
+        console.print("[green]No issues found. Library looks balanced.[/green]")
+        return
+
+    # Display blind spots
+    if result.blind_spots:
+        console.print(f"[bold]Blind Spots[/bold] ({len(result.blind_spots)} sections)\n")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Section", width=10)
+        table.add_column("Sources", width=8, justify="right")
+        table.add_column("Average", width=8, justify="right")
+        table.add_column("Gaps", width=6, justify="right")
+        table.add_column("Severity", width=8)
+
+        for spot in result.blind_spots:
+            sev_style = {"high": "[red]high[/red]", "medium": "[yellow]medium[/yellow]"}.get(
+                spot.severity, spot.severity
+            )
+            table.add_row(
+                spot.section,
+                str(spot.source_count),
+                str(spot.average_count),
+                str(spot.gap_count),
+                sev_style,
+            )
+        console.print(table)
+
+    # Display hidden clusters
+    if result.hidden_clusters:
+        console.print(f"\n[bold]Hidden Clusters[/bold] ({len(result.hidden_clusters)} pairs)\n")
+        for c in result.hidden_clusters:
+            console.print(
+                f"  @{c.citekey_a} ({c.section_a}) ↔ @{c.citekey_b} ({c.section_b})"
+                f"  [dim]similarity: {c.similarity}[/dim]"
+            )
+            if c.title_a and c.title_b:
+                console.print(f"    {c.title_a[:60]}")
+                console.print(f"    {c.title_b[:60]}")
+            console.print()
+
+    # Save as decisions
+    decision_ids = save_insights_as_decisions(result, state)
+    if decision_ids:
+        console.print(
+            f"\n[yellow]{len(decision_ids)} insight(s) saved as pending decisions.[/yellow]"
+            f"\nReview: klemma decisions --pending"
+        )
+
+
 @decisions.command("trail")
 @click.pass_context
 def decisions_trail(ctx):
