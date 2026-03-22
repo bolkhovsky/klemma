@@ -9,6 +9,7 @@ from typing import Optional
 from .repositories import (
     BenchmarkRepository,
     CitationsRepository,
+    DecisionsRepository,
     EmbeddingsStoreRepository,
     FragmentRepository,
     GapsRepository,
@@ -158,6 +159,7 @@ class StateManager:
         self.plans = PlansRepository(self._conn)
         self.prune = PruneRepository(self._conn)
         self.benchmarks = BenchmarkRepository(self._conn)
+        self.decisions = DecisionsRepository(self._conn)
 
     @contextmanager
     def _conn(self):
@@ -183,7 +185,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 12  # bump this when adding new migrations
+        target = 13  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -431,6 +433,31 @@ class StateManager:
                     conn.execute(
                         f"ALTER TABLE sources ADD COLUMN {col} {col_type}"
                     )
+
+        if version < 13:
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    decided_at TEXT,
+                    trigger_type TEXT NOT NULL,
+                    trigger_source TEXT,
+                    context_json TEXT NOT NULL DEFAULT '{}',
+                    options_json TEXT NOT NULL DEFAULT '[]',
+                    chosen_option TEXT,
+                    rationale TEXT,
+                    sections TEXT,
+                    influenced_by TEXT
+                )"""
+            )
+            conn.execute(
+                """CREATE INDEX IF NOT EXISTS idx_decisions_pending
+                   ON decisions(chosen_option) WHERE chosen_option IS NULL"""
+            )
+            conn.execute(
+                """CREATE INDEX IF NOT EXISTS idx_decisions_source
+                   ON decisions(trigger_source) WHERE trigger_source IS NOT NULL"""
+            )
 
         conn.execute(f"PRAGMA user_version = {target}")
 
