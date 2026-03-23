@@ -185,7 +185,7 @@ class StateManager:
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 13  # bump this when adding new migrations
+        target = 14  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -458,6 +458,15 @@ class StateManager:
                 """CREATE INDEX IF NOT EXISTS idx_decisions_source
                    ON decisions(trigger_source) WHERE trigger_source IS NOT NULL"""
             )
+
+        if version < 14:
+            existing_dec = {
+                row[1] for row in conn.execute("PRAGMA table_info(decisions)")
+            }
+            if "note" not in existing_dec:
+                conn.execute("ALTER TABLE decisions ADD COLUMN note TEXT")
+            if "feedback" not in existing_dec:
+                conn.execute("ALTER TABLE decisions ADD COLUMN feedback TEXT")
 
         conn.execute(f"PRAGMA user_version = {target}")
 

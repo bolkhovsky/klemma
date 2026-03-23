@@ -217,6 +217,13 @@ TEMPLATE_CONTEXTS = {
         "similar_sources": [],
         "previous_decisions": [],
     },
+    "insight_curator.md": {
+        "language": "Russian",
+        "dissertation_context": "Test dissertation context",
+        "candidates": "1. BLIND SPOT: section 3.1 has 1 sources (average: 10.0), severity: high",
+        "candidate_count": 1,
+        "feedback_summary": "No feedback yet.",
+    },
     "reconstruct.md": {
         "paper_title": "Test Paper",
         "abstract": "An abstract",

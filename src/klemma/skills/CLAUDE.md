@@ -112,6 +112,27 @@ Dynamic work context builder — replaces hardcoded DISSERTATION_CONTEXT constan
 - `get_current_deadline(project, language)` — returns (deadline_str, days_remaining) for current focus chapter
 - Multi-language labels (ru/en) for chapter headings, deadlines, etc.
 
+### insights.py (~480 lines)
+Guided Serendipity insights — 3-stage pipeline: generate → suppress → curate.
+- `BlindSpot`, `HiddenCluster`, `InsightsResult` — Stage 1 dataclasses (SQL + embeddings, no LLM)
+- `RawCandidate`, `CuratedInsight`, `CuratedInsightsResult` — Stage 2-3 dataclasses
+- `detect_blind_spots(state, project_store?)` — sections with fewer sources than average (pure SQL)
+- `detect_hidden_clusters(state, threshold?, max_pairs?)` — cross-section similar sources (embeddings, no LLM)
+- `generate_insights(state, project_store?)` — combined Stage 1 result
+- `save_insights_as_decisions(insights, state)` — save raw insights as 2-option decisions
+- `suppress_candidates(candidates, state)` — Stage 2: heuristic suppression (already-decided, trivial clusters <0.80, duplicate section pairs, same-chapter redundant blind spots). ~36% reduction per Phansalkar 2013
+- `check_insights_blocked(state)` — returns (is_blocked, pending_count, pending_list)
+- `curate_insights(candidates, config, ai, state, ...)` — Stage 3: LLM curation via `prompts/insight_curator.md`. Multi-objective ranking (novelty × actionability × trajectory × diversity). Max 5 insights, max 2 per diversity_tag. Injects researcher feedback history.
+- `generate_curated_insights(state, config, ai?, ...)` — full pipeline orchestrator. Checks blocking → generates broadly → suppresses → curates (or raw mode with `raw_mode=True`)
+- `save_curated_insights_as_decisions(insights, state)` — save curated insights as 3-option decisions (Act/Bookmark/Dismiss)
+- Academic grounding: Nadkarni 2025 (LLM-as-judge), Paterno 2009 (tiered alerts), Phansalkar 2013 (suppression-first), McNee 2006 (multi-objective), Si 2024 (diversity enforcement), Hummon & Doreian 1989 (trajectories), Kastrin 2025 (interpretability)
+
+### briefer.py (~200 lines)
+Guided Serendipity briefing — analyzes new sources, finds connections, generates branching points.
+- `BriefingResult` — dataclass: source info, key_claims, connections, niches, forks
+- `generate_briefing(source_citekey, config, state, ai, ...)` — renders `prompts/briefing.md` → AI → parse JSON
+- `save_briefing_as_decision(result, state)` — save forks as pending decision
+
 ### coach.py (~170 lines)
 Contextual research advisor — methodology-driven heuristics (zero AI calls). Thresholds from 21 methodology papers (Pautasso 2013, Cohan 2019, Kallestinova 2011).
 - `CoachFinding` — dataclass: category, section, message, severity

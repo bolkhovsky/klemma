@@ -28,6 +28,9 @@ Click CLI entry point. Defines 18 commands + hidden aliases.
 - `coach` command: methodology-driven research advisor (zero AI calls). Default: project-wide health check. `-s X.X`: section focus. `--json`: structured output. Calls `_sync_sections()` before reading (ADR-010)
 - `_coach_section_hint(state, section, project_root)` — generates 1-line hint for inline use; called from `add`, `draft -s`, `research -s`
 - `reassign` command: suggest fragment-to-section reassignments via embedding similarity. Optional `CITEKEY` arg filters to one source. `-s SECTION` + `--apply` directly reassigns. Dry-run shows per-suggestion runnable commands. No batch apply — each reassignment is an explicit user decision.
+- `insights` command: 3-stage pipeline (generate → suppress → curate) for blind spots and hidden clusters. Default: LLM-curated top 3-5. `--raw`: unfiltered (no AI). `--model`: override AI model. Blocking: refuses to generate new if pending insight decisions exist.
+- `decisions` group: `list` (default), `show <ID>`, `trail`, `note <ID> "text"` (research note), `like <ID>` (useful feedback), `dislike <ID>` (not useful feedback). `decide <ID> A|B|C` (top-level command).
+- `briefing` command: AI briefing for a source. `--pending`: process top unbriefed sources. `--model`: override.
 
 ### context.py (47 lines)
 `KlemmaContext` dataclass — single object per CLI command invocation.
@@ -76,7 +79,7 @@ Semantic section vocabulary — cross-project labels for dissertation/paper sect
 - `get_writing_order(sections, type_map, drafts_dir?)` — compute results-first writing order, detect existing drafts
 
 ### state.py (~965 lines)
-SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v10), auto-migrates via `_migrate_schema()`. All 70+ public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
+SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v14), auto-migrates via `_migrate_schema()`. All 70+ public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
 
 **Three-tier library (ADR-014):** Shared `library.db` replaces the old parent-child DB inheritance (#55). Papers and fragments are stored globally in `~/.klemma/library.db` via `LocalPaperStore` + `LocalUserLibrary`; per-project data (sections, gaps, plans) lives in `project/.klemma/data/project.db` via `LocalProjectStore`. StateManager is a pure facade over domain repositories with no cross-DB merging.
 
@@ -95,6 +98,7 @@ Tables:
 - `benchmark_runs` — benchmark run history (run_id, timestamp, metrics JSON, paper_citekey, git_commit, klemma_version, config_snapshot, duration)
 - `section_embeddings` — section centroid embeddings (section × embedding_model composite PK, BLOB float32, source_count, updated_at)
 - `reassign_skips` — persisted skip decisions (legacy, unused since batch --apply removed)
+- `decisions` — Guided Serendipity branching points (trigger_type, trigger_source, context_json, options_json, chosen_option, rationale, sections, influenced_by, `note` TEXT for research notes, `feedback` TEXT for like/dislike retrospective feedback)
 
 Key methods: `register_sources()`, `update_source_info()`, `get_by_section(section, section_type?)` (JOIN on `source_sections`), `get_coverage_stats()` (includes `section_types` dict), `get_gap_summary()`, `save_plan()`, `save_citation_links()`, `get_citation_graph()`, `save_embedding()`, `get_embeddings()`, `save_section_embedding()`, `get_section_embedding()`, `get_all_section_embeddings()`, `get_section_embedding_stats()`, `save_prune_verdicts()`, `get_prune_verdicts()`, `save_benchmark_run()`, `get_benchmark_runs()`, `compare_benchmark_runs()`, `sync_section_types(config)`.
 

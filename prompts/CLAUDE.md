@@ -17,6 +17,7 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 | `outline.md` | `skills/outliner.py` | Project outline generation |
 | `outline_incremental.md` | `skills/outliner.py` | Incremental outline update |
 | `section_draft.md` | `skills/drafter.py` | Section draft generation from research context |
+| `insight_curator.md` | `skills/insights.py` | LLM curation of raw insight candidates (multi-objective ranking) |
 | `analyst.md` | `evaluation/reconstruction.py` | Extract ground truth citation map from paper PDF |
 | `reconstruct.md` | `evaluation/reconstruction.py` | AI citation recommendation (blind to paper text) |
 
@@ -51,6 +52,9 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 
 ### section_draft.md
 `dissertation_context`, `dissertation_context_title`, `section`, `chapter_num`, `chapter_name`, `section_title` (from outline), `research_report` (full research briefing text), `existing_draft` (current section text — expand, don't rewrite), `fragments` (list of section-level fragment dicts — fallback/supplementary), `rag_fragments` (list of per-block RAG fragment groups — each with `block_order`, `block_title`, `fragments` with `source`, `text`, `type`, `similarity`; He et al. 2010 context-aware retrieval), `source_summaries` (list of source metadata dicts with citekey, quality, priority, summary), `language`, `prev_ending` (last paragraph of previous section — continuity bridge; empty string if first section), `outline_context` (dict: `description`, `scientific_contributions`, `current_chapter_desc`, `current_section_desc` — from KLEMMA.md frontmatter + `## Outline`; empty dict if no outline), `custom_prompt`
+
+### insight_curator.md
+`language`, `dissertation_context`, `candidates` (formatted text of raw candidates with index numbers), `candidate_count` (int), `feedback_summary` (formatted researcher preferences — liked/disliked types, recent notes)
 
 ### analyst.md
 `pdf_text`, `library_entries`, `paper_citekey`, `paper_title`
