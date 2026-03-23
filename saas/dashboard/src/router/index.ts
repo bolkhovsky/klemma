@@ -25,7 +25,40 @@ const router = createRouter({
       component: () => import('../views/GlobalLibraryView.vue'),
       meta: { requiresAuth: true },
     },
+    // Demo routes (no auth, for UX prototyping)
+    {
+      path: '/demo/feed',
+      name: 'demo-feed',
+      component: () => import('../views/FeedView.vue'),
+    },
+    {
+      path: '/demo/feed/:insightId',
+      name: 'demo-insight',
+      component: () => import('../views/InsightView.vue'),
+    },
+    {
+      path: '/demo/map',
+      name: 'demo-map',
+      component: () => import('../views/MapView.vue'),
+    },
+    {
+      path: '/demo/map/:sectionId/:blockId',
+      name: 'demo-block',
+      component: () => import('../views/BlockView.vue'),
+    },
     // Project-scoped routes
+    {
+      path: '/:projectId/feed',
+      name: 'feed',
+      component: () => import('../views/FeedView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/:projectId/feed/:insightId',
+      name: 'insight',
+      component: () => import('../views/InsightView.vue'),
+      meta: { requiresAuth: true },
+    },
     {
       path: '/:projectId/health',
       name: 'health',

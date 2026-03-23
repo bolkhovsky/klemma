@@ -16,7 +16,7 @@ function switchProject(projectId: string) {
   const currentParam = route.params.projectId as string | undefined
   if (currentParam) {
     // Navigate to same module within new project
-    const modules = ['health', 'outline', 'library', 'coverage', 'research']
+    const modules = ['feed', 'health', 'outline', 'library', 'coverage', 'research']
     const suffix = route.path.slice(currentParam.length + 2) // strip /projectId/
     const module = modules.find(m => suffix === m || suffix.startsWith(m + '/')) ?? 'health'
     router.push(`/${projectId}/${module}`)
@@ -193,8 +193,20 @@ async function createProject() {
       <!-- Divider -->
       <div class="mx-3 my-1 border-t border-[var(--color-rule)]"></div>
 
-      <!-- Project nav links: 3 items (Здоровье, Библиотека, Исследование) -->
+      <!-- Project nav links: 4 items (Открытия, Здоровье, Библиотека, Исследование) -->
       <nav v-if="route.params.projectId" class="flex flex-col gap-0.5 px-2">
+        <RouterLink
+          :to="`/${route.params.projectId}/feed`"
+          class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
+          :class="route.path === `/${route.params.projectId}/feed`
+            ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
+            : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-4 w-4 flex-shrink-0">
+            <path fill-rule="evenodd" d="M8 1a.75.75 0 0 1 .75.75V5h3.5a.75.75 0 0 1 .6 1.2L9.5 10.5h2.75a.75.75 0 0 1 .6 1.2l-4.5 6a.75.75 0 0 1-1.35-.45V13H4.25a.75.75 0 0 1-.6-1.2L7 7.5H4.25a.75.75 0 0 1-.6-1.2l3.75-5A.75.75 0 0 1 8 1Z" clip-rule="evenodd" />
+          </svg>
+          Открытия
+        </RouterLink>
         <RouterLink
           :to="`/${route.params.projectId}/health`"
           class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"

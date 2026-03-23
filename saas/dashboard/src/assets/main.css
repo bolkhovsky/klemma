@@ -15,6 +15,23 @@
   --color-accent-pale: #e0f4f4;
   --color-accent-deep: #065a5e;
 
+  /* Amber accent — warm ochre complement */
+  --color-amber: #a97624;
+  --color-amber-light: #c99a48;
+  --color-amber-pale: #faf0dc;
+  --color-amber-deep: #7d5518;
+
+  /* Violet accent — muted academic secondary */
+  --color-violet: #6b5f8a;
+  --color-violet-light: #8a7eb0;
+  --color-violet-pale: #ede8f5;
+  --color-violet-deep: #4e4468;
+
+  /* CTA red — warm crimson, not alarm-red */
+  --color-cta: #b83b3b;
+  --color-cta-light: #cf4f4f;
+  --color-cta-pale: #fce8e8;
+
   /* Status */
   --color-ok: #2d6a4f;
   --color-ok-bg: #d8f3dc;
@@ -113,6 +130,24 @@ body {
   background-size: 256px 256px;
 }
 
+/* Citekey links — clickable @source references */
+.citekey-link {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-accent);
+  background: var(--color-accent-pale);
+  padding: 1px 5px;
+  border-radius: 4px;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+  cursor: pointer;
+}
+
+.citekey-link:hover {
+  background: var(--color-accent);
+  color: white;
+}
+
 /* Subtle pulse for accent elements */
 @keyframes pulse-soft {
   0%, 100% { opacity: 1; }
@@ -143,7 +178,7 @@ body {
   background: linear-gradient(
     90deg,
     transparent 0%,
-    var(--color-accent-light) 50%,
+    var(--color-cta-light) 50%,
     transparent 100%
   );
   background-size: 200% 100%;
