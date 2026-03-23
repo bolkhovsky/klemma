@@ -54,12 +54,15 @@ def decisions_list(ctx, section, pending, show_all, limit):
 
     table = Table(show_header=True, header_style="bold")
     table.add_column("ID", style="dim", width=4)
+    table.add_column("Date", width=10)
     table.add_column("Type", width=9)
-    table.add_column("Summary", width=50)
+    table.add_column("Summary", width=40)
     table.add_column("Choice", width=8)
     table.add_column("Sections", width=12)
 
     for d in items:
+        date = d["created_at"][:10] if d.get("created_at") else ""
+
         # Build summary: for insights show first option title, for briefings show citekey
         summary = ""
         if d.get("trigger_source"):
@@ -68,8 +71,8 @@ def decisions_list(ctx, section, pending, show_all, limit):
             options = d.get("options_json", [])
             if isinstance(options, list) and options:
                 summary = options[0].get("title", "")
-        if len(summary) > 50:
-            summary = summary[:47] + "..."
+        if len(summary) > 40:
+            summary = summary[:37] + "..."
 
         choice = d.get("chosen_option")
         if choice is None:
@@ -84,6 +87,7 @@ def decisions_list(ctx, section, pending, show_all, limit):
 
         table.add_row(
             str(d["id"]),
+            date,
             d.get("trigger_type", ""),
             summary,
             choice_str,

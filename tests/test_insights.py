@@ -248,6 +248,27 @@ class TestSuppression:
         assert len(survivors) == 1
         assert survivors[0].section == "4.1"
 
+    def test_skipped_sections_not_suppressed(self, state):
+        """Skipped decisions do NOT suppress sections — only real choices do."""
+        # Create and skip an insight for section 3.1
+        did = state.decisions.save_decision(
+            trigger_type="insight",
+            context={"type": "blind_spot"},
+            options=[{"key": "A", "title": "Act"}],
+            sections=["3.1"],
+        )
+        state.decisions.skip_decision(did)
+
+        candidates = [
+            RawCandidate(
+                candidate_type="blind_spot",
+                section="3.1", sections=["3.1"],
+                source_count=1, average_count=10.0, severity="high",
+            ),
+        ]
+        survivors = suppress_candidates(candidates, state)
+        assert len(survivors) == 1  # NOT suppressed
+
     def test_preserves_valid_candidates(self, state):
         """Valid candidates pass through suppression."""
         candidates = [
