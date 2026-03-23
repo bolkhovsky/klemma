@@ -10,11 +10,12 @@ from ..cli import _get_context, _init_ai, console, main
 
 
 @main.group(invoke_without_command=True)
+@click.option("--pending", is_flag=True, help="Show only pending decisions")
 @click.pass_context
-def decisions(ctx):
+def decisions(ctx, pending):
     """View and manage research decisions (Guided Serendipity)."""
     if ctx.invoked_subcommand is None:
-        ctx.invoke(decisions_list)
+        ctx.invoke(decisions_list, pending=pending)
 
 
 @decisions.command("list")
@@ -55,15 +56,23 @@ def decisions_list(ctx, section, pending, show_all, limit):
     table.add_column("ID", style="dim", width=4)
     table.add_column("Date", width=10)
     table.add_column("Type", width=9)
-    table.add_column("Source", width=20)
+    table.add_column("Summary", width=40)
     table.add_column("Choice", width=8)
-    table.add_column("Sections", width=10)
+    table.add_column("Sections", width=12)
 
     for d in items:
         date = d["created_at"][:10] if d.get("created_at") else ""
-        source = d.get("trigger_source") or ""
-        if len(source) > 20:
-            source = source[:17] + "..."
+
+        # Build summary: for insights show first option title, for briefings show citekey
+        summary = ""
+        if d.get("trigger_source"):
+            summary = f"@{d['trigger_source']}"
+        else:
+            options = d.get("options_json", [])
+            if isinstance(options, list) and options:
+                summary = options[0].get("title", "")
+        if len(summary) > 40:
+            summary = summary[:37] + "..."
 
         choice = d.get("chosen_option")
         if choice is None:
@@ -80,7 +89,7 @@ def decisions_list(ctx, section, pending, show_all, limit):
             str(d["id"]),
             date,
             d.get("trigger_type", ""),
-            source,
+            summary,
             choice_str,
             sections_str,
         )
@@ -113,6 +122,21 @@ def decisions_show(ctx, decision_id):
         )
     )
 
+    # Curated insight fields (WHY / WHERE / tag)
+    context = d.get("context_json", {})
+    if isinstance(context, dict):
+        if context.get("title"):
+            console.print(f"\n[bold]{context['title']}[/bold]")
+        if context.get("explanation"):
+            console.print(f"\n[bold]Why:[/bold] {context['explanation']}")
+        if context.get("trajectory"):
+            console.print(f"[bold]Where this leads:[/bold] {context['trajectory']}")
+        if context.get("diversity_tag"):
+            tag = context["diversity_tag"]
+            tag_colors = {"methodology": "blue", "bridge": "magenta", "gap": "yellow", "anomaly": "red"}
+            tc = tag_colors.get(tag, "white")
+            console.print(f"[bold]Tag:[/bold] [{tc}]{tag}[/{tc}]")
+
     # Options
     options = d.get("options_json", [])
     if isinstance(options, list):
@@ -131,8 +155,16 @@ def decisions_show(ctx, decision_id):
     if d.get("rationale"):
         console.print(f"\n[bold]Rationale:[/bold] {d['rationale']}")
 
-    # Context summary
-    context = d.get("context_json", {})
+    # Research note
+    if d.get("note"):
+        console.print(f"\n[bold]Research note:[/bold] {d['note']}")
+
+    # Feedback
+    if d.get("feedback"):
+        fb_style = "[green]useful[/green]" if d["feedback"] == "like" else "[yellow]not useful[/yellow]"
+        console.print(f"\n[bold]Feedback:[/bold] {fb_style}")
+
+    # Context summary (briefing key_claims)
     if isinstance(context, dict) and context.get("key_claims"):
         console.print("\n[bold]Key claims:[/bold]")
         for claim in context["key_claims"]:
@@ -358,6 +390,260 @@ def _interactive_decide(state, decision_id, result):
         console.print(f"[green]✓ Decision #{decision_id} → {choice}[/green]")
     else:
         console.print(f"[red]Invalid choice. Saved as pending (decide later: klemma decide {decision_id} {keys_str})[/red]")
+
+
+@main.command()
+@click.option("--raw", is_flag=True, help="Show all raw candidates without LLM curation")
+@click.option("--model", default=None, help="Override AI model for curation")
+@click.pass_context
+def insights(ctx, raw, model):
+    """Analyze your library for blind spots and hidden connections.
+
+    Default: LLM-curated top 3-5 insights with trajectories.
+    Use --raw for unfiltered candidates (old behavior, no AI).
+
+    Pipeline: generate broadly → suppress heuristically → curate with LLM.
+    """
+    from ..skills.insights import (
+        generate_curated_insights,
+        generate_insights,
+        save_insights_as_decisions,
+    )
+
+    kctx = _get_context(ctx)
+    state = kctx.state
+    cfg = kctx.config
+
+    if raw:
+        # Raw mode — old behavior, no AI
+        console.print("[dim]Scanning library for patterns...[/dim]\n")
+        result = generate_insights(state, kctx.project_store)
+
+        if not result.blind_spots and not result.hidden_clusters:
+            console.print("[green]No issues found. Library looks balanced.[/green]")
+            return
+
+        _display_raw_insights(result)
+
+        decision_ids = save_insights_as_decisions(result, state)
+        if decision_ids:
+            console.print(
+                f"\n[yellow]{len(decision_ids)} insight(s) saved as pending decisions.[/yellow]"
+                f"\nReview: klemma decisions --pending"
+            )
+        return
+
+    # Curated mode
+    if model:
+        cfg.ai.model = model
+
+    ai = None
+    try:
+        ai = _init_ai(cfg)
+    except Exception:
+        pass
+
+    console.print("[dim]Scanning library for patterns...[/dim]\n")
+    result = generate_curated_insights(
+        state,
+        config=cfg,
+        ai=ai,
+        project_store=kctx.project_store,
+        dissertation_context=kctx.dissertation_context,
+        klemma_home=kctx.klemma_home,
+        project_root=kctx.project_root,
+        project_chain=getattr(kctx, "project_chain", []),
+        language=getattr(cfg.dissertation, "language", "Russian") if cfg.dissertation else "Russian",
+        raw_mode=False,
+    )
+
+    if result.blocked:
+        console.print(
+            f"[yellow]{result.pending_count} pending insight(s) — "
+            f"resolve them before generating new ones.[/yellow]"
+            f"\nReview: klemma decisions --pending"
+        )
+        return
+
+    if result.raw_count == 0:
+        console.print("[green]No issues found. Library looks balanced.[/green]")
+        return
+
+    if not result.insights:
+        # No curated insights (maybe no AI or all suppressed)
+        console.print(
+            f"[dim]Found {result.raw_count} raw candidates, "
+            f"suppressed {result.suppressed_count}.[/dim]"
+        )
+        if result.curated_count > 0:
+            console.print(
+                f"\n[yellow]{result.curated_count} insight(s) saved as pending decisions.[/yellow]"
+                f"\nReview: klemma decisions --pending"
+            )
+        return
+
+    # Display curated insights as Rich panels
+    console.print(
+        f"[bold]Curated Insights[/bold] — {len(result.insights)} of "
+        f"{result.raw_count} candidates "
+        f"[dim]({result.suppressed_count} suppressed)[/dim]\n"
+    )
+
+    for i, insight in enumerate(result.insights):
+        tag_colors = {
+            "methodology": "blue",
+            "bridge": "magenta",
+            "gap": "yellow",
+            "anomaly": "red",
+        }
+        tag_color = tag_colors.get(insight.diversity_tag, "white")
+
+        # Get the real decision ID
+        did = result.decision_ids[i] if i < len(result.decision_ids) else "?"
+
+        body_lines = []
+        if insight.explanation:
+            body_lines.append(f"[bold]Why:[/bold] {insight.explanation}")
+        if insight.trajectory:
+            body_lines.append(f"[bold]Where this leads:[/bold] {insight.trajectory}")
+
+        sections_str = ", ".join(insight.sections) if insight.sections else ""
+        if sections_str:
+            body_lines.append(f"[dim]Sections: {sections_str}[/dim]")
+
+        # Options
+        for opt in insight.options:
+            body_lines.append(
+                f"  [{opt['key']}] [bold]{opt['title']}[/bold] — {opt.get('description', '')}"
+            )
+
+        body_lines.append(f"\n[dim]klemma decide {did} A|B|C[/dim]")
+
+        panel_content = "\n".join(body_lines)
+        console.print(Panel(
+            panel_content,
+            title=f"Decision #{did} — {insight.title}",
+            subtitle=f"[{tag_color}]{insight.diversity_tag}[/{tag_color}]",
+            border_style=tag_color,
+        ))
+
+    if result.curated_count > 0:
+        console.print(
+            f"\n[yellow]{result.curated_count} insight(s) saved as pending decisions.[/yellow]"
+            f"\nDecide: klemma decide <ID> A|B|C"
+        )
+
+
+def _display_raw_insights(result):
+    """Display raw insights (old behavior for --raw mode)."""
+    if result.blind_spots:
+        console.print(f"[bold]Blind Spots[/bold] ({len(result.blind_spots)} sections)\n")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Section", width=10)
+        table.add_column("Sources", width=8, justify="right")
+        table.add_column("Average", width=8, justify="right")
+        table.add_column("Gaps", width=6, justify="right")
+        table.add_column("Severity", width=8)
+
+        for spot in result.blind_spots:
+            sev_style = {"high": "[red]high[/red]", "medium": "[yellow]medium[/yellow]"}.get(
+                spot.severity, spot.severity
+            )
+            table.add_row(
+                spot.section,
+                str(spot.source_count),
+                str(spot.average_count),
+                str(spot.gap_count),
+                sev_style,
+            )
+        console.print(table)
+
+    if result.hidden_clusters:
+        console.print(f"\n[bold]Hidden Clusters[/bold] ({len(result.hidden_clusters)} pairs)\n")
+        for c in result.hidden_clusters:
+            console.print(
+                f"  @{c.citekey_a} ({c.section_a}) ↔ @{c.citekey_b} ({c.section_b})"
+                f"  [dim]similarity: {c.similarity}[/dim]"
+            )
+            if c.title_a and c.title_b:
+                console.print(f"    {c.title_a[:60]}")
+                console.print(f"    {c.title_b[:60]}")
+            console.print()
+
+
+@decisions.command("note")
+@click.argument("decision_id", type=int)
+@click.argument("text", type=str)
+@click.pass_context
+def decisions_note(ctx, decision_id, text):
+    """Add a research note to a decision.
+
+    Captures the researcher's thinking — ideas, experiments, hypotheses
+    that arise from an insight. These notes feed into future briefings
+    and insights.
+
+    Usage:
+      klemma decisions note 5 "сопоставить IIEE с SPS, эксперимент: 5 кейсов"
+    """
+    kctx = _get_context(ctx)
+    repo = kctx.state.decisions
+
+    d = repo.get_decision(decision_id)
+    if not d:
+        console.print(f"[red]Decision #{decision_id} not found[/red]")
+        return
+
+    if repo.add_note(decision_id, text):
+        console.print(f"[green]✓ Note added to decision #{decision_id}[/green]")
+        console.print(f"  [dim]{text}[/dim]")
+    else:
+        console.print(f"[red]Failed to add note to decision #{decision_id}[/red]")
+
+
+@decisions.command("like")
+@click.argument("decision_id", type=int)
+@click.pass_context
+def decisions_like(ctx, decision_id):
+    """Mark an insight as useful (retrospective feedback).
+
+    Usage:
+      klemma decisions like 5
+    """
+    kctx = _get_context(ctx)
+    repo = kctx.state.decisions
+
+    d = repo.get_decision(decision_id)
+    if not d:
+        console.print(f"[red]Decision #{decision_id} not found[/red]")
+        return
+
+    if repo.set_feedback(decision_id, "like"):
+        console.print(f"[green]✓ Decision #{decision_id} marked as useful[/green]")
+    else:
+        console.print(f"[red]Failed to update decision #{decision_id}[/red]")
+
+
+@decisions.command("dislike")
+@click.argument("decision_id", type=int)
+@click.pass_context
+def decisions_dislike(ctx, decision_id):
+    """Mark an insight as not useful (retrospective feedback).
+
+    Usage:
+      klemma decisions dislike 5
+    """
+    kctx = _get_context(ctx)
+    repo = kctx.state.decisions
+
+    d = repo.get_decision(decision_id)
+    if not d:
+        console.print(f"[red]Decision #{decision_id} not found[/red]")
+        return
+
+    if repo.set_feedback(decision_id, "dislike"):
+        console.print(f"[yellow]✗ Decision #{decision_id} marked as not useful[/yellow]")
+    else:
+        console.print(f"[red]Failed to update decision #{decision_id}[/red]")
 
 
 @decisions.command("trail")

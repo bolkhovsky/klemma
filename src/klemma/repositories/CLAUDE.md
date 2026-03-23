@@ -17,7 +17,8 @@ StateManager (facade)
     ├── CitationsRepository   — citation links, graph stats, co-citation, author groups
     ├── PlansRepository       — daily plans, reading queue, writing streak
     ├── PruneRepository       — prune verdicts, protection logic
-    └── BenchmarkRepository   — benchmark run history, comparison
+    ├── BenchmarkRepository   — benchmark run history, comparison
+    └── DecisionsRepository   — Guided Serendipity decisions, notes, feedback
 ```
 
 All repos receive `StateManager._conn` as their connection factory via `BaseRepository.__init__`.
@@ -95,6 +96,19 @@ Benchmark run history persistence and comparison.
 - `compare_runs(id_a, id_b)` — delta for shared summary metric keys
 - `get_benchmarked_citekeys()` — set of all benchmarked paper citekeys
 - `compute_dataset_hash(path)` — SHA256 of dataset file for reproducibility
+
+### decisions.py (~260 lines)
+Guided Serendipity decisions: branching points, research notes, retrospective feedback.
+- `save_decision()` — create a new branching point (trigger_type, context, options, sections)
+- `decide()` — record researcher's choice (chosen_option, rationale)
+- `skip_decision()` — mark as skipped
+- `get_decision()`, `get_pending_decisions()`, `get_decisions()` — query with filters
+- `get_trail()` — chronological decided-only for graph construction
+- `get_decisions_for_context()` — compact summaries for prompt injection
+- `count_decisions()` — counts by status (total, pending, decided, skipped)
+- `add_note(decision_id, note)` — add/update research note on a decision
+- `set_feedback(decision_id, feedback)` — set 'like' or 'dislike' retrospective feedback
+- `get_feedback_summary()` — aggregate feedback for prompt injection (liked_types, disliked_types, recent_notes)
 
 ## Cross-repo dependencies
 

@@ -13,7 +13,7 @@ def state(tmp_path):
 
 
 class TestDecisionsMigration:
-    """Verify v13 migration creates the decisions table."""
+    """Verify v14 migration creates the decisions table with note/feedback."""
 
     def test_decisions_table_exists(self, state):
         with state._conn() as conn:
@@ -25,10 +25,10 @@ class TestDecisionsMigration:
             }
             assert "decisions" in tables
 
-    def test_db_version_is_13(self, state):
+    def test_db_version_is_14(self, state):
         with state._conn() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            assert version == 13
+            assert version == 14
 
     def test_decisions_columns(self, state):
         with state._conn() as conn:
@@ -47,6 +47,8 @@ class TestDecisionsMigration:
                 "rationale",
                 "sections",
                 "influenced_by",
+                "note",
+                "feedback",
             }
             assert expected == cols
 
@@ -274,3 +276,119 @@ class TestDecisionsRepository:
     def test_nonexistent_decision(self, state):
         assert state.decisions.get_decision(999) is None
         assert state.decisions.decide(999, "A") is False
+
+    def test_add_note(self, state):
+        decision_id = state.decisions.save_decision(
+            trigger_type="insight",
+            context={"type": "blind_spot"},
+            options=[{"key": "A", "title": "Act"}],
+        )
+        result = state.decisions.add_note(decision_id, "сопоставить IIEE с SPS")
+        assert result is True
+
+        d = state.decisions.get_decision(decision_id)
+        assert d["note"] == "сопоставить IIEE с SPS"
+
+    def test_add_note_overwrites(self, state):
+        decision_id = state.decisions.save_decision(
+            trigger_type="insight", context={}, options=[]
+        )
+        state.decisions.add_note(decision_id, "first note")
+        state.decisions.add_note(decision_id, "updated note")
+
+        d = state.decisions.get_decision(decision_id)
+        assert d["note"] == "updated note"
+
+    def test_add_note_nonexistent(self, state):
+        result = state.decisions.add_note(999, "note")
+        assert result is False
+
+    def test_set_feedback_like(self, state):
+        decision_id = state.decisions.save_decision(
+            trigger_type="insight",
+            context={"type": "hidden_cluster"},
+            options=[],
+        )
+        result = state.decisions.set_feedback(decision_id, "like")
+        assert result is True
+
+        d = state.decisions.get_decision(decision_id)
+        assert d["feedback"] == "like"
+
+    def test_set_feedback_dislike(self, state):
+        decision_id = state.decisions.save_decision(
+            trigger_type="insight", context={}, options=[]
+        )
+        result = state.decisions.set_feedback(decision_id, "dislike")
+        assert result is True
+
+        d = state.decisions.get_decision(decision_id)
+        assert d["feedback"] == "dislike"
+
+    def test_set_feedback_invalid(self, state):
+        decision_id = state.decisions.save_decision(
+            trigger_type="insight", context={}, options=[]
+        )
+        with pytest.raises(ValueError, match="feedback must be"):
+            state.decisions.set_feedback(decision_id, "neutral")
+
+    def test_set_feedback_nonexistent(self, state):
+        result = state.decisions.set_feedback(999, "like")
+        assert result is False
+
+    def test_get_feedback_summary_empty(self, state):
+        summary = state.decisions.get_feedback_summary()
+        assert summary["total_liked"] == 0
+        assert summary["total_disliked"] == 0
+        assert summary["recent_notes"] == []
+
+    def test_get_feedback_summary(self, state):
+        # Create insight decisions with different types and feedback
+        id1 = state.decisions.save_decision(
+            trigger_type="insight",
+            context={"type": "blind_spot"},
+            options=[],
+        )
+        id2 = state.decisions.save_decision(
+            trigger_type="insight",
+            context={"type": "blind_spot"},
+            options=[],
+        )
+        id3 = state.decisions.save_decision(
+            trigger_type="insight",
+            context={"type": "hidden_cluster"},
+            options=[],
+        )
+        id4 = state.decisions.save_decision(
+            trigger_type="insight",
+            context={"type": "hidden_cluster"},
+            options=[],
+        )
+
+        state.decisions.set_feedback(id1, "like")
+        state.decisions.set_feedback(id2, "like")
+        state.decisions.set_feedback(id3, "dislike")
+        state.decisions.set_feedback(id4, "like")
+
+        # Add a note
+        state.decisions.add_note(id1, "interesting IIEE pattern")
+
+        summary = state.decisions.get_feedback_summary()
+        assert summary["total_liked"] == 3
+        assert summary["total_disliked"] == 1
+        assert summary["liked_types"]["blind_spot"] == 2
+        assert summary["liked_types"]["hidden_cluster"] == 1
+        assert summary["disliked_types"]["hidden_cluster"] == 1
+        assert "interesting IIEE pattern" in summary["recent_notes"]
+
+    def test_feedback_summary_ignores_non_insight(self, state):
+        """Feedback summary only counts insight decisions, not briefings."""
+        id1 = state.decisions.save_decision(
+            trigger_type="briefing",
+            context={"type": "briefing_ctx"},
+            options=[],
+        )
+        state.decisions.set_feedback(id1, "like")
+
+        summary = state.decisions.get_feedback_summary()
+        assert summary["total_liked"] == 0

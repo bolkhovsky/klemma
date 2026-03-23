@@ -183,6 +183,83 @@ class DecisionsRepository(BaseRepository):
             ).fetchone()
             return dict(row)
 
+    def add_note(self, decision_id: int, note: str) -> bool:
+        """Add or update a research note on a decision.
+
+        Returns True if the decision was updated.
+        """
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE decisions SET note = ? WHERE id = ?",
+                (note, decision_id),
+            )
+            return cur.rowcount > 0
+
+    def set_feedback(self, decision_id: int, feedback: str) -> bool:
+        """Set retrospective feedback ('like' or 'dislike') on a decision.
+
+        Returns True if the decision was updated.
+        """
+        if feedback not in ("like", "dislike"):
+            raise ValueError(f"feedback must be 'like' or 'dislike', got '{feedback}'")
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE decisions SET feedback = ? WHERE id = ?",
+                (feedback, decision_id),
+            )
+            return cur.rowcount > 0
+
+    def get_feedback_summary(self) -> dict:
+        """Aggregate researcher feedback for prompt injection.
+
+        Returns:
+            {
+                "liked_types": {"blind_spot": 3, "hidden_cluster": 1},
+                "disliked_types": {"blind_spot": 0, "hidden_cluster": 2},
+                "recent_notes": ["note1", "note2", ...],
+                "total_liked": 4,
+                "total_disliked": 2,
+            }
+        """
+        with self._conn() as conn:
+            # Count likes/dislikes by insight context type
+            liked_types: dict[str, int] = {}
+            disliked_types: dict[str, int] = {}
+
+            rows = conn.execute(
+                """SELECT context_json, feedback FROM decisions
+                   WHERE feedback IS NOT NULL AND trigger_type = 'insight'"""
+            ).fetchall()
+            for row in rows:
+                ctx_raw = row["context_json"]
+                try:
+                    ctx = json.loads(ctx_raw) if isinstance(ctx_raw, str) else ctx_raw
+                except (json.JSONDecodeError, TypeError):
+                    ctx = {}
+                itype = ctx.get("type", "unknown") if isinstance(ctx, dict) else "unknown"
+                fb = row["feedback"]
+                if fb == "like":
+                    liked_types[itype] = liked_types.get(itype, 0) + 1
+                elif fb == "dislike":
+                    disliked_types[itype] = disliked_types.get(itype, 0) + 1
+
+            # Recent notes (last 10)
+            note_rows = conn.execute(
+                """SELECT note FROM decisions
+                   WHERE note IS NOT NULL AND note != ''
+                   ORDER BY COALESCE(decided_at, created_at) DESC
+                   LIMIT 10"""
+            ).fetchall()
+            recent_notes = [r["note"] for r in note_rows]
+
+            return {
+                "liked_types": liked_types,
+                "disliked_types": disliked_types,
+                "recent_notes": recent_notes,
+                "total_liked": sum(liked_types.values()),
+                "total_disliked": sum(disliked_types.values()),
+            }
+
     @staticmethod
     def _row_to_dict(row) -> dict:
         """Convert a sqlite3.Row to a dict with parsed JSON fields."""
