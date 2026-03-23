@@ -76,6 +76,45 @@ klemma ask "Какие методы валидации прогнозов лед
 # 8. Структура проекта
 klemma outline                                 # AI-генерация outline
 klemma outline -p "Фокус на методологии"       # с директивой
+
+# 9. Guided Serendipity — исследовательские развилки
+klemma briefing goessling2016                  # анализ нового источника → развилки
+klemma insights                                # слепые пятна + скрытые кластеры
+klemma decisions trail                         # тропинка принятых решений
+```
+
+## Guided Serendipity
+
+Методология AI-ассистированного исследования: система обнаруживает неожиданные связи в библиотеке и предлагает развилки, на которых исследователь принимает осознанные решения. Накопление решений формирует уникальную исследовательскую тропинку (Research Trail).
+
+### `klemma briefing <citekey>`
+Анализ нового источника: ключевые тезисы, связи с библиотекой, ниши, 2-3 развилки.
+
+```bash
+klemma briefing goessling2016              # briefing для одного источника
+klemma briefing --pending                  # top-10 необработанных (по релевантности)
+klemma briefing --pending -n 5             # top-5
+```
+
+### `klemma insights`
+Анализ библиотеки без AI — чистый SQL + embeddings:
+
+- **Слепые пятна** — разделы с количеством источников <50% от среднего
+- **Скрытые кластеры** — семантически похожие источники из разных разделов
+
+```bash
+klemma insights                            # таблица + сохранение как decisions
+```
+
+### `klemma decisions`
+Просмотр и управление исследовательскими решениями:
+
+```bash
+klemma decisions                           # список всех решений
+klemma decisions --pending                 # только ожидающие ответа
+klemma decisions show 5                    # детали решения #5
+klemma decisions trail                     # хронологическая тропинка
+klemma decide 5 B --reason "Ближе к IIEE" # выбрать вариант B
 ```
 
 ## GitHub PR Auto-Checking (Codex)
@@ -89,7 +128,7 @@ klemma outline -p "Фокус на методологии"       # с дирек
 
 Логика: при падении workflow `CI` Codex пытается сделать минимальный фикс, повторно запускает `ruff` и `pytest`, и открывает PR с исправлением.
 
-## Команды (17)
+## Команды (20)
 
 ### `klemma init`
 Инициализация проекта в текущей директории. Создаёт `.klemma/` (config, tags, DB) и `KLEMMA.md` (контекст для AI). Интерактивный мастер обнаруживает Obsidian vault и Zotero автоматически.
@@ -422,12 +461,13 @@ klemma (CLI, v0.4.1)
 ├── Zotero storage ─── PDF файлы
 ├── PyMuPDF ────────── извлечение текста из PDF
 ├── Config ────────── ~/.klemmarc.yaml → ~/.klemma/ → .klemma/ (3-level merge)
-└── SQLite (schema v9)
+└── SQLite (schema v13)
     ├── sources ─────────── записи Zotero (+ embedding BLOB, embedding_model)
     ├── source_sections ─── source × section (multi-section)
     ├── fragments ───────── фрагменты для цитирования (+ citation_intent, embedding, embedding_model)
     ├── reference_gaps ──── пробелы из библиографий (+ citation_intent, intent scoring)
     ├── citation_links ──── citation graph (source → target, intent, in_library)
+    ├── decisions ───────── Guided Serendipity: развилки, выборы, Research Trail
     ├── daily_plans ─────── сгенерированные планы
     ├── reading_queue ───── очередь чтения
     ├── prune_verdicts ──── результаты аудита (drop/maybe)

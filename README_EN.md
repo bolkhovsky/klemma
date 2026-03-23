@@ -77,9 +77,48 @@ klemma ask "What are the main methods for validating ice forecasts?"
 # 8. Project structure
 klemma outline                                 # AI-generated outline
 klemma outline -p "Focus on methodology"       # with a directive
+
+# 9. Guided Serendipity — research branching points
+klemma briefing goessling2016                  # analyze new source → forks
+klemma insights                                # blind spots + hidden clusters
+klemma decisions trail                         # trail of research decisions
 ```
 
-## Commands (16)
+## Guided Serendipity
+
+AI-assisted research methodology where the system discovers unexpected connections in your library and presents explicit branching points (forks) for you to choose from. Your accumulated choices form a unique Research Trail.
+
+### `klemma briefing <citekey>`
+Analyze a new source: key claims, library connections, niches, 2-3 fork options.
+
+```bash
+klemma briefing goessling2016              # briefing for one source
+klemma briefing --pending                  # top-10 unbriefed (by relevance)
+klemma briefing --pending -n 5             # top-5
+```
+
+### `klemma insights`
+Library analysis without AI — pure SQL + embeddings:
+
+- **Blind spots** — sections with source count <50% of average
+- **Hidden clusters** — semantically similar sources from different sections
+
+```bash
+klemma insights                            # table + save as decisions
+```
+
+### `klemma decisions`
+View and manage research decisions:
+
+```bash
+klemma decisions                           # list all decisions
+klemma decisions --pending                 # only awaiting response
+klemma decisions show 5                    # details of decision #5
+klemma decisions trail                     # chronological trail
+klemma decide 5 B --reason "Closer to IIEE"  # choose option B
+```
+
+## Commands (20)
 
 ### `klemma init`
 Initialize a project in the current directory. Creates `.klemma/` (config, tags, DB) and `KLEMMA.md` (AI context). The interactive wizard auto-discovers Obsidian vaults and Zotero exports.

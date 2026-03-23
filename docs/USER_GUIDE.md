@@ -636,6 +636,131 @@ Intent Benchmark
 
 ---
 
+## 5.x Guided Serendipity — исследовательские развилки
+
+Guided Serendipity — методология AI-ассистированного исследования, в которой система обнаруживает неожиданные связи в вашей библиотеке и предлагает явные точки ветвления (развилки). Вы делаете осознанный выбор на каждой развилке, и ваши решения накапливаются в уникальную исследовательскую тропинку (Research Trail).
+
+### Briefing — анализ нового источника
+
+После добавления нового источника запустите briefing — система проанализирует его тезисы, найдёт связи с вашей библиотекой и предложит 2-3 направления:
+
+```bash
+klemma briefing goessling2016
+```
+
+Вывод:
+```
+Briefing: @goessling2016
+Analyzing source, finding connections...
+
+Key claims:
+  • IIEE разделяет ошибку прогноза на 3 компонента (miss, false alarm, displacement)
+  • 40% ошибки в сезонных прогнозах — displacement, не miss/FA
+  • Метрика применима к любому пространственному бинарному полю
+
+Connections:
+  extends: @dukhovskoy2015 — Оба используют spatial decomposition
+  contradicts: @author2020 — Разные оценки вклада displacement error
+
+Niches/gaps:
+  → Нет анализа displacement error для Арктики отдельно
+
+── Fork ──
+  [A] Взять IIEE как одну метрику в обзоре (sections: 3.2)
+      Включить в сравнительную таблицу наряду с SPS и bias
+  [B] Сделать displacement error центральной темой (sections: 3.2, 4.1)
+      Посвятить отдельный раздел компонентному анализу ошибок
+  [C] Предложить модификацию IIEE для Арктики (sections: 3.2)
+      Адаптировать метрику для специфики ледовой кромки
+
+Choose direction [A/B/C/skip]: B
+Why? (optional): Displacement error — ниша, не покрытая в литературе
+✓ Decision #1 → B
+```
+
+Для пакетной обработки:
+
+```bash
+klemma briefing --pending           # top-10 необработанных источников
+klemma briefing --pending -n 3      # только top-3
+```
+
+### Insights — анализ библиотеки
+
+Периодически запускайте `klemma insights` для обнаружения паттернов:
+
+```bash
+klemma insights
+```
+
+Вывод:
+```
+Blind Spots (2 sections)
+
+┌──────────┬─────────┬─────────┬──────┬──────────┐
+│ Section  │ Sources │ Average │ Gaps │ Severity │
+├──────────┼─────────┼─────────┼──────┼──────────┤
+│ 3.1      │       1 │     5.2 │    3 │ high     │
+│ 4.1      │       2 │     5.2 │    1 │ medium   │
+└──────────┴─────────┴─────────┴──────┴──────────┘
+
+Hidden Clusters (1 pairs)
+
+  @goessling2016 (3.2) ↔ @dukhovskoy2015 (4.1)  similarity: 0.89
+    Evaluating sea ice forecasts with IIEE
+    Arctic Ocean circulation analysis
+
+2 insight(s) saved as pending decisions.
+Review: klemma decisions --pending
+```
+
+**Слепые пятна** — разделы с количеством источников менее 50% от среднего. Высокая severity (<25%) означает, что раздел практически не покрыт.
+
+**Скрытые кластеры** — пары источников из разных разделов, которые семантически очень близки. Это потенциальные undiscovered connections — связи, которые вы ещё не осознали.
+
+Оба типа insights сохраняются как pending decisions — вы решаете, что с ними делать.
+
+### Decisions — управление решениями
+
+Все развилки из briefings и insights сохраняются в Branch Store:
+
+```bash
+klemma decisions                   # список всех решений
+klemma decisions --pending         # только ожидающие
+klemma decisions show 3            # детали решения #3
+klemma decide 3 A                  # выбрать вариант A
+klemma decide 3 A -r "Ближе к теме"  # с обоснованием
+```
+
+### Research Trail — тропинка решений
+
+Просмотр хронологической цепочки всех принятых решений:
+
+```bash
+klemma decisions trail
+```
+
+```
+Research Trail — 4 decisions
+
+  ├─ [2026-03-22] briefing: @goessling2016 → Focus on displacement error
+  │  Displacement error — ниша, не покрытая в литературе
+  ├─ [2026-03-22] insight: library → Search for sources
+  ├─ [2026-03-23] briefing: @dukhovskoy2015 → Combine with IIEE
+  └─ [2026-03-23] briefing: @author2022 → Arctic-specific methodology
+```
+
+Тропинка показывает, как ваше исследование развивалось через осознанные решения, а не случайный дрифт.
+
+### Рекомендуемый workflow с Guided Serendipity
+
+1. **Загрузили новый PDF** → `klemma acquire <url>` → `klemma briefing <citekey>`
+2. **Выбрали развилку** → решение сохранено, влияет на следующие briefings
+3. **Периодически** → `klemma insights` (раз в неделю или после 5+ новых источников)
+4. **Перед написанием** → `klemma decisions trail` — вспомнить свои решения
+
+---
+
 ## 6. Рекомендуемый ежедневный workflow
 
 ### Утро
