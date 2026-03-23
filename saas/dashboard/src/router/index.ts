@@ -48,6 +48,18 @@ const router = createRouter({
     },
     // Project-scoped routes
     {
+      path: '/:projectId/map',
+      name: 'map',
+      component: () => import('../views/MapView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/:projectId/map/:sectionId/:blockId',
+      name: 'block',
+      component: () => import('../views/BlockView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/:projectId/feed',
       name: 'feed',
       component: () => import('../views/FeedView.vue'),
