@@ -10,11 +10,12 @@ from ..cli import _get_context, _init_ai, console, main
 
 
 @main.group(invoke_without_command=True)
+@click.option("--pending", is_flag=True, help="Show only pending decisions")
 @click.pass_context
-def decisions(ctx):
+def decisions(ctx, pending):
     """View and manage research decisions (Guided Serendipity)."""
     if ctx.invoked_subcommand is None:
-        ctx.invoke(decisions_list)
+        ctx.invoke(decisions_list, pending=pending)
 
 
 @decisions.command("list")
