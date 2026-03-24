@@ -3,40 +3,127 @@ import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/AppLayout.vue'
 import { formatMarkdown } from '@/utils/markdown'
+import { projects as apiProjects, library as apiLibrary, userProjects, process as apiProcess, write as apiWrite, blocks as apiBlocks } from '@/api/client'
 
 const route = useRoute()
 const router = useRouter()
 
-// ── Mock data ────────────────────────────────────────────────────────────
+// ── Route params ─────────────────────────────────────────────────────────
+const projectId = computed(() => route.params.projectId as string | undefined)
+const sectionId = computed(() => (route.params.sectionId as string) || '1.1')
+const blockIdParam = computed(() => (route.params.blockId as string) || 'b1')
+const isDemoMode = computed(() => !route.params.projectId)
 
-const section = ref({
-  id: '1.1',
-  name: 'Потребности пользователей НГГМИ',
-  thesis: 'Рост грузопотока по СМП создаёт потребность в оперативных ледовых прогнозах',
-})
+// ── Fragment type ─────────────────────────────────────────────────────────
+interface Fragment {
+  source: string
+  sourceTitle: string
+  year: number | null
+  text: string
+  intent: string
+  page: number | null
+}
+
+// ── Section / block / chapter state ──────────────────────────────────────
+const section = ref({ id: '1.1', name: '', thesis: '' })
 
 const block = ref({
-  id: 'b1.1.1',
-  title: 'Стратегическое значение СМП и рост грузопотока',
+  id: 'b1',
+  title: '',
   wordTarget: 350,
-  status: 'draft' as 'draft' | 'outlined' | 'empty',
-  draftText: 'Северный морской путь (СМП) является исторически сложившейся транспортной артерией России в Арктике. Транспортная стратегия РФ до 2035 года определяет СМП как «единую национальную транспортную коммуникацию», а план развития инфраструктуры предусматривает увеличение грузопотока до 80 млн тонн к 2024 году и 150 млн тонн к 2030 году.',
+  status: 'empty' as 'draft' | 'outlined' | 'empty',
+  draftText: '',
   generatedText: '',
-  fragments: [
-    { source: 'zhuravelSevernyyMorckoyPut2020', sourceTitle: 'Северный морской путь: проблемы, возможности, решения', year: 2020, text: 'Грузопоток по СМП вырос с 7,5 млн тонн в 2016 г. до 34,9 млн тонн в 2022 г., что связано с развитием проектов «Ямал СПГ» и «Арктик СПГ-2».', intent: 'background', page: 12 },
-    { source: 'kuvatovPotencialSevernogoMorskogo2014', sourceTitle: 'Потенциал Северного морского пути', year: 2014, text: 'Экономический потенциал СМП определяется сокращением длины маршрута из Европы в Восточную Азию на 30-40% по сравнению с маршрутом через Суэцкий канал.', intent: 'background', page: 45 },
-    { source: 'Angudovich2025', sourceTitle: 'Перспективы развития арктического судоходства', year: 2025, text: 'Несмотря на рост грузоперевозок, навигационные риски остаются основным сдерживающим фактором: ледовые условия в переходные сезоны создают наибольшую неопределённость для планирования маршрутов.', intent: 'background', page: 3 },
-    { source: 'olhovikINFORMATIONMODELMARITIME2018', sourceTitle: 'Information Model of Maritime Activities in the Arctic Zone', year: 2018, text: 'The non-fixed nature of the Northern Sea Route necessitates real-time monitoring of ice conditions — unlike fixed waterways, vessels must continuously adapt routes based on current ice situation.', intent: 'method', page: 8 },
-    { source: 'RasporyazheniePravitelstvaRossiyskoy', sourceTitle: 'Транспортная стратегия РФ до 2035 года', year: 2021, text: 'СМП определяется как «единая национальная транспортная коммуникация в Арктике»; предусматривается круглогодичная навигация к 2030 году.', intent: 'background', page: null },
-  ],
+  fragments: [] as Fragment[],
   prevBlock: null as { id: string; title: string } | null,
-  nextBlock: { id: 'b1.1.2', title: 'Потребности навигации в ледовой информации' },
+  nextBlock: null as { id: string; title: string } | null,
 })
 
-const chapter = ref({
-  number: 1,
-  thesis: 'Существующие системы НГО не обеспечивают достаточную точность прогнозов',
-})
+const chapter = ref({ number: 1, thesis: '' })
+
+// ── Loading state ─────────────────────────────────────────────────────────
+const loading = ref(false)
+const loadError = ref('')
+
+// ── Static mock data (demo mode only) ─────────────────────────────────────
+const MOCK_FRAGMENTS: Fragment[] = [
+  { source: 'zhuravelSevernyyMorckoyPut2020', sourceTitle: 'Северный морской путь: проблемы, возможности, решения', year: 2020, text: 'Грузопоток по СМП вырос с 7,5 млн тонн в 2016 г. до 34,9 млн тонн в 2022 г., что связано с развитием проектов «Ямал СПГ» и «Арктик СПГ-2».', intent: 'background', page: 12 },
+  { source: 'kuvatovPotencialSevernogoMorskogo2014', sourceTitle: 'Потенциал Северного морского пути', year: 2014, text: 'Экономический потенциал СМП определяется сокращением длины маршрута из Европы в Восточную Азию на 30-40% по сравнению с маршрутом через Суэцкий канал.', intent: 'background', page: 45 },
+  { source: 'Angudovich2025', sourceTitle: 'Перспективы развития арктического судоходства', year: 2025, text: 'Несмотря на рост грузоперевозок, навигационные риски остаются основным сдерживающим фактором: ледовые условия в переходные сезоны создают наибольшую неопределённость для планирования маршрутов.', intent: 'background', page: 3 },
+  { source: 'olhovikINFORMATIONMODELMARITIME2018', sourceTitle: 'Information Model of Maritime Activities in the Arctic Zone', year: 2018, text: 'The non-fixed nature of the Northern Sea Route necessitates real-time monitoring of ice conditions.', intent: 'method', page: 8 },
+  { source: 'RasporyazheniePravitelstvaRossiyskoy', sourceTitle: 'Транспортная стратегия РФ до 2035 года', year: 2021, text: 'СМП определяется как «единая национальная транспортная коммуникация в Арктике»; предусматривается круглогодичная навигация к 2030 году.', intent: 'background', page: null },
+]
+
+const MOCK_LIBRARY: Fragment[] = [
+  { source: 'alekseevaVliyanieIntensivnogoSudohodstva2024', sourceTitle: 'Влияние интенсивного судоходства на экологию АЗРФ', year: 2024, text: 'Фактический грузопоток по СМП в 2023 году составил 36,2 млн тонн, увеличившись на 3,7% по сравнению с 2022 годом.', intent: 'background', page: 7 },
+  { source: 'butakovRezultatyPrognozaGidrometeorologicheskih2025', sourceTitle: 'Результаты прогноза гидрометеорологических условий', year: 2025, text: 'Прогноз грузопотока по СМП на 2025 год — свыше 40 млн тонн при условии ввода в эксплуатацию третьей линии «Арктик СПГ-2».', intent: 'background', page: 15 },
+  { source: 'massonnet2012', sourceTitle: 'A model study of the impact of sea ice on Arctic climate', year: 2012, text: 'Баренцево море демонстрирует аномально высокую предсказуемость (skill score 0.7 на горизонте 4 мес).', intent: 'result_comparison', page: 1204 },
+  { source: 'smirnovMonitoringFizikomehanicheskogoSostoyaniya2020', sourceTitle: 'Мониторинг физико-механического состояния ледяного покрова', year: 2020, text: 'Существующая сеть гидрометеорологических наблюдений на побережье АЗРФ включает 48 станций, из которых 12 оснащены автоматическими средствами.', intent: 'background', page: 33 },
+  { source: 'bidenkoGeoinformacionnayaProceduraOcenki2022', sourceTitle: 'Геоинформационная процедура оценки ледовой обстановки', year: 2022, text: 'Предлагается процедура валидации, включающая три этапа: предобработку спутниковых данных, пространственное сопоставление и расчёт метрик.', intent: 'method', page: 89 },
+]
+
+// ── Data loading ──────────────────────────────────────────────────────────
+async function loadSectionData() {
+  loading.value = true
+  loadError.value = ''
+  try {
+    if (isDemoMode.value) {
+      section.value = { id: sectionId.value, name: 'Потребности пользователей НГГМИ', thesis: 'Рост грузопотока по СМП создаёт потребность в оперативных ледовых прогнозах' }
+      block.value = { id: blockIdParam.value, title: 'Стратегическое значение СМП и рост грузопотока', wordTarget: 350, status: 'draft', draftText: 'Северный морской путь (СМП) является исторически сложившейся транспортной артерией России в Арктике. Транспортная стратегия РФ до 2035 года определяет СМП как «единую национальную транспортную коммуникацию», а план развития инфраструктуры предусматривает увеличение грузопотока до 80 млн тонн к 2024 году и 150 млн тонн к 2030 году.', generatedText: '', fragments: [...MOCK_FRAGMENTS], prevBlock: null, nextBlock: { id: 'b1.1.2', title: 'Потребности навигации в ледовой информации' } }
+      chapter.value = { number: 1, thesis: 'Существующие системы НГО не обеспечивают достаточную точность прогнозов' }
+      return
+    }
+
+    // Real API: load section sources + fragment details
+    section.value.id = sectionId.value
+    block.value.id = blockIdParam.value
+
+    // Fire sectionSources + project list in parallel
+    const [sectionData, projectsData] = await Promise.all([
+      apiProjects.sectionSources(sectionId.value),
+      userProjects.list(),
+    ])
+
+    // Resolve section name immediately (no extra wait)
+    const project = projectsData.projects.find(p => p.project_id === projectId.value)
+    const outlineSection = project?.outline?.find(s => s.id === sectionId.value)
+    section.value.name = outlineSection?.name || `Раздел ${sectionId.value}`
+    block.value.title = outlineSection?.name || `Раздел ${sectionId.value}`
+
+    // Fetch all source details in parallel
+    const citekeys = sectionData.citekeys.slice(0, 8)
+    const sourceResults = await Promise.allSettled(citekeys.map(k => apiLibrary.get(k)))
+
+    const fragments: Fragment[] = []
+    for (let i = 0; i < citekeys.length; i++) {
+      const result = sourceResults[i]
+      if (result?.status !== 'fulfilled') continue
+      const src = result.value
+      for (const f of (src.fragments || []).slice(0, 2)) {
+        fragments.push({ source: citekeys[i]!, sourceTitle: src.title || citekeys[i]!, year: src.year || null, text: f.text || '', intent: f.citation_intent || 'background', page: f.page_number || null })
+      }
+    }
+    block.value.fragments = fragments
+
+    // Load saved draft (MD file on disk via sync-compatible endpoint)
+    if (projectId.value) {
+      try {
+        const saved = await apiBlocks.get(projectId.value, sectionId.value, blockIdParam.value)
+        if (saved.text) {
+          block.value.draftText = saved.text
+          block.value.status = 'draft'
+        }
+      } catch {
+        // No saved draft yet — that's fine
+      }
+    }
+
+  } catch (e: any) {
+    loadError.value = e.message || 'Ошибка загрузки данных'
+  } finally {
+    loading.value = false
+  }
+}
 
 // ── Writing ──────────────────────────────────────────────────────────────
 
@@ -54,57 +141,289 @@ function startEditing() {
   editText.value = currentText.value
   isEditing.value = true
   nextTick(() => {
-    const el = document.querySelector('.draft-editor') as HTMLTextAreaElement
-    if (el) { el.focus(); el.selectionStart = el.value.length }
+    const el = editorEl.value
+    if (!el) return
+    el.innerText = currentText.value
+    el.focus()
+    moveCursorToEnd(el)
   })
 }
 
-function saveEdit() {
+function commitText() {
+  // editText is always ghost-free — updated by onEditorInput before ghost appears
   block.value.generatedText = editText.value
   block.value.draftText = editText.value
   block.value.status = 'draft'
+}
+
+function autoSave() {
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(async () => {
+    commitText()
+    if (!isDemoMode.value && projectId.value) {
+      saveStatus.value = 'saving'
+      try {
+        await apiBlocks.save(projectId.value, sectionId.value, blockIdParam.value, editText.value)
+      } catch {
+        // Save failed silently — local state still updated
+      }
+    }
+    saveStatus.value = 'saved'
+    setTimeout(() => { if (saveStatus.value === 'saved') saveStatus.value = 'idle' }, 2500)
+  }, 800)
+}
+
+function closeEditor() {
+  clearGhost() // removes ghost from DOM, editText stays clean
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+  commitText() // reads editText.value — always safe
+  saveStatus.value = 'idle'
   isEditing.value = false
-  pushAssistantMessage('Текст сохранён. Проверяю цитирование...')
-  setTimeout(() => {
-    pushAssistantMessage('Все 5 ссылок валидны. [@olhovikINFORMATIONMODELMARITIME2018] используется как method — корректно для аргумента о нефиксированности трассы.')
-  }, 1500)
 }
 
 async function generateDraft() {
   generating.value = true
-  generatingProgress.value = 'Собираю контекст цепочки...'
-  pushAssistantMessage('Начинаю генерацию. Контекст: тезис главы 1, тезис раздела 1.1, 5 привязанных фрагментов.')
-  await new Promise(r => setTimeout(r, 800))
+  generatingProgress.value = 'Собираю контекст...'
+  pushAssistantMessage(`Начинаю генерацию. ${block.value.fragments.length} фрагментов в контексте.`)
+
+  if (isDemoMode.value) {
+    await _generateDraftMock()
+    return
+  }
+
+  // Real API: POST /write/draft + poll
+  try {
+    generatingProgress.value = 'Ставлю задачу...'
+    const job = await apiWrite.draft(sectionId.value, projectId.value)
+    generatingProgress.value = 'Задача в очереди, жду результат...'
+
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise(r => setTimeout(r, 2000))
+      const status = await apiProcess.jobStatus(job.job_id)
+      if (status.status === 'finished') {
+        const result = status.result || {}
+        if (result.text) {
+          block.value.generatedText = result.text
+          block.value.status = 'draft'
+          generating.value = false
+          generatingProgress.value = ''
+          pushAssistantMessage(`Черновик готов — ${block.value.generatedText.split(/\s+/).length} слов.`)
+          return
+        }
+        // Stub task returned — graceful fallback
+        pushAssistantMessage('Генератор черновиков ещё не подключён к SaaS API. Показываю демо-текст.')
+        await _generateDraftMock()
+        return
+      }
+      if (status.status === 'failed') {
+        pushAssistantMessage('Генерация завершилась ошибкой. Показываю демо-текст.')
+        await _generateDraftMock()
+        return
+      }
+      generatingProgress.value = `Генерирую... (${(attempt + 1) * 2}с)`
+    }
+    pushAssistantMessage('Таймаут. Показываю демо-текст.')
+    await _generateDraftMock()
+  } catch (e: any) {
+    pushAssistantMessage(`Ошибка API: ${e.message}. Показываю демо-текст.`)
+    await _generateDraftMock()
+  }
+}
+
+async function _generateDraftMock() {
   generatingProgress.value = `Анализирую ${block.value.fragments.length} фрагментов...`
   await new Promise(r => setTimeout(r, 600))
   generatingProgress.value = `Генерирую текст (~${block.value.wordTarget} слов)...`
   await new Promise(r => setTimeout(r, 2000))
+  block.value.generatedText = `Северный морской путь (СМП) является исторически сложившейся транспортной артерией России в Арктике, стратегическое значение которой определяется Транспортной стратегией РФ до 2035 года как «единой национальной транспортной коммуникации» [@RasporyazheniePravitelstvaRossiyskoy]. Грузопоток по СМП демонстрирует устойчивый рост: с 7,5 млн тонн в 2016 году до 34,9 млн тонн в 2022 году [@zhuravelSevernyyMorckoyPut2020].
 
-  block.value.generatedText = `Северный морской путь (СМП) является исторически сложившейся транспортной артерией России в Арктике, стратегическое значение которой определяется Транспортной стратегией РФ до 2035 года как «единой национальной транспортной коммуникации» [@RasporyazheniePravitelstvaRossiyskoy]. Грузопоток по СМП демонстрирует устойчивый рост: с 7,5 млн тонн в 2016 году до 34,9 млн тонн в 2022 году, что связано прежде всего с развитием проектов «Ямал СПГ» и «Арктик СПГ-2» [@zhuravelSevernyyMorckoyPut2020]. Фактический грузопоток в 2023 году составил 36,2 млн тонн, что подтверждает устойчивую тенденцию, хотя и с отставанием от плановых показателей [@alekseevaVliyanieIntensivnogoSudohodstva2024].
+Экономический потенциал СМП определяется сокращением длины маршрута из Европы в Восточную Азию на 30–40% по сравнению с маршрутом через Суэцкий канал [@kuvatovPotencialSevernogoMorskogo2014]. Вместе с тем навигационные риски остаются основным сдерживающим фактором развития арктического судоходства: ледовые условия в переходные сезоны создают наибольшую неопределённость для планирования маршрутов [@Angudovich2025].
 
-Экономический потенциал СМП определяется сокращением длины маршрута из Европы в Восточную Азию на 30–40% по сравнению с традиционным маршрутом через Суэцкий канал [@kuvatovPotencialSevernogoMorskogo2014]. Вместе с тем навигационные риски остаются основным сдерживающим фактором развития арктического судоходства: ледовые условия в переходные сезоны (октябрь–ноябрь, май–июнь) создают наибольшую неопределённость для планирования маршрутов [@Angudovich2025].
-
-Принципиальной особенностью СМП, отличающей его от фиксированных водных путей, является нефиксированность трассы: суда вынуждены непрерывно адаптировать маршрут в зависимости от текущей ледовой обстановки [@olhovikINFORMATIONMODELMARITIME2018]. Это обстоятельство формирует потребность в оперативном мониторинге и прогнозировании ледовой обстановки, что является отправной точкой настоящего исследования.`
-
+Принципиальной особенностью СМП является нефиксированность трассы: суда вынуждены непрерывно адаптировать маршрут в зависимости от текущей ледовой обстановки [@olhovikINFORMATIONMODELMARITIME2018]. Это формирует потребность в оперативном мониторинге и прогнозировании ледовой обстановки.`
   block.value.status = 'draft'
   generating.value = false
   generatingProgress.value = ''
-  pushAssistantMessage(`Готово — ${block.value.generatedText.split(/\s+/).length} слов, ${block.value.fragments.length} источников. Нажмите на текст чтобы отредактировать.`)
+  pushAssistantMessage(`Готово — ${block.value.generatedText.split(/\s+/).length} слов, ${block.value.fragments.length} источников.`)
+}
+
+// ── Ghost text (inline AI continuation) ──────────────────────────────────
+
+const editorEl = ref<HTMLElement>()
+const ghostText = ref('')
+const isSpinning = ref(false)
+let ghostTimer: ReturnType<typeof setTimeout> | null = null
+let streamingTimer: ReturnType<typeof setTimeout> | null = null
+let spinInterval: ReturnType<typeof setInterval> | null = null
+
+const saveStatus = ref<'idle' | 'saving' | 'saved'>('idle')
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+function moveCursorToEnd(el: HTMLElement) {
+  const range = document.createRange()
+  const sel = window.getSelection()
+  range.selectNodeContents(el)
+  range.collapse(false)
+  sel?.removeAllRanges()
+  sel?.addRange(range)
+}
+
+function clearGhost() {
+  ghostText.value = ''
+  isSpinning.value = false
+  if (streamingTimer) { clearTimeout(streamingTimer); streamingTimer = null }
+  if (ghostTimer) { clearTimeout(ghostTimer); ghostTimer = null }
+  if (spinInterval) { clearInterval(spinInterval); spinInterval = null }
+  editorEl.value?.querySelectorAll('.ghost-text, .ghost-spinner').forEach(s => s.remove())
+}
+
+function acceptGhost() {
+  const el = editorEl.value
+  if (!el || !ghostText.value) return
+  el.querySelectorAll('.ghost-text').forEach(ghost => {
+    ghost.replaceWith(document.createTextNode(ghost.textContent || ''))
+  })
+  editText.value = el.innerText
+  ghostText.value = ''
+  if (streamingTimer) { clearTimeout(streamingTimer); streamingTimer = null }
+  moveCursorToEnd(el)
+  autoSave()
+  pushAssistantMessage('Предложение принято. Продолжайте.')
+}
+
+function getMockSuggestion(text: string): string {
+  const lower = text.toLowerCase()
+  if (lower.includes('грузопоток') || lower.includes('арктик спг') || lower.includes('ямал')) {
+    return ' По прогнозу Министерства транспорта РФ, к 2030 году объём перевозок по СМП должен достичь 150 млн тонн, что потребует существенного расширения ледокольного флота и инфраструктуры навигационно-гидрографического обеспечения.'
+  }
+  if (lower.includes('ледов') || lower.includes('лёд') || lower.includes('концентрац')) {
+    return ' Систематические наблюдения ведёт Арктический и антарктический научно-исследовательский институт (ААНИИ), однако точность краткосрочных прогнозов снижается в периоды активной циклонической деятельности.'
+  }
+  if (lower.includes('прогноз') || lower.includes('точност') || lower.includes('нейросет')) {
+    return ' Применение нейросетевых моделей позволяет повысить точность прогнозирования концентрации морского льда на 15–25% по сравнению с детерминированными численными методами [@bidenkoGeoinformacionnayaProceduraOcenki2022].'
+  }
+  if (lower.includes('навигац') || lower.includes('судоходств') || lower.includes('маршрут')) {
+    return ' Критическим периодом для безопасной навигации являются сентябрь–октябрь: первый осенний ледостав в Восточно-Сибирском море создаёт трудно предсказуемые условия для транзитных рейсов.'
+  }
+  return ' Данный аспект имеет принципиальное значение для разработки методики оценки качества нейросетевых прогнозов ледовой обстановки в акватории Северного морского пути [@bidenkoGeoinformacionnayaProceduraOcenki2022].'
+}
+
+function fetchGhostSuggestion() {
+  const text = editText.value.trim()
+  if (text.length < 30) return
+
+  const suggestion = getMockSuggestion(text)
+  const el = editorEl.value
+  if (!el) return
+
+  // Phase 1: spinner  · ·· ···
+  isSpinning.value = true
+  const spinnerSpan = document.createElement('span')
+  spinnerSpan.className = 'ghost-spinner'
+  spinnerSpan.style.color = 'var(--color-ink-muted)'
+  spinnerSpan.style.opacity = '0.7'
+  spinnerSpan.style.pointerEvents = 'none'
+  spinnerSpan.style.userSelect = 'none'
+  spinnerSpan.style.marginLeft = '6px'
+  spinnerSpan.style.letterSpacing = '3px'
+  spinnerSpan.style.fontSize = '11px'
+  spinnerSpan.style.border = '1px solid var(--color-rule)'
+  spinnerSpan.style.borderRadius = '999px'
+  spinnerSpan.style.padding = '1px 7px 2px'
+  spinnerSpan.style.verticalAlign = 'middle'
+  spinnerSpan.style.display = 'inline-block'
+  el.appendChild(spinnerSpan)
+
+  let dots = 1
+  spinnerSpan.textContent = '·'
+  spinInterval = setInterval(() => {
+    if (!el.contains(spinnerSpan)) { clearInterval(spinInterval!); spinInterval = null; return }
+    dots = dots >= 3 ? 1 : dots + 1
+    spinnerSpan.textContent = '·'.repeat(dots)
+  }, 200)
+
+  // Phase 2: after one full dot cycle (600ms) — replace with full text at once
+  streamingTimer = setTimeout(() => {
+    if (spinInterval) { clearInterval(spinInterval); spinInterval = null }
+    if (!el.contains(spinnerSpan)) return
+    spinnerSpan.remove()
+    isSpinning.value = false
+
+    const ghostSpan = document.createElement('span')
+    ghostSpan.className = 'ghost-text'
+    ghostSpan.style.color = 'var(--color-ink-muted)'
+    ghostSpan.style.opacity = '0.4'
+    ghostSpan.style.pointerEvents = 'none'
+    ghostSpan.style.userSelect = 'none'
+    ghostSpan.textContent = suggestion
+    el.appendChild(ghostSpan)
+    ghostText.value = suggestion
+  }, 600)
+}
+
+function onEditorInput() {
+  clearGhost()
+  editText.value = editorEl.value?.innerText || ''
+  autoSave()
+  if (editText.value.trim().length < 30) return
+  ghostTimer = setTimeout(fetchGhostSuggestion, 700)
+}
+
+function onEditorKeydown(e: KeyboardEvent) {
+  if (e.key === 'Tab' && ghostText.value) {
+    e.preventDefault()
+    acceptGhost()
+    return
+  }
+  if (e.key === 'Escape') {
+    clearGhost()
+    return
+  }
+  if (e.metaKey && e.key === 'Enter') {
+    e.preventDefault()
+    closeEditor()
+  }
+}
+
+function onEditorPaste(e: ClipboardEvent) {
+  e.preventDefault()
+  const text = e.clipboardData?.getData('text/plain') || ''
+  const sel = window.getSelection()
+  if (!sel?.rangeCount) return
+  sel.deleteFromDocument()
+  const node = document.createTextNode(text)
+  sel.getRangeAt(0).insertNode(node)
+  sel.collapseToEnd()
+  editText.value = editorEl.value?.innerText || ''
 }
 
 // ── Fragment search ──────────────────────────────────────────────────────
 
 const searchQuery = ref('')
-const searchResults = ref<typeof block.value.fragments>([])
+const searchResults = ref<Fragment[]>([])
 const searching = ref(false)
+const libraryItems = ref<Fragment[]>([])
 
-const mockLibrary = [
-  { source: 'alekseevaVliyanieIntensivnogoSudohodstva2024', sourceTitle: 'Влияние интенсивного судоходства на экологию АЗРФ', year: 2024, text: 'Фактический грузопоток по СМП в 2023 году составил 36,2 млн тонн, увеличившись на 3,7% по сравнению с 2022 годом.', intent: 'background', page: 7 },
-  { source: 'butakovRezultatyPrognozaGidrometeorologicheskih2025', sourceTitle: 'Результаты прогноза гидрометеорологических условий', year: 2025, text: 'Прогноз грузопотока по СМП на 2025 год — свыше 40 млн тонн при условии ввода в эксплуатацию третьей линии «Арктик СПГ-2».', intent: 'background', page: 15 },
-  { source: 'massonnet2012', sourceTitle: 'A model study of the impact of sea ice on Arctic climate', year: 2012, text: 'Баренцево море демонстрирует аномально высокую предсказуемость (skill score 0.7 на горизонте 4 мес) по сравнению с Чукотским (0.3 на 2 мес).', intent: 'result_comparison', page: 1204 },
-  { source: 'smirnovMonitoringFizikomehanicheskogoSostoyaniya2020', sourceTitle: 'Мониторинг физико-механического состояния ледяного покрова', year: 2020, text: 'Существующая сеть гидрометеорологических наблюдений на побережье АЗРФ включает 48 станций, из которых 12 оснащены автоматическими средствами.', intent: 'background', page: 33 },
-  { source: 'bidenkoGeoinformacionnayaProceduraOcenki2022', sourceTitle: 'Геоинформационная процедура оценки ледовой обстановки', year: 2022, text: 'Предлагается процедура валидации, включающая три этапа: предобработку спутниковых данных, пространственное сопоставление и расчёт метрик.', intent: 'method', page: 89 },
-]
+async function ensureLibraryLoaded() {
+  if (isDemoMode.value || libraryItems.value.length > 0) return
+  try {
+    const data = await apiLibrary.list(projectId.value)
+    libraryItems.value = data.sources.map((s: any) => ({
+      source: s.citekey,
+      sourceTitle: s.title || s.citekey,
+      year: s.year || null,
+      text: s.abstract || '',
+      intent: 'background',
+      page: null,
+    }))
+  } catch { /* silent — search will just return empty */ }
+}
+
+function _searchIn(pool: Fragment[], q: string) {
+  return pool.filter(f =>
+    !block.value.fragments.some(bf => bf.source === f.source) &&
+    (f.sourceTitle.toLowerCase().includes(q) || f.source.toLowerCase().includes(q) || f.text.toLowerCase().includes(q))
+  )
+}
 
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
 function onSearchInput() {
@@ -112,25 +431,35 @@ function onSearchInput() {
   const q = searchQuery.value.trim().toLowerCase()
   if (!q) { searchResults.value = []; return }
   searching.value = true
+
+  if (!isDemoMode.value && libraryItems.value.length === 0) {
+    ensureLibraryLoaded().then(() => {
+      searchResults.value = _searchIn(libraryItems.value, q)
+      searching.value = false
+    })
+    return
+  }
+
   searchTimeout = setTimeout(() => {
-    searchResults.value = mockLibrary.filter(f =>
-      !block.value.fragments.some(bf => bf.source === f.source) &&
-      (f.sourceTitle.toLowerCase().includes(q) || f.source.toLowerCase().includes(q) || f.text.toLowerCase().includes(q))
-    )
+    const pool = isDemoMode.value ? MOCK_LIBRARY : libraryItems.value
+    searchResults.value = _searchIn(pool, q)
     searching.value = false
   }, 300)
 }
 
-function attachFragment(f: typeof mockLibrary[0]) {
+async function attachFragment(f: Fragment) {
   block.value.fragments.push(f)
   searchResults.value = searchResults.value.filter(r => r.source !== f.source)
   pushAssistantMessage(`Привязан [@${f.source}] (${f.year}). Теперь ${block.value.fragments.length} фрагментов — можно перегенерировать текст чтобы учесть новый источник.`)
+  if (!isDemoMode.value) {
+    try { await apiProjects.assignSections(f.source, [sectionId.value]) } catch { /* non-fatal */ }
+  }
 }
 
 function detachFragment(index: number) {
   const removed = block.value.fragments[index]
   block.value.fragments.splice(index, 1)
-  pushAssistantMessage(`Отвязан @${removed.source}. Если он упоминается в тексте — стоит убрать ссылку вручную.`)
+  if (removed) pushAssistantMessage(`Отвязан @${removed.source}. Если он упоминается в тексте — стоит убрать ссылку вручную.`)
 }
 
 // ── AI Assistant (reactive strip) ────────────────────────────────────────
@@ -166,6 +495,11 @@ async function sendUserMessage() {
   pushAssistantMessage(`В библиотеке есть 2 дополнительных источника по этой теме. Попробуйте найти их через поиск справа: «грузопоток 2024» или «арктик спг».`)
 }
 
+// Hide "Сохранено" badge the moment ghost spinner kicks in
+watch(isSpinning, (spinning) => {
+  if (spinning) saveStatus.value = 'idle'
+})
+
 // Watch text edits to trigger AI reactions
 watch(isEditing, (editing) => {
   if (editing) {
@@ -173,8 +507,9 @@ watch(isEditing, (editing) => {
   }
 })
 
-onMounted(() => {
-  pushAssistantMessage(`Блок «${block.value.title}» — ${block.value.fragments.length} фрагментов привязано. ${currentText.value ? `Черновик: ${wordCount.value}/${block.value.wordTarget} слов.` : 'Текст не написан — нажмите «Написать блок».'}`)
+onMounted(async () => {
+  await loadSectionData()
+  pushAssistantMessage(`${block.value.title ? `Блок «${block.value.title}»` : 'Раздел'} — ${block.value.fragments.length} фрагментов привязано. ${currentText.value ? `Черновик: ${wordCount.value}/${block.value.wordTarget} слов.` : 'Текст не написан — нажмите «Написать блок».'}`)
 })
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -198,25 +533,34 @@ function timeAgo(d: Date): string {
 <template>
   <AppLayout>
     <div class="max-w-6xl mx-auto">
+      <!-- Loading / error banners -->
+      <div v-if="loading" class="flex items-center gap-2 mb-4 text-sm text-[var(--color-ink-muted)]">
+        <div class="h-4 w-4 border-2 border-[var(--color-accent)] border-t-transparent rounded-full animate-spin flex-shrink-0" />
+        Загружаю данные раздела...
+      </div>
+      <div v-if="loadError" class="mb-4 rounded-md bg-[var(--color-err-bg)] border border-[var(--color-err)]/30 px-4 py-2 text-sm text-[var(--color-err)]">
+        {{ loadError }}
+      </div>
+
       <!-- Breadcrumb + nav -->
       <div class="flex items-center gap-1.5 text-sm mb-3 flex-wrap">
-        <button @click="router.push('/demo/map')" class="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] transition-colors">Карта</button>
+        <button @click="router.push(projectId ? `/${projectId}/map` : '/demo/map')" class="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] transition-colors">Карта</button>
+        <span v-if="chapter.number" class="text-[var(--color-rule)]">/</span>
+        <button v-if="chapter.number" @click="router.push(projectId ? `/${projectId}/map` : '/demo/map')" class="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] transition-colors">Гл. {{ chapter.number }}</button>
         <span class="text-[var(--color-rule)]">/</span>
-        <button @click="router.push('/demo/map')" class="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] transition-colors">Гл. {{ chapter.number }}</button>
+        <button @click="router.push(projectId ? `/${projectId}/map` : '/demo/map')" class="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] transition-colors">{{ section.id }}</button>
         <span class="text-[var(--color-rule)]">/</span>
-        <button @click="router.push('/demo/map')" class="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] transition-colors">{{ section.id }}</button>
-        <span class="text-[var(--color-rule)]">/</span>
-        <span class="text-[var(--color-ink)] font-medium truncate">{{ block.title }}</span>
+        <span class="text-[var(--color-ink)] font-medium truncate">{{ block.title || section.id }}</span>
         <div class="flex-1" />
         <button v-if="block.prevBlock" class="rounded-md px-2 py-1 text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)]">&larr; Пред</button>
         <button v-if="block.nextBlock" class="rounded-md px-2 py-1 text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)]">След &rarr;</button>
       </div>
 
       <!-- Chain context bar -->
-      <div class="flex items-center gap-3 rounded-md bg-[var(--color-paper-warm)] px-4 py-2 mb-4 text-xs text-[var(--color-ink-muted)]">
-        <span><strong class="text-[var(--color-accent)]">Гл. {{ chapter.number }}:</strong> <em>{{ chapter.thesis }}</em></span>
-        <span class="text-[var(--color-rule)]">&rarr;</span>
-        <span><strong class="text-[var(--color-accent)]">{{ section.id }}:</strong> <em>{{ section.thesis }}</em></span>
+      <div v-if="chapter.thesis || section.thesis" class="flex items-center gap-3 rounded-md bg-[var(--color-paper-warm)] px-4 py-2 mb-4 text-xs text-[var(--color-ink-muted)]">
+        <span v-if="chapter.thesis"><strong class="text-[var(--color-accent)]">Гл. {{ chapter.number }}:</strong> <em>{{ chapter.thesis }}</em></span>
+        <span v-if="chapter.thesis && section.thesis" class="text-[var(--color-rule)]">&rarr;</span>
+        <span v-if="section.thesis"><strong class="text-[var(--color-accent)]">{{ section.id }}:</strong> <em>{{ section.thesis }}</em></span>
       </div>
 
       <!-- MAIN LAYOUT: text + assistant left, fragments right -->
@@ -254,16 +598,33 @@ function timeAgo(d: Date): string {
 
             <!-- Editing mode -->
             <div v-else-if="isEditing">
-              <textarea
-                v-model="editText"
-                class="draft-editor w-full px-8 py-6 text-[15px] text-[var(--color-ink)] leading-[1.8] bg-transparent focus:outline-none resize-none font-[var(--font-body)]"
-                style="min-height: 40vh;"
-                @keydown.meta.enter="saveEdit"
-              />
-              <div class="flex items-center gap-2 border-t border-[var(--color-rule-light)] px-6 py-2.5">
-                <button @click="saveEdit" class="rounded-md bg-[var(--color-accent)] px-4 py-1.5 text-sm font-medium text-white hover:bg-[var(--color-accent-deep)] transition-colors">Сохранить</button>
-                <button @click="isEditing = false" class="rounded-md px-3 py-1.5 text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] transition-colors">Отмена</button>
-                <span class="ml-auto font-[var(--font-mono)] text-xs text-[var(--color-ink-muted)]">{{ editWordCount }} слов &middot; &#8984;Enter</span>
+              <div class="relative">
+                <div
+                  ref="editorEl"
+                  contenteditable="true"
+                  spellcheck="false"
+                  class="draft-editor w-full px-8 py-6 text-[15px] text-[var(--color-ink)] leading-[1.8] focus:outline-none font-[var(--font-body)]"
+                  style="min-height: 40vh; white-space: pre-wrap; word-break: break-word;"
+                  @input="onEditorInput"
+                  @keydown="onEditorKeydown"
+                  @paste.prevent="onEditorPaste"
+                />
+                <transition name="ghost-hint">
+                  <div v-if="ghostText && !isSpinning"
+                    class="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-md bg-[var(--color-paper-warm)] border border-[var(--color-rule)] px-2.5 py-1 text-xs text-[var(--color-ink-muted)] shadow-sm pointer-events-none select-none">
+                    <kbd class="font-[var(--font-mono)] text-[var(--color-accent)] font-semibold">Tab</kbd>
+                    <span>принять</span>
+                  </div>
+                </transition>
+              </div>
+              <div class="flex items-center gap-3 border-t border-[var(--color-rule-light)] px-6 py-2.5">
+                <!-- Autosave status -->
+                <transition name="ghost-hint">
+                  <span v-if="saveStatus === 'saved'" class="text-xs text-[var(--color-ok)]">Сохранено ✓</span>
+                </transition>
+                <div class="flex-1" />
+                <span class="font-[var(--font-mono)] text-xs text-[var(--color-ink-muted)]">{{ editWordCount }} слов</span>
+                <button @click="closeEditor" class="rounded-md px-3 py-1.5 text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] transition-colors">Закрыть</button>
               </div>
             </div>
 
@@ -393,3 +754,25 @@ function timeAgo(d: Date): string {
     </div>
   </AppLayout>
 </template>
+
+<style scoped>
+.ghost-text {
+  color: var(--color-ink-muted);
+  opacity: 0.38;
+  pointer-events: none;
+  user-select: none;
+}
+
+[contenteditable]:focus {
+  outline: none;
+}
+
+.ghost-hint-enter-active,
+.ghost-hint-leave-active {
+  transition: opacity 0.15s ease;
+}
+.ghost-hint-enter-from,
+.ghost-hint-leave-to {
+  opacity: 0;
+}
+</style>

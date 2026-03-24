@@ -240,6 +240,29 @@ export const usage = {
     }>('/usage/me'),
 }
 
+// Write (draft generation)
+export const write = {
+  draft: (section: string, projectId?: string) =>
+    request<{ job_id: string; status: string; section: string; task_type: string }>('/write/draft', {
+      method: 'POST',
+      body: JSON.stringify({ section, project_id: projectId }),
+    }),
+}
+
+// Block drafts (MD files on disk)
+export const blocks = {
+  get: (projectId: string, sectionId: string, blockId: string) =>
+    request<{ section_id: string; block_id: string; text: string; word_count: number }>(
+      `/projects/${projectId}/blocks/${sectionId}/${blockId}`
+    ),
+
+  save: (projectId: string, sectionId: string, blockId: string, text: string) =>
+    request<{ section_id: string; block_id: string; text: string; word_count: number }>(
+      `/projects/${projectId}/blocks/${sectionId}/${blockId}`,
+      { method: 'PUT', body: JSON.stringify({ text }) }
+    ),
+}
+
 // Research (literature review generation + stored reports)
 export const research = {
   generate: (section: string, projectId?: string) =>
