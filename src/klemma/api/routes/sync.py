@@ -276,13 +276,17 @@ async def init_repo(
     )
 
 
-@router.get("/file/{project_id}/{file_path:path}", response_model=FileContentResponse)
+@router.get("/file/{project_id:path}", response_model=FileContentResponse)
 async def get_file(
     project_id: str,
-    file_path: str,
+    file_path: str = Query(..., description="Path to file in repo"),
     user: UserRecord = Depends(get_current_user),
 ) -> FileContentResponse:
-    """Read a file from the project's git repo (HEAD revision)."""
+    """Read a file from the project's git repo (HEAD revision).
+
+    file_path is a query param (not path) because project_id itself contains slashes.
+    Example: GET /sync/file/ilya-bolkhovsky/dissertation?file_path=KLEMMA.md
+    """
     repo = _ensure_repo_access(project_id, user)
 
     # Validate path — prevent flag injection and path traversal
@@ -296,7 +300,7 @@ async def get_file(
     return FileContentResponse(path=file_path, content=result.stdout)
 
 
-@router.get("/history/{project_id}")
+@router.get("/history/{project_id:path}")
 async def get_history(
     project_id: str,
     user: UserRecord = Depends(get_current_user),
@@ -326,7 +330,7 @@ async def get_history(
     return entries
 
 
-@router.post("/commit/{project_id}", response_model=CommitResponse)
+@router.post("/commit/{project_id:path}", response_model=CommitResponse)
 async def commit_file(
     project_id: str,
     body: CommitRequest,
@@ -421,7 +425,7 @@ async def commit_file(
     return CommitResponse(commit_hash=commit_hash, message=body.message)
 
 
-@router.post("/rollback/{project_id}")
+@router.post("/rollback/{project_id:path}")
 async def rollback(
     project_id: str,
     body: RollbackRequest,
@@ -654,7 +658,7 @@ async def pull_decisions(
     return {"decisions": []}
 
 
-@router.get("/status/{project_id}", response_model=SyncStatusResponse)
+@router.get("/status/{project_id:path}", response_model=SyncStatusResponse)
 async def sync_status(
     project_id: str,
     user: UserRecord = Depends(get_current_user),

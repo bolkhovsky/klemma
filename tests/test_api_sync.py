@@ -113,13 +113,13 @@ class TestFileEndpoints:
 
     def test_get_file(self, client, data_dir):
         self._create_repo_with_file(data_dir, "test-proj", "KLEMMA.md", "# Test Project")
-        resp = client.get("/sync/file/test-proj/KLEMMA.md")
+        resp = client.get("/sync/file/test-proj", params={"file_path": "KLEMMA.md"})
         assert resp.status_code == 200
         assert "# Test Project" in resp.json()["content"]
 
     def test_get_file_not_found(self, client, data_dir):
         self._create_repo_with_file(data_dir, "test-proj2", "KLEMMA.md", "test")
-        resp = client.get("/sync/file/test-proj2/nonexistent.md")
+        resp = client.get("/sync/file/test-proj2", params={"file_path": "nonexistent.md"})
         assert resp.status_code == 404
 
     def test_get_file_wrong_user(self, client, data_dir):
@@ -127,7 +127,7 @@ class TestFileEndpoints:
         repo.mkdir(parents=True)
         subprocess.run(["git", "init", "--bare"], cwd=str(repo), capture_output=True)
         (repo / "klemma_owner").write_text("other-user-456")
-        resp = client.get("/sync/file/other-proj/KLEMMA.md")
+        resp = client.get("/sync/file/other-proj", params={"file_path": "KLEMMA.md"})
         assert resp.status_code == 403
 
     def test_get_history(self, client, data_dir):
@@ -168,7 +168,7 @@ class TestCommit:
         assert data["message"] == "test commit"
 
         # Verify file is readable
-        read_resp = client.get("/sync/file/commit-proj/notes/test.md")
+        read_resp = client.get("/sync/file/commit-proj", params={"file_path": "notes/test.md"})
         assert read_resp.status_code == 200
         assert "Hello World" in read_resp.json()["content"]
 
