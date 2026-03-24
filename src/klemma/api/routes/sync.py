@@ -269,6 +269,10 @@ async def get_file(
     """Read a file from the project's git repo (HEAD revision)."""
     repo = _ensure_repo_access(project_id, user)
 
+    # Validate path — prevent flag injection and path traversal
+    if ".." in file_path or file_path.startswith("/") or file_path.startswith("-"):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
     result = _run_git(["show", f"HEAD:{file_path}"], cwd=repo, check=False)
     if result.returncode != 0:
         raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
@@ -338,11 +342,15 @@ async def commit_file(
 
     # Read current tree (if any)
     tree_result = _run_git(["rev-parse", "HEAD^{tree}"], cwd=repo, check=False)
-    env = os.environ.copy()
-    env["GIT_AUTHOR_NAME"] = user.name or user.email
-    env["GIT_AUTHOR_EMAIL"] = user.email
-    env["GIT_COMMITTER_NAME"] = user.name or user.email
-    env["GIT_COMMITTER_EMAIL"] = user.email
+    # Minimal env — avoid leaking server secrets (JWT_SECRET, API keys) into subprocess
+    env = {
+        "HOME": os.environ.get("HOME", "/tmp"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "GIT_AUTHOR_NAME": user.name or user.email,
+        "GIT_AUTHOR_EMAIL": user.email,
+        "GIT_COMMITTER_NAME": user.name or user.email,
+        "GIT_COMMITTER_EMAIL": user.email,
+    }
 
     if tree_result.returncode == 0:
         # Update existing tree
