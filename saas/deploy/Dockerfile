@@ -2,9 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system deps for PyMuPDF
+# Install system deps (PyMuPDF + git for sync)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libmupdf-dev \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy source first (required by hatchling build)

@@ -7,6 +7,8 @@ Separate DB file (users.db) from the library data.
 from __future__ import annotations
 
 import json
+import random
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -16,7 +18,7 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -38,6 +40,25 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
 """
+
+
+def _username_from_email(email: str) -> str:
+    """Generate a username slug from email prefix.
+
+    "ilya.bolkhovsky@gmail.com" → "ilya-bolkhovsky"
+    "test@example.com" → "test"
+    "Dr.Smith+work@university.edu" → "dr-smith"
+    """
+    prefix = email.split("@")[0]
+    # Remove + aliases (gmail style)
+    prefix = prefix.split("+")[0]
+    # Replace dots, underscores with hyphens
+    slug = re.sub(r"[._]+", "-", prefix)
+    # Remove non-alphanumeric except hyphens
+    slug = re.sub(r"[^a-z0-9-]", "", slug.lower())
+    # Collapse multiple hyphens and strip
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    return slug or "user"
 
 
 class LocalUserStore:
@@ -132,6 +153,21 @@ class LocalUserStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_rr_project ON research_reports(project_id);
             """)
+        if version < 7:
+            # Add username column — unique, used for git repo paths (user/project)
+            conn.execute("ALTER TABLE users ADD COLUMN username TEXT")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)"
+            )
+            # Backfill existing users: generate username from email
+            rows = conn.execute("SELECT user_id, email FROM users").fetchall()
+            for row in rows:
+                base = _username_from_email(row["email"])
+                username = self._find_unique_username(conn, base)
+                conn.execute(
+                    "UPDATE users SET username = ? WHERE user_id = ?",
+                    (username, row["user_id"]),
+                )
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -146,16 +182,22 @@ class LocalUserStore:
         password_hash: str,
         name: str = "",
     ) -> UserRecord:
-        """Create a new user. Raises ValueError if email already exists."""
+        """Create a new user. Raises ValueError if email already exists.
+
+        Username is auto-generated from email prefix (e.g. "ilya.b@gmail.com" → "ilya-b").
+        If taken, appends random digits (e.g. "ilya-b-42").
+        """
         user_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
         email_normalized = email.strip().lower()
+        base_username = _username_from_email(email_normalized)
         with self._conn() as conn:
+            username = self._find_unique_username(conn, base_username)
             try:
                 conn.execute(
-                    """INSERT INTO users (user_id, email, password_hash, name, created_at)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (user_id, email_normalized, password_hash, name, now),
+                    """INSERT INTO users (user_id, email, password_hash, name, username, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (user_id, email_normalized, password_hash, name, username, now),
                 )
             except sqlite3.IntegrityError:
                 raise ValueError(f"User with email {email_normalized!r} already exists")
@@ -164,6 +206,7 @@ class LocalUserStore:
             email=email,
             password_hash=password_hash,
             name=name,
+            username=username,
             email_verified=False,
             created_at=now,
         )
@@ -446,6 +489,35 @@ class LocalUserStore:
     # Internal helpers                                                     #
     # ------------------------------------------------------------------ #
 
+    def get_user_by_username(self, username: str) -> Optional[UserRecord]:
+        """Look up a user by username. Returns None if not found."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE username = ?", (username,)
+            ).fetchone()
+        if not row:
+            return None
+        return self._row_to_record(row)
+
+    @staticmethod
+    def _find_unique_username(conn: sqlite3.Connection, base: str) -> str:
+        """Find a unique username, appending random digits if base is taken."""
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE username = ?", (base,)
+        ).fetchone()
+        if not row:
+            return base
+        # Collision — append random digits
+        for _ in range(100):
+            candidate = f"{base}-{random.randint(10, 99)}"
+            row = conn.execute(
+                "SELECT 1 FROM users WHERE username = ?", (candidate,)
+            ).fetchone()
+            if not row:
+                return candidate
+        # Extremely unlikely fallback
+        return f"{base}-{uuid.uuid4().hex[:6]}"
+
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> UserRecord:
         return UserRecord(
@@ -453,6 +525,7 @@ class LocalUserStore:
             email=row["email"],
             password_hash=row["password_hash"],
             name=row["name"] or "",
+            username=row["username"] or "",
             email_verified=bool(row["email_verified"]),
             created_at=row["created_at"] or "",
         )

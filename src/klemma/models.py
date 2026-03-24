@@ -52,6 +52,7 @@ class UserRecord:
     email: str
     password_hash: str
     name: str = ""
+    username: str = ""
     email_verified: bool = False
     created_at: str = ""  # ISO 8601
 

@@ -16,7 +16,7 @@ function switchProject(projectId: string) {
   const currentParam = route.params.projectId as string | undefined
   if (currentParam) {
     // Navigate to same module within new project
-    const modules = ['health', 'outline', 'library', 'coverage', 'research']
+    const modules = ['map', 'feed', 'library', 'health', 'outline', 'coverage', 'research']
     const suffix = route.path.slice(currentParam.length + 2) // strip /projectId/
     const module = modules.find(m => suffix === m || suffix.startsWith(m + '/')) ?? 'health'
     router.push(`/${projectId}/${module}`)
@@ -193,19 +193,31 @@ async function createProject() {
       <!-- Divider -->
       <div class="mx-3 my-1 border-t border-[var(--color-rule)]"></div>
 
-      <!-- Project nav links: 3 items (Здоровье, Библиотека, Исследование) -->
+      <!-- Project nav: 3 items (Карта, Лента, Библиотека) -->
       <nav v-if="route.params.projectId" class="flex flex-col gap-0.5 px-2">
         <RouterLink
-          :to="`/${route.params.projectId}/health`"
+          :to="`/${route.params.projectId}/map`"
           class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-          :class="route.path === `/${route.params.projectId}/health`
+          :class="route.path.startsWith(`/${route.params.projectId}/map`)
             ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
             : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-4 w-4 flex-shrink-0">
-            <path d="M2.5 7.5c0-3.1 2.4-5.5 5.5-5.5s5.5 2.4 5.5 5.5c0 1-.3 2-.7 2.8L8 15l-4.8-4.7c-.4-.8-.7-1.8-.7-2.8Zm5.5-3a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm0 1.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z" />
+            <path fill-rule="evenodd" d="M5.37 2.257a1.25 1.25 0 0 1 1.26 0l3.5 2.063a1.25 1.25 0 0 1 .62 1.08v4.2a1.25 1.25 0 0 1-.62 1.08l-3.5 2.063a1.25 1.25 0 0 1-1.26 0l-3.5-2.063A1.25 1.25 0 0 1 1.25 9.6V5.4a1.25 1.25 0 0 1 .62-1.08l3.5-2.063ZM6 4.054 3.25 5.674v3.652L6 10.946l2.75-1.62V5.674L6 4.054Zm4.75.384v5.524l2.5-1.474V5.913l-2.5-1.475Zm3.25.225V9.6a1.25 1.25 0 0 1-.62 1.08l-3.13 1.843 1.38.813a1.25 1.25 0 0 0 1.26 0l2.36-1.39a1.25 1.25 0 0 0 .62-1.08V6.55l-1.87-1.887Z" clip-rule="evenodd" />
           </svg>
-          Здоровье
+          Карта
+        </RouterLink>
+        <RouterLink
+          :to="`/${route.params.projectId}/feed`"
+          class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
+          :class="route.path.startsWith(`/${route.params.projectId}/feed`)
+            ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
+            : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-4 w-4 flex-shrink-0">
+            <path fill-rule="evenodd" d="M8 1a.75.75 0 0 1 .75.75V5h3.5a.75.75 0 0 1 .6 1.2L9.5 10.5h2.75a.75.75 0 0 1 .6 1.2l-4.5 6a.75.75 0 0 1-1.35-.45V13H4.25a.75.75 0 0 1-.6-1.2L7 7.5H4.25a.75.75 0 0 1-.6-1.2l3.75-5A.75.75 0 0 1 8 1Z" clip-rule="evenodd" />
+          </svg>
+          Лента
         </RouterLink>
         <RouterLink
           :to="`/${route.params.projectId}/library`"
@@ -218,18 +230,6 @@ async function createProject() {
             <path d="M3.5 2A1.5 1.5 0 0 0 2 3.5v9A1.5 1.5 0 0 0 3.5 14h9a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 12.5 2h-9Zm0 1.5h9v9h-9v-9Zm3 1a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1h-3Zm0 2.5a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1h-3Zm0 2.5a.5.5 0 0 0 0 1H9a.5.5 0 0 0 0-1H6.5Z" />
           </svg>
           Библиотека
-        </RouterLink>
-        <RouterLink
-          :to="`/${route.params.projectId}/research`"
-          class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-          :class="route.path.startsWith(`/${route.params.projectId}/research`)
-            ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
-            : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-4 w-4 flex-shrink-0">
-            <path fill-rule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clip-rule="evenodd" />
-          </svg>
-          Исследование
         </RouterLink>
       </nav>
       <!-- Hint when no project selected -->

@@ -797,7 +797,77 @@ klemma outline                      # обновить структуру
 
 ---
 
-## 7. Решение проблем
+## 7. Облачная синхронизация (klemma-cli)
+
+Klemma CLI — отдельный лёгкий пакет для синхронизации исследовательского проекта с облачной платформой [litresearch.ru](https://litresearch.ru). Не требует AI-бэкенда, PyMuPDF или тяжёлых зависимостей.
+
+### 7.1 Установка
+
+```bash
+pip install klemma-cli
+```
+
+Зависимости: `click`, `requests`, `pydantic`, `pyyaml` + `git` (через subprocess).
+
+### 7.2 Подключение проекта
+
+```bash
+cd ~/research/dissertation
+klemma-cli link --api-url https://litresearch.ru
+```
+
+Команда `link`:
+1. Находит `.klemma/` директорию (project root)
+2. Запрашивает email и пароль (аккаунт litresearch.ru)
+3. Создаёт серверный bare git-репозиторий
+4. Инициализирует локальный git (если нет)
+5. Добавляет remote `klemma` с токеном доступа
+6. Генерирует `.gitignore` (исключает `.klemma/data/`, `*.pdf`, `*.db`)
+7. Делает начальный коммит и push
+
+### 7.3 Синхронизация
+
+**Push** — отправить изменения на сервер:
+```bash
+klemma-cli push
+```
+Две фазы:
+1. **Git**: `git add` отслеживаемых файлов → auto-commit → `git push klemma main`
+2. **API**: чтение локальной `library.db` → `POST /sync/push/library` (источники + фрагменты) → `POST /sync/push/embeddings` (base64 float32 векторы)
+
+**Pull** — получить изменения с сервера:
+```bash
+klemma-cli pull
+```
+Две фазы:
+1. **Git**: `git pull klemma main` (конфликты → стандартные git-маркеры)
+2. **API**: `GET /sync/pull/library` → запись в локальную `library.db`
+
+### 7.4 Статус и откат
+
+```bash
+klemma-cli status                      # локальные изменения + diff + счётчики библиотеки
+klemma-cli rollback 1                  # откат 1 коммита + force push на сервер
+```
+
+### 7.5 Что синхронизируется
+
+| Канал | Данные |
+|-------|--------|
+| **Git (файлы)** | `KLEMMA.md`, `notes/drafts/*.md`, `notes/research/*.md`, `.gitignore` |
+| **API (библиотека)** | Источники (citekey, метаданные), фрагменты, эмбеддинги, развилки |
+| **Не синхронизируется** | PDF, Obsidian vault, `config.yaml`, API-ключи, `.klemma/data/` |
+
+### 7.6 Зачем git?
+
+- **Откат**: `klemma-cli rollback` — случайно перезаписали файл? Одна команда.
+- **Конфликты**: стандартные merge-маркеры, знакомые каждому разработчику.
+- **История**: `git log` — бесплатная audit trail.
+- **Offline**: полноценный git-рабочий процесс, синхронизация когда есть интернет.
+
+---
+
+## 8. Решение проблем
 
 ### PDF не найден
 

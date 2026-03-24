@@ -20,7 +20,7 @@ Auth endpoints — mounted with `prefix="/auth"`. `TokenResponse` includes `user
 Registration disabled on frontend. Use `scripts/create_user.sh`:
 ```bash
 ./scripts/create_user.sh <email> <password> [name] [token_amount]
-# Set CITEQ_ADMIN_EMAIL + CITEQ_ADMIN_PASSWORD to auto-grant tokens
+# Set Klemma_ADMIN_EMAIL + Klemma_ADMIN_PASSWORD to auto-grant tokens
 ```
 
 ### library.py (~210 lines)
@@ -56,6 +56,28 @@ Write endpoints — mounted with `prefix="/write"`. All require Bearer auth.
 - `POST /write/draft` → `WriteJobResponse` (202) — enqueue section draft job
 - Jobs polled via shared `GET /process/jobs/{job_id}`
 - Task stubs in `api/tasks.py` (AI pipeline not yet wired for headless SaaS)
+
+### sync.py (~550 lines)
+Git-native sync endpoints — mounted with `prefix="/sync"`. All require Bearer auth (except verify-git-token).
+Server-side for `klemma-cli` sync client. Git repos are bare repos at `KLEMMA_DATA_DIR/repos/{project_id}/`.
+
+**Git repo management:**
+- `POST /sync/init-repo` → `InitRepoResponse` (201) — create bare repo + access token
+- `GET /sync/file/{project_id}/{file_path}` → `FileContentResponse` — `git show HEAD:{path}`
+- `GET /sync/history/{project_id}` → `[HistoryEntry]` — `git log`
+- `POST /sync/commit/{project_id}` → `CommitResponse` — commit file from browser edit (bare repo plumbing)
+- `POST /sync/rollback/{project_id}` → rollback N commits via `git update-ref`
+- `GET /sync/status/{project_id}` → `SyncStatusResponse` — file hashes, library counts, last commit
+
+**Library bulk sync:**
+- `POST /sync/push/library` — batch upsert sources + fragments (JSON)
+- `POST /sync/push/embeddings` — batch upsert vectors (base64-encoded float32)
+- `POST /sync/push/decisions` — batch upsert decisions (stub — acknowledged, storage deferred)
+- `GET /sync/pull/library?since=` — incremental: sources + fragments
+- `GET /sync/pull/decisions?since=` — decisions (stub)
+
+**Token verification:**
+- `GET /sync/verify-git-token?token=&project_id=` — for reverse proxy auth (no Bearer required)
 
 ## Adding a new router
 
