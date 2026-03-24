@@ -72,7 +72,11 @@ def commit(path: Path, message: str) -> str | None:
     """Create a commit with the given message. Returns commit hash or None if nothing to commit."""
     result = _run(["commit", "-m", message], cwd=path, check=False)
     if result.returncode != 0:
-        if "nothing to commit" in result.stdout + result.stderr:
+        combined = result.stdout + result.stderr
+        if "nothing to commit" in combined or "nothing added to commit" in combined:
+            return None
+        # Empty stderr with non-zero exit = also nothing to commit (no staged files)
+        if not result.stderr.strip():
             return None
         raise GitError("commit", result.stderr.strip())
     # Extract commit hash
