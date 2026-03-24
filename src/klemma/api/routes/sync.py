@@ -464,47 +464,52 @@ async def push_library(
     sources_saved = 0
     fragments_saved = 0
 
+    # Map client paper_id → server paper_id (server may assign new UUIDs)
+    paper_id_map: dict[str, str] = {}
+
     for src in body.sources:
-        # Register or find paper in global corpus
-        paper_id = src.paper_id
-        if not paper_id:
+        client_paper_id = src.paper_id
+        server_paper_id = client_paper_id
+
+        if not client_paper_id:
             existing = None
             if src.doi:
                 existing = paper_store.find_paper(doi=src.doi)
             if existing:
-                paper_id = existing.paper_id
+                server_paper_id = existing.paper_id
             else:
-                paper_id = paper_store.register_paper(
+                server_paper_id = paper_store.register_paper(
                     title=src.title, authors=src.authors,
                     year=src.year, doi=src.doi, abstract=src.abstract,
                     pdf_hash="",
                 )
         else:
-            # Ensure paper exists, update metadata
-            existing = paper_store.get_paper_by_id(paper_id)
+            existing = paper_store.get_paper_by_id(client_paper_id)
             if not existing:
-                paper_id = paper_store.register_paper(
+                server_paper_id = paper_store.register_paper(
                     title=src.title, authors=src.authors,
                     year=src.year, doi=src.doi, abstract=src.abstract,
                     pdf_hash="",
                 )
             else:
+                server_paper_id = existing.paper_id
                 paper_store.update_paper_metadata(
-                    paper_id, title=src.title, authors=src.authors,
+                    server_paper_id, title=src.title, authors=src.authors,
                     year=src.year, doi=src.doi, abstract=src.abstract,
                 )
 
-        # Add to user library
+        if client_paper_id:
+            paper_id_map[client_paper_id] = server_paper_id
+
         library.add_source(
-            paper_id, src.citekey,
+            server_paper_id, src.citekey,
             status=src.status,
             user_id=user.user_id,
         )
 
-        # Set section assignments
         if src.sections:
             project_store.set_source_sections(
-                src.citekey, paper_id, src.sections, [],
+                src.citekey, server_paper_id, src.sections, [],
                 user_id=user.user_id,
             )
 
@@ -512,16 +517,18 @@ async def push_library(
 
     for frag in body.fragments:
         from klemma.models import FragmentRecord
+        # Resolve client paper_id to server paper_id
+        resolved_paper_id = paper_id_map.get(frag.paper_id, frag.paper_id)
         record = FragmentRecord(
             fragment_id=frag.fragment_id,
-            paper_id=frag.paper_id,
+            paper_id=resolved_paper_id,
             fragment_text=frag.text,
             fragment_type=frag.fragment_type,
             page_number=frag.page,
             citation_intent=frag.citation_intent,
         )
         paper_store.save_fragments(
-            frag.paper_id, [record],
+            resolved_paper_id, [record],
             prompt_hash="cli-sync",
             ai_model="cli-sync",
         )

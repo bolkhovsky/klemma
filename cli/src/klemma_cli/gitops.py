@@ -80,8 +80,17 @@ def commit(path: Path, message: str) -> str | None:
     return hash_result.stdout.strip()
 
 
-def push(path: Path, remote: str = "klemma", branch: str = "main") -> bool:
+def current_branch(path: Path) -> str:
+    """Return the current branch name, or 'main' as fallback."""
+    result = _run(["rev-parse", "--abbrev-ref", "HEAD"], cwd=path, check=False)
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    return "main"
+
+
+def push(path: Path, remote: str = "klemma", branch: str | None = None) -> bool:
     """Push to remote. Returns True on success, False if rejected."""
+    branch = branch or current_branch(path)
     result = _run(["push", remote, branch], cwd=path, check=False)
     if result.returncode != 0:
         if "rejected" in result.stderr or "non-fast-forward" in result.stderr:
@@ -90,8 +99,9 @@ def push(path: Path, remote: str = "klemma", branch: str = "main") -> bool:
     return True
 
 
-def pull(path: Path, remote: str = "klemma", branch: str = "main") -> str:
+def pull(path: Path, remote: str = "klemma", branch: str | None = None) -> str:
     """Pull from remote. Returns output text."""
+    branch = branch or current_branch(path)
     result = _run(["pull", remote, branch, "--no-rebase"], cwd=path, check=False)
     if result.returncode != 0:
         if "CONFLICT" in result.stdout + result.stderr:
@@ -123,8 +133,9 @@ def status(path: Path) -> str:
     return result.stdout.strip()
 
 
-def remote_log(path: Path, remote: str = "klemma", branch: str = "main") -> list[str]:
+def remote_log(path: Path, remote: str = "klemma", branch: str | None = None) -> list[str]:
     """Return commits on remote that are not in local HEAD."""
+    branch = branch or current_branch(path)
     fetch(path, remote)
     result = _run(
         ["log", f"HEAD..{remote}/{branch}", "--oneline"],
@@ -143,8 +154,9 @@ def revert_last_n(path: Path, n: int) -> None:
     _run(["revert", "--no-edit", f"HEAD~{n}..HEAD"], cwd=path)
 
 
-def force_push(path: Path, remote: str = "klemma", branch: str = "main") -> None:
+def force_push(path: Path, remote: str = "klemma", branch: str | None = None) -> None:
     """Force push with lease (safe force push)."""
+    branch = branch or current_branch(path)
     _run(["push", "--force-with-lease", remote, branch], cwd=path)
 
 

@@ -34,7 +34,7 @@ def login(api_url: str, email: str, password: str) -> dict:
     Raises requests.HTTPError on failure.
     """
     resp = requests.post(
-        f"{api_url}/api/auth/login",
+        f"{api_url}/auth/login",
         json={"email": email, "password": password},
         timeout=15,
     )
@@ -58,7 +58,7 @@ def refresh_access_token(api_url: str, refresh_token: str) -> dict | None:
     """
     try:
         resp = requests.post(
-            f"{api_url}/api/auth/refresh",
+            f"{api_url}/auth/refresh",
             json={"refresh_token": refresh_token},
             timeout=15,
         )

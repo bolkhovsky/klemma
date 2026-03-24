@@ -19,7 +19,7 @@ def cli() -> None:
 
 
 @cli.command()
-@click.option("--api-url", default="https://litresearch.ru", help="API base URL")
+@click.option("--api-url", default="https://litresearch.ru/api", help="API base URL (include /api for production)")
 @click.option("--email", prompt="Email", help="Account email")
 @click.option("--password", prompt=True, hide_input=True, help="Account password")
 def link(api_url: str, email: str, password: str) -> None:

@@ -42,7 +42,7 @@ class KlemmaClient:
 
     def get(self, path: str, **kwargs: Any) -> requests.Response:
         """GET request with auto-refresh on 401."""
-        url = f"{self.api_url}/api{path}"
+        url = f"{self.api_url}{path}"
         resp = requests.get(url, headers=self._headers(), timeout=30, **kwargs)
         if self._maybe_refresh(resp):
             resp = requests.get(url, headers=self._headers(), timeout=30, **kwargs)
@@ -51,7 +51,7 @@ class KlemmaClient:
 
     def post(self, path: str, json: Any = None, **kwargs: Any) -> requests.Response:
         """POST request with auto-refresh on 401."""
-        url = f"{self.api_url}/api{path}"
+        url = f"{self.api_url}{path}"
         resp = requests.post(url, headers=self._headers(), json=json, timeout=30, **kwargs)
         if self._maybe_refresh(resp):
             resp = requests.post(url, headers=self._headers(), json=json, timeout=30, **kwargs)
