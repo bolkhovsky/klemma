@@ -1,0 +1,289 @@
+"""Library sync — read local DB and push/pull via API."""
+
+from __future__ import annotations
+
+import base64
+import sqlite3
+from pathlib import Path
+from typing import Optional
+
+from .client import KlemmaClient
+from .models import EmbeddingPayload, FragmentPayload, SourcePayload
+
+
+def _find_library_db(project_root: Path) -> Path | None:
+    """Find the library.db file. Checks project .klemma/data/ first, then ~/.klemma/."""
+    candidates = [
+        project_root / ".klemma" / "data" / "library.db",
+        project_root / ".klemma" / "data" / "klemma.db",
+        Path.home() / ".klemma" / "library.db",
+        Path.home() / ".klemma" / "klemma.db",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
+def _find_project_db(project_root: Path) -> Path | None:
+    """Find the project.db file."""
+    candidates = [
+        project_root / ".klemma" / "data" / "project.db",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
+def read_local_sources(project_root: Path) -> list[SourcePayload]:
+    """Read sources from local library.db."""
+    db_path = _find_library_db(project_root)
+    if not db_path:
+        return []
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    sources = []
+    try:
+        # Read from user_sources + papers
+        rows = conn.execute(
+            """SELECT us.citekey, us.paper_id, us.status,
+                      p.title, p.authors, p.year, p.doi, p.abstract
+               FROM user_sources us
+               LEFT JOIN papers p ON us.paper_id = p.paper_id
+               ORDER BY us.added_at"""
+        ).fetchall()
+
+        for row in rows:
+            # Get sections
+            section_rows = conn.execute(
+                "SELECT section FROM user_source_sections WHERE citekey = ?",
+                (row["citekey"],),
+            ).fetchall()
+            sections = [r["section"] for r in section_rows]
+
+            sources.append(SourcePayload(
+                citekey=row["citekey"],
+                paper_id=row["paper_id"] or "",
+                title=row["title"] or "",
+                authors=row["authors"] or "",
+                year=row["year"],
+                doi=row["doi"],
+                abstract=row["abstract"] or "",
+                sections=sections,
+                status=row["status"] or "pending",
+            ))
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        conn.close()
+
+    return sources
+
+
+def read_local_fragments(project_root: Path) -> list[FragmentPayload]:
+    """Read fragments from local library.db."""
+    db_path = _find_library_db(project_root)
+    if not db_path:
+        return []
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    fragments = []
+    try:
+        rows = conn.execute(
+            """SELECT fragment_id, paper_id, fragment_text,
+                      fragment_type, citation_intent, page_number
+               FROM fragments ORDER BY rowid"""
+        ).fetchall()
+
+        for row in rows:
+            fragments.append(FragmentPayload(
+                fragment_id=row["fragment_id"],
+                paper_id=row["paper_id"],
+                text=row["fragment_text"],
+                fragment_type=row["fragment_type"] or "key_idea",
+                citation_intent=row["citation_intent"],
+                page=row["page_number"],
+            ))
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        conn.close()
+
+    return fragments
+
+
+def read_local_embeddings(
+    project_root: Path,
+) -> tuple[list[EmbeddingPayload], list[EmbeddingPayload]]:
+    """Read embeddings from local library.db. Returns (paper_embs, fragment_embs)."""
+    db_path = _find_library_db(project_root)
+    if not db_path:
+        return [], []
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    paper_embs: list[EmbeddingPayload] = []
+    fragment_embs: list[EmbeddingPayload] = []
+
+    try:
+        for row in conn.execute("SELECT paper_id, model_name, vector FROM paper_embeddings"):
+            b64 = base64.b64encode(row["vector"]).decode()
+            paper_embs.append(EmbeddingPayload(
+                id=row["paper_id"], vector_b64=b64, model=row["model_name"],
+            ))
+
+        for row in conn.execute("SELECT fragment_id, model_name, vector FROM fragment_embeddings"):
+            b64 = base64.b64encode(row["vector"]).decode()
+            fragment_embs.append(EmbeddingPayload(
+                id=row["fragment_id"], vector_b64=b64, model=row["model_name"],
+            ))
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        conn.close()
+
+    return paper_embs, fragment_embs
+
+
+def push_library(client: KlemmaClient, project_root: Path) -> dict:
+    """Push local library data to server. Returns summary dict."""
+    sources = read_local_sources(project_root)
+    fragments = read_local_fragments(project_root)
+
+    result = {"sources": 0, "fragments": 0, "embeddings": 0}
+
+    if sources or fragments:
+        resp = client.post("/sync/push/library", json={
+            "sources": [s.model_dump() for s in sources],
+            "fragments": [f.model_dump() for f in fragments],
+        })
+        data = resp.json()
+        result["sources"] = data.get("sources_saved", 0)
+        result["fragments"] = data.get("fragments_saved", 0)
+
+    # Push embeddings in chunks
+    paper_embs, fragment_embs = read_local_embeddings(project_root)
+    chunk_size = 100
+    for i in range(0, len(paper_embs), chunk_size):
+        chunk_p = paper_embs[i:i + chunk_size]
+        chunk_f = fragment_embs[i:i + chunk_size] if i < len(fragment_embs) else []
+        client.post("/sync/push/embeddings", json={
+            "paper_embeddings": [e.model_dump() for e in chunk_p],
+            "fragment_embeddings": [e.model_dump() for e in chunk_f],
+        })
+        result["embeddings"] += len(chunk_p) + len(chunk_f)
+
+    # Push remaining fragment embeddings
+    remaining_start = len(paper_embs)
+    if remaining_start < len(fragment_embs):
+        for i in range(remaining_start, len(fragment_embs), chunk_size):
+            chunk_f = fragment_embs[i:i + chunk_size]
+            client.post("/sync/push/embeddings", json={
+                "paper_embeddings": [],
+                "fragment_embeddings": [e.model_dump() for e in chunk_f],
+            })
+            result["embeddings"] += len(chunk_f)
+
+    return result
+
+
+def pull_library(client: KlemmaClient, project_root: Path, since: Optional[str] = None) -> dict:
+    """Pull library data from server and write to local DB. Returns summary dict."""
+    params = {}
+    if since:
+        params["since"] = since
+
+    resp = client.get("/sync/pull/library", params=params)
+    data = resp.json()
+
+    sources = data.get("sources", [])
+    fragments = data.get("fragments", [])
+
+    result = {"sources": 0, "fragments": 0}
+
+    db_path = _find_library_db(project_root)
+    if not db_path:
+        # Create library.db
+        db_path = project_root / ".klemma" / "data" / "library.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        # Ensure tables exist
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS papers (
+                paper_id TEXT PRIMARY KEY, pdf_hash TEXT UNIQUE,
+                doi TEXT, s2_paper_id TEXT, title TEXT NOT NULL DEFAULT '',
+                authors TEXT, year INTEGER, abstract TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS user_sources (
+                citekey TEXT PRIMARY KEY, paper_id TEXT NOT NULL,
+                status TEXT DEFAULT 'pending', pdf_path TEXT, note_path TEXT,
+                quality_score INTEGER, added_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                project_id TEXT, user_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS user_source_sections (
+                citekey TEXT NOT NULL, section TEXT NOT NULL,
+                PRIMARY KEY (citekey, section)
+            );
+            CREATE TABLE IF NOT EXISTS fragments (
+                fragment_id TEXT PRIMARY KEY, paper_id TEXT NOT NULL,
+                extraction_id TEXT, fragment_text TEXT NOT NULL,
+                fragment_type TEXT, page_number INTEGER, citation_intent TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+
+        for src in sources:
+            conn.execute(
+                """INSERT OR REPLACE INTO papers
+                   (paper_id, title, authors, year, doi, abstract)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (src["paper_id"], src.get("title", ""), src.get("authors", ""),
+                 src.get("year"), src.get("doi"), src.get("abstract", "")),
+            )
+            conn.execute(
+                """INSERT INTO user_sources (citekey, paper_id, status)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(citekey) DO UPDATE SET
+                       paper_id=excluded.paper_id, status=excluded.status,
+                       updated_at=datetime('now')""",
+                (src["citekey"], src["paper_id"], src.get("status", "pending")),
+            )
+            # Update sections
+            conn.execute(
+                "DELETE FROM user_source_sections WHERE citekey = ?",
+                (src["citekey"],),
+            )
+            for section in src.get("sections", []):
+                conn.execute(
+                    "INSERT OR IGNORE INTO user_source_sections (citekey, section) VALUES (?, ?)",
+                    (src["citekey"], section),
+                )
+            result["sources"] += 1
+
+        for frag in fragments:
+            conn.execute(
+                """INSERT OR IGNORE INTO fragments
+                   (fragment_id, paper_id, fragment_text, fragment_type,
+                    page_number, citation_intent)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (frag["fragment_id"], frag["paper_id"], frag["text"],
+                 frag.get("fragment_type", "key_idea"),
+                 frag.get("page"), frag.get("citation_intent")),
+            )
+            result["fragments"] += 1
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return result

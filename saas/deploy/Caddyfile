@@ -3,6 +3,15 @@
 }
 
 litresearch.ru {
+	# Git HTTP backend — proxied via API sync/verify-git-token for auth
+	handle_path /git/* {
+		reverse_proxy api:8000 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
 	# API proxy — strip /api prefix
 	handle_path /api/* {
 		reverse_proxy api:8000 {

@@ -431,6 +431,31 @@ tags: ["NLP", "Machine-Learning"]
 
 **Куда сохраняются отчёты**: AI-отчёты (`outline`, `research`, `library`) сохраняются в корень проекта (`project_root/`). Только заметки `@citekey.md` — в vault (`notes_folder`).
 
+## Klemma CLI — облачная синхронизация
+
+Отдельный лёгкий пакет для синхронизации проекта с [litresearch.ru](https://litresearch.ru). Файлы синхронизируются через git, библиотека — через REST API. Откат на предыдущую версию — `klemma-cli rollback`.
+
+```bash
+pip install klemma-cli
+
+# Подключить проект к облаку
+klemma-cli link                        # логин + создание серверного git-репозитория
+
+# Работать как обычно, затем синхронизировать
+klemma-cli push                        # git push + загрузка библиотеки (источники, фрагменты, эмбеддинги)
+klemma-cli pull                        # git pull + скачивание обновлений библиотеки
+klemma-cli status                      # локальные изменения + diff с сервером
+
+# Случайно перезаписали файл?
+klemma-cli rollback 1                  # откат последнего коммита, force push на сервер
+```
+
+**Что синхронизируется через git**: `KLEMMA.md`, `notes/drafts/*.md`, `notes/research/*.md`
+**Что синхронизируется через API**: источники, фрагменты, эмбеддинги, развилки
+**Что НЕ синхронизируется**: PDF, Obsidian vault, конфиги, API-ключи
+
+Зависимости: click, requests, pydantic, pyyaml (+ git через subprocess). Без AI, без SQLite-обработки, без PyMuPDF.
+
 ## Лицензия
 
 Klemma — свободный инструмент для исследователей, но **не для коммерческого использования**.

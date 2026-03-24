@@ -402,6 +402,31 @@ tags: ["NLP", "Machine-Learning"]
 
 **Where reports are saved**: AI reports (`outline`, `research`, `library`) are saved to the project root (`project_root/`). Only `@citekey.md` notes go to the vault (`notes_folder`).
 
+## Klemma CLI — Cloud Sync
+
+A separate lightweight package for syncing your project with [litresearch.ru](https://litresearch.ru). Files sync via git, library data via REST API. Roll back accidental overwrites with `klemma-cli rollback`.
+
+```bash
+pip install klemma-cli
+
+# Connect project to the cloud
+klemma-cli link                        # login + create server-side git repo
+
+# Work as usual, then sync
+klemma-cli push                        # git push + upload library (sources, fragments, embeddings)
+klemma-cli pull                        # git pull + download library updates
+klemma-cli status                      # local changes + server diff
+
+# Accidentally overwrote a file?
+klemma-cli rollback 1                  # revert last commit, force push to server
+```
+
+**Synced via git**: `KLEMMA.md`, `notes/drafts/*.md`, `notes/research/*.md`
+**Synced via API**: sources, fragments, embeddings, decisions
+**NOT synced**: PDFs, Obsidian vault, configs, API keys
+
+Dependencies: click, requests, pydantic, pyyaml (+ git via subprocess). No AI, no SQLite processing, no PyMuPDF.
+
 ## Architecture
 
 ```
