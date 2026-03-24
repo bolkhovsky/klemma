@@ -35,6 +35,27 @@ def _create_ai_provider():
     return create_ai(config), config
 
 
+def _mirror_research_report(data_path: Path, project_id: str, section: str, text: str, model: str) -> None:
+    """Write research report to MD file for klemma-cli sync pull.
+
+    SQLite is the primary store; this file is a read-only mirror.
+    Path: {data_dir}/research/{project_id}/{section}.md
+    """
+    from datetime import datetime, timezone
+
+    try:
+        path = data_path / "research" / project_id / f"{section}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        content = (
+            f"---\nsection: {section}\nproject_id: {project_id}\n"
+            f"model: {model}\ncreated_at: {created_at}\n---\n\n{text}"
+        )
+        path.write_text(content, encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Failed to mirror research report to MD for %s/%s: %s", project_id, section, exc)
+
+
 def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = "", project_id: str | None = None, force: bool = False) -> dict:
     """Extract fragments from a paper's PDF.
 
@@ -468,6 +489,9 @@ def generate_research(section: str, project_id: str, data_dir: str, user_id: str
             report_text=result.research_text,
             model=ai_config.model,
         )
+
+        # Mirror to MD file so klemma-cli can pull it via sync
+        _mirror_research_report(data_path, project_id, section, result.research_text, ai_config.model)
 
         logger.info("Research report generated for section %s (project %s)", section, project_id)
         return {
