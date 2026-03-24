@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import AppLayout from '@/components/AppLayout.vue'
-import { userProjects, projects as apiProjects, type OutlineSection } from '@/api/client'
+import { userProjects, projects as apiProjects, blocks as apiBlocks, type OutlineSection } from '@/api/client'
 
 const router = useRouter()
 const route = useRoute()
@@ -235,15 +235,17 @@ const error = ref<string | null>(null)
 const projectName = ref('')
 const rawSections = ref<OutlineSection[]>([])
 const sectionSourceCounts = ref<Record<string, number>>({})
+const blockStatuses = ref<Record<string, { has_draft: boolean; word_count: number }>>({})
 
 async function loadMapData() {
   if (isDemoMode.value) return
   loading.value = true
   error.value = null
   try {
-    const [projectsData, coverageResult] = await Promise.all([
+    const [projectsData, coverageResult, statusResult] = await Promise.all([
       userProjects.list(),
-      apiProjects.coverage(),
+      apiProjects.coverage().catch(() => ({ total_sources: 0, sections: {} as Record<string, number>, chapters: {} as Record<string, number> })),
+      apiBlocks.getStatus(projectId.value!).catch(() => ({ statuses: {} as Record<string, { has_draft: boolean; word_count: number }> })),
     ])
     const project = projectsData.projects.find(p => p.project_id === projectId.value)
     if (project) {
@@ -251,11 +253,17 @@ async function loadMapData() {
       rawSections.value = project.outline ?? []
     }
     sectionSourceCounts.value = coverageResult.sections
+    blockStatuses.value = statusResult.statuses
   } catch (e: any) {
     error.value = (e as Error).message ?? 'Ошибка загрузки'
   } finally {
     loading.value = false
   }
+}
+
+/** Draft status for a section's first block (b1). */
+function sectionDraftStatus(sectionId: string): 'draft' | 'empty' {
+  return blockStatuses.value[`${sectionId}/b1`]?.has_draft ? 'draft' : 'empty'
 }
 
 onMounted(loadMapData)
@@ -533,6 +541,14 @@ function blockStatusColor(status: string): string {
                     <span class="text-xs text-[var(--color-ink-muted)] flex-shrink-0">
                       {{ sec.sourceCount }}s<template v-if="isDemoMode"> &middot; {{ sec.fragmentCount }}f</template>
                     </span>
+
+                    <!-- Real mode: draft status badge -->
+                    <span
+                      v-if="!isDemoMode"
+                      class="text-xs flex-shrink-0"
+                      :class="sectionDraftStatus(sec.id) === 'draft' ? 'text-[var(--color-ok)]' : 'text-[var(--color-ink-muted)]'"
+                      :title="sectionDraftStatus(sec.id) === 'draft' ? 'Черновик сохранён' : 'Пусто'"
+                    >{{ sectionDraftStatus(sec.id) === 'draft' ? '●' : '○' }}</span>
 
                     <!-- Real mode: open arrow instead of expand -->
                     <svg
