@@ -20,9 +20,9 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--api-url", default="https://litresearch.ru/api", help="API base URL (include /api for production)")
-@click.option("--email", prompt="Email", help="Account email")
-@click.option("--password", prompt=True, hide_input=True, help="Account password")
-def link(api_url: str, email: str, password: str) -> None:
+@click.option("--email", default=None, help="Account email")
+@click.option("--password", default=None, help="Account password")
+def link(api_url: str, email: str | None, password: str | None) -> None:
     """Connect this project to Klemma SaaS.
 
     Discovers .klemma/ project root, logs in, creates a server-side git repo,
@@ -35,16 +35,21 @@ def link(api_url: str, email: str, password: str) -> None:
     from .project import ensure_project_root, get_project_name
     from .state import save_sync_config
 
-    # 0. Show server URL first — user must know where credentials go
+    # 0. Show server URL and project BEFORE asking for credentials
     click.echo(f"Server: {api_url}")
-
-    # 1. Find project root
     project_root = ensure_project_root()
     project_name = get_project_name(project_root)
     click.echo(f"Project: {project_name} ({project_root})")
+    click.echo()
+
+    # 1. Prompt for credentials (after user sees where they're going)
+    if not email:
+        email = click.prompt("Email")
+    if not password:
+        password = click.prompt("Password", hide_input=True)
 
     # 2. Login
-    click.echo(f"Logging in...")
+    click.echo("Logging in...")
     try:
         auth_data = login(api_url, email, password)
     except Exception as e:
