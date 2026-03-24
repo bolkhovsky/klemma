@@ -50,6 +50,9 @@
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
+/* Clickable elements */
+button, [role="button"] { cursor: pointer; }
+
 /* Base */
 body {
   font-family: var(--font-body);
