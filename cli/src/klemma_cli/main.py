@@ -217,6 +217,23 @@ def pull() -> None:
     save_sync_config(project_root, config)
 
 
+def _resolve_project_id(config: object) -> str:
+    """Get the namespaced project_id (username/project) from config.
+
+    Falls back to extracting from git_url if project_id lacks a slash.
+    """
+    pid = config.project_id  # type: ignore[attr-defined]
+    if "/" in pid:
+        return pid
+    # Extract from git_url: https://litresearch.ru/git/username/project.git
+    git_url = config.git_url  # type: ignore[attr-defined]
+    if "/git/" in git_url:
+        path = git_url.split("/git/", 1)[1].removesuffix(".git")
+        if "/" in path:
+            return path
+    return pid
+
+
 @cli.command("status")
 def sync_status() -> None:
     """Show sync status — local changes + remote diff + library counts."""
@@ -249,7 +266,8 @@ def sync_status() -> None:
     click.echo("\n=== Library ===")
     try:
         client = KlemmaClient(api_url=config.api_url)
-        resp = client.get(f"/sync/status/{config.project_id}")
+        project_id = _resolve_project_id(config)
+        resp = client.get(f"/sync/status/{project_id}")
         data = resp.json()
         click.echo(f"  Sources: {data['source_count']}")
         click.echo(f"  Fragments: {data['fragment_count']}")
