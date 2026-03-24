@@ -78,26 +78,32 @@ async function loadSectionData() {
     section.value.id = sectionId.value
     block.value.id = blockIdParam.value
 
-    const sectionData = await apiProjects.sectionSources(sectionId.value)
+    // Fire sectionSources + project list in parallel
+    const [sectionData, projectsData] = await Promise.all([
+      apiProjects.sectionSources(sectionId.value),
+      userProjects.list(),
+    ])
 
-    const fragments: Fragment[] = []
-    for (const citekey of sectionData.citekeys.slice(0, 8)) {
-      try {
-        const src = await apiLibrary.get(citekey)
-        for (const f of (src.fragments || []).slice(0, 2)) {
-          fragments.push({ source: citekey, sourceTitle: src.title || citekey, year: src.year || null, text: f.text || '', intent: f.citation_intent || 'background', page: f.page_number || null })
-        }
-      } catch { /* skip unavailable sources */ }
-    }
-    block.value.fragments = fragments
-
-    // Resolve section name from project outline
-    const projectsData = await userProjects.list()
+    // Resolve section name immediately (no extra wait)
     const project = projectsData.projects.find(p => p.project_id === projectId.value)
     const outlineSection = project?.outline?.find(s => s.id === sectionId.value)
     section.value.name = outlineSection?.name || `Раздел ${sectionId.value}`
     block.value.title = outlineSection?.name || `Раздел ${sectionId.value}`
-    if (fragments.length > 0) block.value.status = 'empty'
+
+    // Fetch all source details in parallel
+    const citekeys = sectionData.citekeys.slice(0, 8)
+    const sourceResults = await Promise.allSettled(citekeys.map(k => apiLibrary.get(k)))
+
+    const fragments: Fragment[] = []
+    for (let i = 0; i < citekeys.length; i++) {
+      const result = sourceResults[i]
+      if (result?.status !== 'fulfilled') continue
+      const src = result.value
+      for (const f of (src.fragments || []).slice(0, 2)) {
+        fragments.push({ source: citekeys[i]!, sourceTitle: src.title || citekeys[i]!, year: src.year || null, text: f.text || '', intent: f.citation_intent || 'background', page: f.page_number || null })
+      }
+    }
+    block.value.fragments = fragments
 
   } catch (e: any) {
     loadError.value = e.message || 'Ошибка загрузки данных'
