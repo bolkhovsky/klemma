@@ -207,40 +207,44 @@ def pull_library(client: KlemmaClient, project_root: Path, since: Optional[str] 
 
     result = {"sources": 0, "fragments": 0}
 
-    db_path = _find_library_db(project_root)
-    if not db_path:
-        # Create library.db
-        db_path = project_root / ".klemma" / "data" / "library.db"
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+    # Always write to the new-format library.db (never to legacy klemma.db)
+    db_path = project_root / ".klemma" / "data" / "library.db"
+    if not db_path.exists():
+        # Fallback to system-level library.db
+        system_db = Path.home() / ".klemma" / "library.db"
+        if system_db.exists():
+            db_path = system_db
+        else:
+            db_path.parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(str(db_path))
     try:
-        # Ensure tables exist
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS papers (
-                paper_id TEXT PRIMARY KEY, pdf_hash TEXT UNIQUE,
-                doi TEXT, s2_paper_id TEXT, title TEXT NOT NULL DEFAULT '',
-                authors TEXT, year INTEGER, abstract TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS user_sources (
-                citekey TEXT PRIMARY KEY, paper_id TEXT NOT NULL,
-                status TEXT DEFAULT 'pending', pdf_path TEXT, note_path TEXT,
-                quality_score INTEGER, added_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now')),
-                project_id TEXT, user_id TEXT
-            );
-            CREATE TABLE IF NOT EXISTS user_source_sections (
-                citekey TEXT NOT NULL, section TEXT NOT NULL,
-                PRIMARY KEY (citekey, section)
-            );
-            CREATE TABLE IF NOT EXISTS fragments (
-                fragment_id TEXT PRIMARY KEY, paper_id TEXT NOT NULL,
-                extraction_id TEXT, fragment_text TEXT NOT NULL,
-                fragment_type TEXT, page_number INTEGER, citation_intent TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-        """)
+        # Ensure tables exist (simplified schema — no datetime defaults)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS papers ("
+            "paper_id TEXT PRIMARY KEY, pdf_hash TEXT, doi TEXT, s2_paper_id TEXT,"
+            "title TEXT NOT NULL DEFAULT '', authors TEXT, year INTEGER, abstract TEXT,"
+            "created_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS user_sources ("
+            "citekey TEXT PRIMARY KEY, paper_id TEXT NOT NULL,"
+            "status TEXT DEFAULT 'pending', pdf_path TEXT, note_path TEXT,"
+            "quality_score INTEGER, added_at TEXT, updated_at TEXT,"
+            "project_id TEXT, user_id TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS user_source_sections ("
+            "citekey TEXT NOT NULL, section TEXT NOT NULL,"
+            "PRIMARY KEY (citekey, section))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS fragments ("
+            "fragment_id TEXT PRIMARY KEY, paper_id TEXT NOT NULL,"
+            "extraction_id TEXT, fragment_text TEXT NOT NULL,"
+            "fragment_type TEXT, page_number INTEGER, citation_intent TEXT,"
+            "created_at TEXT)"
+        )
 
         for src in sources:
             conn.execute(
