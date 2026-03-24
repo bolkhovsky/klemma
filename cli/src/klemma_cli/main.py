@@ -35,13 +35,16 @@ def link(api_url: str, email: str, password: str) -> None:
     from .project import ensure_project_root, get_project_name
     from .state import save_sync_config
 
+    # 0. Show server URL first — user must know where credentials go
+    click.echo(f"Server: {api_url}")
+
     # 1. Find project root
     project_root = ensure_project_root()
     project_name = get_project_name(project_root)
     click.echo(f"Project: {project_name} ({project_root})")
 
     # 2. Login
-    click.echo(f"Logging in to {api_url}...")
+    click.echo(f"Logging in...")
     try:
         auth_data = login(api_url, email, password)
     except Exception as e:
