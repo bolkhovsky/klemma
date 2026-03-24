@@ -1,4 +1,4 @@
-"""Tests for reference_parser.py (#76 CiteQ onboarding)."""
+"""Tests for reference_parser.py (#76 Klemma onboarding)."""
 
 from __future__ import annotations
 

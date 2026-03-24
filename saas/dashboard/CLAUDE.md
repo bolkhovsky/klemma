@@ -1,4 +1,4 @@
-# CiteQ Dashboard
+# Klemma Dashboard
 
 Vue 3 SaaS frontend for the Klemma API (Epic #191, ADR-015 proprietary).
 

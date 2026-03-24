@@ -1,7 +1,7 @@
 # Pre-SaaS Sprint Issue Prioritization
 
 **Date:** 2026-03-03
-**Context:** Preparing for CiteQ.ru SaaS epic (klemma → SaaS). Evaluating 11 open issues to decide what to close before the sprint vs defer.
+**Context:** Preparing for Klemma.ru SaaS epic (klemma → SaaS). Evaluating 11 open issues to decide what to close before the sprint vs defer.
 
 ## Prioritization Criteria
 
@@ -28,7 +28,7 @@
 |-------|-------|-------|-----------|
 | [#67](https://github.com/klemma-ai/klemma/issues/67) | Semantic section types | Phase 1 | Cross-cutting refactor, better with klemma-core package |
 | [#39](https://github.com/klemma-ai/klemma/issues/39) | Online source ingest | Phase 2 | Part of SaaS upload flow |
-| [#63](https://github.com/klemma-ai/klemma/issues/63) | SPECTER vs OpenAI embeddings | Phase 2 | Benchmark determines default CiteQ embedder |
+| [#63](https://github.com/klemma-ai/klemma/issues/63) | SPECTER vs OpenAI embeddings | Phase 2 | Benchmark determines default Klemma embedder |
 
 ## Tier 3: DEFERRED
 
@@ -38,7 +38,7 @@
 | [#59](https://github.com/klemma-ai/klemma/issues/59) | `klemma bib export` | Resolved by SaaS `/export` endpoint |
 | [#37](https://github.com/klemma-ai/klemma/issues/37) | Run intent benchmark | Blocked by paper first draft |
 | [#31](https://github.com/klemma-ai/klemma/issues/31) | Epic-E: Deferred expansion | Meta-issue, #54 promoted out |
-| [#30](https://github.com/klemma-ai/klemma/issues/30) | Epic-D: Advanced features | Stretch goals → CiteQ post-MVP |
+| [#30](https://github.com/klemma-ai/klemma/issues/30) | Epic-D: Advanced features | Stretch goals → Klemma post-MVP |
 
 ---
 

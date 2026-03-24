@@ -2,7 +2,7 @@
 
 Pure string processing — no AI, no external deps. Handles common
 academic citation formats (APA, numbered, inline). Used by the
-CiteQ onboarding pipeline to extract references from draft PDFs.
+Klemma onboarding pipeline to extract references from draft PDFs.
 """
 
 from __future__ import annotations

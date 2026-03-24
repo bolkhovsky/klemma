@@ -53,6 +53,28 @@ Every epic/feature follows this sequence. Do not skip or reorder steps. Skip thi
     Never edit version numbers by hand.
 8. **Paper draft** — export the Release Note into `~/research/klemma-paper/sections/` as a section draft. Russian academic style, `[@citekey]` references, matching existing sections format. File name: `section_N_<topic>.md` where N maps to the paper outline section. Add any missing BibTeX entries to `~/research/klemma-paper/references.bib`. Also create a results file in `~/research/klemma-paper/results/` with frontmatter `step`, `date`, `paper_sections` and sections: Baseline / Implementation / Results / Delta / Paper Section.
 
+## Marketing & Growth (Linear)
+
+Marketing content lives in **Linear**, not in the repository. Code and marketing are strictly separated.
+
+### Where things live
+- **Project**: [Klemma Growth Marketing](https://linear.app/klemma/project/klemma-growth-marketing-32a997edac7a) in Linear
+- **Documents**: lead magnets (LM-1, LM-2), email sequences (LM-3) — stored as Linear documents in the project
+- **Issues**: KLE-5 through KLE-10 — tasks for implementation (PDF design, Unisender setup, Хабр article, etc.)
+- **Labels**: `marketing`, `lead-magnet`, `email`
+
+### Rules
+- **Never commit marketing content** (copy, emails, lead magnets, blog drafts) to the git repository. All marketing assets go to Linear documents.
+- **Use Linear MCP** (`/linear` skill) to create, read, and update marketing tasks and documents.
+- **Landing pages and forms** (Klemma.ru/checklist, Klemma.ru/gost-template) are code — those go in the repo under `saas/dashboard/`.
+- **Lead magnet source content** is derived from Klemma prompts (`prompts/*.md`). When prompts change, update the corresponding Linear documents.
+- **Email platform**: Unisender (Russian market). Configuration and automation are set up in Unisender UI, not in code.
+
+### Workflow for new marketing content
+1. Create a Linear document in the Klemma Growth Marketing project
+2. Create a tracking issue with labels `marketing` + relevant type (`lead-magnet`, `email`)
+3. If the content needs a landing page or API endpoint — that code goes to `saas/dashboard/` via normal feature workflow (PR, review, etc.)
+
 ## Maintaining CLAUDE.md documentation
 
 This documentation is a modular knowledge graph — 9 interconnected CLAUDE.md files loaded incrementally as the agent navigates directories. **Keep it up to date when changing code.**

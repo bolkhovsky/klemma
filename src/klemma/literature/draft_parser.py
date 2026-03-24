@@ -1,7 +1,7 @@
 """Parse structure and bibliography from draft PDFs/DOCX (#76).
 
 Extracts section headings, body text, and bibliography entries from
-academic drafts. Used by the CiteQ onboarding `--from-draft` pipeline
+academic drafts. Used by the Klemma onboarding `--from-draft` pipeline
 to bootstrap a project from an existing paper.
 
 Uses PyMuPDF (already a core dependency) for PDF parsing.
