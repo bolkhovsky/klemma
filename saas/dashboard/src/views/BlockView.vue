@@ -54,20 +54,36 @@ function startEditing() {
   editText.value = currentText.value
   isEditing.value = true
   nextTick(() => {
-    const el = document.querySelector('.draft-editor') as HTMLTextAreaElement
-    if (el) { el.focus(); el.selectionStart = el.value.length }
+    const el = editorEl.value
+    if (!el) return
+    el.innerText = currentText.value
+    el.focus()
+    moveCursorToEnd(el)
   })
 }
 
-function saveEdit() {
+function commitText() {
+  // editText is always ghost-free — updated by onEditorInput before ghost appears
   block.value.generatedText = editText.value
   block.value.draftText = editText.value
   block.value.status = 'draft'
+}
+
+function autoSave() {
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => {
+    commitText()
+    saveStatus.value = 'saved'
+    setTimeout(() => { if (saveStatus.value === 'saved') saveStatus.value = 'idle' }, 2500)
+  }, 800)
+}
+
+function closeEditor() {
+  clearGhost() // removes ghost from DOM, editText stays clean
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+  commitText() // reads editText.value — always safe
+  saveStatus.value = 'idle'
   isEditing.value = false
-  pushAssistantMessage('Текст сохранён. Проверяю цитирование...')
-  setTimeout(() => {
-    pushAssistantMessage('Все 5 ссылок валидны. [@olhovikINFORMATIONMODELMARITIME2018] используется как method — корректно для аргумента о нефиксированности трассы.')
-  }, 1500)
 }
 
 async function generateDraft() {
@@ -90,6 +106,156 @@ async function generateDraft() {
   generating.value = false
   generatingProgress.value = ''
   pushAssistantMessage(`Готово — ${block.value.generatedText.split(/\s+/).length} слов, ${block.value.fragments.length} источников. Нажмите на текст чтобы отредактировать.`)
+}
+
+// ── Ghost text (inline AI continuation) ──────────────────────────────────
+
+const editorEl = ref<HTMLElement>()
+const ghostText = ref('')
+const isSpinning = ref(false)
+let ghostTimer: ReturnType<typeof setTimeout> | null = null
+let streamingTimer: ReturnType<typeof setTimeout> | null = null
+let spinInterval: ReturnType<typeof setInterval> | null = null
+
+const saveStatus = ref<'idle' | 'saving' | 'saved'>('idle')
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+function moveCursorToEnd(el: HTMLElement) {
+  const range = document.createRange()
+  const sel = window.getSelection()
+  range.selectNodeContents(el)
+  range.collapse(false)
+  sel?.removeAllRanges()
+  sel?.addRange(range)
+}
+
+function clearGhost() {
+  ghostText.value = ''
+  isSpinning.value = false
+  if (streamingTimer) { clearTimeout(streamingTimer); streamingTimer = null }
+  if (ghostTimer) { clearTimeout(ghostTimer); ghostTimer = null }
+  if (spinInterval) { clearInterval(spinInterval); spinInterval = null }
+  editorEl.value?.querySelectorAll('.ghost-text, .ghost-spinner').forEach(s => s.remove())
+}
+
+function acceptGhost() {
+  const el = editorEl.value
+  if (!el || !ghostText.value) return
+  el.querySelectorAll('.ghost-text').forEach(ghost => {
+    ghost.replaceWith(document.createTextNode(ghost.textContent || ''))
+  })
+  editText.value = el.innerText
+  ghostText.value = ''
+  if (streamingTimer) { clearTimeout(streamingTimer); streamingTimer = null }
+  moveCursorToEnd(el)
+  autoSave()
+  pushAssistantMessage('Предложение принято. Продолжайте.')
+}
+
+function getMockSuggestion(text: string): string {
+  const lower = text.toLowerCase()
+  if (lower.includes('грузопоток') || lower.includes('арктик спг') || lower.includes('ямал')) {
+    return ' По прогнозу Министерства транспорта РФ, к 2030 году объём перевозок по СМП должен достичь 150 млн тонн, что потребует существенного расширения ледокольного флота и инфраструктуры навигационно-гидрографического обеспечения.'
+  }
+  if (lower.includes('ледов') || lower.includes('лёд') || lower.includes('концентрац')) {
+    return ' Систематические наблюдения ведёт Арктический и антарктический научно-исследовательский институт (ААНИИ), однако точность краткосрочных прогнозов снижается в периоды активной циклонической деятельности.'
+  }
+  if (lower.includes('прогноз') || lower.includes('точност') || lower.includes('нейросет')) {
+    return ' Применение нейросетевых моделей позволяет повысить точность прогнозирования концентрации морского льда на 15–25% по сравнению с детерминированными численными методами [@bidenkoGeoinformacionnayaProceduraOcenki2022].'
+  }
+  if (lower.includes('навигац') || lower.includes('судоходств') || lower.includes('маршрут')) {
+    return ' Критическим периодом для безопасной навигации являются сентябрь–октябрь: первый осенний ледостав в Восточно-Сибирском море создаёт трудно предсказуемые условия для транзитных рейсов.'
+  }
+  return ' Данный аспект имеет принципиальное значение для разработки методики оценки качества нейросетевых прогнозов ледовой обстановки в акватории Северного морского пути [@bidenkoGeoinformacionnayaProceduraOcenki2022].'
+}
+
+function fetchGhostSuggestion() {
+  const text = editText.value.trim()
+  if (text.length < 30) return
+
+  const suggestion = getMockSuggestion(text)
+  const el = editorEl.value
+  if (!el) return
+
+  // Phase 1: spinner  · ·· ···
+  isSpinning.value = true
+  const spinnerSpan = document.createElement('span')
+  spinnerSpan.className = 'ghost-spinner'
+  spinnerSpan.style.color = 'var(--color-ink-muted)'
+  spinnerSpan.style.opacity = '0.7'
+  spinnerSpan.style.pointerEvents = 'none'
+  spinnerSpan.style.userSelect = 'none'
+  spinnerSpan.style.marginLeft = '6px'
+  spinnerSpan.style.letterSpacing = '3px'
+  spinnerSpan.style.fontSize = '11px'
+  spinnerSpan.style.border = '1px solid var(--color-rule)'
+  spinnerSpan.style.borderRadius = '999px'
+  spinnerSpan.style.padding = '1px 7px 2px'
+  spinnerSpan.style.verticalAlign = 'middle'
+  spinnerSpan.style.display = 'inline-block'
+  el.appendChild(spinnerSpan)
+
+  let dots = 1
+  spinnerSpan.textContent = '·'
+  spinInterval = setInterval(() => {
+    if (!el.contains(spinnerSpan)) { clearInterval(spinInterval!); spinInterval = null; return }
+    dots = dots >= 3 ? 1 : dots + 1
+    spinnerSpan.textContent = '·'.repeat(dots)
+  }, 200)
+
+  // Phase 2: after one full dot cycle (600ms) — replace with full text at once
+  streamingTimer = setTimeout(() => {
+    if (spinInterval) { clearInterval(spinInterval); spinInterval = null }
+    if (!el.contains(spinnerSpan)) return
+    spinnerSpan.remove()
+    isSpinning.value = false
+
+    const ghostSpan = document.createElement('span')
+    ghostSpan.className = 'ghost-text'
+    ghostSpan.style.color = 'var(--color-ink-muted)'
+    ghostSpan.style.opacity = '0.4'
+    ghostSpan.style.pointerEvents = 'none'
+    ghostSpan.style.userSelect = 'none'
+    ghostSpan.textContent = suggestion
+    el.appendChild(ghostSpan)
+    ghostText.value = suggestion
+  }, 600)
+}
+
+function onEditorInput() {
+  clearGhost()
+  editText.value = editorEl.value?.innerText || ''
+  autoSave()
+  if (editText.value.trim().length < 30) return
+  ghostTimer = setTimeout(fetchGhostSuggestion, 700)
+}
+
+function onEditorKeydown(e: KeyboardEvent) {
+  if (e.key === 'Tab' && ghostText.value) {
+    e.preventDefault()
+    acceptGhost()
+    return
+  }
+  if (e.key === 'Escape') {
+    clearGhost()
+    return
+  }
+  if (e.metaKey && e.key === 'Enter') {
+    e.preventDefault()
+    closeEditor()
+  }
+}
+
+function onEditorPaste(e: ClipboardEvent) {
+  e.preventDefault()
+  const text = e.clipboardData?.getData('text/plain') || ''
+  const sel = window.getSelection()
+  if (!sel?.rangeCount) return
+  sel.deleteFromDocument()
+  const node = document.createTextNode(text)
+  sel.getRangeAt(0).insertNode(node)
+  sel.collapseToEnd()
+  editText.value = editorEl.value?.innerText || ''
 }
 
 // ── Fragment search ──────────────────────────────────────────────────────
@@ -165,6 +331,11 @@ async function sendUserMessage() {
   await new Promise(r => setTimeout(r, 1000))
   pushAssistantMessage(`В библиотеке есть 2 дополнительных источника по этой теме. Попробуйте найти их через поиск справа: «грузопоток 2024» или «арктик спг».`)
 }
+
+// Hide "Сохранено" badge the moment ghost spinner kicks in
+watch(isSpinning, (spinning) => {
+  if (spinning) saveStatus.value = 'idle'
+})
 
 // Watch text edits to trigger AI reactions
 watch(isEditing, (editing) => {
@@ -254,16 +425,33 @@ function timeAgo(d: Date): string {
 
             <!-- Editing mode -->
             <div v-else-if="isEditing">
-              <textarea
-                v-model="editText"
-                class="draft-editor w-full px-8 py-6 text-[15px] text-[var(--color-ink)] leading-[1.8] bg-transparent focus:outline-none resize-none font-[var(--font-body)]"
-                style="min-height: 40vh;"
-                @keydown.meta.enter="saveEdit"
-              />
-              <div class="flex items-center gap-2 border-t border-[var(--color-rule-light)] px-6 py-2.5">
-                <button @click="saveEdit" class="rounded-md bg-[var(--color-accent)] px-4 py-1.5 text-sm font-medium text-white hover:bg-[var(--color-accent-deep)] transition-colors">Сохранить</button>
-                <button @click="isEditing = false" class="rounded-md px-3 py-1.5 text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] transition-colors">Отмена</button>
-                <span class="ml-auto font-[var(--font-mono)] text-xs text-[var(--color-ink-muted)]">{{ editWordCount }} слов &middot; &#8984;Enter</span>
+              <div class="relative">
+                <div
+                  ref="editorEl"
+                  contenteditable="true"
+                  spellcheck="false"
+                  class="draft-editor w-full px-8 py-6 text-[15px] text-[var(--color-ink)] leading-[1.8] focus:outline-none font-[var(--font-body)]"
+                  style="min-height: 40vh; white-space: pre-wrap; word-break: break-word;"
+                  @input="onEditorInput"
+                  @keydown="onEditorKeydown"
+                  @paste.prevent="onEditorPaste"
+                />
+                <transition name="ghost-hint">
+                  <div v-if="ghostText && !isSpinning"
+                    class="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-md bg-[var(--color-paper-warm)] border border-[var(--color-rule)] px-2.5 py-1 text-xs text-[var(--color-ink-muted)] shadow-sm pointer-events-none select-none">
+                    <kbd class="font-[var(--font-mono)] text-[var(--color-accent)] font-semibold">Tab</kbd>
+                    <span>принять</span>
+                  </div>
+                </transition>
+              </div>
+              <div class="flex items-center gap-3 border-t border-[var(--color-rule-light)] px-6 py-2.5">
+                <!-- Autosave status -->
+                <transition name="ghost-hint">
+                  <span v-if="saveStatus === 'saved'" class="text-xs text-[var(--color-ok)]">Сохранено ✓</span>
+                </transition>
+                <div class="flex-1" />
+                <span class="font-[var(--font-mono)] text-xs text-[var(--color-ink-muted)]">{{ editWordCount }} слов</span>
+                <button @click="closeEditor" class="rounded-md px-3 py-1.5 text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] transition-colors">Закрыть</button>
               </div>
             </div>
 
@@ -393,3 +581,25 @@ function timeAgo(d: Date): string {
     </div>
   </AppLayout>
 </template>
+
+<style scoped>
+.ghost-text {
+  color: var(--color-ink-muted);
+  opacity: 0.38;
+  pointer-events: none;
+  user-select: none;
+}
+
+[contenteditable]:focus {
+  outline: none;
+}
+
+.ghost-hint-enter-active,
+.ghost-hint-leave-active {
+  transition: opacity 0.15s ease;
+}
+.ghost-hint-enter-from,
+.ghost-hint-leave-to {
+  opacity: 0;
+}
+</style>
