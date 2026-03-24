@@ -86,7 +86,7 @@ async def submit_draft_job(
 
     Returns 202 with a job_id. Poll status via GET /process/jobs/{job_id}.
     """
-    return await _enqueue_write_task("generate_draft", body.section)
+    return await _enqueue_write_task("generate_draft", body.section, body.project_id, user.user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +102,10 @@ async def _enqueue_write_task(
 
     data_dir = os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma"))
     fn = generate_research if task_name == "generate_research" else generate_draft
-    args = (section, project_id or "", data_dir, user_id) if task_name == "generate_research" else (section, data_dir)
+    if task_name == "generate_research":
+        args = (section, project_id or "", data_dir, user_id)
+    else:
+        args = (section, data_dir, project_id or "", user_id)
 
     # Try Redis first
     if _RQ_AVAILABLE:
