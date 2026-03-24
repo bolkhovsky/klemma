@@ -50,13 +50,16 @@ def _repos_dir() -> Path:
 def _repo_path(project_id: str) -> Path:
     """Return path to the bare git repo for a project. Validates project_id.
 
-    Repos are namespaced by user_id prefix baked into project_id at init time,
-    so two users can each have a "dissertation" project without collision.
+    project_id format: "username/project-name" (like GitHub).
+    Maps to: KLEMMA_DATA_DIR/repos/username/project-name/
     """
-    safe = project_id.replace("/", "").replace("..", "").replace("\\", "")
-    if not safe or safe != project_id:
+    # Reject traversal and dangerous chars, but allow single /
+    if ".." in project_id or "\\" in project_id or project_id.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid project_id")
-    return _repos_dir() / safe
+    parts = project_id.split("/")
+    if len(parts) > 2 or any(not p or p.startswith("-") for p in parts):
+        raise HTTPException(status_code=400, detail="Invalid project_id format")
+    return _repos_dir() / project_id
 
 
 def _run_git(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
@@ -244,8 +247,10 @@ async def init_repo(
     project_id is namespaced with user_id prefix to prevent collision
     between users who choose the same project name (e.g. "dissertation").
     """
-    # Namespace: user_id[:8]-project_id → unique per user
-    namespaced_id = f"{user.user_id[:8]}-{body.project_id}"
+    # Namespace: username/project_id → like GitHub (e.g. "ilya-bolkhovsky/dissertation")
+    if not user.username:
+        raise HTTPException(status_code=400, detail="User has no username — re-login to generate one")
+    namespaced_id = f"{user.username}/{body.project_id}"
     repo = _repo_path(namespaced_id)
     if repo.exists():
         raise HTTPException(status_code=409, detail="Repository already exists")

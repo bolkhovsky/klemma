@@ -55,22 +55,23 @@ def link(api_url: str, email: str | None, password: str | None) -> None:
     except Exception as e:
         click.echo(f"Login failed: {e}", err=True)
         raise SystemExit(1)
-    click.echo(f"Logged in as {auth_data['email']}")
+    username = auth_data.get("username", "")
+    click.echo(f"Logged in as {auth_data['email']} ({username})")
 
-    # 3. Create server-side repo
+    # 3. Create server-side repo (username/project-name format, like GitHub)
     client = KlemmaClient(api_url=api_url, access_token=auth_data["access_token"])
-    project_id = project_name.lower().replace(" ", "-").replace("_", "-")
+    project_slug = project_name.lower().replace(" ", "-").replace("_", "-")
 
     try:
-        resp = client.post("/sync/init-repo", json={"project_id": project_id})
+        resp = client.post("/sync/init-repo", json={"project_id": project_slug})
         repo_data = resp.json()
     except Exception as e:
         error_msg = str(e)
         if "409" in error_msg:
             click.echo("Server repo already exists — reconnecting.")
-            # Strip /api suffix for git URL (git goes through /git/, not /api/git/)
             base = api_url.rstrip("/").removesuffix("/api")
-            repo_data = {"git_url": f"{base}/git/{project_id}.git", "access_token": ""}
+            namespaced = f"{username}/{project_slug}" if username else project_slug
+            repo_data = {"git_url": f"{base}/git/{namespaced}.git", "access_token": ""}
         else:
             click.echo(f"Failed to create server repo: {e}", err=True)
             raise SystemExit(1)
@@ -105,7 +106,7 @@ def link(api_url: str, email: str | None, password: str | None) -> None:
 
     # 8. Save sync config
     config = SyncConfig(
-        project_id=project_id,
+        project_id=repo_data.get("project_id", project_slug),
         api_url=api_url,
         git_url=git_url,
         access_token=access_token,

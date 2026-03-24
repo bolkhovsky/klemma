@@ -33,6 +33,7 @@ def mock_user():
         email="test@example.com",
         password_hash="xxx",
         name="Test User",
+        username="test-user",
     )
 
 
@@ -58,14 +59,13 @@ class TestInitRepo:
         )
         assert resp.status_code == 201
         data = resp.json()
-        # project_id is namespaced with user_id prefix
-        assert data["project_id"].endswith("-my-project")
+        # project_id is namespaced as username/project-name
+        assert data["project_id"] == "test-user/my-project"
         assert "git_url" in data
         assert "access_token" in data
 
         # Verify bare repo was created (namespaced path)
-        namespaced_id = data["project_id"]
-        repo_path = data_dir / "repos" / namespaced_id
+        repo_path = data_dir / "repos" / "test-user" / "my-project"
         assert repo_path.exists()
         assert (repo_path / "HEAD").exists()  # bare repo indicator
         assert (repo_path / "klemma_owner").read_text() == "test-user-123"

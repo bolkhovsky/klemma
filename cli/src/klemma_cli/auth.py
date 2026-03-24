@@ -45,6 +45,7 @@ def login(api_url: str, email: str, password: str) -> dict:
         "access_token": data["access_token"],
         "refresh_token": data["refresh_token"],
         "user_id": data.get("user_id", ""),
+        "username": data.get("username", ""),
         "email": email,
     }
     save_auth(auth_data)
