@@ -58,12 +58,14 @@ class TestInitRepo:
         )
         assert resp.status_code == 201
         data = resp.json()
-        assert data["project_id"] == "my-project"
+        # project_id is namespaced with user_id prefix
+        assert data["project_id"].endswith("-my-project")
         assert "git_url" in data
         assert "access_token" in data
 
-        # Verify bare repo was created
-        repo_path = data_dir / "repos" / "my-project"
+        # Verify bare repo was created (namespaced path)
+        namespaced_id = data["project_id"]
+        repo_path = data_dir / "repos" / namespaced_id
         assert repo_path.exists()
         assert (repo_path / "HEAD").exists()  # bare repo indicator
         assert (repo_path / "klemma_owner").read_text() == "test-user-123"
@@ -137,11 +139,12 @@ class TestFileEndpoints:
         assert entries[0]["message"] == "init"
 
     def test_history_empty_repo(self, client, data_dir):
-        repo = data_dir / "repos" / "empty-proj"
+        namespaced = "test-use-empty-proj"
+        repo = data_dir / "repos" / namespaced
         repo.mkdir(parents=True)
         subprocess.run(["git", "init", "--bare"], cwd=str(repo), capture_output=True)
         (repo / "klemma_owner").write_text("test-user-123")
-        resp = client.get("/sync/history/empty-proj")
+        resp = client.get(f"/sync/history/{namespaced}")
         assert resp.status_code == 200
         assert resp.json() == []
 

@@ -48,7 +48,11 @@ def _repos_dir() -> Path:
 
 
 def _repo_path(project_id: str) -> Path:
-    """Return path to the bare git repo for a project. Validates project_id."""
+    """Return path to the bare git repo for a project. Validates project_id.
+
+    Repos are namespaced by user_id prefix baked into project_id at init time,
+    so two users can each have a "dissertation" project without collision.
+    """
     safe = project_id.replace("/", "").replace("..", "").replace("\\", "")
     if not safe or safe != project_id:
         raise HTTPException(status_code=400, detail="Invalid project_id")
@@ -78,12 +82,13 @@ def _ensure_repo_access(project_id: str, user: UserRecord) -> Path:
     repo = _repo_path(project_id)
     if not repo.exists():
         raise HTTPException(status_code=404, detail="Repository not found")
-    # Check token file for ownership
+    # Check ownership — reject repos without owner file (corrupted state)
     token_file = repo / "klemma_owner"
-    if token_file.exists():
-        owner_id = token_file.read_text().strip()
-        if owner_id != user.user_id:
-            raise HTTPException(status_code=403, detail="Not your repository")
+    if not token_file.exists():
+        raise HTTPException(status_code=403, detail="Repository has no owner")
+    owner_id = token_file.read_text().strip()
+    if owner_id != user.user_id:
+        raise HTTPException(status_code=403, detail="Not your repository")
     return repo
 
 
@@ -109,9 +114,9 @@ class FileContentResponse(BaseModel):
 
 
 class CommitRequest(BaseModel):
-    file_path: str
-    content: str
-    message: str = "edit from SaaS dashboard"
+    file_path: str = Field(..., max_length=500)
+    content: str = Field(..., max_length=1_000_000)  # 1MB max per file
+    message: str = Field(default="edit from SaaS dashboard", max_length=500)
 
 
 class CommitResponse(BaseModel):
@@ -157,8 +162,8 @@ class FragmentPush(BaseModel):
 
 
 class LibraryPushRequest(BaseModel):
-    sources: list[SourcePush] = []
-    fragments: list[FragmentPush] = []
+    sources: list[SourcePush] = Field(default=[], max_length=1000)
+    fragments: list[FragmentPush] = Field(default=[], max_length=10000)
 
 
 class EmbeddingEntry(BaseModel):
@@ -168,8 +173,8 @@ class EmbeddingEntry(BaseModel):
 
 
 class EmbeddingsPushRequest(BaseModel):
-    paper_embeddings: list[EmbeddingEntry] = []
-    fragment_embeddings: list[EmbeddingEntry] = []
+    paper_embeddings: list[EmbeddingEntry] = Field(default=[], max_length=500)
+    fragment_embeddings: list[EmbeddingEntry] = Field(default=[], max_length=5000)
 
 
 class DecisionPush(BaseModel):
@@ -234,8 +239,14 @@ async def init_repo(
     body: InitRepoRequest,
     user: UserRecord = Depends(get_current_user),
 ) -> InitRepoResponse:
-    """Create a bare git repo for a project. Returns git URL + access token."""
-    repo = _repo_path(body.project_id)
+    """Create a bare git repo for a project. Returns git URL + access token.
+
+    project_id is namespaced with user_id prefix to prevent collision
+    between users who choose the same project name (e.g. "dissertation").
+    """
+    # Namespace: user_id[:8]-project_id → unique per user
+    namespaced_id = f"{user.user_id[:8]}-{body.project_id}"
+    repo = _repo_path(namespaced_id)
     if repo.exists():
         raise HTTPException(status_code=409, detail="Repository already exists")
 
@@ -251,12 +262,12 @@ async def init_repo(
 
     # Construct git URL (token embedded for MVP — Option A from plan)
     api_base = os.environ.get("KLEMMA_API_URL", "https://litresearch.ru")
-    git_url = f"{api_base}/git/{body.project_id}.git"
+    git_url = f"{api_base}/git/{namespaced_id}.git"
 
     return InitRepoResponse(
         git_url=git_url,
         access_token=token,
-        project_id=body.project_id,
+        project_id=namespaced_id,
     )
 
 
@@ -322,8 +333,8 @@ async def commit_file(
     """
     repo = _ensure_repo_access(project_id, user)
 
-    # Validate file_path
-    if ".." in body.file_path or body.file_path.startswith("/"):
+    # Validate file_path — prevent traversal and flag injection
+    if ".." in body.file_path or body.file_path.startswith("/") or body.file_path.startswith("-"):
         raise HTTPException(status_code=400, detail="Invalid file path")
 
     # Write content to a blob and update the tree
