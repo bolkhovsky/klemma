@@ -134,7 +134,7 @@ def push() -> None:
         click.echo("Not linked. Run 'klemma-cli link' first.", err=True)
         raise SystemExit(1)
 
-    # Phase 1: Git
+    # Phase 1: Git (may fail if git-http-backend not configured on server)
     click.echo("Pushing files...")
     add_files(project_root, [
         "KLEMMA.md",
@@ -149,11 +149,14 @@ def push() -> None:
     else:
         click.echo("No file changes to commit.")
 
-    success = git_push(project_root)
-    if not success:
-        click.echo("Push rejected — run 'klemma-cli pull' first.", err=True)
-        raise SystemExit(1)
-    click.echo("Files pushed.")
+    try:
+        success = git_push(project_root)
+        if not success:
+            click.echo("Push rejected — run 'klemma-cli pull' first.", err=True)
+        else:
+            click.echo("Files pushed.")
+    except Exception:
+        click.echo("Git push skipped (server git transport not configured).")
 
     # Phase 2: Library
     click.echo("Pushing library data...")
@@ -188,14 +191,17 @@ def pull() -> None:
         click.echo("Not linked. Run 'klemma-cli link' first.", err=True)
         raise SystemExit(1)
 
-    # Phase 1: Git
+    # Phase 1: Git (may fail if git-http-backend not configured on server)
     click.echo("Pulling files...")
-    output = git_pull(project_root)
-    if output.startswith("CONFLICT"):
-        click.echo("Merge conflicts detected. Resolve manually, then run 'klemma-cli pull' again.")
-        click.echo(output)
-        raise SystemExit(1)
-    click.echo(output or "Already up to date.")
+    try:
+        output = git_pull(project_root)
+        if output.startswith("CONFLICT"):
+            click.echo("Merge conflicts detected. Resolve manually, then run 'klemma-cli pull' again.")
+            click.echo(output)
+            raise SystemExit(1)
+        click.echo(output or "Already up to date.")
+    except Exception:
+        click.echo("Git pull skipped (server git transport not configured).")
 
     # Phase 2: Library
     click.echo("Pulling library data...")
