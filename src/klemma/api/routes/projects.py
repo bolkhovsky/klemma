@@ -381,7 +381,8 @@ async def get_block_draft_status(
 
     if drafts_dir.exists():
         for section_dir in drafts_dir.iterdir():
-            if not section_dir.is_dir():
+            # Guard: skip any dir with an unexpected name (shouldn't exist, but be safe)
+            if not section_dir.is_dir() or not _SAFE_ID.match(section_dir.name):
                 continue
             for draft_file in section_dir.glob("*.md"):
                 block_id = draft_file.stem
