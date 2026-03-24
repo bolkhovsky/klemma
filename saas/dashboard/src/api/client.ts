@@ -240,6 +240,15 @@ export const usage = {
     }>('/usage/me'),
 }
 
+// Write (draft generation)
+export const write = {
+  draft: (section: string, projectId?: string) =>
+    request<{ job_id: string; status: string; section: string; task_type: string }>('/write/draft', {
+      method: 'POST',
+      body: JSON.stringify({ section, project_id: projectId }),
+    }),
+}
+
 // Research (literature review generation + stored reports)
 export const research = {
   generate: (section: string, projectId?: string) =>
