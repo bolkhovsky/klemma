@@ -68,7 +68,9 @@ def link(api_url: str, email: str | None, password: str | None) -> None:
         error_msg = str(e)
         if "409" in error_msg:
             click.echo("Server repo already exists — reconnecting.")
-            repo_data = {"git_url": f"{api_url}/git/{project_id}.git", "access_token": ""}
+            # Strip /api suffix for git URL (git goes through /git/, not /api/git/)
+            base = api_url.rstrip("/").removesuffix("/api")
+            repo_data = {"git_url": f"{base}/git/{project_id}.git", "access_token": ""}
         else:
             click.echo(f"Failed to create server repo: {e}", err=True)
             raise SystemExit(1)
