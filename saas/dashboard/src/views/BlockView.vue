@@ -210,14 +210,22 @@ async function generateDraft() {
           pushAssistantMessage(`Черновик готов — ${block.value.generatedText.split(/\s+/).length} слов.`)
           return
         }
-        // Stub task returned — graceful fallback
-        pushAssistantMessage('Генератор черновиков ещё не подключён к SaaS API. Показываю демо-текст.')
+        if (result.status === 'error') {
+          generating.value = false
+          generatingProgress.value = ''
+          pushAssistantMessage(`Ошибка генерации: ${result.detail || 'неизвестная ошибка'}`)
+          return
+        }
+        // Empty text without error — show demo
+        pushAssistantMessage('Черновик пуст. Показываю демо-пример.')
         await _generateDraftMock()
         return
       }
       if (status.status === 'failed') {
-        pushAssistantMessage('Генерация завершилась ошибкой. Показываю демо-текст.')
-        await _generateDraftMock()
+        const result = status.result || {}
+        generating.value = false
+        generatingProgress.value = ''
+        pushAssistantMessage(`Ошибка генерации: ${result.error || 'задача завершилась с ошибкой'}`)
         return
       }
       generatingProgress.value = `Генерирую... (${(attempt + 1) * 2}с)`
