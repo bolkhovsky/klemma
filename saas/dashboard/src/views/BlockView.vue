@@ -194,7 +194,7 @@ async function generateDraft() {
   // Real API: POST /write/draft + poll
   try {
     generatingProgress.value = 'Ставлю задачу...'
-    const job = await apiWrite.draft(sectionId.value, projectId.value)
+    const job = await apiWrite.draft(sectionId.value, projectId.value, block.value.wordTarget)
     generatingProgress.value = 'Задача в очереди, жду результат...'
 
     for (let attempt = 0; attempt < 30; attempt++) {

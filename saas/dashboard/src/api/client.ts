@@ -242,10 +242,10 @@ export const usage = {
 
 // Write (draft generation)
 export const write = {
-  draft: (section: string, projectId?: string) =>
+  draft: (section: string, projectId?: string, wordTarget?: number) =>
     request<{ job_id: string; status: string; section: string; task_type: string }>('/write/draft', {
       method: 'POST',
-      body: JSON.stringify({ section, project_id: projectId }),
+      body: JSON.stringify({ section, project_id: projectId, word_target: wordTarget }),
     }),
 }
 

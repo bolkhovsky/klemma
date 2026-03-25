@@ -36,6 +36,7 @@ class WriteJobRequest(BaseModel):
 
     section: str
     project_id: str | None = None
+    word_target: int | None = None
 
 
 class WriteJobResponse(BaseModel):
@@ -91,7 +92,7 @@ async def submit_draft_job(
         project = store.get_project_by_id(body.project_id)
         if not project or project["user_id"] != user.user_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    return await _enqueue_write_task("generate_draft", body.section, body.project_id, user.user_id)
+    return await _enqueue_write_task("generate_draft", body.section, body.project_id, user.user_id, body.word_target)
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +101,8 @@ async def submit_draft_job(
 
 
 async def _enqueue_write_task(
-    task_name: str, section: str, project_id: str | None = None, user_id: str = ""
+    task_name: str, section: str, project_id: str | None = None, user_id: str = "",
+    word_target: int | None = None,
 ) -> WriteJobResponse:
     """Enqueue a write task via rq, falling back to in-process thread when Redis is unavailable."""
     from ..tasks import generate_draft, generate_research
@@ -110,7 +112,7 @@ async def _enqueue_write_task(
     if task_name == "generate_research":
         args = (section, project_id or "", data_dir, user_id)
     else:
-        args = (section, data_dir, project_id or "", user_id)
+        args = (section, data_dir, project_id or "", user_id, word_target or 0)
 
     # Try Redis first
     if _RQ_AVAILABLE:
