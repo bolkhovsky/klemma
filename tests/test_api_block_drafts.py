@@ -38,14 +38,13 @@ def client_and_project(data_dir, mock_user):
     then creates a project via the API.
     """
     from klemma.api.app import create_app
-    from klemma.api.auth.deps import get_current_user, get_user_store
+    from klemma.api.auth.deps import get_current_user
 
     app = create_app()
     app.dependency_overrides[get_current_user] = lambda: mock_user
 
     with TestClient(app) as c:
         # Insert the mock user into the DB (lifespan has run, store is ready)
-        store = get_user_store()
         import sqlite3
         db_path = data_dir / "users.db"
         with sqlite3.connect(str(db_path)) as conn:
