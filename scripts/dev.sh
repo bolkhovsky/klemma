@@ -1,50 +1,71 @@
 #!/usr/bin/env bash
-# Run backend (FastAPI) and frontend (Vite) together for local development.
-# Usage: ./scripts/dev.sh
-# Stop: Ctrl+C (kills both processes)
+# dev.sh — запуск локальной среды разработки (backend + frontend)
+# Использование: ./scripts/dev.sh
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ENV_FILE="$REPO_ROOT/.env.local"
+
+# ── Загрузка .env.local ───────────────────────────────────────────────────
+
+if [[ -f "$ENV_FILE" ]]; then
+  echo "→ Загружаю $ENV_FILE"
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+else
+  echo "⚠  $ENV_FILE не найден — создайте его из примера ниже:"
+  echo ""
+  echo "  KLEMMA_JWT_SECRET=\$(python3 -c \"import secrets; print(secrets.token_hex(32))\")"
+  echo "  ANTHROPIC_API_KEY=sk-ant-..."
+  echo ""
+fi
+
+# ── Проверка зависимостей ─────────────────────────────────────────────────
+
+if ! command -v uvicorn &>/dev/null; then
+  echo "✗ uvicorn не найден. Установите: pip install 'klemma[api]'" >&2
+  exit 1
+fi
+
+if ! command -v npm &>/dev/null; then
+  echo "✗ npm не найден. Установите Node.js." >&2
+  exit 1
+fi
+
+# ── Установка npm-зависимостей если нужно ────────────────────────────────
+
+if [[ ! -d "$REPO_ROOT/saas/dashboard/node_modules" ]]; then
+  echo "→ npm install..."
+  npm --prefix "$REPO_ROOT/saas/dashboard" install --silent
+fi
+
+# ── Запуск процессов ──────────────────────────────────────────────────────
 
 cleanup() {
-    echo ""
-    echo "Stopping..."
-    kill $BACKEND_PID $FRONTEND_PID 2>/dev/null || true
-    wait $BACKEND_PID $FRONTEND_PID 2>/dev/null || true
-    echo "Done."
+  echo ""
+  echo "→ Останавливаю процессы..."
+  kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
+  wait "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
-# Backend: FastAPI on port 8000
-echo "Starting backend on http://localhost:8000 ..."
-cd "$PROJECT_ROOT"
-uvicorn klemma.api.app:create_app --factory --reload --host 0.0.0.0 --port 8000 &
+echo "→ Запускаю backend  (http://localhost:8000)"
+cd "$REPO_ROOT"
+uvicorn klemma.api.app:create_app --factory --port 8000 --reload --log-level warning &
 BACKEND_PID=$!
 
-# Wait for backend to be ready
-for i in $(seq 1 30); do
-    if curl -s http://localhost:8000/health > /dev/null 2>&1; then
-        echo "Backend ready."
-        break
-    fi
-    sleep 0.5
-done
-
-# Frontend: Vite on port 5173 (proxies /api/* → localhost:8000)
-echo "Starting frontend on http://localhost:5173 ..."
-cd "$PROJECT_ROOT/saas/dashboard"
-npm run dev &
+echo "→ Запускаю frontend (http://localhost:5173)"
+npm --prefix "$REPO_ROOT/saas/dashboard" run dev &
 FRONTEND_PID=$!
 
 echo ""
-echo "=== Dev servers running ==="
-echo "  Frontend: http://localhost:5173"
 echo "  Backend:  http://localhost:8000"
-echo "  API docs: http://localhost:8000/docs"
-echo "==========================="
-echo "Press Ctrl+C to stop both."
+echo "  Frontend: http://localhost:5173"
+echo "  Остановить: Ctrl+C"
 echo ""
 
-wait
+# Ждём завершения любого из процессов
+wait -n "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || wait

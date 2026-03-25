@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -92,6 +93,17 @@ class AssignSectionRequest(BaseModel):
     citekey: str
     sections: list[str]
     chapters: list[int] = []
+
+
+class BlockDraftResponse(BaseModel):
+    section_id: str
+    block_id: str
+    text: str
+    word_count: int
+
+
+class BlockDraftSaveRequest(BaseModel):
+    text: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +295,103 @@ async def list_research_reports(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     reports = store.get_project_research_reports(project_id)
     return {"project_id": project_id, "reports": reports}
+
+
+# ---------------------------------------------------------------------------
+# Endpoints — Block drafts (MD files on disk, synced via git)
+# ---------------------------------------------------------------------------
+
+_SAFE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _draft_path(project_id: str, section_id: str, block_id: str) -> Path:
+    """Return path to the block draft MD file.
+
+    Layout: {data_dir}/drafts/{project_id}/{section_id}/{block_id}.md
+    klemma-cli reads these from the same data dir.
+    """
+    data_dir = Path(os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma")))
+    return data_dir / "drafts" / project_id / section_id / f"{block_id}.md"
+
+
+@router.get("/{project_id}/blocks/{section_id}/{block_id}", response_model=BlockDraftResponse)
+async def get_block_draft(
+    project_id: str,
+    section_id: str,
+    block_id: str,
+    user: UserRecord = Depends(get_current_user),
+) -> BlockDraftResponse:
+    """Load a saved block draft (MD file on disk)."""
+    store = get_user_store()
+    project = store.get_project_by_id(project_id)
+    if not project or project["user_id"] != user.user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    for seg in (section_id, block_id):
+        if not _SAFE_ID.match(seg):
+            raise HTTPException(status_code=400, detail="Invalid section_id or block_id")
+
+    path = _draft_path(project_id, section_id, block_id)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    word_count = len(text.split()) if text.strip() else 0
+    return BlockDraftResponse(section_id=section_id, block_id=block_id, text=text, word_count=word_count)
+
+
+@router.put("/{project_id}/blocks/{section_id}/{block_id}", response_model=BlockDraftResponse)
+async def save_block_draft(
+    project_id: str,
+    section_id: str,
+    block_id: str,
+    body: BlockDraftSaveRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> BlockDraftResponse:
+    """Save a block draft as a Markdown file on disk."""
+    store = get_user_store()
+    project = store.get_project_by_id(project_id)
+    if not project or project["user_id"] != user.user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    for seg in (section_id, block_id):
+        if not _SAFE_ID.match(seg):
+            raise HTTPException(status_code=400, detail="Invalid section_id or block_id")
+
+    path = _draft_path(project_id, section_id, block_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body.text, encoding="utf-8")
+
+    word_count = len(body.text.split()) if body.text.strip() else 0
+    return BlockDraftResponse(section_id=section_id, block_id=block_id, text=body.text, word_count=word_count)
+
+
+@router.get("/{project_id}/blocks/status")
+async def get_block_draft_status(
+    project_id: str,
+    user: UserRecord = Depends(get_current_user),
+) -> dict:
+    """Scan draft files for a project and return which blocks have saved content.
+
+    Returns: {"statuses": {"section_id/block_id": {"has_draft": bool, "word_count": int}}}
+    """
+    store = get_user_store()
+    project = store.get_project_by_id(project_id)
+    if not project or project["user_id"] != user.user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    data_dir = Path(os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma")))
+    drafts_dir = data_dir / "drafts" / project_id
+    statuses: dict[str, dict] = {}
+
+    if drafts_dir.exists():
+        for section_dir in drafts_dir.iterdir():
+            # Guard: skip any dir with an unexpected name (shouldn't exist, but be safe)
+            if not section_dir.is_dir() or not _SAFE_ID.match(section_dir.name):
+                continue
+            for draft_file in section_dir.glob("*.md"):
+                block_id = draft_file.stem
+                key = f"{section_dir.name}/{block_id}"
+                text = draft_file.read_text(encoding="utf-8")
+                word_count = len(text.split()) if text.strip() else 0
+                statuses[key] = {"has_draft": bool(text.strip()), "word_count": word_count}
+
+    return {"statuses": statuses}
 
 
 @router.get("/{project_id}/research/{section:path}")

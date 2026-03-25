@@ -18,11 +18,11 @@ function switchProject(projectId: string) {
     // Navigate to same module within new project
     const modules = ['map', 'feed', 'library', 'health', 'outline', 'coverage', 'research']
     const suffix = route.path.slice(currentParam.length + 2) // strip /projectId/
-    const module = modules.find(m => suffix === m || suffix.startsWith(m + '/')) ?? 'health'
+    const module = modules.find(m => suffix === m || suffix.startsWith(m + '/')) ?? 'map'
     router.push(`/${projectId}/${module}`)
   } else {
-    // Currently on global page — go to health of new project
-    router.push(`/${projectId}/health`)
+    // Currently on global page — go to map of new project
+    router.push(`/${projectId}/map`)
   }
 }
 

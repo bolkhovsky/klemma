@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -11,6 +13,7 @@ from pydantic import BaseModel
 from klemma.models import UserRecord
 
 from ..auth.deps import get_current_user, get_user_store
+from .process import _run_local_job
 
 try:
     from redis import Redis
@@ -62,13 +65,12 @@ async def submit_research_job(
 
     Returns 202 with a job_id. Poll status via GET /process/jobs/{job_id}.
     """
-    # Validate project ownership
     if body.project_id:
         store = get_user_store()
         project = store.get_project_by_id(body.project_id)
         if not project or project["user_id"] != user.user_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    return _enqueue_write_task("generate_research", body.section, body.project_id, user.user_id)
+    return await _enqueue_write_task("generate_research", body.section, body.project_id, user.user_id)
 
 
 @router.post(
@@ -84,7 +86,7 @@ async def submit_draft_job(
 
     Returns 202 with a job_id. Poll status via GET /process/jobs/{job_id}.
     """
-    return _enqueue_write_task("generate_draft", body.section)
+    return await _enqueue_write_task("generate_draft", body.section, body.project_id, user.user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -92,38 +94,31 @@ async def submit_draft_job(
 # ---------------------------------------------------------------------------
 
 
-def _enqueue_write_task(
+async def _enqueue_write_task(
     task_name: str, section: str, project_id: str | None = None, user_id: str = ""
 ) -> WriteJobResponse:
-    """Enqueue a write task (research or draft) via rq."""
-    if not _RQ_AVAILABLE:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Redis/rq not available — install klemma[api]",
-        )
+    """Enqueue a write task via rq, falling back to in-process thread when Redis is unavailable."""
+    from ..tasks import generate_draft, generate_research
 
-    try:
-        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-        redis_conn = Redis.from_url(redis_url)
-        q = Queue(connection=redis_conn)
+    data_dir = os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma"))
+    fn = generate_research if task_name == "generate_research" else generate_draft
+    if task_name == "generate_research":
+        args = (section, project_id or "", data_dir, user_id)
+    else:
+        args = (section, data_dir, project_id or "", user_id)
 
-        from ..tasks import generate_draft, generate_research
+    # Try Redis first
+    if _RQ_AVAILABLE:
+        try:
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+            redis_conn = Redis.from_url(redis_url)
+            q = Queue(connection=redis_conn)
+            job = q.enqueue(fn, *args, job_timeout=600)
+            return WriteJobResponse(job_id=job.id, status="queued", section=section, task_type=task_name)
+        except Exception:
+            pass  # Redis unavailable — fall through to local execution
 
-        data_dir = os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma"))
-
-        if task_name == "generate_research":
-            job = q.enqueue(
-                generate_research, section, project_id or "", data_dir, user_id,
-                job_timeout=600,
-            )
-        else:
-            job = q.enqueue(generate_draft, section, data_dir, job_timeout=600)
-
-        return WriteJobResponse(
-            job_id=job.id, status="queued", section=section, task_type=task_name
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Redis unavailable: {type(exc).__name__}",
-        )
+    # Local fallback: run in asyncio thread pool
+    job_id = str(uuid.uuid4())
+    asyncio.create_task(_run_local_job(job_id, fn, *args))
+    return WriteJobResponse(job_id=job_id, status="queued", section=section, task_type=task_name)

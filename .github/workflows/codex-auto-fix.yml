@@ -25,27 +25,36 @@ jobs:
       FAILED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - name: Skip when OPENAI_API_KEY is missing
-        if: ${{ env.OPENAI_API_KEY == '' }}
+        id: check-key
         run: |
-          echo "OPENAI_API_KEY is not configured; skipping Codex auto-fix workflow."
-          exit 0
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY is not configured; skipping Codex auto-fix workflow."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Checkout failing ref
-        uses: actions/checkout@v4
+        if: steps.check-key.outputs.skip != 'true'
+        uses: actions/checkout@v6
         with:
           ref: ${{ env.FAILED_HEAD_SHA }}
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        if: steps.check-key.outputs.skip != 'true'
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: "pip"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        if: steps.check-key.outputs.skip != 'true'
+        run: pip install -e ".[dev,api]"
 
       - name: Run Codex
-        uses: openai/codex-action@main
+        if: steps.check-key.outputs.skip != 'true'
+        uses: openai/codex-action@v1.6
         with:
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           prompt: |
@@ -57,13 +66,15 @@ jobs:
           codex_args: '["--config","sandbox_mode=\"workspace-write\""]'
 
       - name: Verify lint
+        if: steps.check-key.outputs.skip != 'true'
         run: ruff check src tests
 
       - name: Verify tests
+        if: steps.check-key.outputs.skip != 'true'
         run: pytest -q
 
       - name: Create pull request with fixes
-        if: success()
+        if: steps.check-key.outputs.skip != 'true' && success()
         uses: peter-evans/create-pull-request@v6
         with:
           commit-message: "fix(ci): auto-fix failing checks via Codex"

@@ -35,6 +35,27 @@ def _create_ai_provider():
     return create_ai(config), config
 
 
+def _mirror_research_report(data_path: Path, project_id: str, section: str, text: str, model: str) -> None:
+    """Write research report to MD file for klemma-cli sync pull.
+
+    SQLite is the primary store; this file is a read-only mirror.
+    Path: {data_dir}/research/{project_id}/{section}.md
+    """
+    from datetime import datetime, timezone
+
+    try:
+        path = data_path / "research" / project_id / f"{section}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        content = (
+            f"---\nsection: {section}\nproject_id: {project_id}\n"
+            f"model: {model}\ncreated_at: {created_at}\n---\n\n{text}"
+        )
+        path.write_text(content, encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Failed to mirror research report to MD for %s/%s: %s", project_id, section, exc)
+
+
 def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = "", project_id: str | None = None, force: bool = False) -> dict:
     """Extract fragments from a paper's PDF.
 
@@ -469,6 +490,9 @@ def generate_research(section: str, project_id: str, data_dir: str, user_id: str
             model=ai_config.model,
         )
 
+        # Mirror to MD file so klemma-cli can pull it via sync
+        _mirror_research_report(data_path, project_id, section, result.research_text, ai_config.model)
+
         logger.info("Research report generated for section %s (project %s)", section, project_id)
         return {
             "status": "completed",
@@ -481,15 +505,148 @@ def generate_research(section: str, project_id: str, data_dir: str, user_id: str
         return {"status": "error", "detail": f"Research failed: {type(exc).__name__}: {exc}"}
 
 
-def generate_draft(section: str, data_dir: str) -> dict:
-    """Generate a section draft.
+def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: str = "") -> dict:
+    """Generate a section draft using drafter.py in headless SaaS mode.
 
-    Returns a dict with status and content.
+    Loads fragments + research report from three-tier stores, calls
+    drafter.generate_draft(), returns the prose text.
     """
-    # TODO: wire to drafter.generate_draft() when adapted for headless mode.
-    logger.info("generate_draft: section %s — not yet wired", section)
-    return {
-        "status": "pending",
-        "section": section,
-        "detail": "Draft pipeline not yet wired for SaaS",
-    }
+    import re
+
+    from klemma.config import _SHIPPED_PROMPTS_DIR, KlemmaConfig
+    from klemma.stores.paper_store import LocalPaperStore
+    from klemma.stores.project_store import LocalProjectStore
+    from klemma.stores.user_library import LocalUserLibrary
+    from klemma.stores.user_store import (
+        LocalUserStore,  # noqa: F401 (already imported above, but needed here for worker isolation)
+    )
+
+    data_path = Path(data_dir)
+    library_db = data_path / "library.db"
+    paper_store = LocalPaperStore(library_db)
+    user_library = LocalUserLibrary(library_db)
+    project_store = LocalProjectStore(data_path / "project.db")
+    user_store = LocalUserStore(data_path / "users.db")
+
+    if user_id and not user_store.check_token_limit(user_id):
+        return {"status": "error", "detail": "Token limit exhausted"}
+
+    if not os.getenv("ANTHROPIC_API_KEY") and not os.getenv("OPENAI_API_KEY"):
+        return {"status": "error", "detail": "No AI API key configured"}
+
+    # Chapter number from section id (e.g. "1.1" → 1, "2.3" → 2)
+    try:
+        chapter = int(section.split(".")[0])
+    except (ValueError, IndexError):
+        chapter = 0
+
+    # Load project outline for context
+    dissertation_context = ""
+    section_title = ""
+    if project_id:
+        try:
+            project = user_store.get_project_by_id(project_id)
+            if project and project.get("outline"):
+                outline = project["outline"]
+                dissertation_context = "Dissertation sections:\n" + "\n".join(
+                    f"  {s['id']}: {s['name']}" for s in outline
+                )
+                sec = next((s for s in outline if s["id"] == section), None)
+                if sec:
+                    section_title = sec["name"]
+        except Exception as exc:
+            logger.warning("Failed to load project outline: %s", exc)
+
+    # Load section citekeys and build source_summaries + fragments
+    source_summaries: list[dict] = []
+    fragments: list[dict] = []
+    valid_citekeys: set[str] = set()
+
+    try:
+        section_citekeys = project_store.get_sources_by_section(section)
+        for citekey in section_citekeys:
+            valid_citekeys.add(citekey)
+            src = user_library.get_source_by_citekey(citekey)
+            if not src:
+                continue
+            paper = paper_store.get_paper_by_id(src.paper_id)
+            if paper:
+                source_summaries.append({
+                    "citekey": citekey,
+                    "quality": "?",
+                    "priority": "medium",
+                    "summary": (paper.abstract or "")[:300],
+                })
+            paper_fragments = paper_store.get_fragments(src.paper_id)
+            for f in paper_fragments:
+                fragments.append({
+                    "source": citekey,
+                    "type": f.fragment_type or "key_idea",
+                    "relevance": 3,
+                    "text": f.fragment_text,
+                })
+    except Exception as exc:
+        logger.warning("Failed to load section fragments: %s", exc)
+
+    # Load research report as additional context
+    research_report_content = ""
+    if project_id:
+        try:
+            report = user_store.get_research_report(project_id, section)
+            if report:
+                research_report_content = report.get("report_text", "")
+        except Exception as exc:
+            logger.warning("Failed to load research report: %s", exc)
+
+    try:
+        ai, ai_config = _create_ai_provider()
+        config = KlemmaConfig()
+        klemma_home = _SHIPPED_PROMPTS_DIR.parent
+
+        from klemma.skills.drafter import generate_draft as _generate_draft
+
+        result = _generate_draft(
+            section=section,
+            chapter=chapter,
+            config=config,
+            ai=ai,
+            dissertation_context=dissertation_context,
+            klemma_home=klemma_home,
+            research_report_content=research_report_content,
+            source_summaries=source_summaries,
+            fragments=fragments,
+            valid_citekeys=valid_citekeys or None,
+            section_title=section_title,
+        )
+
+        if not result.text:
+            return {"status": "error", "detail": "AI returned no draft text"}
+
+        # Convert Obsidian wikilinks [[@citekey]] → [@citekey] for SaaS output
+        text = re.sub(r"\[\[@([\w\-]+)\]\]", r"[@\1]", result.text)
+
+        if user_id:
+            user_store.record_usage(
+                user_id=user_id,
+                operation="generate_draft",
+                model=ai_config.model,
+                input_tokens=0,
+                output_tokens=0,
+                section=section,
+            )
+
+        logger.info(
+            "Draft generated for section %s: %d words, %d citations",
+            section, result.word_count, len(result.citations_used),
+        )
+        return {
+            "status": "completed",
+            "section": section,
+            "text": text,
+            "word_count": result.word_count,
+            "citations_used": result.citations_used,
+        }
+
+    except Exception as exc:
+        logger.error("Draft generation failed for %s: %s", section, exc, exc_info=True)
+        return {"status": "error", "detail": f"Draft failed: {type(exc).__name__}: {exc}"}
