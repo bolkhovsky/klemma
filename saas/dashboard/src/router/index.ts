@@ -79,7 +79,7 @@ const router = createRouter({
     },
     {
       path: '/:projectId/dashboard',
-      redirect: (to) => `/${to.params.projectId}/health`,
+      redirect: (to) => `/${to.params.projectId}/map`,
     },
     {
       path: '/:projectId/library',
@@ -121,9 +121,10 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
-  if (to.meta.requiresAuth && !localStorage.getItem('access_token')) {
-    return { name: 'login' }
-  }
+  const token = localStorage.getItem('access_token')
+  if (to.meta.requiresAuth && !token) return { name: 'login' }
+  // Авторизованным пользователям на /login или /register — в библиотеку
+  if ((to.name === 'login' || to.name === 'register') && token) return { path: '/library' }
 })
 
 router.afterEach((to) => {
