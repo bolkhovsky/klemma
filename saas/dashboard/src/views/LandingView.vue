@@ -33,8 +33,8 @@ onUnmounted(() => {
 
 const faqs = [
   {
-    q: 'Это инструмент для написания диссертации за меня?',
-    a: 'Нет. LitResearch — инструмент для работы с научной литературой: извлечение фрагментов, анализ покрытия, обнаружение пробелов. Он помогает систематизировать источники и генерирует черновики обзора, но не пишет диссертацию и не предназначен для обхода систем антиплагиата.',
+    q: 'Это инструмент для написания научной работы за меня?',
+    a: 'Нет. LitResearch — инструмент для работы с научной литературой: извлечение фрагментов, анализ покрытия, обнаружение пробелов. Он помогает систематизировать источники и генерирует черновики обзора, но не пишет научную работу и не предназначен для обхода систем антиплагиата.',
   },
   {
     q: 'Чем это отличается от ChatGPT / Claude для работы с литературой?',
@@ -50,10 +50,10 @@ const faqs = [
   },
   {
     q: 'Сколько это стоит?',
-    a: 'CLI-версия Klemma — open source. Веб-версия LitResearch даёт 1 млн токенов бесплатно при регистрации. Детали тарифов появятся позже.',
+    a: 'CLI-версия Klemma — open source. Веб-версия LitResearch сейчас в закрытом доступе — запишитесь на личный демо через Telegram.',
   },
   {
-    q: 'Безопасны ли мои данные?',
+    q: 'В безопасности ли мои данные?',
     a: 'Ваши PDF хранятся на сервере и не передаются третьим лицам. Для AI-обработки отправляется только текст — без метаданных и файлов целиком.',
   },
 ]
@@ -70,9 +70,9 @@ const faqs = [
         </RouterLink>
         <RouterLink
           to="/register"
-          class="rounded-lg bg-accent px-5 py-2.5 text-base font-semibold text-white hover:bg-accent-light transition-colors"
+          class="rounded-lg bg-cta px-5 py-2.5 text-base font-semibold text-white hover:bg-cta-light transition-colors"
         >
-          Попробовать
+          Записаться
         </RouterLink>
       </div>
     </nav>
@@ -81,14 +81,14 @@ const faqs = [
     <header class="relative mx-auto max-w-4xl px-6 pt-20 pb-24 text-center">
       <!-- Decorative polar circles -->
       <div class="pointer-events-none absolute top-8 left-1/2 -translate-x-1/2 h-[480px] w-[480px] rounded-full border border-rule-light opacity-40 float"></div>
-      <div class="pointer-events-none absolute top-20 left-1/2 -translate-x-1/2 h-[360px] w-[360px] rounded-full border border-accent-pale opacity-30 float-delayed"></div>
+      <div class="pointer-events-none absolute top-20 left-1/2 -translate-x-1/2 h-[360px] w-[360px] rounded-full border border-amber opacity-20 float-delayed"></div>
 
       <div class="relative">
         <p class="animate-in font-mono text-sm tracking-widest text-accent uppercase">
           Инфраструктура для исследователей
         </p>
         <h1 class="animate-in animate-in-delay-1 mt-5 font-display text-5xl leading-tight font-bold tracking-tight text-ink sm:text-6xl">
-          Каких статей не хватает<br />в вашей диссертации?
+          Каких статей не хватает<br />в вашей научной работе?
         </h1>
         <p class="animate-in animate-in-delay-2 mx-auto mt-8 max-w-2xl text-xl leading-relaxed text-ink-light">
           LitResearch анализирует библиографии ваших источников, находит пробелы
@@ -98,9 +98,9 @@ const faqs = [
         <div class="animate-in animate-in-delay-3 mt-12 flex justify-center gap-4">
           <RouterLink
             to="/register"
-            class="beam-border rounded-lg bg-accent px-8 py-4 text-base font-semibold text-white shadow-sm hover:bg-accent-light transition-colors"
+            class="beam-border rounded-lg bg-cta px-8 py-4 text-base font-semibold text-white shadow-sm hover:bg-cta-light transition-colors"
           >
-            Начать бесплатно
+            Записаться на демо
           </RouterLink>
           <a
             href="#how-it-works"
@@ -112,6 +112,25 @@ const faqs = [
       </div>
     </header>
 
+    <!-- Product screenshot -->
+    <section class="relative mx-auto max-w-5xl px-6 pb-16 reveal">
+      <div class="rounded-xl border border-rule bg-paper-white shadow-lg overflow-hidden">
+        <!-- Browser chrome -->
+        <div class="flex items-center gap-2 border-b border-rule bg-paper-warm px-4 py-2.5">
+          <span class="h-3 w-3 rounded-full bg-err/40"></span>
+          <span class="h-3 w-3 rounded-full bg-warn/40"></span>
+          <span class="h-3 w-3 rounded-full bg-ok/40"></span>
+          <span class="ml-3 flex-1 rounded-md bg-paper px-3 py-1 text-xs text-ink-muted font-mono">litresearch.ru/health</span>
+        </div>
+        <img
+          src="/screenshot-health.png"
+          alt="LitResearch — экран здоровья библиотеки: общая оценка, покрытие по главам, статистика источников"
+          class="w-full"
+          loading="eager"
+        />
+      </div>
+    </section>
+
     <!-- Value bar -->
     <section class="relative border-y border-rule bg-paper-warm grain">
       <div class="relative mx-auto grid max-w-5xl grid-cols-2 gap-8 px-6 py-10 sm:grid-cols-4 stagger-children">
@@ -120,11 +139,11 @@ const faqs = [
           <div class="mt-1 text-sm text-ink-muted">из вашей библиотеки</div>
         </div>
         <div class="text-center">
-          <div class="font-display text-base font-bold text-accent">Покрытие по главам</div>
+          <div class="font-display text-base font-bold text-amber">Покрытие по главам</div>
           <div class="mt-1 text-sm text-ink-muted">пробелы видны сразу</div>
         </div>
         <div class="text-center">
-          <div class="font-display text-base font-bold text-accent">100+ AI-моделей</div>
+          <div class="font-display text-base font-bold text-violet">100+ AI-моделей</div>
           <div class="mt-1 text-sm text-ink-muted">Claude, GPT, Qwen, Ollama</div>
         </div>
         <div class="text-center">
@@ -150,7 +169,7 @@ const faqs = [
           по 225 миллионам статей, но не знает структуру вашей работы. ChatGPT
           генерирует красивые обзоры — с выдуманными ссылками.
         </p>
-        <p class="rounded-lg border-l-2 border-accent bg-accent-pale/30 py-4 pl-5 pr-4 text-base font-medium text-ink">
+        <p class="rounded-lg border-l-2 border-amber bg-amber-pale/30 py-4 pl-5 pr-4 text-base font-medium text-ink">
           Ни один существующий инструмент не совмещает извлечение фрагментов
           с классификацией цитирования и отслеживание пробелов по разделам.
         </p>
@@ -176,11 +195,11 @@ const faqs = [
           </div>
           <div class="group text-center">
             <div
-              class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-accent font-display text-2xl font-bold text-white shadow-sm transition-transform group-hover:scale-110"
+              class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-amber font-display text-2xl font-bold text-white shadow-sm transition-transform group-hover:scale-110"
             >
               02
             </div>
-            <h3 class="mt-5 font-display text-xl font-semibold text-ink">Получите фрагменты</h3>
+            <h3 class="mt-5 font-display text-xl font-semibold text-ink">Получите цитаты</h3>
             <p class="mt-3 text-base leading-relaxed text-ink-muted">
               AI извлекает цитатные фрагменты, классифицирует тип цитирования
               и привязывает каждый к разделу вашей работы.
@@ -188,11 +207,11 @@ const faqs = [
           </div>
           <div class="group text-center">
             <div
-              class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-accent font-display text-2xl font-bold text-white shadow-sm transition-transform group-hover:scale-110"
+              class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-violet font-display text-2xl font-bold text-white shadow-sm transition-transform group-hover:scale-110"
             >
               03
             </div>
-            <h3 class="mt-5 font-display text-xl font-semibold text-ink">Увидьте пробелы</h3>
+            <h3 class="mt-5 font-display text-xl font-semibold text-ink">Закройте пробелы</h3>
             <p class="mt-3 text-base leading-relaxed text-ink-muted">
               Покрытие по главам, недостающие типы ссылок, рекомендации
               конкретных работ для закрытия пробелов.
@@ -215,7 +234,7 @@ const faqs = [
           <div class="flex items-center gap-3">
             <div class="flex h-9 w-9 items-center justify-center rounded-md bg-accent-pale text-sm font-bold text-accent-deep font-mono">01</div>
             <h3 class="font-display text-lg font-semibold text-ink">
-              Обзор литературы за неделю, не за семестр
+              Обзор литературы за час, не за семестр
             </h3>
           </div>
           <p class="mt-4 text-base leading-relaxed text-ink-muted">
@@ -226,7 +245,7 @@ const faqs = [
         </div>
         <div class="hover-lift rounded-lg border border-rule bg-paper-white p-7">
           <div class="flex items-center gap-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-md bg-accent-pale text-sm font-bold text-accent-deep font-mono">02</div>
+            <div class="flex h-9 w-9 items-center justify-center rounded-md bg-amber-pale text-sm font-bold text-amber-deep font-mono">02</div>
             <h3 class="font-display text-lg font-semibold text-ink">
               Пробелы видны до научрука
             </h3>
@@ -239,7 +258,7 @@ const faqs = [
         </div>
         <div class="hover-lift rounded-lg border border-rule bg-paper-white p-7">
           <div class="flex items-center gap-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-md bg-accent-pale text-sm font-bold text-accent-deep font-mono">03</div>
+            <div class="flex h-9 w-9 items-center justify-center rounded-md bg-violet-pale text-sm font-bold text-violet-deep font-mono">03</div>
             <h3 class="font-display text-lg font-semibold text-ink">
               Черновик с реальными цитатами
             </h3>
@@ -260,7 +279,7 @@ const faqs = [
           <p class="mt-4 text-base leading-relaxed text-ink-muted">
             Исследовательские брифинги по каждой главе: какие источники покрывают тему,
             какова структура аргументации, что ещё нужно прочитать.
-            Обновляются инкрементально при добавлении новых источников.
+            Обновляются постепенно при добавлении новых источников.
           </p>
         </div>
       </div>
@@ -276,7 +295,7 @@ const faqs = [
           </h2>
           <p class="mt-4 text-center text-base text-ink-muted">
             LitResearch — инструмент для работы с научной литературой,<br class="hidden sm:inline" />
-            не для написания диссертации и не для обхода антиплагиата.
+            не для написания научных работ и не для обхода антиплагиата.
           </p>
         </div>
         <div class="mt-10 space-y-4 stagger-children">
@@ -293,7 +312,7 @@ const faqs = [
             </div>
           </div>
           <div class="hover-lift flex items-start gap-4 rounded-lg border border-rule bg-paper-white p-6">
-            <div class="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent-pale font-mono text-sm font-bold text-accent-deep">
+            <div class="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-pale font-mono text-sm font-bold text-amber-deep">
               S2
             </div>
             <div>
@@ -305,7 +324,7 @@ const faqs = [
             </div>
           </div>
           <div class="hover-lift flex items-start gap-4 rounded-lg border border-rule bg-paper-white p-6">
-            <div class="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent-pale font-mono text-sm font-bold text-accent-deep">
+            <div class="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-pale font-mono text-sm font-bold text-violet-deep">
               AI
             </div>
             <div>
@@ -341,7 +360,7 @@ const faqs = [
           </div>
         </div>
         <div class="hover-lift flex gap-4 rounded-lg border border-rule bg-paper-white p-6">
-          <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-accent text-sm font-bold text-white font-mono">
+          <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-amber text-sm font-bold text-white font-mono">
             R
           </div>
           <div>
@@ -353,7 +372,7 @@ const faqs = [
           </div>
         </div>
         <div class="hover-lift flex gap-4 rounded-lg border border-rule bg-paper-white p-6">
-          <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-accent text-sm font-bold text-white font-mono">
+          <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-violet text-sm font-bold text-white font-mono">
             PI
           </div>
           <div>
@@ -376,7 +395,7 @@ const faqs = [
             Что под капотом
           </h2>
           <p class="mt-4 text-center text-base text-ink-muted">
-            Каждый шаг pipeline опирается на конкретную научную методологию
+            Каждый шаг процесса опирается на конкретную научную методологию
           </p>
         </div>
 
@@ -402,10 +421,10 @@ const faqs = [
           <!-- Step 2 -->
           <div class="flex items-stretch gap-5">
             <div class="flex flex-col items-center">
-              <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-accent font-mono text-sm font-bold text-white shadow-sm">
+              <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-amber font-mono text-sm font-bold text-white shadow-sm">
                 02
               </div>
-              <div class="mt-1 w-px grow bg-gradient-to-b from-accent/40 to-rule"></div>
+              <div class="mt-1 w-px grow bg-gradient-to-b from-amber/40 to-rule"></div>
             </div>
             <div class="pb-8">
               <h3 class="text-base font-semibold text-ink">Citation Worthiness</h3>
@@ -441,10 +460,10 @@ const faqs = [
           <!-- Step 4 -->
           <div class="flex items-stretch gap-5">
             <div class="flex flex-col items-center">
-              <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-accent font-mono text-sm font-bold text-white shadow-sm">
+              <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-violet font-mono text-sm font-bold text-white shadow-sm">
                 04
               </div>
-              <div class="mt-1 w-px grow bg-gradient-to-b from-accent/40 to-rule"></div>
+              <div class="mt-1 w-px grow bg-gradient-to-b from-violet/40 to-rule"></div>
             </div>
             <div class="pb-8">
               <h3 class="text-base font-semibold text-ink">Gap Scoring + Semantic Reranking</h3>
@@ -478,7 +497,7 @@ const faqs = [
           <!-- Step 6 -->
           <div class="flex items-start gap-5">
             <div class="flex flex-col items-center">
-              <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-accent font-mono text-sm font-bold text-white shadow-sm">
+              <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-amber font-mono text-sm font-bold text-white shadow-sm">
                 06
               </div>
             </div>
@@ -529,21 +548,21 @@ const faqs = [
     <!-- Final CTA -->
     <section class="relative border-t border-rule bg-paper-warm grain py-24">
       <!-- Decorative circles -->
-      <div class="pointer-events-none absolute bottom-8 right-1/4 h-56 w-56 rounded-full border border-rule-light opacity-30 float"></div>
+      <div class="pointer-events-none absolute bottom-8 right-1/4 h-56 w-56 rounded-full border border-amber opacity-15 float"></div>
 
       <div class="relative mx-auto max-w-2xl px-6 text-center reveal">
         <h2 class="font-display text-4xl font-bold text-ink sm:text-5xl">
           Перестаньте перечитывать.<br />Начните писать.
         </h2>
         <p class="mt-5 text-lg text-ink-muted">
-          1M токенов бесплатно. Загрузите первый PDF за две минуты.
+          Запишитесь на личный демо — настроим проект и покажем результат на ваших PDF.
         </p>
         <div class="mt-10 flex justify-center gap-4">
           <RouterLink
             to="/register"
-            class="beam-border rounded-lg bg-accent px-8 py-4 text-base font-semibold text-white shadow-sm hover:bg-accent-light transition-colors"
+            class="beam-border rounded-lg bg-cta px-8 py-4 text-base font-semibold text-white shadow-sm hover:bg-cta-light transition-colors"
           >
-            Начать бесплатно
+            Записаться на демо
           </RouterLink>
           <RouterLink
             to="/login"

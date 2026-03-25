@@ -219,7 +219,7 @@ services:
 - **Pricing model** — free tier vs paid, limits, quotas
 - **Multi-tenancy isolation** — row-level security vs separate schemas (decide with #82)
 - **Monitoring stack** — Prometheus/Grafana vs simpler alternatives (decide at deploy time)
-- **Domain/branding** — CiteQ (#76) vs klemma.ai (pending decision)
+- **Domain/branding** — Klemma (#76) vs klemma.ai (pending decision)
 
 ## Risks
 

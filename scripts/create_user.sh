@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create a new CiteQ user via API.
+# Create a new Klemma user via API.
 # Usage: ./scripts/create_user.sh <email> <password> [name] [token_amount]
 #
 # Examples:
@@ -8,9 +8,9 @@
 
 set -euo pipefail
 
-API="${CITEQ_API_URL:-https://litresearch.ru/api}"
-ADMIN_EMAIL="${CITEQ_ADMIN_EMAIL:-}"
-ADMIN_PASS="${CITEQ_ADMIN_PASSWORD:-}"
+API="${Klemma_API_URL:-https://litresearch.ru/api}"
+ADMIN_EMAIL="${Klemma_ADMIN_EMAIL:-}"
+ADMIN_PASS="${Klemma_ADMIN_PASSWORD:-}"
 
 EMAIL="${1:?Usage: create_user.sh <email> <password> [name] [token_amount]}"
 PASSWORD="${2:?Usage: create_user.sh <email> <password> [name] [token_amount]}"
@@ -41,7 +41,7 @@ if [ -n "$ADMIN_EMAIL" ] && [ -n "$ADMIN_PASS" ]; then
     | python3 -m json.tool
 else
   echo ""
-  echo "    To grant tokens, set CITEQ_ADMIN_EMAIL and CITEQ_ADMIN_PASSWORD, or run:"
+  echo "    To grant tokens, set Klemma_ADMIN_EMAIL and Klemma_ADMIN_PASSWORD, or run:"
   echo "    curl -X POST $API/usage/grant \\"
   echo "      -H 'Authorization: Bearer <admin_token>' \\"
   echo "      -H 'Content-Type: application/json' \\"
