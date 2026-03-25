@@ -261,6 +261,11 @@ export const blocks = {
       `/projects/${projectId}/blocks/${sectionId}/${blockId}`,
       { method: 'PUT', body: JSON.stringify({ text }) }
     ),
+
+  getStatus: (projectId: string) =>
+    request<{ statuses: Record<string, { has_draft: boolean; word_count: number }> }>(
+      `/projects/${projectId}/blocks/status`
+    ),
 }
 
 // Research (literature review generation + stored reports)

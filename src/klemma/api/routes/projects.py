@@ -361,6 +361,39 @@ async def save_block_draft(
     return BlockDraftResponse(section_id=section_id, block_id=block_id, text=body.text, word_count=word_count)
 
 
+@router.get("/{project_id}/blocks/status")
+async def get_block_draft_status(
+    project_id: str,
+    user: UserRecord = Depends(get_current_user),
+) -> dict:
+    """Scan draft files for a project and return which blocks have saved content.
+
+    Returns: {"statuses": {"section_id/block_id": {"has_draft": bool, "word_count": int}}}
+    """
+    store = get_user_store()
+    project = store.get_project_by_id(project_id)
+    if not project or project["user_id"] != user.user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    data_dir = Path(os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma")))
+    drafts_dir = data_dir / "drafts" / project_id
+    statuses: dict[str, dict] = {}
+
+    if drafts_dir.exists():
+        for section_dir in drafts_dir.iterdir():
+            # Guard: skip any dir with an unexpected name (shouldn't exist, but be safe)
+            if not section_dir.is_dir() or not _SAFE_ID.match(section_dir.name):
+                continue
+            for draft_file in section_dir.glob("*.md"):
+                block_id = draft_file.stem
+                key = f"{section_dir.name}/{block_id}"
+                text = draft_file.read_text(encoding="utf-8")
+                word_count = len(text.split()) if text.strip() else 0
+                statuses[key] = {"has_draft": bool(text.strip()), "word_count": word_count}
+
+    return {"statuses": statuses}
+
+
 @router.get("/{project_id}/research/{section:path}")
 async def get_research_report(
     project_id: str,
