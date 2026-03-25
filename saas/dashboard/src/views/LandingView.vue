@@ -97,14 +97,20 @@ const faqs = [
         </p>
         <div class="animate-in animate-in-delay-3 mt-12 flex justify-center gap-4">
           <RouterLink
-            to="/register"
+            to="/demo/map"
             class="beam-border rounded-lg bg-cta px-8 py-4 text-base font-semibold text-white shadow-sm hover:bg-cta-light transition-colors"
+          >
+            Открыть карту →
+          </RouterLink>
+          <RouterLink
+            to="/register"
+            class="rounded-lg border border-rule px-8 py-4 text-base font-semibold text-ink-light hover:bg-paper-warm transition-colors"
           >
             Записаться на демо
           </RouterLink>
           <a
             href="#how-it-works"
-            class="rounded-lg border border-rule px-8 py-4 text-base font-semibold text-ink-light hover:bg-paper-warm transition-colors"
+            class="rounded-lg border border-rule px-8 py-4 text-base font-semibold text-ink-light hover:bg-paper-warm transition-colors hidden sm:inline-flex"
           >
             Как это работает
           </a>
@@ -559,10 +565,10 @@ const faqs = [
         </p>
         <div class="mt-10 flex justify-center gap-4">
           <RouterLink
-            to="/register"
+            to="/demo/map"
             class="beam-border rounded-lg bg-cta px-8 py-4 text-base font-semibold text-white shadow-sm hover:bg-cta-light transition-colors"
           >
-            Записаться на демо
+            Открыть карту →
           </RouterLink>
           <RouterLink
             to="/login"

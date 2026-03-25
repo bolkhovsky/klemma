@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { auth, ApiError } from '@/api/client'
+import { auth, userProjects, ApiError } from '@/api/client'
 
 const router = useRouter()
 const email = ref('')
@@ -16,7 +16,13 @@ async function handleLogin() {
     const data = await auth.login(email.value, password.value)
     localStorage.setItem('access_token', data.access_token)
     localStorage.setItem('refresh_token', data.refresh_token)
-    router.push('/library')
+    try {
+      const projectsData = await userProjects.list()
+      const first = projectsData.projects[0]
+      router.push(first ? `/${first.project_id}/map` : '/demo/map')
+    } catch {
+      router.push('/demo/map')
+    }
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : 'Ошибка входа'
   } finally {
