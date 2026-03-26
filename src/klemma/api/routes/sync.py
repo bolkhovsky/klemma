@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from klemma.models import UserRecord
 
-from ..auth.deps import get_current_user
+from ..auth.deps import get_current_user, get_user_store
 from ..deps import get_paper_store, get_project_store, get_user_library
 
 logger = logging.getLogger(__name__)
@@ -102,12 +102,14 @@ def _ensure_repo_access(project_id: str, user: UserRecord) -> Path:
 
 class InitRepoRequest(BaseModel):
     project_id: str
+    project_type: str = "dissertation"  # passed to dashboard project creation
 
 
 class InitRepoResponse(BaseModel):
     git_url: str
     access_token: str
     project_id: str
+    dashboard_project_id: str = ""  # UUID for /projects/{id}/drafts API
 
 
 class FileContentResponse(BaseModel):
@@ -237,6 +239,18 @@ class SyncStatusResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _find_or_create_dashboard_project(user_id: str, project_name: str,
+                                       project_type: str) -> str:
+    """Find existing dashboard project by name or create one. Returns project_id (UUID)."""
+    store = get_user_store()
+    projects = store.get_projects(user_id)
+    for p in projects:
+        if p.get("name") == project_name:
+            return p["project_id"]
+    project = store.create_project(user_id, project_name, project_type)
+    return project["project_id"]
+
+
 @router.post("/init-repo", response_model=InitRepoResponse, status_code=201)
 async def init_repo(
     body: InitRepoRequest,
@@ -246,6 +260,7 @@ async def init_repo(
 
     project_id is namespaced with user_id prefix to prevent collision
     between users who choose the same project name (e.g. "dissertation").
+    Also finds/creates a dashboard project and returns its UUID.
     """
     # Namespace: username/project_id → like GitHub (e.g. "ilya-bolkhovsky/dissertation")
     if not user.username:
@@ -267,6 +282,16 @@ async def init_repo(
     token = secrets.token_urlsafe(32)
     (repo / "klemma_token").write_text(token)
 
+    # Find or create dashboard project (for /projects/{id}/drafts API)
+    # Non-fatal: if user store lacks the record (e.g. during tests), return empty string
+    try:
+        dashboard_project_id = _find_or_create_dashboard_project(
+            user.user_id, body.project_id, body.project_type
+        )
+    except Exception as exc:
+        logger.warning("dashboard project lookup/create failed for %s: %s", body.project_id, exc)
+        dashboard_project_id = ""
+
     # Construct git URL (token embedded for MVP — Option A from plan)
     api_base = os.environ.get("KLEMMA_API_URL", "https://litresearch.ru")
     git_url = f"{api_base}/git/{namespaced_id}.git"
@@ -275,7 +300,28 @@ async def init_repo(
         git_url=git_url,
         access_token=token,
         project_id=namespaced_id,
+        dashboard_project_id=dashboard_project_id,
     )
+
+
+@router.get("/dashboard-project")
+async def get_dashboard_project(
+    project_id: str = Query(..., description="Namespaced git project_id (username/project)"),
+    user: UserRecord = Depends(get_current_user),
+) -> dict:
+    """Look up the dashboard project UUID for a git project. Used during reconnect (409).
+
+    Returns {dashboard_project_id, project_name} for the matching dashboard project.
+    Matches by looking for a project with name == the short project name (without username prefix).
+    """
+    # Short name: "ilya-bolkhovsky/dissertation" → "dissertation"
+    short_name = project_id.split("/", 1)[-1] if "/" in project_id else project_id
+    store = get_user_store()
+    projects = store.get_projects(user.user_id)
+    for p in projects:
+        if p.get("name") == short_name:
+            return {"dashboard_project_id": p["project_id"], "project_name": p["name"]}
+    raise HTTPException(status_code=404, detail="No dashboard project found for this git project")
 
 
 @router.get("/file/{project_id:path}", response_model=FileContentResponse)

@@ -72,6 +72,12 @@ def link(api_url: str, email: str | None, password: str | None) -> None:
             base = api_url.rstrip("/").removesuffix("/api")
             namespaced = f"{username}/{project_slug}" if username else project_slug
             repo_data = {"git_url": f"{base}/git/{namespaced}.git", "access_token": ""}
+            # Look up dashboard_project_id for this git project
+            try:
+                lookup = client.get(f"/sync/dashboard-project", params={"project_id": namespaced})
+                repo_data["dashboard_project_id"] = lookup.json().get("dashboard_project_id", "")
+            except Exception:
+                pass  # Non-fatal — draft push will be skipped until re-linked
         else:
             click.echo(f"Failed to create server repo: {e}", err=True)
             raise SystemExit(1)
@@ -110,6 +116,7 @@ def link(api_url: str, email: str | None, password: str | None) -> None:
         api_url=api_url,
         git_url=git_url,
         access_token=access_token,
+        dashboard_project_id=repo_data.get("dashboard_project_id", ""),
     )
     save_sync_config(project_root, config)
     click.echo("Linked! Run 'klemma-cli push' to sync.")
@@ -126,7 +133,7 @@ def push() -> None:
     from .gitops import push as git_push
     from .project import ensure_project_root
     from .state import load_sync_config, save_sync_config
-    from .sync import push_library
+    from .sync import push_drafts, push_library
 
     project_root = ensure_project_root()
     config = load_sync_config(project_root)
@@ -167,6 +174,23 @@ def push() -> None:
         f"{result['fragments']} fragments, "
         f"{result['embeddings']} embeddings"
     )
+
+    # Phase 3: Drafts
+    if config.dashboard_project_id:
+        click.echo("Pushing draft files...")
+        try:
+            draft_result = push_drafts(client, project_root, config.dashboard_project_id)
+            if draft_result["files"]:
+                click.echo(
+                    f"Pushed {draft_result['files']} draft file(s), "
+                    f"{draft_result['words']} words"
+                )
+            else:
+                click.echo("No draft files found (notes/drafts/ is empty or missing).")
+        except Exception as exc:
+            click.echo(f"Draft push failed: {exc}", err=True)
+    else:
+        click.echo("Draft push skipped (no dashboard_project_id — re-run 'klemma-cli link').")
 
     # Update last_push timestamp
     config.last_push = datetime.now(timezone.utc).isoformat()

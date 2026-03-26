@@ -60,6 +60,7 @@ class TestInitRepo:
         assert data["project_id"] == "test-user/my-project"
         assert "git_url" in data
         assert "access_token" in data
+        assert "dashboard_project_id" in data  # field present (may be "" when user not in store)
 
         # Verify bare repo was created (namespaced path)
         repo_path = data_dir / "repos" / "test-user" / "my-project"
@@ -75,6 +76,12 @@ class TestInitRepo:
     def test_init_rejects_path_traversal(self, client):
         resp = client.post("/sync/init-repo", json={"project_id": "../escape"})
         assert resp.status_code == 400
+
+
+class TestDashboardProject:
+    def test_dashboard_project_not_found(self, client):
+        resp = client.get("/sync/dashboard-project", params={"project_id": "nonexistent/project"})
+        assert resp.status_code == 404
 
 
 class TestFileEndpoints:
