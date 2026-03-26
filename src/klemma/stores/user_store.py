@@ -18,7 +18,7 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -168,6 +168,10 @@ class LocalUserStore:
                     "UPDATE users SET username = ? WHERE user_id = ?",
                     (username, row["user_id"]),
                 )
+        if version < 8:
+            conn.execute(
+                "ALTER TABLE projects ADD COLUMN draft_scheme TEXT NOT NULL DEFAULT 'single'"
+            )
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -283,13 +287,19 @@ class LocalUserStore:
     # Project management                                                  #
     # ------------------------------------------------------------------ #
 
-    def create_project(self, user_id: str, name: str, type_: str = "dissertation") -> dict:
+    def create_project(
+        self,
+        user_id: str,
+        name: str,
+        type_: str = "dissertation",
+        draft_scheme: str = "single",
+    ) -> dict:
         """Create a new project for a user. Returns the project dict."""
         project_id = uuid.uuid4().hex
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO projects (project_id, user_id, name, type) VALUES (?, ?, ?, ?)",
-                (project_id, user_id, name, type_),
+                "INSERT INTO projects (project_id, user_id, name, type, draft_scheme) VALUES (?, ?, ?, ?, ?)",
+                (project_id, user_id, name, type_, draft_scheme),
             )
         return self.get_project_by_id(project_id)  # type: ignore[return-value]
 
@@ -297,7 +307,7 @@ class LocalUserStore:
         """List all projects for a user, ordered by creation date."""
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT project_id, name, type, created_at, outline FROM projects WHERE user_id = ? ORDER BY created_at",
+                "SELECT project_id, name, type, created_at, outline, draft_scheme FROM projects WHERE user_id = ? ORDER BY created_at",
                 (user_id,),
             ).fetchall()
         result = []
@@ -311,7 +321,7 @@ class LocalUserStore:
         """Return project dict or None if not found."""
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT project_id, user_id, name, type, created_at, outline FROM projects WHERE project_id = ?",
+                "SELECT project_id, user_id, name, type, created_at, outline, draft_scheme FROM projects WHERE project_id = ?",
                 (project_id,),
             ).fetchone()
         if not row:

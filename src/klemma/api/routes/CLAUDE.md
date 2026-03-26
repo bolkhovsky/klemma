@@ -50,6 +50,14 @@ Process endpoints — mounted with `prefix="/process"`. All require Bearer auth.
 Analyze endpoints — mounted with `prefix="/analyze"`. All require Bearer auth.
 - `GET /analyze/status` → `StatusResponse` — source counts (total/completed/pending/failed), coverage by section, total fragment count. SaaS equivalent of `klemma status`.
 
+### blocks.py (~200 lines)
+Block draft endpoints — mounted with `prefix="/projects"`. All require Bearer auth.
+File layout: `KLEMMA_DATA_DIR/drafts/{project_id}/{section_id}/{block_id}.md`
+Each project directory is a git repo; every save creates a commit with `"block {section}/{block}: {N}w"`.
+- `GET /projects/{project_id}/blocks/{section_id}/{block_id}` → `BlockResponse` — read draft (empty text if not yet saved)
+- `PUT /projects/{project_id}/blocks/{section_id}/{block_id}` → `BlockResponse` — write file + git commit; commit failure is non-fatal
+- `GET /projects/{project_id}/blocks/status` → `BlockStatusResponse` — all saved blocks with `{section_id}/{block_id}` keys, word counts, `has_draft` flags
+
 ### write.py (~110 lines)
 Write endpoints — mounted with `prefix="/write"`. All require Bearer auth.
 - `POST /write/research` → `WriteJobResponse` (202) — enqueue research briefing job

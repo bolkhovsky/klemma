@@ -2,7 +2,7 @@
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/AppLayout.vue'
-import { formatMarkdown } from '@/utils/markdown'
+import { formatMarkdown, renderDraft } from '@/utils/markdown'
 import { projects as apiProjects, library as apiLibrary, userProjects, process as apiProcess, write as apiWrite, blocks as apiBlocks } from '@/api/client'
 
 const route = useRoute()
@@ -256,6 +256,12 @@ async function _generateDraftMock() {
 
 // ── Ghost text (inline AI continuation) ──────────────────────────────────
 
+const ghostEnabled = ref(localStorage.getItem('klemma_ghost_enabled') !== 'false')
+watch(ghostEnabled, v => {
+  localStorage.setItem('klemma_ghost_enabled', String(v))
+  if (!v) clearGhost()
+})
+
 const editorEl = ref<HTMLElement>()
 const ghostText = ref('')
 const isSpinning = ref(false)
@@ -372,8 +378,12 @@ function onEditorInput() {
   clearGhost()
   editText.value = editorEl.value?.innerText || ''
   autoSave()
-  if (editText.value.trim().length < 30) return
-  ghostTimer = setTimeout(fetchGhostSuggestion, 700)
+  if (!ghostEnabled.value) return
+  const text = editText.value.trim()
+  if (text.length < 30) return
+  // Only suggest at sentence boundaries — after ". ", "! ", "? " or end-of-line
+  if (!/[.!?][\s\n]*$/.test(text)) return
+  ghostTimer = setTimeout(fetchGhostSuggestion, 1500)
 }
 
 function onEditorKeydown(e: KeyboardEvent) {
@@ -632,15 +642,32 @@ function timeAgo(d: Date): string {
                 </transition>
                 <div class="flex-1" />
                 <span class="font-[var(--font-mono)] text-xs text-[var(--color-ink-muted)]">{{ editWordCount }} слов</span>
+                <!-- kAI toggle radio button -->
+                <button
+                  @click="ghostEnabled = !ghostEnabled"
+                  :title="ghostEnabled ? 'Выключить kAI автодополнение' : 'Включить kAI автодополнение'"
+                  class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold tracking-tight transition-all duration-150"
+                  :class="ghostEnabled
+                    ? 'border-[var(--color-accent)] bg-[var(--color-accent-pale)] text-[var(--color-accent)]'
+                    : 'border-[var(--color-rule)] bg-transparent text-[var(--color-ink-muted)]'"
+                >
+                  <span
+                    class="h-[7px] w-[7px] rounded-full border transition-all duration-150 flex-shrink-0"
+                    :class="ghostEnabled
+                      ? 'bg-[var(--color-accent)] border-[var(--color-accent)]'
+                      : 'bg-transparent border-[var(--color-ink-muted)]'"
+                  />
+                  kAI
+                </button>
                 <button @click="closeEditor" class="rounded-md px-3 py-1.5 text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] transition-colors">Закрыть</button>
               </div>
             </div>
 
             <!-- Display mode -->
             <div v-else-if="currentText" class="relative group">
-              <div class="px-8 py-6 text-[15px] text-[var(--color-ink)] leading-[1.8] font-[var(--font-body)] cursor-text"
+              <div class="draft-prose px-8 py-6 text-[15px] text-[var(--color-ink)] leading-[1.8] font-[var(--font-body)] cursor-text"
                 @click="startEditing"
-                v-html="formatMarkdown(currentText)" />
+                v-html="renderDraft(currentText)" />
               <div class="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button @click.stop="startEditing"
                   class="flex items-center gap-1 rounded-md bg-white/90 border border-[var(--color-rule)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent-pale)] transition-colors shadow-sm">
@@ -782,5 +809,51 @@ function timeAgo(d: Date): string {
 .ghost-hint-enter-from,
 .ghost-hint-leave-to {
   opacity: 0;
+}
+
+/* Prose styles for rendered draft markdown */
+.draft-prose :deep(h1),
+.draft-prose :deep(h2),
+.draft-prose :deep(h3) {
+  font-weight: 600;
+  color: var(--color-ink);
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  line-height: 1.3;
+}
+.draft-prose :deep(h1) { font-size: 1.25em; }
+.draft-prose :deep(h2) { font-size: 1.1em; }
+.draft-prose :deep(h3) { font-size: 1em; }
+
+.draft-prose :deep(p) {
+  margin-bottom: 1em;
+}
+.draft-prose :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.draft-prose :deep(ul),
+.draft-prose :deep(ol) {
+  margin-bottom: 1em;
+  padding-left: 1.5em;
+}
+.draft-prose :deep(li) {
+  margin-bottom: 0.25em;
+}
+
+.draft-prose :deep(strong) {
+  font-weight: 600;
+}
+.draft-prose :deep(em) {
+  font-style: italic;
+}
+
+.draft-prose :deep(.citekey-ref) {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--color-accent);
+  background: var(--color-accent-pale);
+  border-radius: 3px;
+  padding: 0 3px;
 }
 </style>

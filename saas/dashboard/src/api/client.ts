@@ -268,6 +268,60 @@ export const blocks = {
     ),
 }
 
+// Draft files (Markdown-first, single .md per project)
+export interface DraftHeading {
+  level: number
+  section_id: string
+  title: string
+  full_title: string
+  line: number
+}
+
+export interface DraftFile {
+  name: string
+  headings: DraftHeading[]
+  word_count: number
+}
+
+export interface DraftContent extends DraftFile {
+  content: string
+}
+
+export const drafts = {
+  list: (projectId: string) =>
+    request<{ files: DraftFile[] }>(`/projects/${projectId}/drafts`),
+
+  get: (projectId: string, filename: string) =>
+    request<DraftContent>(`/projects/${projectId}/drafts/${encodeURIComponent(filename)}`),
+
+  save: (projectId: string, filename: string, content: string) =>
+    request<DraftContent>(`/projects/${projectId}/drafts/${encodeURIComponent(filename)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    }),
+
+  init: (projectId: string, filename?: string) =>
+    request<DraftContent>(`/projects/${projectId}/drafts/init`, {
+      method: 'POST',
+      body: JSON.stringify({ filename: filename ?? null }),
+    }),
+
+  upsertSection: (
+    projectId: string,
+    filename: string,
+    sectionId: string,
+    body: string,
+    headingTitle?: string,
+  ) =>
+    request<{ section_id: string; filename: string; commit: string }>(
+      `/projects/${projectId}/drafts/${encodeURIComponent(filename)}/sections/${encodeURIComponent(sectionId)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ body, heading_title: headingTitle ?? null }),
+      },
+    ),
+}
+
 // Research (literature review generation + stored reports)
 export const research = {
   generate: (section: string, projectId?: string) =>

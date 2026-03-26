@@ -272,7 +272,7 @@ onMounted(loadMapData)
 const realChapters = computed((): Chapter[] => {
   const groups = new Map<number, OutlineSection[]>()
   for (const s of rawSections.value) {
-    const ch = parseInt(s.id.split('.')[0])
+    const ch = parseInt(s.id.split('.')[0] ?? '0')
     if (!isNaN(ch)) {
       if (!groups.has(ch)) groups.set(ch, [])
       groups.get(ch)!.push(s)
