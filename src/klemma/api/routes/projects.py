@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from klemma.models import UserRecord
@@ -148,6 +149,41 @@ async def rename_project(
     store.rename_project(project_id, body.name)
     project["name"] = body.name
     return ProjectResponse(**project)
+
+
+@router.delete("/{project_id}")
+async def delete_project(
+    project_id: str,
+    user: UserRecord = Depends(get_current_user),
+) -> Response:
+    """Delete a project, its draft files, and its git sync repo.
+
+    Preserves: global library sources and fragments.
+    Deletes: project DB record, research_reports (cascade), draft directory, sync repo.
+    """
+    if not _SAFE_ID.match(project_id):
+        raise HTTPException(status_code=400, detail="Invalid project_id")
+
+    store = get_user_store()
+    project = store.get_project_by_id(project_id)
+    if not project or project["user_id"] != user.user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    store.delete_project(project_id)
+
+    data_dir = Path(os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma")))
+
+    drafts_dir = data_dir / "drafts" / project_id
+    if drafts_dir.exists():
+        shutil.rmtree(drafts_dir)
+        logger.info("Deleted project draft files: %s", project_id)
+
+    repo_dir = data_dir / "repos" / project_id
+    if repo_dir.exists():
+        shutil.rmtree(repo_dir)
+        logger.info("Deleted project git repo: %s", project_id)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.patch("/{project_id}/outline", response_model=ProjectResponse)

@@ -174,6 +174,9 @@ export const userProjects = {
       body: JSON.stringify({ name }),
     }),
 
+  delete: (projectId: string) =>
+    request<void>(`/projects/${projectId}`, { method: 'DELETE' }),
+
   updateOutline: (projectId: string, sections: OutlineSection[]) =>
     request<Project>(`/projects/${projectId}/outline`, {
       method: 'PATCH',
@@ -242,10 +245,10 @@ export const usage = {
 
 // Write (draft generation)
 export const write = {
-  draft: (section: string, projectId?: string) =>
+  draft: (section: string, projectId?: string, wordTarget?: number) =>
     request<{ job_id: string; status: string; section: string; task_type: string }>('/write/draft', {
       method: 'POST',
-      body: JSON.stringify({ section, project_id: projectId }),
+      body: JSON.stringify({ section, project_id: projectId, word_target: wordTarget }),
     }),
 }
 
@@ -265,6 +268,72 @@ export const blocks = {
   getStatus: (projectId: string) =>
     request<{ statuses: Record<string, { has_draft: boolean; word_count: number }> }>(
       `/projects/${projectId}/blocks/status`
+    ),
+}
+
+// Draft files (Markdown-first, single .md per project)
+export interface DraftHeading {
+  level: number
+  section_id: string
+  title: string
+  full_title: string
+  line: number
+}
+
+/** Compute word count for every section from full draft content. */
+export function computeSectionWordCounts(content: string, headings: DraftHeading[]): Record<string, number> {
+  const lines = content.split('\n')
+  const counts: Record<string, number> = {}
+  headings.forEach((h, i) => {
+    const nextLine = headings[i + 1]?.line ?? lines.length
+    const body = lines.slice(h.line + 1, nextLine).join('\n').trim()
+    counts[h.section_id] = body ? body.split(/\s+/).filter(Boolean).length : 0
+  })
+  return counts
+}
+
+export interface DraftFile {
+  name: string
+  headings: DraftHeading[]
+  word_count: number
+}
+
+export interface DraftContent extends DraftFile {
+  content: string
+}
+
+export const drafts = {
+  list: (projectId: string) =>
+    request<{ files: DraftFile[] }>(`/projects/${projectId}/drafts`),
+
+  get: (projectId: string, filename: string) =>
+    request<DraftContent>(`/projects/${projectId}/drafts/${encodeURIComponent(filename)}`),
+
+  save: (projectId: string, filename: string, content: string) =>
+    request<DraftContent>(`/projects/${projectId}/drafts/${encodeURIComponent(filename)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    }),
+
+  init: (projectId: string, filename?: string) =>
+    request<DraftContent>(`/projects/${projectId}/drafts/init`, {
+      method: 'POST',
+      body: JSON.stringify({ filename: filename ?? null }),
+    }),
+
+  upsertSection: (
+    projectId: string,
+    filename: string,
+    sectionId: string,
+    body: string,
+    headingTitle?: string,
+  ) =>
+    request<{ section_id: string; filename: string; commit: string }>(
+      `/projects/${projectId}/drafts/${encodeURIComponent(filename)}/sections/${encodeURIComponent(sectionId)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ body, heading_title: headingTitle ?? null }),
+      },
     ),
 }
 

@@ -21,13 +21,13 @@ def store(tmp_path) -> LocalUserStore:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_7(tmp_path):
+def test_schema_version(tmp_path):
     db_path = tmp_path / "users.db"
     LocalUserStore(db_path)
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 7
+    assert version == 9
 
 
 def test_creates_db_file(tmp_path):
@@ -222,3 +222,44 @@ def test_outline_in_project_list(store):
     store.update_project_outline(project["project_id"], sections)
     projects = store.get_projects(user.user_id)
     assert projects[0]["outline"] == sections
+
+
+def test_delete_project(store):
+    user = store.create_user(email="del@example.com", password_hash="h")
+    project = store.create_project(user.user_id, "To Delete")
+    pid = project["project_id"]
+
+    result = store.delete_project(pid)
+
+    assert result is True
+    assert store.get_project_by_id(pid) is None
+    assert store.get_projects(user.user_id) == []
+
+
+def test_delete_project_nonexistent(store):
+    result = store.delete_project("does-not-exist")
+    assert result is False
+
+
+def test_delete_project_cascades_research_reports(store):
+    import json
+
+    user = store.create_user(email="cascade@example.com", password_hash="h")
+    project = store.create_project(user.user_id, "Cascade Test")
+    pid = project["project_id"]
+
+    # Insert a research report directly
+    store.save_research_report(
+        pid, "1.1", json.dumps({"blocks": []}), "report text", "test-model"
+    )
+
+    # Verify it exists
+    assert store.get_research_report(pid, "1.1") is not None
+
+    # Delete project — research_reports should cascade
+    store.delete_project(pid)
+
+    # Project gone
+    assert store.get_project_by_id(pid) is None
+    # Research report also gone (ON DELETE CASCADE)
+    assert store.get_research_report(pid, "1.1") is None

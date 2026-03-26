@@ -133,6 +133,23 @@ body {
   background-size: 256px 256px;
 }
 
+/* Draft prose — rendered markdown in view mode */
+.draft-prose h1 { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; line-height: 1.3; margin: 1.5rem 0 0.75rem; color: var(--color-ink); }
+.draft-prose h2 { font-family: var(--font-display); font-size: 1.25rem; font-weight: 600; line-height: 1.35; margin: 1.5rem 0 0.6rem; color: var(--color-ink); }
+.draft-prose h3 { font-family: var(--font-display); font-size: 1.1rem; font-weight: 600; line-height: 1.4; margin: 1.25rem 0 0.5rem; color: var(--color-ink); }
+.draft-prose h4 { font-family: var(--font-display); font-size: 1rem; font-weight: 600; line-height: 1.4; margin: 1rem 0 0.4rem; color: var(--color-ink-light); }
+.draft-prose p { margin-bottom: 0.85rem; }
+.draft-prose p:last-child { margin-bottom: 0; }
+.draft-prose ul, .draft-prose ol { margin: 0.5rem 0 0.85rem 1.25rem; }
+.draft-prose li { margin-bottom: 0.25rem; }
+.draft-prose strong { font-weight: 600; }
+.draft-prose em { font-style: italic; }
+.draft-prose blockquote { border-left: 3px solid var(--color-rule); padding-left: 1rem; margin: 0.75rem 0; color: var(--color-ink-muted); font-style: italic; }
+.draft-prose code { font-family: var(--font-mono); font-size: 0.85em; background: var(--color-paper-warm); padding: 1px 4px; border-radius: 3px; }
+
+/* Citekey inline reference spans (from renderDraft) */
+.citekey-ref { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-accent); background: var(--color-accent-pale); padding: 1px 5px; border-radius: 4px; }
+
 /* Citekey links — clickable @source references */
 .citekey-link {
   font-family: var(--font-mono);

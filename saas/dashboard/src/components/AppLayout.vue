@@ -193,7 +193,7 @@ async function createProject() {
       <!-- Divider -->
       <div class="mx-3 my-1 border-t border-[var(--color-rule)]"></div>
 
-      <!-- Project nav: 3 items (Карта, Лента, Библиотека) -->
+      <!-- Project nav: Карта, Лента, Библиотека -->
       <nav v-if="route.params.projectId" class="flex flex-col gap-0.5 px-2">
         <RouterLink
           :to="`/${route.params.projectId}/map`"

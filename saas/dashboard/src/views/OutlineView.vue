@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import AppLayout from '@/components/AppLayout.vue'
 import { userProjects, process, type OutlineSection } from '@/api/client'
 
 const projectStore = useProjectStore()
+const router = useRouter()
 
 // Local editable copy of the outline
 const sections = ref<OutlineSection[]>([])
@@ -126,6 +128,27 @@ function pollGenerateJob(jobId: string) {
       genError.value = 'Ошибка опроса статуса задачи'
     }
   }, 3000)
+}
+
+// Danger Zone
+const showDeleteConfirm = ref(false)
+const deleting = ref(false)
+const deleteError = ref('')
+
+async function deleteProject() {
+  if (!projectStore.activeProjectId) return
+  deleting.value = true
+  deleteError.value = ''
+  try {
+    await userProjects.delete(projectStore.activeProjectId)
+    showDeleteConfirm.value = false
+    await projectStore.loadProjects()
+    router.push('/library')
+  } catch (e: unknown) {
+    deleteError.value = e instanceof Error ? e.message : 'Ошибка удаления'
+  } finally {
+    deleting.value = false
+  }
 }
 
 const DISSERTATION_TEMPLATE: OutlineSection[] = [
@@ -336,6 +359,49 @@ function applyTemplate() {
         </form>
         <p v-if="addError" class="mt-2 text-sm text-[var(--color-err)]">{{ addError }}</p>
       </div>
+      <!-- Danger Zone -->
+      <div class="animate-in rounded-xl border border-[var(--color-err)] bg-[var(--color-paper-white)] p-5">
+        <h2 class="font-[var(--font-display)] text-sm font-semibold text-[var(--color-err)] uppercase tracking-wider mb-3">
+          Опасная зона
+        </h2>
+
+        <div v-if="!showDeleteConfirm" class="flex items-center justify-between gap-4">
+          <p class="text-sm text-[var(--color-ink-muted)]">
+            Удалить проект «{{ projectStore.activeProject?.name }}» безвозвратно.
+            Источники и фрагменты в общей библиотеке не затрагиваются.
+          </p>
+          <button
+            @click="showDeleteConfirm = true"
+            class="shrink-0 rounded-lg border border-[var(--color-err)] px-4 py-2 text-sm font-medium text-[var(--color-err)] hover:bg-[var(--color-err-bg)] transition-colors"
+          >
+            Удалить проект
+          </button>
+        </div>
+
+        <div v-else class="space-y-3">
+          <p class="text-sm font-medium text-[var(--color-err)]">
+            Удалить «{{ projectStore.activeProject?.name }}»? Это действие необратимо — черновик и данные проекта будут удалены.
+          </p>
+          <div class="flex items-center gap-3">
+            <button
+              @click="deleteProject"
+              :disabled="deleting"
+              class="rounded-lg bg-[var(--color-err)] px-4 py-2 text-sm font-semibold text-white hover:opacity-80 disabled:opacity-50 transition-opacity"
+            >
+              {{ deleting ? 'Удаление…' : 'Да, удалить' }}
+            </button>
+            <button
+              @click="showDeleteConfirm = false"
+              :disabled="deleting"
+              class="text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:opacity-50 transition-colors"
+            >
+              Отмена
+            </button>
+            <span v-if="deleteError" class="text-sm text-[var(--color-err)]">{{ deleteError }}</span>
+          </div>
+        </div>
+      </div>
+
     </div>
   </AppLayout>
 </template>

@@ -18,7 +18,7 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 9
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -168,6 +168,17 @@ class LocalUserStore:
                     "UPDATE users SET username = ? WHERE user_id = ?",
                     (username, row["user_id"]),
                 )
+        if version < 8:
+            conn.execute(
+                "ALTER TABLE projects ADD COLUMN draft_scheme TEXT NOT NULL DEFAULT 'single'"
+            )
+        if version < 9:
+            # Idempotent re-apply: add draft_scheme if somehow skipped at v8
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
+            if "draft_scheme" not in existing:
+                conn.execute(
+                    "ALTER TABLE projects ADD COLUMN draft_scheme TEXT NOT NULL DEFAULT 'single'"
+                )
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -283,13 +294,19 @@ class LocalUserStore:
     # Project management                                                  #
     # ------------------------------------------------------------------ #
 
-    def create_project(self, user_id: str, name: str, type_: str = "dissertation") -> dict:
+    def create_project(
+        self,
+        user_id: str,
+        name: str,
+        type_: str = "dissertation",
+        draft_scheme: str = "single",
+    ) -> dict:
         """Create a new project for a user. Returns the project dict."""
         project_id = uuid.uuid4().hex
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO projects (project_id, user_id, name, type) VALUES (?, ?, ?, ?)",
-                (project_id, user_id, name, type_),
+                "INSERT INTO projects (project_id, user_id, name, type, draft_scheme) VALUES (?, ?, ?, ?, ?)",
+                (project_id, user_id, name, type_, draft_scheme),
             )
         return self.get_project_by_id(project_id)  # type: ignore[return-value]
 
@@ -297,7 +314,7 @@ class LocalUserStore:
         """List all projects for a user, ordered by creation date."""
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT project_id, name, type, created_at, outline FROM projects WHERE user_id = ? ORDER BY created_at",
+                "SELECT project_id, name, type, created_at, outline, draft_scheme FROM projects WHERE user_id = ? ORDER BY created_at",
                 (user_id,),
             ).fetchall()
         result = []
@@ -311,7 +328,7 @@ class LocalUserStore:
         """Return project dict or None if not found."""
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT project_id, user_id, name, type, created_at, outline FROM projects WHERE project_id = ?",
+                "SELECT project_id, user_id, name, type, created_at, outline, draft_scheme FROM projects WHERE project_id = ?",
                 (project_id,),
             ).fetchone()
         if not row:
@@ -335,6 +352,18 @@ class LocalUserStore:
         with self._conn() as conn:
             cursor = conn.execute(
                 "UPDATE projects SET name = ? WHERE project_id = ?", (name, project_id)
+            )
+        return cursor.rowcount > 0
+
+    def delete_project(self, project_id: str) -> bool:
+        """Delete a project and all its related data (research_reports cascade).
+
+        Returns True if project existed and was deleted.
+        Sources and fragments in the global library are NOT affected.
+        """
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM projects WHERE project_id = ?", (project_id,)
             )
         return cursor.rowcount > 0
 
