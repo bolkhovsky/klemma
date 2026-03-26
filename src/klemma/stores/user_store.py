@@ -168,12 +168,7 @@ class LocalUserStore:
                     "UPDATE users SET username = ? WHERE user_id = ?",
                     (username, row["user_id"]),
                 )
-        if version < 8:
-            conn.execute(
-                "ALTER TABLE projects ADD COLUMN draft_scheme TEXT NOT NULL DEFAULT 'single'"
-            )
         if version < 9:
-            # Idempotent re-apply: add draft_scheme if somehow skipped at v8
             existing = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
             if "draft_scheme" not in existing:
                 conn.execute(
