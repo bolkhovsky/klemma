@@ -355,6 +355,18 @@ class LocalUserStore:
             )
         return cursor.rowcount > 0
 
+    def delete_project(self, project_id: str) -> bool:
+        """Delete a project and all its related data (research_reports cascade).
+
+        Returns True if project existed and was deleted.
+        Sources and fragments in the global library are NOT affected.
+        """
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM projects WHERE project_id = ?", (project_id,)
+            )
+        return cursor.rowcount > 0
+
     # ------------------------------------------------------------------ #
     # Research reports                                                      #
     # ------------------------------------------------------------------ #

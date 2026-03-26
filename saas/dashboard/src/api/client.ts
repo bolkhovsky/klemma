@@ -174,6 +174,9 @@ export const userProjects = {
       body: JSON.stringify({ name }),
     }),
 
+  delete: (projectId: string) =>
+    request<void>(`/projects/${projectId}`, { method: 'DELETE' }),
+
   updateOutline: (projectId: string, sections: OutlineSection[]) =>
     request<Project>(`/projects/${projectId}/outline`, {
       method: 'PATCH',
