@@ -193,6 +193,32 @@ def push_library(client: KlemmaClient, project_root: Path) -> dict:
     return result
 
 
+def push_drafts(client: KlemmaClient, project_root: Path, dashboard_project_id: str) -> dict:
+    """Push local draft .md files to server's /projects/{id}/drafts API.
+
+    Reads all .md files from notes/drafts/ and uploads each one via PUT.
+    Returns summary dict with 'files' and 'words' counts.
+    """
+    drafts_dir = project_root / "notes" / "drafts"
+    result: dict = {"files": 0, "words": 0}
+
+    if not drafts_dir.exists():
+        return result
+
+    for md_file in sorted(drafts_dir.glob("*.md")):
+        content = md_file.read_text(encoding="utf-8")
+        filename = md_file.name
+        resp = client.put(
+            f"/projects/{dashboard_project_id}/drafts/{filename}",
+            json={"content": content},
+        )
+        wc = resp.json().get("word_count", 0)
+        result["files"] += 1
+        result["words"] += wc
+
+    return result
+
+
 def pull_library(client: KlemmaClient, project_root: Path, since: Optional[str] = None) -> dict:
     """Pull library data from server and write to local DB. Returns summary dict."""
     params = {}

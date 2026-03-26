@@ -57,3 +57,12 @@ class KlemmaClient:
             resp = requests.post(url, headers=self._headers(), json=json, timeout=30, **kwargs)
         resp.raise_for_status()
         return resp
+
+    def put(self, path: str, json: Any = None, **kwargs: Any) -> requests.Response:
+        """PUT request with auto-refresh on 401."""
+        url = f"{self.api_url}{path}"
+        resp = requests.put(url, headers=self._headers(), json=json, timeout=60, **kwargs)
+        if self._maybe_refresh(resp):
+            resp = requests.put(url, headers=self._headers(), json=json, timeout=60, **kwargs)
+        resp.raise_for_status()
+        return resp

@@ -53,5 +53,6 @@ class SyncConfig(BaseModel):
     api_url: str
     git_url: str
     access_token: str
+    dashboard_project_id: str = ""  # UUID for /projects/{id}/drafts API
     last_push: str = ""
     last_pull: str = ""
