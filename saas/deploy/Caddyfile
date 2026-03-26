@@ -3,8 +3,8 @@
 }
 
 litresearch.ru {
-	# Git HTTP backend — proxied via API sync/verify-git-token for auth
-	handle_path /git/* {
+	# Git HTTP backend — full path preserved so FastAPI route /git/{path} matches
+	handle /git/* {
 		reverse_proxy api:8000 {
 			header_up X-Real-IP {remote_host}
 			header_up X-Forwarded-For {remote_host}
