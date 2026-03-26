@@ -277,6 +277,18 @@ export interface DraftHeading {
   line: number
 }
 
+/** Compute word count for every section from full draft content. */
+export function computeSectionWordCounts(content: string, headings: DraftHeading[]): Record<string, number> {
+  const lines = content.split('\n')
+  const counts: Record<string, number> = {}
+  headings.forEach((h, i) => {
+    const nextLine = headings[i + 1]?.line ?? lines.length
+    const body = lines.slice(h.line + 1, nextLine).join('\n').trim()
+    counts[h.section_id] = body ? body.split(/\s+/).filter(Boolean).length : 0
+  })
+  return counts
+}
+
 export interface DraftFile {
   name: string
   headings: DraftHeading[]

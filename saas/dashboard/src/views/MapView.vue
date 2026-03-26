@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import AppLayout from '@/components/AppLayout.vue'
-import { userProjects, projects as apiProjects, drafts, type DraftHeading } from '@/api/client'
+import { userProjects, projects as apiProjects, drafts, computeSectionWordCounts, type DraftHeading, type OutlineSection } from '@/api/client'
 
 const router = useRouter()
 const route = useRoute()
@@ -28,6 +28,7 @@ interface Section {
   sourceCount: number
   fragmentCount: number
   insightCount: number
+  wordCount: number
 }
 
 interface Chapter {
@@ -71,7 +72,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b1.1.4', title: 'Ледовые карты как инструмент навигации', sources: ['arcticandantarcticresearchinstituteUSINGNEURALNETWORK2024', 'stokholmAutoICEChallenge2024'], wordTarget: 350, status: 'outlined' },
           { id: 'b1.1.5', title: 'Спутниковое ДЗЗ и информационные пробелы', sources: ['zabolotskihSputnikovoeMikrovolnovoeZondirovanie2023', 'bidenkoGeoinformacionnayaProceduraOcenki2022'], wordTarget: 300, status: 'outlined' },
         ],
-        sourceCount: 23, fragmentCount: 40, insightCount: 0,
+        sourceCount: 23, fragmentCount: 40, insightCount: 0, wordCount: 0,
       },
       {
         id: '1.2', name: 'Источники НГГМИ в АЗРФ',
@@ -81,7 +82,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b1.2.2', title: 'Автоматические буйковые станции и дрифтеры', sources: ['kirillovVozmozhnostiIssledovaniyaVozrastnyh2023'], wordTarget: 250, status: 'empty' },
           { id: 'b1.2.3', title: 'Зависимость предсказуемости от сезона инициализации', sources: ['tietsche2014', 'day2014', 'collow2015'], wordTarget: 350, status: 'empty' },
         ],
-        sourceCount: 18, fragmentCount: 31, insightCount: 1,
+        sourceCount: 18, fragmentCount: 31, insightCount: 1, wordCount: 0,
       },
       {
         id: '1.3', name: 'Данные ДЗЗ и ИНС',
@@ -91,7 +92,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b1.3.2', title: 'Радарная съёмка (SAR) и проблема отечественных спутников', sources: ['Tsepelev2023', 'bidenkoGeoinformacionnayaProceduraOcenki2022'], wordTarget: 300, status: 'outlined' },
           { id: 'b1.3.3', title: 'ИНС для тематической интерпретации спутниковых данных', sources: ['arcticandantarcticresearchinstituteUSINGNEURALNETWORK2024'], wordTarget: 250, status: 'empty' },
         ],
-        sourceCount: 15, fragmentCount: 22, insightCount: 1,
+        sourceCount: 15, fragmentCount: 22, insightCount: 1, wordCount: 0,
       },
       {
         id: '1.4', name: 'Методы и технологии НГГМИ',
@@ -102,7 +103,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b1.4.3', title: 'Нейросетевые архитектуры: LSTM, U-Net, ConvLSTM', sources: ['arcticandantarcticresearchinstituteUSINGNEURALNETWORK2024'], wordTarget: 350, status: 'empty' },
           { id: 'b1.4.4', title: 'Сравнительный анализ горизонтов и ресурсов', sources: ['collow2015', 'tietsche2014'], wordTarget: 300, status: 'empty' },
         ],
-        sourceCount: 12, fragmentCount: 19, insightCount: 1,
+        sourceCount: 12, fragmentCount: 19, insightCount: 1, wordCount: 0,
       },
     ],
   },
@@ -119,7 +120,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b2.1.1', title: 'Обоснование многокомпонентного подхода', sources: ['bidenkoGeoinformacionnayaProceduraOcenki2022'], wordTarget: 400, status: 'draft' },
           { id: 'b2.1.2', title: 'Архитектура модели: входы, обработка, выходы', sources: ['bidenkoGeoinformacionnayaProceduraOcenki2022'], wordTarget: 350, status: 'outlined' },
         ],
-        sourceCount: 8, fragmentCount: 14, insightCount: 0,
+        sourceCount: 8, fragmentCount: 14, insightCount: 0, wordCount: 0,
       },
       {
         id: '2.2', name: 'Состав модели',
@@ -129,7 +130,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b2.2.2', title: 'Компонент пространственной сегментации (U-Net)', sources: ['stokholmAutoICEChallenge2024'], wordTarget: 300, status: 'empty' },
           { id: 'b2.2.3', title: 'Компонент пространственно-временной динамики (ConvLSTM)', sources: [], wordTarget: 300, status: 'empty' },
         ],
-        sourceCount: 6, fragmentCount: 10, insightCount: 0,
+        sourceCount: 6, fragmentCount: 10, insightCount: 0, wordCount: 0,
       },
       {
         id: '2.3', name: 'Содержание модели',
@@ -139,7 +140,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b2.3.2', title: 'Предобработка и нормализация', sources: [], wordTarget: 250, status: 'empty' },
           { id: 'b2.3.3', title: 'Функции потерь и критерии обучения', sources: [], wordTarget: 300, status: 'empty' },
         ],
-        sourceCount: 11, fragmentCount: 18, insightCount: 0,
+        sourceCount: 11, fragmentCount: 18, insightCount: 0, wordCount: 0,
       },
     ],
   },
@@ -156,7 +157,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b3.1.1', title: 'Источники данных для валидации', sources: ['zabolotskihSputnikovoeMikrovolnovoeZondirovanie2023'], wordTarget: 300, status: 'outlined' },
           { id: 'b3.1.2', title: 'Процедура контроля качества входных данных', sources: ['bidenkoGeoinformacionnayaProceduraOcenki2022'], wordTarget: 350, status: 'empty' },
         ],
-        sourceCount: 5, fragmentCount: 8, insightCount: 0,
+        sourceCount: 5, fragmentCount: 8, insightCount: 0, wordCount: 0,
       },
       {
         id: '3.2', name: 'Методы верификации прогнозов',
@@ -168,7 +169,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b3.2.4', title: 'Сравнительный анализ метрик для навигационных задач', sources: ['goessling2016', 'dukhovskoy2015'], wordTarget: 350, status: 'empty' },
           { id: 'b3.2.5', title: 'Стратификация по условиям инициализации', sources: ['collow2015', 'chevallier2013', 'tietsche2014'], wordTarget: 350, status: 'empty' },
         ],
-        sourceCount: 14, fragmentCount: 25, insightCount: 2,
+        sourceCount: 14, fragmentCount: 25, insightCount: 2, wordCount: 0,
       },
       {
         id: '3.3', name: 'Алгоритм оценки качества',
@@ -177,7 +178,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b3.3.1', title: 'Взвешенная комбинация метрик', sources: [], wordTarget: 300, status: 'empty' },
           { id: 'b3.3.2', title: 'Пороги приемлемости для навигации', sources: [], wordTarget: 250, status: 'empty' },
         ],
-        sourceCount: 3, fragmentCount: 5, insightCount: 1,
+        sourceCount: 3, fragmentCount: 5, insightCount: 1, wordCount: 0,
       },
     ],
   },
@@ -194,7 +195,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b4.1.1', title: 'Функциональные требования к модулю', sources: ['bidenkoGeoinformacionnayaProceduraOcenki2022'], wordTarget: 300, status: 'draft' },
           { id: 'b4.1.2', title: 'Нефункциональные требования: воспроизводимость, производительность', sources: [], wordTarget: 250, status: 'outlined' },
         ],
-        sourceCount: 4, fragmentCount: 7, insightCount: 0,
+        sourceCount: 4, fragmentCount: 7, insightCount: 0, wordCount: 0,
       },
       {
         id: '4.2', name: 'Алгоритм валидации',
@@ -203,7 +204,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b4.2.1', title: 'Пошаговый алгоритм валидации', sources: [], wordTarget: 400, status: 'outlined' },
           { id: 'b4.2.2', title: 'Обработка граничных случаев: пропуски данных, полярная ночь', sources: [], wordTarget: 300, status: 'empty' },
         ],
-        sourceCount: 6, fragmentCount: 11, insightCount: 0,
+        sourceCount: 6, fragmentCount: 11, insightCount: 0, wordCount: 0,
       },
       {
         id: '4.3', name: 'Программная реализация',
@@ -213,7 +214,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b4.3.2', title: 'Формат входных/выходных данных (NetCDF, GeoTIFF)', sources: [], wordTarget: 250, status: 'outlined' },
           { id: 'b4.3.3', title: 'Визуализация результатов (карты, графики)', sources: [], wordTarget: 300, status: 'empty' },
         ],
-        sourceCount: 5, fragmentCount: 9, insightCount: 0,
+        sourceCount: 5, fragmentCount: 9, insightCount: 0, wordCount: 0,
       },
       {
         id: '4.4', name: 'Технологический суверенитет',
@@ -222,7 +223,7 @@ const DEMO_CHAPTERS: Chapter[] = [
           { id: 'b4.4.1', title: 'Импортозамещение в ПО для обработки ДЗЗ', sources: ['Tsepelev2023'], wordTarget: 300, status: 'empty' },
           { id: 'b4.4.2', title: 'Связь с работами кафедры РГГМУ', sources: [], wordTarget: 250, status: 'empty' },
         ],
-        sourceCount: 3, fragmentCount: 4, insightCount: 1,
+        sourceCount: 3, fragmentCount: 4, insightCount: 1, wordCount: 0,
       },
     ],
   },
@@ -234,25 +235,34 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const projectName = ref('')
 const draftHeadings = ref<DraftHeading[]>([])
+const draftContent = ref('')
 const draftHasContent = ref(false)
+const dbOutline = ref<OutlineSection[] | null>(null)
 const sectionSourceCounts = ref<Record<string, number>>({})
+const sectionWordCounts = ref<Record<string, number>>({})
 
 async function loadMapData() {
   if (isDemoMode.value) return
   loading.value = true
   error.value = null
   try {
-    const [projectsData, coverageResult, draftResult] = await Promise.all([
+    const [projectsData, coverageResult, draftData] = await Promise.all([
       userProjects.list(),
       apiProjects.coverage().catch(() => ({ total_sources: 0, sections: {} as Record<string, number>, chapters: {} as Record<string, number> })),
-      drafts.list(projectId.value!).catch(() => ({ files: [] as { name: string; headings: DraftHeading[]; word_count: number }[] })),
+      drafts.init(projectId.value!).catch(() => null),
     ])
     const project = projectsData.projects.find(p => p.project_id === projectId.value)
-    if (project) projectName.value = project.name
+    if (project) {
+      projectName.value = project.name
+      dbOutline.value = project.outline
+    }
     sectionSourceCounts.value = coverageResult.sections
-    const file = draftResult.files[0]
-    draftHeadings.value = file?.headings ?? []
-    draftHasContent.value = (file?.word_count ?? 0) > 0
+    if (draftData) {
+      draftHeadings.value = draftData.headings
+      draftContent.value = draftData.content
+      draftHasContent.value = draftData.word_count > 0
+      sectionWordCounts.value = computeSectionWordCounts(draftData.content, draftData.headings)
+    }
   } catch (e: any) {
     error.value = (e as Error).message ?? 'Ошибка загрузки'
   } finally {
@@ -260,42 +270,74 @@ async function loadMapData() {
   }
 }
 
-/** Draft status: has any content in the file at all. Per-section tracking deferred. */
-function sectionDraftStatus(_sectionId: string): 'draft' | 'empty' {
-  return draftHasContent.value ? 'draft' : 'empty'
+/** Draft status per section: has word count > 0. */
+function sectionDraftStatus(sectionId: string): 'draft' | 'empty' {
+  return (sectionWordCounts.value[sectionId] ?? 0) > 0 ? 'draft' : 'empty'
 }
 
 onMounted(loadMapData)
 
 // Build chapters from draft headings (level-2 = chapter, level-3+ = sections under that chapter)
 const realChapters = computed((): Chapter[] => {
-  if (!draftHeadings.value.length) return []
-
-  // Separate chapter-level (no dot) from section-level (has dot)
-  const chapterHeadings = draftHeadings.value.filter(h => !h.section_id.includes('.'))
-  const sectionMap = new Map<string, DraftHeading[]>()
-  for (const h of draftHeadings.value) {
-    if (!h.section_id.includes('.')) continue
-    const chKey = h.section_id.split('.')[0]!
-    if (!sectionMap.has(chKey)) sectionMap.set(chKey, [])
-    sectionMap.get(chKey)!.push(h)
+  // Primary source: draft file headings
+  if (draftHeadings.value.length) {
+    const chapterHeadings = draftHeadings.value.filter(h => !h.section_id.includes('.'))
+    const sectionMap = new Map<string, DraftHeading[]>()
+    for (const h of draftHeadings.value) {
+      if (!h.section_id.includes('.')) continue
+      const chKey = h.section_id.split('.')[0]!
+      if (!sectionMap.has(chKey)) sectionMap.set(chKey, [])
+      sectionMap.get(chKey)!.push(h)
+    }
+    return chapterHeadings
+      .sort((a, b) => parseInt(a.section_id) - parseInt(b.section_id))
+      .map(ch => ({
+        number: parseInt(ch.section_id),
+        name: ch.full_title,
+        thesis: '',
+        task: '',
+        sections: (sectionMap.get(ch.section_id) ?? []).map(s => ({
+          id: s.section_id,
+          name: s.full_title.replace(/^\d[\d.]*\s*/, ''),
+          thesis: undefined,
+          blocks: [],
+          sourceCount: sectionSourceCounts.value[s.section_id] ?? 0,
+          fragmentCount: 0,
+          insightCount: 0,
+          wordCount: sectionWordCounts.value[s.section_id] ?? 0,
+        })),
+      }))
   }
 
-  return chapterHeadings
-    .sort((a, b) => parseInt(a.section_id) - parseInt(b.section_id))
+  // Fallback: DB outline (sections array from project)
+  const outline = dbOutline.value
+  if (!outline?.length) return []
+
+  const chapterSections = outline.filter(s => !s.id.includes('.'))
+  const sectionMap = new Map<string, OutlineSection[]>()
+  for (const s of outline) {
+    if (!s.id.includes('.')) continue
+    const chKey = s.id.split('.')[0]!
+    if (!sectionMap.has(chKey)) sectionMap.set(chKey, [])
+    sectionMap.get(chKey)!.push(s)
+  }
+
+  return chapterSections
+    .sort((a, b) => parseInt(a.id) - parseInt(b.id))
     .map(ch => ({
-      number: parseInt(ch.section_id),
-      name: ch.full_title,
+      number: parseInt(ch.id),
+      name: ch.name,
       thesis: '',
       task: '',
-      sections: (sectionMap.get(ch.section_id) ?? []).map(s => ({
-        id: s.section_id,
-        name: s.full_title.replace(/^\d[\d.]*\s*/, ''),
+      sections: (sectionMap.get(ch.id) ?? []).map(s => ({
+        id: s.id,
+        name: s.name,
         thesis: undefined,
         blocks: [],
-        sourceCount: sectionSourceCounts.value[s.section_id] ?? 0,
+        sourceCount: sectionSourceCounts.value[s.id] ?? 0,
         fragmentCount: 0,
         insightCount: 0,
+        wordCount: sectionWordCounts.value[s.id] ?? 0,
       })),
     }))
 })
@@ -478,35 +520,44 @@ function blockStatusColor(status: string): string {
               : 'border-[var(--color-rule)]'"
           >
             <!-- Chapter header -->
-            <button
-              @click="toggleChapter(ch.number)"
-              class="flex items-start gap-4 w-full px-5 py-4 text-left"
-            >
-              <span
-                class="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-bold font-[var(--font-display)] flex-shrink-0"
-                :class="expandedChapter === ch.number
-                  ? 'bg-[var(--color-accent)] text-white'
-                  : 'bg-[var(--color-rule-light)] text-[var(--color-ink-muted)]'"
+            <div class="flex items-start gap-4 w-full px-5 py-4">
+              <!-- Title area: click → navigate to chapter view (real) or toggle (demo) -->
+              <div
+                class="flex items-start gap-4 flex-1 min-w-0 cursor-pointer"
+                @click="isDemoMode ? toggleChapter(ch.number) : navigateToBlock(String(ch.number), 'b1')"
               >
-                {{ ch.number }}
-              </span>
-              <div class="flex-1 min-w-0">
-                <h2 class="font-[var(--font-display)] text-base font-semibold text-[var(--color-ink)] leading-snug">
-                  {{ ch.name }}
-                </h2>
-                <p v-if="ch.thesis" class="mt-0.5 text-sm text-[var(--color-ink-light)] leading-relaxed italic">
-                  {{ ch.thesis }}
-                </p>
-                <p v-if="ch.task" class="mt-1 text-xs text-[var(--color-ink-muted)]">{{ ch.task }}</p>
+                <span
+                  class="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-bold font-[var(--font-display)] flex-shrink-0"
+                  :class="expandedChapter === ch.number
+                    ? 'bg-[var(--color-accent)] text-white'
+                    : 'bg-[var(--color-rule-light)] text-[var(--color-ink-muted)]'"
+                >
+                  {{ ch.number }}
+                </span>
+                <div class="flex-1 min-w-0">
+                  <h2 class="font-[var(--font-display)] text-base font-semibold text-[var(--color-ink)] leading-snug">
+                    {{ ch.name }}
+                  </h2>
+                  <p v-if="ch.thesis" class="mt-0.5 text-sm text-[var(--color-ink-light)] leading-relaxed italic">
+                    {{ ch.thesis }}
+                  </p>
+                  <p v-if="ch.task" class="mt-1 text-xs text-[var(--color-ink-muted)]">{{ ch.task }}</p>
+                </div>
               </div>
-              <svg
-                xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor"
-                class="h-4 w-4 text-[var(--color-ink-muted)] flex-shrink-0 mt-1 transition-transform"
-                :class="expandedChapter === ch.number ? 'rotate-180' : ''"
+              <!-- Chevron: toggle expand/collapse only -->
+              <button
+                @click.stop="toggleChapter(ch.number)"
+                class="mt-1 flex-shrink-0 p-1 rounded hover:bg-[var(--color-rule-light)] transition-colors"
               >
-                <path fill-rule="evenodd" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
-              </svg>
-            </button>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor"
+                  class="h-4 w-4 text-[var(--color-ink-muted)] transition-transform"
+                  :class="expandedChapter === ch.number ? 'rotate-180' : ''"
+                >
+                  <path fill-rule="evenodd" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+                </svg>
+              </button>
+            </div>
 
             <!-- Sections (zoom level 2) -->
             <div v-if="expandedChapter === ch.number" class="border-t border-[var(--color-rule-light)] px-5 pb-4 pt-2">
@@ -547,13 +598,19 @@ function blockStatusColor(status: string): string {
                       {{ sec.sourceCount }}s<template v-if="isDemoMode"> &middot; {{ sec.fragmentCount }}f</template>
                     </span>
 
-                    <!-- Real mode: draft status badge -->
-                    <span
-                      v-if="!isDemoMode"
-                      class="text-xs flex-shrink-0"
-                      :class="sectionDraftStatus(sec.id) === 'draft' ? 'text-[var(--color-ok)]' : 'text-[var(--color-ink-muted)]'"
-                      :title="sectionDraftStatus(sec.id) === 'draft' ? 'Черновик сохранён' : 'Пусто'"
-                    >{{ sectionDraftStatus(sec.id) === 'draft' ? '●' : '○' }}</span>
+                    <!-- Real mode: word count + draft status dot -->
+                    <template v-if="!isDemoMode">
+                      <span
+                        v-if="sec.wordCount > 0"
+                        class="font-[var(--font-mono)] text-xs flex-shrink-0 text-[var(--color-ok)]"
+                        :title="`${sec.wordCount} слов в черновике`"
+                      >{{ sec.wordCount }}w</span>
+                      <span
+                        class="text-xs flex-shrink-0"
+                        :class="sec.wordCount > 0 ? 'text-[var(--color-ok)]' : 'text-[var(--color-ink-muted)]'"
+                        :title="sec.wordCount > 0 ? 'Черновик сохранён' : 'Пусто'"
+                      >{{ sec.wordCount > 0 ? '●' : '○' }}</span>
+                    </template>
 
                     <!-- Real mode: open arrow instead of expand -->
                     <svg

@@ -18,7 +18,7 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 9
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -172,6 +172,13 @@ class LocalUserStore:
             conn.execute(
                 "ALTER TABLE projects ADD COLUMN draft_scheme TEXT NOT NULL DEFAULT 'single'"
             )
+        if version < 9:
+            # Idempotent re-apply: add draft_scheme if somehow skipped at v8
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
+            if "draft_scheme" not in existing:
+                conn.execute(
+                    "ALTER TABLE projects ADD COLUMN draft_scheme TEXT NOT NULL DEFAULT 'single'"
+                )
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 

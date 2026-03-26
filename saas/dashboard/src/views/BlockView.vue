@@ -3,7 +3,7 @@ import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/AppLayout.vue'
 import { formatMarkdown, renderDraft } from '@/utils/markdown'
-import { projects as apiProjects, library as apiLibrary, userProjects, process as apiProcess, write as apiWrite, blocks as apiBlocks, drafts, type DraftHeading } from '@/api/client'
+import { projects as apiProjects, library as apiLibrary, userProjects, process as apiProcess, write as apiWrite, blocks as apiBlocks, drafts, computeSectionWordCounts, type DraftHeading } from '@/api/client'
 
 const route = useRoute()
 const router = useRouter()
@@ -33,6 +33,34 @@ const sections = computed<DocSection[]>(() => {
   })
 })
 const activeSection = computed(() => sections.value.find(s => s.section_id === activeSectionId.value) ?? null)
+
+// Per-section word counts from file content
+const sectionWordCounts = computed<Record<string, number>>(() =>
+  draftContent.value ? computeSectionWordCounts(draftContent.value, draftHeadings.value) : {}
+)
+
+// Active content: section body OR full chapter body (for chapter-level nodes)
+const activeContent = computed(() => {
+  if (!activeSectionId.value || !draftContent.value) return ''
+  const id = activeSectionId.value
+  if (!id.includes('.')) {
+    // Chapter: extract everything between this chapter heading and the next chapter-level heading
+    const lines = draftContent.value.split('\n')
+    const chIdx = draftHeadings.value.findIndex(h => h.section_id === id)
+    if (chIdx < 0) return ''
+    const chHeading = draftHeadings.value[chIdx]
+    if (!chHeading) return ''
+    const chLine = chHeading.line
+    const nextChapterIdx = draftHeadings.value.findIndex((h, i) => i > chIdx && !h.section_id.includes('.'))
+    const nextChapterHeading = nextChapterIdx >= 0 ? draftHeadings.value[nextChapterIdx] : undefined
+    const endLine = nextChapterHeading?.line ?? lines.length
+    return lines.slice(chLine + 1, endLine).join('\n').trim()
+  }
+  return activeSection.value?.body ?? ''
+})
+
+// View / edit mode toggle
+const isViewMode = ref(false)
 
 function tocIndent(level: number): string {
   const map: Record<number, string> = { 3: 'pl-3', 4: 'pl-6', 5: 'pl-9' }
@@ -163,9 +191,20 @@ const generatingProgress = ref('')
 const currentText = computed(() =>
   isDemoMode.value
     ? (block.value.generatedText || block.value.draftText)
-    : (activeSection.value?.body ?? '')
+    : activeContent.value
 )
-const wordCount = computed(() => currentText.value ? currentText.value.trim().split(/\s+/).filter(Boolean).length : 0)
+const wordCount = computed(() => {
+  if (isDemoMode.value) return currentText.value ? currentText.value.trim().split(/\s+/).filter(Boolean).length : 0
+  const id = activeSectionId.value
+  if (!id) return 0
+  if (!id.includes('.')) {
+    // Chapter: sum of its subsection word counts
+    return sections.value
+      .filter(s => s.section_id.startsWith(id + '.'))
+      .reduce((sum, s) => sum + (sectionWordCounts.value[s.section_id] ?? 0), 0)
+  }
+  return sectionWordCounts.value[id] ?? 0
+})
 const wordPercent = computed(() => Math.min(Math.round((wordCount.value / block.value.wordTarget) * 100), 100))
 const editWordCount = computed(() => editingBody.value ? editingBody.value.trim().split(/\s+/).filter(Boolean).length : 0)
 
@@ -226,19 +265,19 @@ async function activateSection(id: string) {
   if (activeSectionId.value === id) return
   if (isDirty.value && activeSectionId.value) await saveSection()
   clearGhost()
-  const sec = sections.value.find(s => s.section_id === id)
-  if (!sec) return
+
   activeSectionId.value = id
-  editingBody.value = sec.body
   isDirty.value = false
-  isEditing.value = true
-  router.replace({ name: 'block', params: { projectId: projectId.value, sectionId: id, blockId: blockIdParam.value } })
-  await nextTick()
-  if (editorEl.value) {
-    editorEl.value.innerText = sec.body
-    editorEl.value.focus()
-    moveCursorToEnd(editorEl.value)
+  isViewMode.value = true  // default to view mode on navigation
+
+  if (projectId.value) {
+    router.replace({ name: 'block', params: { projectId: projectId.value, sectionId: id, blockId: blockIdParam.value } })
   }
+
+  // Preload editing body so switching to edit mode has content ready
+  await nextTick()
+  editingBody.value = activeContent.value
+  isEditing.value = true
 }
 
 function deactivateSection() {
@@ -294,6 +333,10 @@ async function generateDraft() {
           if (!isDemoMode.value && activeSectionId.value) {
             editingBody.value = result.text
             await saveSection()
+            await nextTick()
+            if (editorEl.value) {
+              editorEl.value.innerText = result.text
+            }
           } else {
             block.value.generatedText = result.text
             block.value.status = 'draft'
@@ -616,6 +659,18 @@ watch(isEditing, (editing) => {
   }
 })
 
+// When switching to edit mode, restore editor content from editingBody
+watch(isViewMode, async (viewMode) => {
+  if (!viewMode && isEditing.value) {
+    await nextTick()
+    if (editorEl.value) {
+      editorEl.value.innerText = editingBody.value
+      editorEl.value.focus()
+      moveCursorToEnd(editorEl.value)
+    }
+  }
+})
+
 onMounted(async () => {
   await loadSectionData()
 
@@ -625,19 +680,34 @@ onMounted(async () => {
       draftFilename.value = data.name
       draftContent.value = data.content
       draftHeadings.value = data.headings
-      // Activate section from URL param
+      // Activate section from URL param (works for both chapter and section IDs)
       const targetId = sectionId.value
-      const target = sections.value.find(s => s.section_id === targetId)
-      if (target) {
-        await activateSection(target.section_id)
-      } else if (sections.value.length > 0) {
-        await activateSection(sections.value[0]!.section_id)
+      const validId = draftHeadings.value.find(h => h.section_id === targetId)?.section_id
+        ?? draftHeadings.value[0]?.section_id
+      if (validId) {
+        activeSectionId.value = validId
+        isViewMode.value = true
+        isEditing.value = true
+        editingBody.value = activeContent.value
       }
     } catch { /* non-fatal — fall back to demo-style editing */ }
   }
 
   pushAssistantMessage(`${block.value.title ? `Блок «${block.value.title}»` : 'Раздел'} — ${block.value.fragments.length} фрагментов привязано. ${currentText.value ? `Черновик: ${wordCount.value}/${block.value.wordTarget} слов.` : 'Текст не написан — нажмите «Написать блок».'}`)
 })
+
+// ── Download ─────────────────────────────────────────────────────────────
+
+function downloadDraft() {
+  if (!draftContent.value || !draftFilename.value) return
+  const blob = new Blob([draftContent.value], { type: 'text/markdown; charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = draftFilename.value
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -697,130 +767,140 @@ function timeAgo(d: Date): string {
 
         <!-- LEFT: TOC (w-48 sticky) -->
         <nav class="w-48 flex-shrink-0 sticky top-8">
-          <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Содержание</p>
+          <div class="flex items-center mb-2">
+            <p class="flex-1 text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Содержание</p>
+            <button
+              v-if="draftContent && draftFilename"
+              @click="downloadDraft"
+              class="rounded p-1 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-accent-pale)] transition-colors"
+              :title="`Скачать ${draftFilename}`"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-3.5 w-3.5">
+                <path d="M8.75 2.75a.75.75 0 0 0-1.5 0v5.69L5.03 6.22a.75.75 0 0 0-1.06 1.06l3.5 3.5a.75.75 0 0 0 1.06 0l3.5-3.5a.75.75 0 0 0-1.06-1.06L8.75 8.44V2.75Z" />
+                <path d="M3.5 9.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 14h6.5A2.75 2.75 0 0 0 14 11.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25v-1.5Z" />
+              </svg>
+            </button>
+          </div>
           <div class="flex flex-col gap-0.5">
             <button v-for="sec in sections" :key="sec.section_id"
-              @click="scrollToDocSection(sec.section_id); activateSection(sec.section_id)"
+              @click="activateSection(sec.section_id)"
               class="flex items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs transition-colors leading-tight w-full"
               :class="[tocIndent(sec.level), activeSectionId === sec.section_id
                 ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)] font-medium'
                 : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]']">
               <span class="font-[var(--font-mono)] flex-shrink-0 text-[10px] opacity-60">{{ sec.section_id }}</span>
-              <span class="truncate">{{ sec.full_title.replace(/^\d[\d.]*\s*/, '') }}</span>
+              <span class="truncate flex-1">{{ sec.full_title.replace(/^\d[\d.]*\s*/, '') }}</span>
+              <span v-if="sectionWordCounts[sec.section_id]" class="font-[var(--font-mono)] text-[9px] opacity-50 flex-shrink-0">{{ sectionWordCounts[sec.section_id] }}</span>
             </button>
           </div>
         </nav>
 
-        <!-- CENTER: Full document + AI assistant -->
-        <div class="flex-1 min-w-0 flex flex-col gap-3">
+        <!-- CENTER: Unified editor (view / edit modes) -->
+        <div class="flex-1 min-w-0 flex flex-col gap-4">
 
-          <!-- Active section header + word progress -->
-          <div v-if="activeSection" class="flex items-center gap-3">
+          <!-- Title row + word count + mode toggle -->
+          <div class="flex items-center gap-3">
             <h1 class="font-[var(--font-display)] text-xl font-semibold text-[var(--color-ink)] leading-snug flex-1">
-              {{ activeSection.full_title }}
+              {{ sections.find(s => s.section_id === activeSectionId)?.full_title.replace(/^\d[\d.]*\s*/, '') ?? activeSectionId ?? '—' }}
             </h1>
-            <span class="font-[var(--font-mono)] text-xs" :class="wordPercent >= 80 ? 'text-[var(--color-ok)]' : wordPercent >= 40 ? 'text-[var(--color-amber)]' : 'text-[var(--color-ink-muted)]'">
-              {{ wordCount }}/{{ block.wordTarget }}
-            </span>
-            <div class="w-16 h-1.5 rounded-full bg-[var(--color-rule-light)] overflow-hidden">
-              <div class="h-full rounded-full transition-all duration-500"
-                :class="wordPercent >= 80 ? 'bg-[var(--color-ok)]' : wordPercent >= 40 ? 'bg-[var(--color-amber)]' : 'bg-[var(--color-rule)]'"
-                :style="{ width: `${wordPercent}%` }" />
-            </div>
+            <!-- Chapter: show total word count only; Section: show N/target -->
+            <template v-if="activeSectionId && !activeSectionId.includes('.')">
+              <span class="font-[var(--font-mono)] text-xs" :class="wordCount > 0 ? 'text-[var(--color-ok)]' : 'text-[var(--color-ink-muted)]'">
+                {{ wordCount }}w
+              </span>
+            </template>
+            <template v-else>
+              <span class="font-[var(--font-mono)] text-xs" :class="wordPercent >= 80 ? 'text-[var(--color-ok)]' : wordPercent >= 40 ? 'text-[var(--color-amber)]' : 'text-[var(--color-ink-muted)]'">
+                {{ wordCount }}/{{ block.wordTarget }}
+              </span>
+              <div class="w-16 h-1.5 rounded-full bg-[var(--color-rule-light)] overflow-hidden">
+                <div class="h-full rounded-full transition-all duration-500"
+                  :class="wordPercent >= 80 ? 'bg-[var(--color-ok)]' : wordPercent >= 40 ? 'bg-[var(--color-amber)]' : 'bg-[var(--color-rule)]'"
+                  :style="{ width: `${wordPercent}%` }" />
+              </div>
+            </template>
+            <!-- View / Edit toggle -->
+            <button
+              v-if="activeSectionId"
+              @click="isViewMode = !isViewMode"
+              class="rounded-md border px-2.5 py-1 text-xs font-medium transition-colors"
+              :class="isViewMode
+                ? 'border-[var(--color-rule)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+                : 'border-[var(--color-accent)]/40 text-[var(--color-accent)] bg-[var(--color-accent-pale)]'"
+            >{{ isViewMode ? 'Редактировать' : 'Просмотр' }}</button>
           </div>
 
-          <!-- Document sections list -->
-          <div class="rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper-white)] divide-y divide-[var(--color-rule-light)]">
-            <div v-for="sec in sections" :key="sec.section_id" :id="`doc-sec-${sec.section_id}`">
-
-              <!-- Section heading row (click to activate) -->
-              <div class="flex items-center gap-2 px-4 py-2 cursor-pointer transition-colors"
-                :class="activeSectionId === sec.section_id
-                  ? 'bg-[var(--color-accent-pale)]/40'
-                  : 'hover:bg-[var(--color-paper-warm)]'"
-                @click="activateSection(sec.section_id)">
-                <span class="font-[var(--font-mono)] text-xs text-[var(--color-ink-muted)] flex-shrink-0 w-10">{{ sec.section_id }}</span>
-                <span class="text-sm font-medium text-[var(--color-ink)] leading-snug flex-1">{{ sec.full_title.replace(/^\d[\d.]*\s*/, '') }}</span>
-                <span v-if="sec.body" class="font-[var(--font-mono)] text-[10px] text-[var(--color-ink-muted)] flex-shrink-0">
-                  {{ sec.body.trim().split(/\s+/).filter(Boolean).length }} сл.
-                </span>
-              </div>
-
-              <!-- Active section: contenteditable editor -->
-              <div v-if="activeSectionId === sec.section_id" class="border-t border-[var(--color-accent)]/20 bg-[var(--color-paper-white)]">
-                <!-- Generating spinner -->
-                <div v-if="generating" class="flex items-center justify-center py-16">
-                  <div class="text-center">
-                    <div class="h-8 w-8 border-2 border-[var(--color-accent)] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-                    <p class="text-sm text-[var(--color-ink-light)]">{{ generatingProgress }}</p>
-                  </div>
-                </div>
-                <!-- Editor -->
-                <div v-else class="relative">
-                  <div
-                    ref="editorEl"
-                    contenteditable="true"
-                    spellcheck="false"
-                    class="draft-editor w-full px-8 py-5 text-[15px] text-[var(--color-ink)] leading-[1.8] focus:outline-none font-[var(--font-body)]"
-                    style="min-height: 16vh; white-space: pre-wrap; word-break: break-word;"
-                    @input="onEditorInput"
-                    @keydown="onEditorKeydown"
-                    @paste.prevent="onEditorPaste"
-                  />
-                  <transition name="ghost-hint">
-                    <div v-if="ghostText && !isSpinning"
-                      class="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-md bg-[var(--color-paper-warm)] border border-[var(--color-rule)] px-2.5 py-1 text-xs text-[var(--color-ink-muted)] shadow-sm pointer-events-none select-none">
-                      <kbd class="font-[var(--font-mono)] text-[var(--color-accent)] font-semibold">Tab</kbd>
-                      <span>принять</span>
-                    </div>
-                  </transition>
-                </div>
-                <!-- Editor toolbar -->
-                <div class="flex items-center gap-3 border-t border-[var(--color-rule-light)] px-6 py-2">
-                  <transition name="ghost-hint">
-                    <span v-if="saveStatus === 'saved'" class="text-xs text-[var(--color-ok)]">Сохранено ✓</span>
-                  </transition>
-                  <div class="flex-1" />
-                  <span class="font-[var(--font-mono)] text-xs text-[var(--color-ink-muted)]">{{ editWordCount }} слов</span>
-                  <button
-                    @click="ghostEnabled = !ghostEnabled"
-                    :title="ghostEnabled ? 'Выключить kAI автодополнение' : 'Включить kAI автодополнение'"
-                    class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold tracking-tight transition-all duration-150"
-                    :class="ghostEnabled
-                      ? 'border-[var(--color-accent)] bg-[var(--color-accent-pale)] text-[var(--color-accent)]'
-                      : 'border-[var(--color-rule)] bg-transparent text-[var(--color-ink-muted)]'"
-                  >
-                    <span
-                      class="h-[7px] w-[7px] rounded-full border transition-all duration-150 flex-shrink-0"
-                      :class="ghostEnabled
-                        ? 'bg-[var(--color-accent)] border-[var(--color-accent)]'
-                        : 'bg-transparent border-[var(--color-ink-muted)]'"
-                    />
-                    kAI
-                  </button>
-                  <button @click="generateDraft"
-                    class="rounded-md border border-[var(--color-rule)] px-2.5 py-1 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] transition-colors"
-                    title="Перегенерировать">↺</button>
-                </div>
-              </div>
-
-              <!-- Inactive section with content: rendered markdown, click to edit -->
-              <div v-else-if="sec.body"
-                class="draft-prose px-8 py-4 text-[15px] text-[var(--color-ink)] leading-[1.8] font-[var(--font-body)] cursor-text opacity-50 hover:opacity-90 transition-opacity"
-                @click="activateSection(sec.section_id)"
-                v-html="renderDraft(sec.body)" />
-
-              <!-- Empty section: prompt to start writing -->
-              <div v-else
-                class="px-8 py-4 cursor-pointer"
-                @click="activateSection(sec.section_id)">
-                <span class="text-xs text-[var(--color-ink-muted)] italic hover:text-[var(--color-accent)] transition-colors">Нажмите, чтобы начать писать...</span>
+          <!-- THE EDITOR BLOCK -->
+          <div class="rounded-lg border bg-[var(--color-paper-white)] transition-colors"
+            :class="!isViewMode && isEditing ? 'border-[var(--color-accent)]/40 shadow-sm' : 'border-[var(--color-rule)]'"
+          >
+            <!-- Generating spinner -->
+            <div v-if="generating" class="flex items-center justify-center py-24">
+              <div class="text-center">
+                <div class="h-8 w-8 border-2 border-[var(--color-accent)] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                <p class="text-sm text-[var(--color-ink-light)]">{{ generatingProgress }}</p>
               </div>
             </div>
 
-            <!-- No sections yet -->
-            <div v-if="sections.length === 0" class="flex items-center justify-center py-16">
-              <p class="text-sm text-[var(--color-ink-muted)]">Черновик пока пуст — структура документа загружается...</p>
+            <!-- VIEW mode: rendered markdown -->
+            <div v-else-if="isViewMode && activeSectionId"
+              class="draft-prose px-8 py-6 text-[15px] text-[var(--color-ink)] leading-[1.8] font-[var(--font-body)] cursor-text"
+              @click="isViewMode = false"
+              v-html="activeContent ? renderDraft(activeContent) : '<p class=\'text-[var(--color-ink-muted)] italic\'>Раздел пуст — нажмите для редактирования</p>'"
+            />
+
+            <!-- EDIT mode: contenteditable -->
+            <div v-else-if="!isViewMode && isEditing">
+              <div class="relative">
+                <div
+                  ref="editorEl"
+                  contenteditable="true"
+                  spellcheck="false"
+                  class="draft-editor w-full px-8 py-6 text-[15px] text-[var(--color-ink)] leading-[1.8] focus:outline-none font-[var(--font-body)]"
+                  style="min-height: 40vh; white-space: pre-wrap; word-break: break-word;"
+                  @input="onEditorInput"
+                  @keydown="onEditorKeydown"
+                  @paste.prevent="onEditorPaste"
+                />
+                <transition name="ghost-hint">
+                  <div v-if="ghostText && !isSpinning"
+                    class="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-md bg-[var(--color-paper-warm)] border border-[var(--color-rule)] px-2.5 py-1 text-xs text-[var(--color-ink-muted)] shadow-sm pointer-events-none select-none">
+                    <kbd class="font-[var(--font-mono)] text-[var(--color-accent)] font-semibold">Tab</kbd>
+                    <span>принять</span>
+                  </div>
+                </transition>
+              </div>
+              <div class="flex items-center gap-3 border-t border-[var(--color-rule-light)] px-6 py-2.5">
+                <transition name="ghost-hint">
+                  <span v-if="saveStatus === 'saved'" class="text-xs text-[var(--color-ok)]">Сохранено ✓</span>
+                </transition>
+                <div class="flex-1" />
+                <span class="font-[var(--font-mono)] text-xs text-[var(--color-ink-muted)]">{{ editWordCount }} слов</span>
+                <button
+                  @click="ghostEnabled = !ghostEnabled"
+                  :title="ghostEnabled ? 'Выключить kAI автодополнение' : 'Включить kAI автодополнение'"
+                  class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold tracking-tight transition-all duration-150"
+                  :class="ghostEnabled
+                    ? 'border-[var(--color-accent)] bg-[var(--color-accent-pale)] text-[var(--color-accent)]'
+                    : 'border-[var(--color-rule)] bg-transparent text-[var(--color-ink-muted)]'"
+                >
+                  <span
+                    class="h-[7px] w-[7px] rounded-full border transition-all duration-150 flex-shrink-0"
+                    :class="ghostEnabled
+                      ? 'bg-[var(--color-accent)] border-[var(--color-accent)]'
+                      : 'bg-transparent border-[var(--color-ink-muted)]'"
+                  />
+                  kAI
+                </button>
+                <button @click="generateDraft"
+                  class="rounded-md border border-[var(--color-rule)] px-2.5 py-1 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] transition-colors"
+                  title="Перегенерировать">↺</button>
+              </div>
+            </div>
+
+            <!-- No section selected -->
+            <div v-else class="flex items-center justify-center py-20">
+              <p class="text-sm text-[var(--color-ink-muted)]">Выберите раздел в содержании слева</p>
             </div>
           </div>
 

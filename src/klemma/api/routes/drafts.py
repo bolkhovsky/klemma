@@ -108,7 +108,11 @@ def _heading_marker(section_id: str) -> str:
 
 
 def parse_headings(content: str) -> list[dict]:
-    """Return list of {level, section_id, title, full_title, line} from Markdown content."""
+    """Return list of {level, section_id, title, full_title, line} from Markdown content.
+
+    Only headings whose text starts with a numeric section ID (e.g. "1", "1.4", "1.4.2")
+    are included — prose headings inside section body are intentionally skipped.
+    """
     headings = []
     for i, line in enumerate(content.splitlines()):
         m = re.match(r"^(#{1,6})\s+(.+)$", line)
@@ -117,12 +121,10 @@ def parse_headings(content: str) -> list[dict]:
         level = len(m.group(1))
         full_title = m.group(2).strip()
         sid_m = _SECTION_ID_RE.match(full_title)
-        if sid_m:
-            section_id = sid_m.group(1)
-            title = sid_m.group(2).strip() or section_id
-        else:
-            section_id = full_title.lower().replace(" ", "-")
-            title = full_title
+        if not sid_m:
+            continue  # skip non-numeric headings (prose headings inside section body)
+        section_id = sid_m.group(1)
+        title = sid_m.group(2).strip() or section_id
         headings.append({
             "level": level,
             "section_id": section_id,
@@ -134,7 +136,11 @@ def parse_headings(content: str) -> list[dict]:
 
 
 def extract_section(content: str, section_id: str) -> tuple[str, int, int] | None:
-    """Return (body_text, heading_line, end_line_exclusive) or None."""
+    """Return (body_text, heading_line, end_line_exclusive) or None.
+
+    End detection only stops at numeric section headings (e.g. "### 1.5 Title"),
+    not at prose headings (e.g. "### Перспективы развития") inside the body.
+    """
     lines = content.splitlines(keepends=True)
     start = None
     start_level = None
@@ -150,7 +156,8 @@ def extract_section(content: str, section_id: str) -> tuple[str, int, int] | Non
         return None
 
     for i in range(start + 1, len(lines)):
-        m = re.match(r"^(#{1,6})\s+", lines[i])
+        # Only numeric section headings terminate a section — prose headings are body content
+        m = re.match(r"^(#{1,6})\s+([\d]+(?:\.[\d]+)*)", lines[i])
         if m and len(m.group(1)) <= start_level:
             end = i
             break
@@ -164,6 +171,13 @@ def extract_section(content: str, section_id: str) -> tuple[str, int, int] | Non
 def upsert_section(content: str, section_id: str, new_body: str,
                    heading_title: Optional[str] = None) -> str:
     """Replace section body in content. Appends new section if not found."""
+    # Strip any leading section heading the AI or editor may have prepended to the body.
+    # E.g. if new_body starts with "### 1.4 Title\n\n..." strip the heading line.
+    stripped = new_body.lstrip("\n")
+    m = re.match(r"^#{1,6}\s+" + re.escape(section_id) + r"[^\n]*\n?", stripped)
+    if m:
+        new_body = stripped[m.end():].lstrip("\n")
+
     result = extract_section(content, section_id)
 
     if result is None:
