@@ -143,7 +143,7 @@ async function deleteProject() {
     await userProjects.delete(projectStore.activeProjectId)
     showDeleteConfirm.value = false
     await projectStore.loadProjects()
-    router.push('/map')
+    router.push('/library')
   } catch (e: unknown) {
     deleteError.value = e instanceof Error ? e.message : 'Ошибка удаления'
   } finally {
