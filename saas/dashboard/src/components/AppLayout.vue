@@ -16,7 +16,7 @@ function switchProject(projectId: string) {
   const currentParam = route.params.projectId as string | undefined
   if (currentParam) {
     // Navigate to same module within new project
-    const modules = ['map', 'feed', 'library', 'health', 'outline', 'coverage', 'research', 'draft']
+    const modules = ['map', 'feed', 'library', 'health', 'outline', 'coverage', 'research']
     const suffix = route.path.slice(currentParam.length + 2) // strip /projectId/
     const module = modules.find(m => suffix === m || suffix.startsWith(m + '/')) ?? 'map'
     router.push(`/${projectId}/${module}`)
@@ -193,7 +193,7 @@ async function createProject() {
       <!-- Divider -->
       <div class="mx-3 my-1 border-t border-[var(--color-rule)]"></div>
 
-      <!-- Project nav: 3 items (Карта, Лента, Библиотека) -->
+      <!-- Project nav: Карта, Лента, Библиотека -->
       <nav v-if="route.params.projectId" class="flex flex-col gap-0.5 px-2">
         <RouterLink
           :to="`/${route.params.projectId}/map`"
@@ -230,18 +230,6 @@ async function createProject() {
             <path d="M3.5 2A1.5 1.5 0 0 0 2 3.5v9A1.5 1.5 0 0 0 3.5 14h9a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 12.5 2h-9Zm0 1.5h9v9h-9v-9Zm3 1a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1h-3Zm0 2.5a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1h-3Zm0 2.5a.5.5 0 0 0 0 1H9a.5.5 0 0 0 0-1H6.5Z" />
           </svg>
           Библиотека
-        </RouterLink>
-        <RouterLink
-          :to="`/${route.params.projectId}/draft`"
-          class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-          :class="route.path.startsWith(`/${route.params.projectId}/draft`)
-            ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
-            : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-4 w-4 flex-shrink-0">
-            <path d="M13.488 2.513a1.75 1.75 0 0 0-2.475 0L6.75 6.774a2.75 2.75 0 0 0-.596.892l-.848 2.047a.75.75 0 0 0 .98.98l2.047-.848a2.75 2.75 0 0 0 .892-.596l4.261-4.263a1.75 1.75 0 0 0 0-2.474ZM4.75 3.5c-.69 0-1.25.56-1.25 1.25v6.5c0 .69.56 1.25 1.25 1.25h6.5c.69 0 1.25-.56 1.25-1.25V9a.75.75 0 0 1 1.5 0v2.25A2.75 2.75 0 0 1 11.25 14h-6.5A2.75 2.75 0 0 1 2 11.25v-6.5A2.75 2.75 0 0 1 4.75 2H7a.75.75 0 0 1 0 1.5H4.75Z" />
-          </svg>
-          Черновик
         </RouterLink>
       </nav>
       <!-- Hint when no project selected -->

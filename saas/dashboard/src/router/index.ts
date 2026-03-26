@@ -119,9 +119,7 @@ const router = createRouter({
     },
     {
       path: '/:projectId/draft',
-      name: 'draft',
-      component: () => import('../views/DraftView.vue'),
-      meta: { requiresAuth: true },
+      redirect: (to) => `/${to.params.projectId}/map`,
     },
   ],
 })

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import AppLayout from '@/components/AppLayout.vue'
-import { userProjects, projects as apiProjects, blocks as apiBlocks, type OutlineSection } from '@/api/client'
+import { userProjects, projects as apiProjects, drafts, type DraftHeading } from '@/api/client'
 
 const router = useRouter()
 const route = useRoute()
@@ -233,27 +233,26 @@ const DEMO_CHAPTERS: Chapter[] = [
 const loading = ref(false)
 const error = ref<string | null>(null)
 const projectName = ref('')
-const rawSections = ref<OutlineSection[]>([])
+const draftHeadings = ref<DraftHeading[]>([])
+const draftHasContent = ref(false)
 const sectionSourceCounts = ref<Record<string, number>>({})
-const blockStatuses = ref<Record<string, { has_draft: boolean; word_count: number }>>({})
 
 async function loadMapData() {
   if (isDemoMode.value) return
   loading.value = true
   error.value = null
   try {
-    const [projectsData, coverageResult, statusResult] = await Promise.all([
+    const [projectsData, coverageResult, draftResult] = await Promise.all([
       userProjects.list(),
       apiProjects.coverage().catch(() => ({ total_sources: 0, sections: {} as Record<string, number>, chapters: {} as Record<string, number> })),
-      apiBlocks.getStatus(projectId.value!).catch(() => ({ statuses: {} as Record<string, { has_draft: boolean; word_count: number }> })),
+      drafts.list(projectId.value!).catch(() => ({ files: [] as { name: string; headings: DraftHeading[]; word_count: number }[] })),
     ])
     const project = projectsData.projects.find(p => p.project_id === projectId.value)
-    if (project) {
-      projectName.value = project.name
-      rawSections.value = project.outline ?? []
-    }
+    if (project) projectName.value = project.name
     sectionSourceCounts.value = coverageResult.sections
-    blockStatuses.value = statusResult.statuses
+    const file = draftResult.files[0]
+    draftHeadings.value = file?.headings ?? []
+    draftHasContent.value = (file?.word_count ?? 0) > 0
   } catch (e: any) {
     error.value = (e as Error).message ?? 'Ошибка загрузки'
   } finally {
@@ -261,38 +260,44 @@ async function loadMapData() {
   }
 }
 
-/** Draft status for a section's first block (b1). */
-function sectionDraftStatus(sectionId: string): 'draft' | 'empty' {
-  return blockStatuses.value[`${sectionId}/b1`]?.has_draft ? 'draft' : 'empty'
+/** Draft status: has any content in the file at all. Per-section tracking deferred. */
+function sectionDraftStatus(_sectionId: string): 'draft' | 'empty' {
+  return draftHasContent.value ? 'draft' : 'empty'
 }
 
 onMounted(loadMapData)
 
-// Build chapters from real outline (flat OutlineSection[] → grouped by prefix)
+// Build chapters from draft headings (level-2 = chapter, level-3+ = sections under that chapter)
 const realChapters = computed((): Chapter[] => {
-  const groups = new Map<number, OutlineSection[]>()
-  for (const s of rawSections.value) {
-    const ch = parseInt(s.id.split('.')[0] ?? '0')
-    if (!isNaN(ch)) {
-      if (!groups.has(ch)) groups.set(ch, [])
-      groups.get(ch)!.push(s)
-    }
+  if (!draftHeadings.value.length) return []
+
+  // Separate chapter-level (no dot) from section-level (has dot)
+  const chapterHeadings = draftHeadings.value.filter(h => !h.section_id.includes('.'))
+  const sectionMap = new Map<string, DraftHeading[]>()
+  for (const h of draftHeadings.value) {
+    if (!h.section_id.includes('.')) continue
+    const chKey = h.section_id.split('.')[0]!
+    if (!sectionMap.has(chKey)) sectionMap.set(chKey, [])
+    sectionMap.get(chKey)!.push(h)
   }
-  return [...groups.entries()].sort(([a], [b]) => a - b).map(([n, secs]) => ({
-    number: n,
-    name: `Глава ${n}`,
-    thesis: '',
-    task: '',
-    sections: secs.map(s => ({
-      id: s.id,
-      name: s.name,
-      thesis: undefined,
-      blocks: [],
-      sourceCount: sectionSourceCounts.value[s.id] ?? 0,
-      fragmentCount: 0,
-      insightCount: 0,
-    })),
-  }))
+
+  return chapterHeadings
+    .sort((a, b) => parseInt(a.section_id) - parseInt(b.section_id))
+    .map(ch => ({
+      number: parseInt(ch.section_id),
+      name: ch.full_title,
+      thesis: '',
+      task: '',
+      sections: (sectionMap.get(ch.section_id) ?? []).map(s => ({
+        id: s.section_id,
+        name: s.full_title.replace(/^\d[\d.]*\s*/, ''),
+        thesis: undefined,
+        blocks: [],
+        sourceCount: sectionSourceCounts.value[s.section_id] ?? 0,
+        fragmentCount: 0,
+        insightCount: 0,
+      })),
+    }))
 })
 
 // Active data (demo or real)
@@ -432,14 +437,14 @@ function blockStatusColor(status: string): string {
           </div>
         </div>
 
-        <!-- No outline yet (real mode, outline empty) -->
+        <!-- No draft file yet (real mode) -->
         <div
           v-if="!isDemoMode && chapters.length === 0"
           class="rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper-white)] px-6 py-10 text-center"
         >
-          <p class="text-sm text-[var(--color-ink-muted)]">Структура работы не задана</p>
+          <p class="text-sm text-[var(--color-ink-muted)]">Структура черновика не задана</p>
           <p class="mt-1 text-xs text-[var(--color-ink-muted)]">
-            Перейдите в настройки проекта, чтобы задать разделы
+            Задайте структуру в настройках проекта — черновик создастся автоматически
           </p>
           <button
             class="mt-4 text-sm font-medium text-[var(--color-accent)] hover:underline"
