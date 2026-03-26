@@ -155,8 +155,8 @@ def push() -> None:
             click.echo("Push rejected — run 'klemma-cli pull' first.", err=True)
         else:
             click.echo("Files pushed.")
-    except Exception:
-        click.echo("Git push skipped (server git transport not configured).")
+    except Exception as exc:
+        click.echo(f"Git push failed: {exc}", err=True)
 
     # Phase 2: Library
     click.echo("Pushing library data...")

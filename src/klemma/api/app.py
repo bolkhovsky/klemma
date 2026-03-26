@@ -28,6 +28,7 @@ from .routes import (
     auth,
     blocks,
     drafts,
+    git,
     health,
     library,
     process,
@@ -100,5 +101,6 @@ def create_app() -> FastAPI:
     app.include_router(write.router, prefix="/write", tags=["write"])
     app.include_router(usage.router, prefix="/usage", tags=["usage"])
     app.include_router(sync.router, prefix="/sync", tags=["sync"])
+    app.include_router(git.router, tags=["git"])  # no prefix — route itself starts with /git/
 
     return app
