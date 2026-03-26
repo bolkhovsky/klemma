@@ -155,10 +155,10 @@ function scrollToSection(sectionId: string) {
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-// Heading level → indent for TOC
-function tocIndent(level: number) {
-  if (level <= 2) return ''
-  return `pl-${(level - 2) * 3}`
+// Heading level → indent for TOC (static strings for Tailwind purge)
+function tocIndent(level: number): string {
+  const map: Record<number, string> = { 3: 'pl-3', 4: 'pl-6', 5: 'pl-9' }
+  return map[level] ?? ''
 }
 
 // Format saved-at time
