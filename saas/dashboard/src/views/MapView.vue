@@ -281,7 +281,9 @@ onMounted(loadMapData)
 const realChapters = computed((): Chapter[] => {
   // Primary source: draft file headings
   if (draftHeadings.value.length) {
-    const chapterHeadings = draftHeadings.value.filter(h => !h.section_id.includes('.'))
+    // Only level-2 (##) headings without dots are chapters.
+    // level-1 (#) headings produce slug IDs that cause artifact text.
+    const chapterHeadings = draftHeadings.value.filter(h => h.level === 2 && !h.section_id.includes('.'))
     const sectionMap = new Map<string, DraftHeading[]>()
     for (const h of draftHeadings.value) {
       if (!h.section_id.includes('.')) continue
@@ -290,9 +292,10 @@ const realChapters = computed((): Chapter[] => {
       sectionMap.get(chKey)!.push(h)
     }
     return chapterHeadings
-      .sort((a, b) => parseInt(a.section_id) - parseInt(b.section_id))
+      // Sort by line position to preserve file order (non-numeric IDs like 'введение' sort correctly)
+      .sort((a, b) => a.line - b.line)
       .map(ch => ({
-        number: parseInt(ch.section_id),
+        number: parseInt(ch.section_id) || 0,
         name: ch.full_title,
         thesis: '',
         task: '',
