@@ -103,6 +103,7 @@ async def git_http_backend(project_path: str, request: Request) -> Response:
     body = await request.body()
     env = {
         "GIT_HTTP_EXPORT_ALL": "1",
+        "GIT_HTTP_RECEIVE_PACK": "true",  # enable git push (receive-pack)
         "GIT_PROJECT_ROOT": str(_repos_dir()),
         "PATH_INFO": "/" + repo_id + ("/" + service_path if service_path else ""),
         "REQUEST_METHOD": request.method,

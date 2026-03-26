@@ -257,6 +257,8 @@ async def init_repo(
 
     repo.mkdir(parents=True)
     _run_git(["init", "--bare"], cwd=repo)
+    # Enable git push via HTTP (disabled by default in git-http-backend)
+    _run_git(["config", "http.receivepack", "true"], cwd=repo)
 
     # Store owner
     (repo / "klemma_owner").write_text(user.user_id)
