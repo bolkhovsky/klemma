@@ -4,10 +4,8 @@ Tests cover the pure Markdown-processing helpers:
   parse_headings, extract_section, upsert_section
 """
 
-import pytest
 
 from klemma.api.routes.drafts import extract_section, parse_headings, upsert_section
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

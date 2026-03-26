@@ -23,7 +23,19 @@ from klemma.stores.user_store import LocalUserStore
 
 from .auth.deps import set_user_store
 from .deps import set_file_store, set_paper_store, set_project_store, set_user_library
-from .routes import analyze, auth, blocks, drafts, health, library, process, projects, sync, usage, write
+from .routes import (
+    analyze,
+    auth,
+    blocks,
+    drafts,
+    health,
+    library,
+    process,
+    projects,
+    sync,
+    usage,
+    write,
+)
 
 
 @asynccontextmanager

@@ -40,6 +40,15 @@ _DEFAULT_FILENAME = {"dissertation": "dissertation.md", "paper": "paper.md"}
 _SAFE_FILENAME = re.compile(r"^[\w.\-]+\.md$")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 _SECTION_ID_RE = re.compile(r"^([\d]+(?:\.[\d]+)*)\s*(.*)")
+_NON_WORD_RE = re.compile(r"[^\w\s-]")
+_WHITESPACE_RE = re.compile(r"[\s_]+")
+
+
+def _slugify(text: str) -> str:
+    """Lowercase slug from heading text, preserving Unicode letters (Cyrillic etc.)."""
+    slug = _NON_WORD_RE.sub("", text.lower())
+    slug = _WHITESPACE_RE.sub("-", slug)
+    return slug.strip("-")
 
 # ---------------------------------------------------------------------------
 # Helpers — filesystem / git
@@ -110,8 +119,8 @@ def _heading_marker(section_id: str) -> str:
 def parse_headings(content: str) -> list[dict]:
     """Return list of {level, section_id, title, full_title, line} from Markdown content.
 
-    Only headings whose text starts with a numeric section ID (e.g. "1", "1.4", "1.4.2")
-    are included — prose headings inside section body are intentionally skipped.
+    Numeric headings (e.g. "1", "1.4", "1.4.2") get their numeric section_id.
+    Non-numeric headings get slug section_ids (e.g. "Introduction" → "introduction").
     """
     headings = []
     for i, line in enumerate(content.splitlines()):
@@ -121,10 +130,12 @@ def parse_headings(content: str) -> list[dict]:
         level = len(m.group(1))
         full_title = m.group(2).strip()
         sid_m = _SECTION_ID_RE.match(full_title)
-        if not sid_m:
-            continue  # skip non-numeric headings (prose headings inside section body)
-        section_id = sid_m.group(1)
-        title = sid_m.group(2).strip() or section_id
+        if sid_m:
+            section_id = sid_m.group(1)
+            title = sid_m.group(2).strip() or section_id
+        else:
+            section_id = _slugify(full_title)
+            title = full_title
         headings.append({
             "level": level,
             "section_id": section_id,

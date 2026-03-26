@@ -243,7 +243,6 @@ def test_delete_project_nonexistent(store):
 
 def test_delete_project_cascades_research_reports(store):
     import json
-    import sqlite3
 
     user = store.create_user(email="cascade@example.com", password_hash="h")
     project = store.create_project(user.user_id, "Cascade Test")
