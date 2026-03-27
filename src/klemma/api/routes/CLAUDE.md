@@ -23,14 +23,19 @@ Registration disabled on frontend. Use `scripts/create_user.sh`:
 # Set Klemma_ADMIN_EMAIL + Klemma_ADMIN_PASSWORD to auto-grant tokens
 ```
 
-### library.py (~210 lines)
+### library.py (~220 lines)
 Library CRUD endpoints — mounted with `prefix="/library"`. All require Bearer auth.
 - `GET /library/sources` → `SourceListResponse` — list all user sources with paper metadata
 - `GET /library/sources/{citekey}` → `SourceDetailResponse` — source details + fragments
-- `POST /library/sources` → `SourceResponse` (201) — add source by metadata (DOI dedup)
+- `POST /library/sources` → `SourceResponse` (201) — add source by metadata (DOI dedup); uses caller-supplied `citekey` as primary key (no UUID generated)
 - `DELETE /library/sources/{citekey}` → 204 — remove from user library (keeps global corpus)
-- `POST /library/upload` → `UploadResponse` (201) — upload PDF file with content-addressable dedup (pdf_hash)
+- `POST /library/upload` → `UploadResponse` (201) — upload PDF with content-addressable dedup (`pdf_hash`); citekey derived from filename; **if same user re-uploads the same PDF, returns existing citekey unchanged** (citekey stability guarantee — issue #268)
 - Schemas: `SourceResponse`, `SourceListResponse`, `SourceCreateRequest`, `FragmentResponse`, `SourceDetailResponse`, `UploadResponse`
+
+**Citekey stability guarantee** (issue #268): citekeys must remain stable across push/pull round-trips because `draft/*.md` files embed `[@citekey]` references and section assignments are keyed by citekey.
+- `POST /library/sources` — uses caller-provided `citekey` verbatim. ✅
+- `POST /library/upload` — derives citekey from filename on first upload; subsequent uploads of the same PDF by the same user return the **original citekey** (not a new one). ✅
+- `GET /sync/pull/library` — returns the exact citekey stored on push. ✅
 
 ### projects.py (~175 lines)
 Project CRUD + coverage + section assignment endpoints — mounted with `prefix="/projects"`. All require Bearer auth.

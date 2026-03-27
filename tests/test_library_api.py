@@ -228,6 +228,30 @@ def test_upload_dedup(client):
     assert r2.json()["deduplicated"] is True
 
 
+def test_upload_dedup_same_user_preserves_citekey(client):
+    """Re-uploading the same PDF by the same user returns the original citekey (issue #268)."""
+    token = _register_and_get_token(client)
+    pdf = _fake_pdf()
+    r1 = client.post(
+        "/library/upload",
+        files={"file": ("smith2020.pdf", pdf, "application/pdf")},
+        headers=_auth_headers(token),
+    )
+    r2 = client.post(
+        "/library/upload",
+        files={"file": ("smith2020.pdf", pdf, "application/pdf")},
+        headers=_auth_headers(token),
+    )
+    assert r1.status_code == 201
+    assert r2.status_code == 201
+    # Same user, same PDF → citekey must not change
+    assert r1.json()["citekey"] == r2.json()["citekey"], (
+        "Re-uploading the same PDF should return the existing citekey, "
+        "not generate a new one with hash suffix"
+    )
+    assert r2.json()["deduplicated"] is True
+
+
 def test_upload_rejects_non_pdf(client):
     token = _register_and_get_token(client)
     resp = client.post(

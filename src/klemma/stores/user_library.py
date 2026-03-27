@@ -240,6 +240,55 @@ class LocalUserLibrary:
                 rows = conn.execute("SELECT citekey FROM user_sources").fetchall()
         return {row["citekey"] for row in rows}
 
+    def get_source_by_paper_id(
+        self, paper_id: str, user_id: Optional[str] = None
+    ) -> Optional["UserSource"]:
+        """Return the first UserSource pointing to paper_id, or None.
+
+        Used to detect when the same PDF is re-uploaded (same paper_id).
+        Scoped to user_id in SaaS mode to avoid cross-user leakage.
+        """
+        from ..models import UserSource
+
+        with self._conn() as conn:
+            if user_id is not None:
+                row = conn.execute(
+                    "SELECT * FROM user_sources WHERE paper_id = ? AND user_id = ? LIMIT 1",
+                    (paper_id, user_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM user_sources WHERE paper_id = ? LIMIT 1",
+                    (paper_id,),
+                ).fetchone()
+            if not row:
+                return None
+            citekey = row["citekey"]
+            chapters = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT chapter FROM user_source_chapters WHERE citekey = ? ORDER BY chapter",
+                    (citekey,),
+                ).fetchall()
+            ]
+            sections = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT section FROM user_source_sections WHERE citekey = ? ORDER BY section",
+                    (citekey,),
+                ).fetchall()
+            ]
+        return UserSource(
+            citekey=citekey,
+            paper_id=row["paper_id"],
+            status=row["status"] or "pending",
+            pdf_path=row["pdf_path"],
+            note_path=row["note_path"],
+            quality_score=row["quality_score"],
+            chapters=chapters,
+            sections=sections,
+        )
+
     # ------------------------------------------------------------------ #
     # Additional helpers (beyond Protocol minimum)                        #
     # ------------------------------------------------------------------ #
