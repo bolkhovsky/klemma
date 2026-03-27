@@ -201,13 +201,13 @@ def push() -> None:
 def pull() -> None:
     """Pull changes from Klemma SaaS.
 
-    Two phases: git pull (files) + API pull (library data).
+    Three phases: git pull (files) + API pull (library data) + draft files.
     """
     from .client import KlemmaClient
     from .gitops import pull as git_pull
     from .project import ensure_project_root
     from .state import load_sync_config, save_sync_config
-    from .sync import pull_library
+    from .sync import pull_drafts, pull_library
 
     project_root = ensure_project_root()
     config = load_sync_config(project_root)
@@ -235,6 +235,20 @@ def pull() -> None:
         f"Pulled {result['sources']} sources, "
         f"{result['fragments']} fragments"
     )
+
+    # Phase 3: Drafts (dashboard edits → local draft/)
+    if config.dashboard_project_id:
+        click.echo("Pulling draft files...")
+        try:
+            draft_result = pull_drafts(client, project_root, config.dashboard_project_id)
+            if draft_result["files"]:
+                click.echo(f"Updated {draft_result['files']} draft file(s)")
+            else:
+                click.echo("Draft files up to date.")
+        except Exception as exc:
+            click.echo(f"Draft pull failed: {exc}", err=True)
+    else:
+        click.echo("Draft pull skipped (no dashboard_project_id — re-run 'klemma-cli link').")
 
     # Update last_pull timestamp
     config.last_pull = datetime.now(timezone.utc).isoformat()

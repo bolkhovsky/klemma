@@ -28,13 +28,15 @@ Git subprocess wrappers.
 - `log`, `status`, `remote_log`, `revert_last_n`, `force_push`
 - `write_gitignore` — auto-generate .gitignore for klemma projects
 
-### sync.py (~210 lines)
-Library sync — read local SQLite DB and push/pull via API.
+### sync.py (~265 lines)
+Library and draft sync — read local SQLite DB and push/pull via API.
 - `read_local_sources(project_root)` — read from library.db user_sources + papers
 - `read_local_fragments(project_root)` — read from library.db fragments
 - `read_local_embeddings(project_root)` — base64-encode vectors from library.db
 - `push_library(client, project_root)` — push sources + fragments + embeddings
 - `pull_library(client, project_root)` — pull and write to local library.db
+- `push_drafts(client, project_root, dashboard_project_id)` — PUT each `draft/*.md` to server
+- `pull_drafts(client, project_root, dashboard_project_id)` — GET draft file list + contents, write only if changed; `_SAFE_DRAFT_FILENAME` regex guards against path traversal
 
 ### project.py (~50 lines)
 Project discovery — find `.klemma/` directory, parse KLEMMA.md.
@@ -63,14 +65,16 @@ klemma-cli push
 klemma-cli pull
   1. git pull klemma main (conflicts → print instructions)
   2. GET /sync/pull/library → write sources/fragments to local library.db
-  3. Update .klemma/sync_config.json last_pull timestamp
+  3. GET /projects/{id}/drafts → list; GET /projects/{id}/drafts/{name} per file
+     → write to draft/{name} only if content differs (ADR-016)
+  4. Update .klemma/sync_config.json last_pull timestamp
 ```
 
 ## Tests
 
 - `cli/tests/test_gitops.py` — git subprocess wrapper tests
 - `cli/tests/test_project.py` — project discovery tests
-- `cli/tests/test_sync.py` — library DB read tests
+- `cli/tests/test_sync.py` — library DB read tests + pull_drafts tests (5 cases)
 - `tests/test_api_sync.py` — backend sync API endpoint tests (15 tests)
 
 See: [API Routes](../src/klemma/api/routes/CLAUDE.md) | [Root](../CLAUDE.md)

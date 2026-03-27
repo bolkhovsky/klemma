@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -214,6 +215,47 @@ def push_drafts(client: KlemmaClient, project_root: Path, dashboard_project_id: 
             json={"content": content},
         )
         wc = resp.json().get("word_count", 0)
+        result["files"] += 1
+        result["words"] += wc
+
+    return result
+
+
+_SAFE_DRAFT_FILENAME = re.compile(r"^[\w.\-]+\.md$")
+
+
+def pull_drafts(client: KlemmaClient, project_root: Path, dashboard_project_id: str) -> dict:
+    """Pull draft .md files from server's /projects/{id}/drafts API to local draft/.
+
+    Only writes a file if its content differs from the local copy (avoids noise).
+    Skips files with unsafe names (path traversal guard).
+    Returns summary dict with 'files' (updated count) and 'words' counts.
+    """
+    resp = client.get(f"/projects/{dashboard_project_id}/drafts")
+    file_list = resp.json().get("files", [])
+    result: dict = {"files": 0, "words": 0}
+
+    if not file_list:
+        return result
+
+    draft_dir = project_root / "draft"
+    draft_dir.mkdir(exist_ok=True)
+
+    for file_info in file_list:
+        name = file_info.get("name", "")
+        if not _SAFE_DRAFT_FILENAME.match(name) or ".." in name:
+            continue  # skip unsafe filenames
+
+        content_resp = client.get(f"/projects/{dashboard_project_id}/drafts/{name}")
+        data = content_resp.json()
+        content: str = data.get("content", "")
+        wc: int = data.get("word_count", 0)
+
+        target = draft_dir / name
+        if target.exists() and target.read_text(encoding="utf-8") == content:
+            continue  # already up to date
+
+        target.write_text(content, encoding="utf-8")
         result["files"] += 1
         result["words"] += wc
 

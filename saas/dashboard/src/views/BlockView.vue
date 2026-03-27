@@ -2,6 +2,7 @@
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/AppLayout.vue'
+import SourcePanel from '@/components/SourcePanel.vue'
 import { formatMarkdown, renderDraft } from '@/utils/markdown'
 import { projects as apiProjects, library as apiLibrary, userProjects, process as apiProcess, write as apiWrite, blocks as apiBlocks, drafts, computeSectionWordCounts, type DraftHeading } from '@/api/client'
 
@@ -548,70 +549,14 @@ function onEditorPaste(e: ClipboardEvent) {
   editingBody.value = editorEl.value?.innerText || ''
 }
 
-// ── Fragment search ──────────────────────────────────────────────────────
+// ── Fragment panel events (handled by SourcePanel component) ─────────────
 
-const searchQuery = ref('')
-const searchResults = ref<Fragment[]>([])
-const searching = ref(false)
-const libraryItems = ref<Fragment[]>([])
-
-async function ensureLibraryLoaded() {
-  if (isDemoMode.value || libraryItems.value.length > 0) return
-  try {
-    const data = await apiLibrary.list(projectId.value)
-    libraryItems.value = data.sources.map((s: any) => ({
-      source: s.citekey,
-      sourceTitle: s.title || s.citekey,
-      year: s.year || null,
-      text: s.abstract || '',
-      intent: 'background',
-      page: null,
-    }))
-  } catch { /* silent — search will just return empty */ }
+function onSourceAttach(citekey: string) {
+  pushAssistantMessage(`Привязан @${citekey} — можно перегенерировать текст чтобы учесть новый источник.`)
 }
 
-function _searchIn(pool: Fragment[], q: string) {
-  return pool.filter(f =>
-    !block.value.fragments.some(bf => bf.source === f.source) &&
-    (f.sourceTitle.toLowerCase().includes(q) || f.source.toLowerCase().includes(q) || f.text.toLowerCase().includes(q))
-  )
-}
-
-let searchTimeout: ReturnType<typeof setTimeout> | null = null
-function onSearchInput() {
-  if (searchTimeout) clearTimeout(searchTimeout)
-  const q = searchQuery.value.trim().toLowerCase()
-  if (!q) { searchResults.value = []; return }
-  searching.value = true
-
-  if (!isDemoMode.value && libraryItems.value.length === 0) {
-    ensureLibraryLoaded().then(() => {
-      searchResults.value = _searchIn(libraryItems.value, q)
-      searching.value = false
-    })
-    return
-  }
-
-  searchTimeout = setTimeout(() => {
-    const pool = isDemoMode.value ? MOCK_LIBRARY : libraryItems.value
-    searchResults.value = _searchIn(pool, q)
-    searching.value = false
-  }, 300)
-}
-
-async function attachFragment(f: Fragment) {
-  block.value.fragments.push(f)
-  searchResults.value = searchResults.value.filter(r => r.source !== f.source)
-  pushAssistantMessage(`Привязан [@${f.source}] (${f.year}). Теперь ${block.value.fragments.length} фрагментов — можно перегенерировать текст чтобы учесть новый источник.`)
-  if (!isDemoMode.value) {
-    try { await apiProjects.assignSections(f.source, [sectionId.value]) } catch { /* non-fatal */ }
-  }
-}
-
-function detachFragment(index: number) {
-  const removed = block.value.fragments[index]
-  block.value.fragments.splice(index, 1)
-  if (removed) pushAssistantMessage(`Отвязан @${removed.source}. Если он упоминается в тексте — стоит убрать ссылку вручную.`)
+function onSourceDetach(citekey: string) {
+  pushAssistantMessage(`Отвязан @${citekey}. Если он упоминается в тексте — стоит убрать ссылку вручную.`)
 }
 
 // ── AI Assistant (reactive strip) ────────────────────────────────────────
@@ -693,7 +638,7 @@ onMounted(async () => {
     } catch { /* non-fatal — fall back to demo-style editing */ }
   }
 
-  pushAssistantMessage(`${block.value.title ? `Блок «${block.value.title}»` : 'Раздел'} — ${block.value.fragments.length} фрагментов привязано. ${currentText.value ? `Черновик: ${wordCount.value}/${block.value.wordTarget} слов.` : 'Текст не написан — нажмите «Написать блок».'}`)
+  pushAssistantMessage(`${block.value.title ? `Блок «${block.value.title}»` : 'Раздел'} — ${currentText.value ? `Черновик: ${wordCount.value}/${block.value.wordTarget} слов.` : 'Текст не написан — нажмите «Написать блок».'}`)
 })
 
 // ── Download ─────────────────────────────────────────────────────────────
@@ -711,13 +656,6 @@ function downloadDraft() {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-const intentLabels: Record<string, { label: string; color: string }> = {
-  background: { label: 'фон', color: 'var(--color-ink-muted)' },
-  method: { label: 'метод', color: 'var(--color-accent)' },
-  result_comparison: { label: 'результат', color: 'var(--color-violet)' },
-  extends: { label: 'развивает', color: 'var(--color-ok)' },
-  contrasts: { label: 'оспаривает', color: 'var(--color-cta)' },
-}
 
 function timeAgo(d: Date): string {
   const s = Math.round((Date.now() - d.getTime()) / 1000)
@@ -936,60 +874,15 @@ function timeAgo(d: Date): string {
           </div>
         </div>
 
-        <!-- RIGHT: Fragments panel (w-52) -->
-        <div class="w-52 flex-shrink-0 flex flex-col" style="max-height: calc(100vh - 9rem);">
-          <!-- Search -->
-          <div class="mb-2 flex-shrink-0">
-            <div class="relative">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--color-ink-muted)]">
-                <path fill-rule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clip-rule="evenodd" />
-              </svg>
-              <input v-model="searchQuery" @input="onSearchInput" type="text"
-                class="w-full rounded-md border border-[var(--color-rule)] bg-[var(--color-paper)] pl-8 pr-3 py-1.5 text-sm placeholder-[var(--color-ink-muted)] focus:border-[var(--color-accent)] focus:outline-none"
-                placeholder="Найти в библиотеке..." />
-            </div>
-          </div>
-          <!-- Search results -->
-          <div v-if="searchQuery.trim() && (searchResults.length > 0 || searching)" class="mb-2 flex-shrink-0">
-            <div class="rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent-pale)]/20 overflow-hidden">
-              <div class="px-3 py-1 text-xs font-semibold text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]/40">Результаты</div>
-              <div v-if="searching" class="px-3 py-3 text-center text-xs text-[var(--color-ink-muted)]">Ищу...</div>
-              <div v-else-if="searchResults.length === 0" class="px-3 py-2 text-center text-xs text-[var(--color-ink-muted)]">Не найдено</div>
-              <div v-else class="divide-y divide-[var(--color-rule-light)]">
-                <div v-for="r in searchResults" :key="r.source" class="px-3 py-2 hover:bg-[var(--color-accent-pale)]/40">
-                  <div class="flex items-center gap-1 mb-0.5">
-                    <a :href="`/${projectId}/library/${r.source}`" class="citekey-link" @click.prevent>@{{ r.source.length > 14 ? r.source.slice(0, 14) + '..' : r.source }}</a>
-                    <span class="text-xs text-[var(--color-ink-muted)]">{{ r.year }}</span>
-                    <button @click="attachFragment(r)"
-                      class="ml-auto rounded bg-[var(--color-accent)] px-1.5 py-0.5 text-xs font-medium text-white hover:bg-[var(--color-accent-deep)]">+</button>
-                  </div>
-                  <p class="text-xs text-[var(--color-ink-light)] leading-relaxed line-clamp-2">{{ r.text }}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-          <!-- Attached fragments -->
-          <div class="flex-1 overflow-y-auto space-y-2">
-            <div class="text-xs font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider px-1">
-              Привязано ({{ block.fragments.length }})
-            </div>
-            <div v-for="(f, i) in block.fragments" :key="f.source + i"
-              class="group rounded-md border border-[var(--color-rule-light)] bg-[var(--color-paper-white)] px-3 py-2 relative">
-              <div class="flex items-center gap-1 mb-0.5">
-                <a :href="`/${projectId}/library/${f.source}`" class="citekey-link">@{{ f.source.length > 14 ? f.source.slice(0, 14) + '..' : f.source }}</a>
-                <span class="text-xs text-[var(--color-ink-muted)]">{{ f.year }}</span>
-                <span class="ml-auto text-xs" :style="{ color: intentLabels[f.intent]?.color }">{{ intentLabels[f.intent]?.label }}</span>
-              </div>
-              <p class="text-xs text-[var(--color-ink-light)] leading-relaxed">{{ f.text }}</p>
-              <button @click="detachFragment(i)"
-                class="absolute top-1.5 right-1.5 h-4 w-4 rounded flex items-center justify-center text-[var(--color-ink-muted)] hover:text-[var(--color-err)] hover:bg-[var(--color-err-bg)] opacity-0 group-hover:opacity-100 transition-all"
-                title="Отвязать">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-2.5 w-2.5">
-                  <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
-                </svg>
-              </button>
-            </div>
-          </div>
+        <!-- RIGHT: Source panel (w-52) -->
+        <div class="w-52 flex-shrink-0" style="max-height: calc(100vh - 9rem);">
+          <SourcePanel
+            :sectionId="sectionId"
+            :projectId="projectId ?? ''"
+            :isDemoMode="isDemoMode"
+            @attach="onSourceAttach"
+            @detach="onSourceDetach"
+          />
         </div>
       </div>
 
@@ -1137,60 +1030,15 @@ function timeAgo(d: Date): string {
           </div>
         </div>
 
-        <!-- RIGHT: Fragments panel (1/4) — demo mode -->
-        <div class="lg:col-span-1 flex flex-col" style="max-height: calc(100vh - 9rem);">
-          <!-- Search -->
-          <div class="mb-2 flex-shrink-0">
-            <div class="relative">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--color-ink-muted)]">
-                <path fill-rule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clip-rule="evenodd" />
-              </svg>
-              <input v-model="searchQuery" @input="onSearchInput" type="text"
-                class="w-full rounded-md border border-[var(--color-rule)] bg-[var(--color-paper)] pl-8 pr-3 py-1.5 text-sm placeholder-[var(--color-ink-muted)] focus:border-[var(--color-accent)] focus:outline-none"
-                placeholder="Найти в библиотеке..." />
-            </div>
-          </div>
-          <!-- Search results -->
-          <div v-if="searchQuery.trim() && (searchResults.length > 0 || searching)" class="mb-2 flex-shrink-0">
-            <div class="rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent-pale)]/20 overflow-hidden">
-              <div class="px-3 py-1 text-xs font-semibold text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]/40">Результаты</div>
-              <div v-if="searching" class="px-3 py-3 text-center text-xs text-[var(--color-ink-muted)]">Ищу...</div>
-              <div v-else-if="searchResults.length === 0" class="px-3 py-2 text-center text-xs text-[var(--color-ink-muted)]">Не найдено</div>
-              <div v-else class="divide-y divide-[var(--color-rule-light)]">
-                <div v-for="r in searchResults" :key="r.source" class="px-3 py-2 hover:bg-[var(--color-accent-pale)]/40">
-                  <div class="flex items-center gap-1 mb-0.5">
-                    <a :href="`/demo/library/${r.source}`" class="citekey-link" @click.prevent>@{{ r.source.length > 14 ? r.source.slice(0, 14) + '..' : r.source }}</a>
-                    <span class="text-xs text-[var(--color-ink-muted)]">{{ r.year }}</span>
-                    <button @click="attachFragment(r)"
-                      class="ml-auto rounded bg-[var(--color-accent)] px-1.5 py-0.5 text-xs font-medium text-white hover:bg-[var(--color-accent-deep)]">+</button>
-                  </div>
-                  <p class="text-xs text-[var(--color-ink-light)] leading-relaxed line-clamp-2">{{ r.text }}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-          <!-- Attached fragments -->
-          <div class="flex-1 overflow-y-auto space-y-2">
-            <div class="text-xs font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider px-1">
-              Привязано ({{ block.fragments.length }})
-            </div>
-            <div v-for="(f, i) in block.fragments" :key="f.source + i"
-              class="group rounded-md border border-[var(--color-rule-light)] bg-[var(--color-paper-white)] px-3 py-2 relative">
-              <div class="flex items-center gap-1 mb-0.5">
-                <a :href="`/demo/library/${f.source}`" class="citekey-link">@{{ f.source.length > 14 ? f.source.slice(0, 14) + '..' : f.source }}</a>
-                <span class="text-xs text-[var(--color-ink-muted)]">{{ f.year }}</span>
-                <span class="ml-auto text-xs" :style="{ color: intentLabels[f.intent]?.color }">{{ intentLabels[f.intent]?.label }}</span>
-              </div>
-              <p class="text-xs text-[var(--color-ink-light)] leading-relaxed">{{ f.text }}</p>
-              <button @click="detachFragment(i)"
-                class="absolute top-1.5 right-1.5 h-4 w-4 rounded flex items-center justify-center text-[var(--color-ink-muted)] hover:text-[var(--color-err)] hover:bg-[var(--color-err-bg)] opacity-0 group-hover:opacity-100 transition-all"
-                title="Отвязать">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-2.5 w-2.5">
-                  <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
-                </svg>
-              </button>
-            </div>
-          </div>
+        <!-- RIGHT: Source panel (1/4) — demo mode -->
+        <div class="lg:col-span-1" style="max-height: calc(100vh - 9rem);">
+          <SourcePanel
+            :sectionId="sectionId"
+            :projectId="''"
+            :isDemoMode="true"
+            @attach="onSourceAttach"
+            @detach="onSourceDetach"
+          />
         </div>
       </div>
     </div>
