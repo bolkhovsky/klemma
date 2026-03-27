@@ -28,12 +28,22 @@ def link(api_url: str, email: str | None, password: str | None) -> None:
     Discovers .klemma/ project root, logs in, creates a server-side git repo,
     initializes local git, and sets up the 'klemma' remote.
     """
+    from urllib.parse import urlparse
+
     from .auth import login
     from .client import KlemmaClient
-    from .gitops import add_files, add_remote, commit, init, is_git_repo, write_gitignore
+    from .gitops import (
+        add_files,
+        add_remote,
+        commit,
+        init,
+        is_git_repo,
+        set_http_auth_header,
+        write_gitignore,
+    )
     from .models import SyncConfig
     from .project import ensure_project_root, get_project_name
-    from .state import save_sync_config
+    from .state import load_sync_config, save_sync_config
 
     # 0. Show server URL and project BEFORE asking for credentials
     click.echo(f"Server: {api_url}")
@@ -72,6 +82,10 @@ def link(api_url: str, email: str | None, password: str | None) -> None:
             base = api_url.rstrip("/").removesuffix("/api")
             namespaced = f"{username}/{project_slug}" if username else project_slug
             repo_data = {"git_url": f"{base}/git/{namespaced}.git", "access_token": ""}
+            # Recover git token from existing sync_config so auth header is re-applied.
+            existing_config = load_sync_config(project_root)
+            if existing_config and existing_config.access_token:
+                repo_data["access_token"] = existing_config.access_token
             # Look up dashboard_project_id for this git project (#260 item 5)
             try:
                 lookup = client.get("/sync/dashboard-project", params={"project_id": namespaced})
@@ -96,16 +110,13 @@ def link(api_url: str, email: str | None, password: str | None) -> None:
         click.echo("Initializing git repository...")
         init(project_root)
 
-    # 5. Add remote
-    if access_token:
-        # Embed token in URL for MVP (Option A)
-        proto, rest = git_url.split("://", 1)
-        authed_url = f"{proto}://token:{access_token}@{rest}"
-    else:
-        authed_url = git_url
-
-    add_remote(project_root, "klemma", authed_url)
+    # 5. Add remote (clean URL — token stored in git local config, not in URL)
+    add_remote(project_root, "klemma", git_url)
     click.echo(f"Remote 'klemma' set to {git_url}")
+    if access_token:
+        parsed = urlparse(git_url)
+        server_url = f"{parsed.scheme}://{parsed.netloc}"
+        set_http_auth_header(project_root, server_url, access_token)
 
     # 6. Auto-generate .gitignore
     write_gitignore(project_root)

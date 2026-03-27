@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import subprocess
 from pathlib import Path
 
@@ -170,6 +171,26 @@ def get_head_hash(path: Path) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip()
+
+
+def set_http_auth_header(path: Path, server_url: str, token: str) -> None:
+    """Configure git to use an Authorization header for requests to server_url.
+
+    Stores auth in the local repo git config (.git/config), not embedded in
+    the remote URL — so tokens are never visible in 'git remote -v' or pushed
+    to the server.
+
+    Args:
+        path: Path to the local git repository.
+        server_url: URL prefix to match, e.g. 'https://litresearch.ru'.
+        token: Raw access token (encoded as 'Basic token:<token>').
+    """
+    encoded = base64.b64encode(f"token:{token}".encode()).decode()
+    _run(
+        ["config", "--local", f"http.{server_url}/.extraHeader",
+         f"Authorization: Basic {encoded}"],
+        cwd=path,
+    )
 
 
 def write_gitignore(path: Path) -> None:
