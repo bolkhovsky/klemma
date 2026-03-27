@@ -132,10 +132,17 @@ def log(path: Path, count: int = 10, format_str: str = "%h %s") -> list[str]:
     return [line for line in result.stdout.strip().split("\n") if line]
 
 
+_SYNCED_PREFIXES = ("KLEMMA.md", "draft/", "notes/research/", ".gitignore")
+
+
 def status(path: Path) -> str:
-    """Return git status output."""
+    """Return git status filtered to klemma-synced paths only."""
     result = _run(["status", "--short"], cwd=path, check=False)
-    return result.stdout.strip()
+    lines = [
+        line for line in result.stdout.splitlines()
+        if len(line) > 3 and any(line[3:].startswith(p) for p in _SYNCED_PREFIXES)
+    ]
+    return "\n".join(lines)
 
 
 def remote_log(path: Path, remote: str = "klemma", branch: str | None = None) -> list[str]:
