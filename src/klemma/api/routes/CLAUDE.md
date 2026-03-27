@@ -32,12 +32,22 @@ Library CRUD endpoints — mounted with `prefix="/library"`. All require Bearer 
 - `POST /library/upload` → `UploadResponse` (201) — upload PDF file with content-addressable dedup (pdf_hash)
 - Schemas: `SourceResponse`, `SourceListResponse`, `SourceCreateRequest`, `FragmentResponse`, `SourceDetailResponse`, `UploadResponse`
 
-### projects.py (~110 lines)
-Project endpoints — mounted with `prefix="/projects"`. All require Bearer auth.
+### projects.py (~175 lines)
+Project CRUD + coverage + section assignment endpoints — mounted with `prefix="/projects"`. All require Bearer auth.
+- `GET /projects` → `ProjectListResponse` — list user's projects
+- `POST /projects` → `ProjectResponse` (201) — create project
+- `PATCH /projects/{project_id}` → `ProjectResponse` — rename project
+- `DELETE /projects/{project_id}` → 204 — delete project + draft files + sync repo
+- `PATCH /projects/{project_id}/outline` → `ProjectResponse` — update section outline
+- `POST /projects/{project_id}/outline/generate` → `{job_id, status}` — enqueue AI outline generation (requires Redis/rq)
 - `GET /projects/coverage` → `CoverageStatsResponse` — total sources, per-section/chapter counts
 - `GET /projects/sections/{section}/sources` → `SectionSourcesResponse` — citekeys assigned to a section
 - `POST /projects/sections/assign` → assign source to sections (validates source exists in library)
 - `GET /projects/sources/{citekey}/sections` → sections assigned to a source
+- `GET /projects/{project_id}/research` → list research reports for a project
+- `GET /projects/{project_id}/research/{section:path}` → get research report for a section
+- Schemas: `ProjectResponse`, `ProjectListResponse`, `ProjectCreateRequest`, `ProjectRenameRequest`, `OutlineSection`, `OutlineUpdateRequest`, `OutlineGenerateRequest`, `CoverageStatsResponse`, `SectionSourcesResponse`, `AssignSectionRequest`
+- Block draft endpoints live in `blocks.py` (not here — duplicates removed in #261)
 
 ### process.py (~120 lines)
 Process endpoints — mounted with `prefix="/process"`. All require Bearer auth.

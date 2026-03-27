@@ -10,8 +10,8 @@ Lightweight git-native sync client for Klemma SaaS. Separate package (`pip insta
 
 ## Modules
 
-### main.py (~250 lines)
-Click CLI entry point. 5 commands: `link`, `push`, `pull`, `status`, `rollback`.
+### main.py (~280 lines)
+Click CLI entry point. 6 commands: `link`, `push`, `pull`, `status`, `rollback`, `login`.
 
 ### auth.py (~80 lines)
 Login to Klemma API, token storage at `~/.klemma-cli/auth.json`.
