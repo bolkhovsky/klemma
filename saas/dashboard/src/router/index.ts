@@ -121,6 +121,18 @@ const router = createRouter({
       path: '/:projectId/draft',
       redirect: (to) => `/${to.params.projectId}/map`,
     },
+    {
+      path: '/:projectId/edit',
+      name: 'edit',
+      component: () => import('../views/FileEditorView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/:projectId/edit/:filename',
+      name: 'edit-file',
+      component: () => import('../views/FileEditorView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 
