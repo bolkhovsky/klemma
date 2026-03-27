@@ -162,11 +162,15 @@ def push() -> None:
         click.echo("Pushing draft files...")
         try:
             draft_result = push_drafts(client, project_root, config.dashboard_project_id)
-            if draft_result["files"]:
-                click.echo(
-                    f"Pushed {draft_result['files']} draft file(s), "
-                    f"{draft_result['words']} words"
-                )
+            pushed = draft_result["files"]
+            skipped = draft_result.get("skipped", 0)
+            if pushed:
+                msg = f"Pushed {pushed} draft file(s), {draft_result['words']} words"
+                if skipped:
+                    msg += f" ({skipped} skipped — server copy is newer)"
+                click.echo(msg)
+            elif skipped:
+                click.echo(f"Draft files up to date ({skipped} file(s) skipped — server copy is newer).")
             else:
                 click.echo("No draft files found (draft/ is empty or missing).")
             drafts_ok = True
@@ -217,8 +221,15 @@ def pull() -> None:
         click.echo("Pulling draft files...")
         try:
             draft_result = pull_drafts(client, project_root, config.dashboard_project_id)
-            if draft_result["files"]:
-                click.echo(f"Updated {draft_result['files']} draft file(s)")
+            updated = draft_result["files"]
+            skipped = draft_result.get("skipped", 0)
+            if updated:
+                msg = f"Updated {updated} draft file(s)"
+                if skipped:
+                    msg += f" ({skipped} skipped — local copy is newer)"
+                click.echo(msg)
+            elif skipped:
+                click.echo(f"Draft files up to date ({skipped} file(s) skipped — local copy is newer).")
             else:
                 click.echo("Draft files up to date.")
         except Exception as exc:

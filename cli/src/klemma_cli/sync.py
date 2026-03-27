@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import re
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -159,14 +160,37 @@ def push_library(client: KlemmaClient, project_root: Path) -> dict:
 
     result = {"sources": 0, "fragments": 0, "embeddings": 0}
 
-    if sources or fragments:
+    # Push in chunks to avoid timeout on large libraries
+    src_chunk = 200
+    frag_chunk = 1000
+    src_list = [s.model_dump() for s in sources]
+    frag_list = [f.model_dump() for f in fragments]
+
+    # First chunk carries all sources + first batch of fragments
+    for src_start in range(0, max(len(src_list), 1), src_chunk):
+        src_batch = src_list[src_start:src_start + src_chunk]
+        frag_start = (src_start // src_chunk) * frag_chunk
+        frag_batch = frag_list[frag_start:frag_start + frag_chunk]
+        if not src_batch and not frag_batch:
+            break
         resp = client.post("/sync/push/library", json={
-            "sources": [s.model_dump() for s in sources],
-            "fragments": [f.model_dump() for f in fragments],
+            "sources": src_batch,
+            "fragments": frag_batch,
         })
         data = resp.json()
-        result["sources"] = data.get("sources_saved", 0)
-        result["fragments"] = data.get("fragments_saved", 0)
+        result["sources"] += data.get("sources_saved", 0)
+        result["fragments"] += data.get("fragments_saved", 0)
+
+    # Push any remaining fragments not covered by source chunks
+    src_batches_count = max(1, (len(src_list) + src_chunk - 1) // src_chunk)
+    frag_offset = src_batches_count * frag_chunk
+    for i in range(frag_offset, len(frag_list), frag_chunk):
+        resp = client.post("/sync/push/library", json={
+            "sources": [],
+            "fragments": frag_list[i:i + frag_chunk],
+        })
+        data = resp.json()
+        result["fragments"] += data.get("fragments_saved", 0)
 
     # Push embeddings in chunks
     paper_embs, fragment_embs = read_local_embeddings(project_root)
@@ -197,19 +221,40 @@ def push_library(client: KlemmaClient, project_root: Path) -> dict:
 def push_drafts(client: KlemmaClient, project_root: Path, dashboard_project_id: str) -> dict:
     """Push local draft .md files to server's /projects/{id}/drafts API.
 
-    Reads all .md files from draft/ (ADR-016 canonical location) and uploads each
-    via PUT /projects/{id}/drafts/{filename}.
-    Returns summary dict with 'files' and 'words' counts.
+    Only pushes a file if the local copy is strictly newer than the server copy.
+    This prevents older local files from overwriting dashboard edits.
+    Returns summary dict with 'files' (pushed count), 'skipped', and 'words'.
     """
     drafts_dir = project_root / "draft"
-    result: dict = {"files": 0, "words": 0}
+    result: dict = {"files": 0, "skipped": 0, "words": 0}
 
     if not drafts_dir.exists():
         return result
 
+    # Fetch server file timestamps once
+    server_times: dict[str, datetime] = {}
+    try:
+        resp = client.get(f"/projects/{dashboard_project_id}/drafts")
+        for f in resp.json().get("files", []):
+            ts = f.get("updated_at", "")
+            if ts:
+                try:
+                    server_times[f["name"]] = datetime.fromisoformat(ts)
+                except ValueError:
+                    pass
+    except Exception:
+        pass  # if list fails, push everything
+
     for md_file in sorted(drafts_dir.glob("*.md")):
-        content = md_file.read_text(encoding="utf-8")
         filename = md_file.name
+        local_mtime = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc)
+        server_mtime = server_times.get(filename)
+
+        if server_mtime and server_mtime >= local_mtime:
+            result["skipped"] += 1
+            continue
+
+        content = md_file.read_text(encoding="utf-8")
         resp = client.put(
             f"/projects/{dashboard_project_id}/drafts/{filename}",
             json={"content": content},
@@ -241,19 +286,34 @@ def pull_drafts(client: KlemmaClient, project_root: Path, dashboard_project_id: 
     draft_dir = project_root / "draft"
     draft_dir.mkdir(exist_ok=True)
 
+    result["skipped"] = 0
+
     for file_info in file_list:
         name = file_info.get("name", "")
         if not _SAFE_DRAFT_FILENAME.match(name) or ".." in name:
             continue  # skip unsafe filenames
+
+        target = draft_dir / name
+
+        # Skip if local copy is strictly newer than server copy
+        server_ts = file_info.get("updated_at", "")
+        if server_ts and target.exists():
+            try:
+                server_mtime = datetime.fromisoformat(server_ts)
+                local_mtime = datetime.fromtimestamp(target.stat().st_mtime, tz=timezone.utc)
+                if local_mtime > server_mtime:
+                    result["skipped"] += 1
+                    continue
+            except ValueError:
+                pass
 
         content_resp = client.get(f"/projects/{dashboard_project_id}/drafts/{name}")
         data = content_resp.json()
         content: str = data.get("content", "")
         wc: int = data.get("word_count", 0)
 
-        target = draft_dir / name
         if target.exists() and target.read_text(encoding="utf-8") == content:
-            continue  # already up to date
+            continue  # already up to date (same content)
 
         target.write_text(content, encoding="utf-8")
         result["files"] += 1

@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -264,6 +265,7 @@ class FileInfo(BaseModel):
     name: str
     headings: list[HeadingInfo]
     word_count: int
+    updated_at: str = ""  # ISO 8601 UTC, e.g. "2026-03-28T12:00:00+00:00"
 
 
 class FileListResponse(BaseModel):
@@ -315,7 +317,10 @@ def list_draft_files(
             content = md.read_text(encoding="utf-8")
             headings = [HeadingInfo(**h) for h in parse_headings(content)]
             wc = len(content.split())
-            files.append(FileInfo(name=md.name, headings=headings, word_count=wc))
+            mtime = md.stat().st_mtime
+            updated_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+            files.append(FileInfo(name=md.name, headings=headings, word_count=wc,
+                                  updated_at=updated_at))
     return FileListResponse(files=files)
 
 
