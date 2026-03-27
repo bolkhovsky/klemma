@@ -292,6 +292,21 @@ async def upload_pdf(
     # Dedup: check if this PDF already exists in the global corpus
     existing = paper_store.find_paper(pdf_hash=pdf_hash)
     if existing:
+        # If the user already has this paper, return the existing citekey unchanged.
+        # This preserves citekey stability: re-uploading the same PDF does not create
+        # a new citekey and does not break [@citekey] references in draft files.
+        existing_source = library.get_source_by_paper_id(
+            existing.paper_id, user_id=user.user_id
+        )
+        if existing_source:
+            return UploadResponse(
+                citekey=existing_source.citekey,
+                paper_id=existing.paper_id,
+                pdf_hash=pdf_hash,
+                status=existing_source.status,
+                deduplicated=True,
+            )
+        # New user, same PDF — generate citekey from filename
         citekey = _citekey_from_filename(file.filename)
         if library.get_source_by_citekey(citekey, user_id=user.user_id):
             citekey = f"{citekey}_{pdf_hash[:6]}"
