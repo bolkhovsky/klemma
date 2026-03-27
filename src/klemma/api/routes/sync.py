@@ -283,11 +283,14 @@ async def init_repo(
     (repo / "klemma_token").write_text(token)
 
     # Find or create dashboard project (for /projects/{id}/drafts API)
+    # Store the git_project_id association so reconnect (409 path) can look up by it.
     # Non-fatal: if user store lacks the record (e.g. during tests), return empty string
     try:
+        user_store = get_user_store()
         dashboard_project_id = _find_or_create_dashboard_project(
             user.user_id, body.project_id, body.project_type
         )
+        user_store.set_git_project_id(dashboard_project_id, namespaced_id)
     except Exception as exc:
         logger.warning("dashboard project lookup/create failed for %s: %s", body.project_id, exc)
         dashboard_project_id = ""
@@ -314,13 +317,22 @@ async def get_dashboard_project(
     Returns {dashboard_project_id, project_name} for the matching dashboard project.
     Matches by looking for a project with name == the short project name (without username prefix).
     """
-    # Short name: "ilya-bolkhovsky/dissertation" → "dissertation"
-    short_name = project_id.split("/", 1)[-1] if "/" in project_id else project_id
     store = get_user_store()
+
+    # Primary lookup: by git_project_id (set during init-repo, survives name changes)
+    p = store.get_project_by_git_id(project_id)
+    if p and p["user_id"] == user.user_id:
+        return {"dashboard_project_id": p["project_id"], "project_name": p["name"]}
+
+    # Fallback: match by short name (e.g. "ilya-bolkhovsky/dissertation" → "dissertation")
+    short_name = project_id.split("/", 1)[-1] if "/" in project_id else project_id
     projects = store.get_projects(user.user_id)
     for p in projects:
         if p.get("name") == short_name:
+            # Backfill the association for faster future lookups
+            store.set_git_project_id(p["project_id"], project_id)
             return {"dashboard_project_id": p["project_id"], "project_name": p["name"]}
+
     raise HTTPException(status_code=404, detail="No dashboard project found for this git project")
 
 

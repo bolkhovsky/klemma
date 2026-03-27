@@ -18,7 +18,7 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 9
+_SCHEMA_VERSION = 10
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -174,6 +174,16 @@ class LocalUserStore:
                 conn.execute(
                     "ALTER TABLE projects ADD COLUMN draft_scheme TEXT NOT NULL DEFAULT 'single'"
                 )
+        if version < 10:
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
+            if "git_project_id" not in existing:
+                conn.execute(
+                    "ALTER TABLE projects ADD COLUMN git_project_id TEXT DEFAULT NULL"
+                )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_git_id ON projects(git_project_id) "
+                "WHERE git_project_id IS NOT NULL"
+            )
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -331,6 +341,28 @@ class LocalUserStore:
         d = dict(row)
         d["outline"] = json.loads(d["outline"]) if d["outline"] else None
         return d
+
+    def get_project_by_git_id(self, git_project_id: str) -> Optional[dict]:
+        """Return project dict by git_project_id or None if not found."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT project_id, user_id, name, type, created_at, outline, draft_scheme "
+                "FROM projects WHERE git_project_id = ?",
+                (git_project_id,),
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["outline"] = json.loads(d["outline"]) if d["outline"] else None
+        return d
+
+    def set_git_project_id(self, project_id: str, git_project_id: str) -> None:
+        """Associate a dashboard project with a git project ID (namespaced, e.g. user/project)."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE projects SET git_project_id = ? WHERE project_id = ?",
+                (git_project_id, project_id),
+            )
 
     def update_project_outline(self, project_id: str, sections: list[dict]) -> bool:
         """Save the outline (section list) for a project. Returns True if project existed."""
