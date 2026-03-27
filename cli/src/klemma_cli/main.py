@@ -247,11 +247,19 @@ def pull() -> None:
     # Phase 2: Library
     click.echo("Pulling library data...")
     client = KlemmaClient(api_url=config.api_url)
-    result = pull_library(client, project_root, since=config.last_pull or None)
-    click.echo(
-        f"Pulled {result['sources']} sources, "
-        f"{result['fragments']} fragments"
-    )
+    try:
+        result = pull_library(client, project_root, since=config.last_pull or None)
+        click.echo(
+            f"Pulled {result['sources']} sources, "
+            f"{result['fragments']} fragments"
+        )
+        # Update last_pull immediately after successful library pull (#260 item 7).
+        # This ensures the timestamp always marks the last *successful* library sync,
+        # and the next incremental pull only fetches sources added after this point.
+        config.last_pull = datetime.now(timezone.utc).isoformat()
+        save_sync_config(project_root, config)
+    except Exception as exc:
+        click.echo(f"Library pull failed: {exc}", err=True)
 
     # Phase 3: Drafts (dashboard edits → local draft/)
     if config.dashboard_project_id:
@@ -266,10 +274,6 @@ def pull() -> None:
             click.echo(f"Draft pull failed: {exc}", err=True)
     else:
         click.echo("Draft pull skipped (no dashboard_project_id — re-run 'klemma-cli link').")
-
-    # Update last_pull timestamp
-    config.last_pull = datetime.now(timezone.utc).isoformat()
-    save_sync_config(project_root, config)
 
 
 def _resolve_project_id(config: object) -> str:

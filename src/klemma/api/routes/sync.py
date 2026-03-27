@@ -668,7 +668,7 @@ async def pull_library(
     library = get_user_library()
     paper_store = get_paper_store()
 
-    all_sources = library.get_all_sources(user_id=user.user_id)
+    all_sources = library.get_all_sources(user_id=user.user_id, since=since)
     project_store = get_project_store()
 
     sources = []
