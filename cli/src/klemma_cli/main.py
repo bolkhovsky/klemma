@@ -140,6 +140,35 @@ def link(api_url: str, email: str | None, password: str | None) -> None:
 
 
 @cli.command()
+@click.option("--api-url", default=None, help="API base URL (defaults to saved URL)")
+@click.option("--email", default=None, help="Account email")
+@click.option("--password", default=None, help="Account password")
+def login(api_url: str | None, email: str | None, password: str | None) -> None:
+    """Refresh auth tokens without changing git remotes or sync config.
+
+    Use when 'klemma-cli pull' or 'push' returns 401 Unauthorized.
+    """
+    from .auth import load_auth
+    from .auth import login as do_login
+
+    existing = load_auth()
+    resolved_url = api_url or (existing["api_url"] if existing else "https://litresearch.ru/api")
+    resolved_email = email or (existing.get("email", "") if existing else "")
+
+    if not resolved_email:
+        resolved_email = click.prompt("Email")
+    if not password:
+        password = click.prompt("Password", hide_input=True)
+
+    try:
+        auth_data = do_login(resolved_url, resolved_email, password)
+        click.echo(f"Logged in as {auth_data['email']}. Tokens saved to ~/.klemma-cli/auth.json")
+    except Exception as e:
+        click.echo(f"Login failed: {e}", err=True)
+        raise SystemExit(1)
+
+
+@cli.command()
 def push() -> None:
     """Push local changes to Klemma SaaS.
 
@@ -381,35 +410,6 @@ def rollback(n: int) -> None:
         click.echo(f"Rolled back {n} commit(s) and pushed to server.")
     except Exception as e:
         click.echo(f"Rollback failed: {e}", err=True)
-        raise SystemExit(1)
-
-
-@cli.command()
-@click.option("--api-url", default=None, help="API base URL (defaults to saved URL)")
-@click.option("--email", default=None, help="Account email")
-@click.option("--password", default=None, help="Account password")
-def login(api_url: str | None, email: str | None, password: str | None) -> None:
-    """Refresh auth tokens without changing git remotes or sync config.
-
-    Use when 'klemma-cli push' or 'pull' returns 401 Unauthorized.
-    This happens when the server restarts and invalidates old refresh tokens.
-    """
-    from .auth import load_auth
-    from .auth import login as do_login
-
-    existing = load_auth()
-    resolved_url = api_url or (existing["api_url"] if existing else "https://litresearch.ru/api")
-    resolved_email = email or (existing.get("email", "") if existing else "")
-    if not resolved_email:
-        resolved_email = click.prompt("Email")
-    if not password:
-        password = click.prompt("Password", hide_input=True)
-
-    try:
-        auth_data = do_login(resolved_url, resolved_email, password)
-        click.echo(f"Logged in as {auth_data['email']}. Tokens saved to ~/.klemma-cli/auth.json")
-    except Exception as e:
-        click.echo(f"Login failed: {e}", err=True)
         raise SystemExit(1)
 
 
