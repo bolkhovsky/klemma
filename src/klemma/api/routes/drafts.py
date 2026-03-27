@@ -25,7 +25,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from klemma.models import UserRecord
@@ -97,6 +97,20 @@ def _ensure_git_repo(project_dir: Path) -> None:
                    capture_output=True, check=True, timeout=5)
     subprocess.run(["git", "-C", str(project_dir), "config", "user.name", "Klemma SaaS"],
                    capture_output=True, check=True, timeout=5)
+
+
+def _git_remove(project_dir: Path, filepath: Path, message: str) -> str:
+    """Stage deletion of a file and commit. Returns commit hash or ''."""
+    rel = filepath.relative_to(project_dir)
+    # `git rm --force` removes from both working tree and index; no-op if not tracked
+    subprocess.run(["git", "-C", str(project_dir), "rm", "--force", str(rel)],
+                   capture_output=True, timeout=10)
+    result = subprocess.run(
+        ["git", "-C", str(project_dir), "commit", "-m", message, "--allow-empty-message"],
+        capture_output=True, text=True, timeout=10,
+    )
+    m = re.search(r"\[(?:\w+ )?([0-9a-f]+)\]", result.stdout)
+    return m.group(1) if m else ""
 
 
 def _git_commit(project_dir: Path, filepath: Path, message: str) -> str:
@@ -397,6 +411,36 @@ def init_draft_file(
     headings = [HeadingInfo(**h) for h in parse_headings(content)]
     return FileContentResponse(name=filename, content=content,
                                headings=headings, word_count=len(content.split()))
+
+
+@router.delete("/{project_id}/drafts/{filename}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_draft_file(
+    project_id: str,
+    filename: str,
+    user: UserRecord = Depends(get_current_user),
+) -> Response:
+    """Delete a draft file and record the deletion in git.
+
+    Returns 404 if the file does not exist. The deletion is committed to the
+    project's draft git repo so the history is preserved.
+    """
+    _validate_filename(filename)
+    _assert_project_owner(project_id, user)
+
+    path = _drafts_dir(project_id) / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"{filename} not found")
+
+    project_dir = _project_dir(project_id)
+    try:
+        _git_remove(project_dir, path, f"delete {filename}")
+    except Exception as exc:
+        logger.warning("git remove failed for %s/%s: %s", project_id, filename, exc)
+        # File may not be in git yet — remove from filesystem directly
+        if path.exists():
+            path.unlink()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.put("/{project_id}/drafts/{filename}/sections/{section_id}",

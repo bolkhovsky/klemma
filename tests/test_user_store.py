@@ -27,7 +27,7 @@ def test_schema_version(tmp_path):
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 9
+    assert version == 10
 
 
 def test_creates_db_file(tmp_path):
@@ -263,3 +263,67 @@ def test_delete_project_cascades_research_reports(store):
     assert store.get_project_by_id(pid) is None
     # Research report also gone (ON DELETE CASCADE)
     assert store.get_research_report(pid, "1.1") is None
+
+
+# ---------------------------------------------------------------------------
+# git_project_id (schema v10, issue #260 item 5)
+# ---------------------------------------------------------------------------
+
+
+def test_schema_v10_git_project_id_column(tmp_path):
+    """Schema v10 adds git_project_id column to projects table."""
+    import sqlite3
+
+    db_path = tmp_path / "v10.db"
+    LocalUserStore(db_path)
+    conn = sqlite3.connect(str(db_path))
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
+    conn.close()
+    assert "git_project_id" in cols
+
+
+def test_get_project_by_git_id_found(store):
+    """get_project_by_git_id returns project dict when association is set."""
+    user = store.create_user(email="gitid@example.com", password_hash="h")
+    project = store.create_project(user.user_id, "My Dissertation")
+    pid = project["project_id"]
+
+    store.set_git_project_id(pid, "username/dissertation")
+
+    result = store.get_project_by_git_id("username/dissertation")
+    assert result is not None
+    assert result["project_id"] == pid
+
+
+def test_get_project_by_git_id_not_found(store):
+    """get_project_by_git_id returns None when no association exists."""
+    assert store.get_project_by_git_id("nobody/nothing") is None
+
+
+def test_set_git_project_id_updates_existing(store):
+    """set_git_project_id can be called twice — updates the association."""
+    user = store.create_user(email="gitid2@example.com", password_hash="h")
+    project = store.create_project(user.user_id, "Test")
+    pid = project["project_id"]
+
+    store.set_git_project_id(pid, "user/old-name")
+    store.set_git_project_id(pid, "user/new-name")
+
+    assert store.get_project_by_git_id("user/new-name") is not None
+    # Old association no longer resolvable
+    assert store.get_project_by_git_id("user/old-name") is None
+
+
+def test_git_project_id_unique_per_project(store):
+    """Each project can have at most one git_project_id."""
+    user = store.create_user(email="gitid3@example.com", password_hash="h")
+    p1 = store.create_project(user.user_id, "Proj1")
+    p2 = store.create_project(user.user_id, "Proj2")
+
+    store.set_git_project_id(p1["project_id"], "user/proj1")
+    store.set_git_project_id(p2["project_id"], "user/proj2")
+
+    r1 = store.get_project_by_git_id("user/proj1")
+    r2 = store.get_project_by_git_id("user/proj2")
+    assert r1["project_id"] == p1["project_id"]
+    assert r2["project_id"] == p2["project_id"]

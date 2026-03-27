@@ -72,12 +72,18 @@ def link(api_url: str, email: str | None, password: str | None) -> None:
             base = api_url.rstrip("/").removesuffix("/api")
             namespaced = f"{username}/{project_slug}" if username else project_slug
             repo_data = {"git_url": f"{base}/git/{namespaced}.git", "access_token": ""}
-            # Look up dashboard_project_id for this git project
+            # Look up dashboard_project_id for this git project (#260 item 5)
             try:
                 lookup = client.get("/sync/dashboard-project", params={"project_id": namespaced})
+                lookup.raise_for_status()
                 repo_data["dashboard_project_id"] = lookup.json().get("dashboard_project_id", "")
-            except Exception:
-                pass  # Non-fatal — draft push will be skipped until re-linked
+            except Exception as lookup_err:
+                click.echo(
+                    f"Warning: could not resolve dashboard project ID ({lookup_err}).\n"
+                    "Draft sync will be skipped until this is resolved.\n"
+                    "Open https://litresearch.ru, create a project, then re-run 'klemma-cli link'.",
+                    err=True,
+                )
         else:
             click.echo(f"Failed to create server repo: {e}", err=True)
             raise SystemExit(1)
@@ -168,14 +174,20 @@ def push() -> None:
     # Phase 2: Library
     click.echo("Pushing library data...")
     client = KlemmaClient(api_url=config.api_url)
-    result = push_library(client, project_root)
-    click.echo(
-        f"Pushed {result['sources']} sources, "
-        f"{result['fragments']} fragments, "
-        f"{result['embeddings']} embeddings"
-    )
+    library_ok = False
+    try:
+        result = push_library(client, project_root)
+        click.echo(
+            f"Pushed {result['sources']} sources, "
+            f"{result['fragments']} fragments, "
+            f"{result['embeddings']} embeddings"
+        )
+        library_ok = True
+    except Exception as exc:
+        click.echo(f"Library push failed: {exc}", err=True)
 
     # Phase 3: Drafts
+    drafts_ok = False
     if config.dashboard_project_id:
         click.echo("Pushing draft files...")
         try:
@@ -187,13 +199,18 @@ def push() -> None:
                 )
             else:
                 click.echo("No draft files found (draft/ is empty or missing — run migrate_drafts.py).")
+            drafts_ok = True
         except Exception as exc:
             click.echo(f"Draft push failed: {exc}", err=True)
     else:
         click.echo("Draft push skipped (no dashboard_project_id — re-run 'klemma-cli link').")
+        drafts_ok = True  # N/A, not a failure
 
-    # Update last_push timestamp
-    config.last_push = datetime.now(timezone.utc).isoformat()
+    # Only update last_push when library + drafts both succeeded (#260 item 3)
+    if library_ok and drafts_ok:
+        config.last_push = datetime.now(timezone.utc).isoformat()
+    else:
+        click.echo("Warning: last_push not updated due to failed phase(s).", err=True)
     save_sync_config(project_root, config)
 
 
