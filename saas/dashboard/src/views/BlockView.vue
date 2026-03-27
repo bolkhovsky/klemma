@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/AppLayout.vue'
 import SourcePanel from '@/components/SourcePanel.vue'
 import { formatMarkdown, renderDraft } from '@/utils/markdown'
-import { projects as apiProjects, library as apiLibrary, userProjects, process as apiProcess, write as apiWrite, blocks as apiBlocks, drafts, computeSectionWordCounts, type DraftHeading } from '@/api/client'
+import { projects as apiProjects, library as apiLibrary, userProjects, process as apiProcess, write as apiWrite, drafts, computeSectionWordCounts, type DraftHeading } from '@/api/client'
 
 const route = useRoute()
 const router = useRouter()
@@ -162,19 +162,6 @@ async function loadSectionData() {
       }
     }
     block.value.fragments = fragments
-
-    // Load saved draft (MD file on disk via sync-compatible endpoint)
-    if (projectId.value) {
-      try {
-        const saved = await apiBlocks.get(projectId.value, sectionId.value, blockIdParam.value)
-        if (saved.text) {
-          block.value.draftText = saved.text
-          block.value.status = 'draft'
-        }
-      } catch {
-        // No saved draft yet — that's fine
-      }
-    }
 
   } catch (e: any) {
     loadError.value = e.message || 'Ошибка загрузки данных'

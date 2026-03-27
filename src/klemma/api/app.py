@@ -26,7 +26,6 @@ from .deps import set_file_store, set_paper_store, set_project_store, set_user_l
 from .routes import (
     analyze,
     auth,
-    blocks,
     drafts,
     git,
     health,
@@ -94,7 +93,6 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/auth", tags=["auth"])
     app.include_router(library.router, prefix="/library", tags=["library"])
     app.include_router(projects.router, prefix="/projects", tags=["projects"])
-    app.include_router(blocks.router, prefix="/projects", tags=["blocks"])
     app.include_router(drafts.router, prefix="/projects", tags=["drafts"])
     app.include_router(analyze.router, prefix="/analyze", tags=["analyze"])
     app.include_router(process.router, prefix="/process", tags=["process"])
