@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/AppLayout.vue'
 import FileBrowser from '@/components/FileBrowser.vue'
 import SourcePanel from '@/components/SourcePanel.vue'
-import { formatMarkdown } from '@/utils/markdown'
+import { formatMarkdown, renderDraft } from '@/utils/markdown'
 import { drafts, type DraftHeading } from '@/api/client'
 
 const route = useRoute()
@@ -41,6 +41,29 @@ function displayName(name: string): string {
   if (m?.[1]) return `Глава ${m[1]}`
   return name.replace('.md', '')
 }
+
+// ── View / Edit mode ──────────────────────────────────────────────────────
+const isViewMode = ref(true)
+
+function moveCursorToEnd(el: HTMLElement) {
+  const range = document.createRange()
+  const sel = window.getSelection()
+  range.selectNodeContents(el)
+  range.collapse(false)
+  sel?.removeAllRanges()
+  sel?.addRange(range)
+}
+
+watch(isViewMode, async (viewMode) => {
+  if (!viewMode) {
+    await nextTick()
+    if (editorEl.value) {
+      editorEl.value.innerText = editingBody.value
+      editorEl.value.focus()
+      moveCursorToEnd(editorEl.value)
+    }
+  }
+})
 
 // ── Cursor section detection ──────────────────────────────────────────────
 const cursorSectionId = ref<string | null>(null)
@@ -84,6 +107,7 @@ async function loadFile(filename: string) {
     editingBody.value = data.content
     cursorSectionId.value = draftHeadings.value[0]?.section_id ?? null
 
+    isViewMode.value = true
     loading.value = false
     await nextTick()
     if (editorEl.value) {
@@ -249,11 +273,19 @@ watch(() => route.params.filename, (filename) => {
             <span v-if="editWordCount > 0" class="font-[var(--font-mono)] text-xs text-[var(--color-ink-muted)]">
               {{ editWordCount }}w
             </span>
+            <button
+              v-if="draftFilename"
+              @click="isViewMode = !isViewMode"
+              class="rounded-md border px-2.5 py-1 text-xs font-medium transition-colors"
+              :class="isViewMode
+                ? 'border-[var(--color-rule)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+                : 'border-[var(--color-accent)]/40 text-[var(--color-accent)] bg-[var(--color-accent-pale)]'"
+            >{{ isViewMode ? 'Редактировать' : 'Просмотр' }}</button>
           </div>
 
           <!-- Editor block -->
           <div class="rounded-lg border bg-[var(--color-paper-white)] transition-colors"
-            :class="draftFilename && !loading ? 'border-[var(--color-accent)]/40 shadow-sm' : 'border-[var(--color-rule)]'"
+            :class="!isViewMode && draftFilename ? 'border-[var(--color-accent)]/40 shadow-sm' : 'border-[var(--color-rule)]'"
           >
             <!-- Loading spinner -->
             <div v-if="loading" class="flex items-center justify-center py-24">
@@ -263,8 +295,15 @@ watch(() => route.params.filename, (filename) => {
               </div>
             </div>
 
-            <!-- Contenteditable editor -->
-            <div v-else-if="draftFilename">
+            <!-- VIEW mode: rendered markdown -->
+            <div v-else-if="draftFilename && isViewMode"
+              class="draft-prose px-8 py-6 text-[15px] text-[var(--color-ink)] leading-[1.8] font-[var(--font-body)] cursor-text"
+              @click="isViewMode = false"
+              v-html="editingBody ? renderDraft(editingBody) : '<p class=\'text-[var(--color-ink-muted)] italic\'>Файл пуст — нажмите для редактирования</p>'"
+            />
+
+            <!-- EDIT mode: contenteditable -->
+            <div v-else-if="draftFilename && !isViewMode">
               <div class="relative">
                 <div
                   ref="editorEl"
@@ -368,5 +407,50 @@ watch(() => route.params.filename, (filename) => {
 .ghost-hint-enter-from,
 .ghost-hint-leave-to {
   opacity: 0;
+}
+
+.draft-prose :deep(h1),
+.draft-prose :deep(h2),
+.draft-prose :deep(h3) {
+  font-weight: 600;
+  color: var(--color-ink);
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  line-height: 1.3;
+}
+.draft-prose :deep(h1) { font-size: 1.25em; }
+.draft-prose :deep(h2) { font-size: 1.1em; }
+.draft-prose :deep(h3) { font-size: 1em; }
+
+.draft-prose :deep(p) {
+  margin-bottom: 1em;
+}
+.draft-prose :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.draft-prose :deep(ul),
+.draft-prose :deep(ol) {
+  margin-bottom: 1em;
+  padding-left: 1.5em;
+}
+.draft-prose :deep(li) {
+  margin-bottom: 0.25em;
+}
+
+.draft-prose :deep(strong) {
+  font-weight: 600;
+}
+.draft-prose :deep(em) {
+  font-style: italic;
+}
+
+.draft-prose :deep(.citekey-ref) {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--color-accent);
+  background: var(--color-accent-pale);
+  border-radius: 3px;
+  padding: 0 3px;
 }
 </style>
