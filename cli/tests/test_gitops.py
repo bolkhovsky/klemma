@@ -71,12 +71,23 @@ class TestCommit:
 class TestStatus:
     def test_clean_status(self, git_repo):
         s = status(git_repo)
-        assert s == ""  # or empty — clean repo
+        assert s == ""
 
-    def test_dirty_status(self, git_repo):
-        (git_repo / "new.md").write_text("new file")
+    def test_non_synced_file_hidden(self, git_repo):
+        """Files outside synced paths are not shown."""
+        (git_repo / "random_file.md").write_text("not synced")
         s = status(git_repo)
-        assert "new.md" in s
+        assert s == ""
+
+    def test_synced_file_shown(self, git_repo):
+        """Files under synced paths (KLEMMA.md, draft/, notes/research/) are shown."""
+        (git_repo / "KLEMMA.md").write_text("project metadata")
+        (git_repo / "draft").mkdir()
+        (git_repo / "draft" / "chapter_1.md").write_text("chapter text")
+        s = status(git_repo)
+        assert "KLEMMA.md" in s
+        assert "draft/" in s
+        assert "random_file.md" not in s
 
 
 class TestHasChanges:
