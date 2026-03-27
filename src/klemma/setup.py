@@ -5,6 +5,7 @@ Two modes:
 - init_system(): creates ~/.klemma/ with minimal global config
 """
 
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -257,6 +258,68 @@ def _validate_outline_for_type(project_type: str, plan_data) -> None:
         )
 
 
+def _chapters_to_sections(project_type: str, chapters: dict, title: str = "") -> list[dict]:
+    """Convert chapters dict to ADR-016 sections list.
+
+    dissertation/thesis: {1: "Глава 1", 2: "Глава 2"} →
+        [{id: "chapter_1", title: "Глава 1"}, {id: "chapter_2", title: "Глава 2"}]
+    paper: single file →
+        [{id: "paper", title: "<project title>"}]
+    """
+    if project_type == "paper":
+        return [{"id": "paper", "title": title or "Paper"}]
+    # dissertation / thesis: one chapter_N.md per chapter
+    return [
+        {"id": f"chapter_{num}", "title": ch_title}
+        for num, ch_title in sorted(chapters.items())
+    ]
+
+
+def _create_draft_scaffold(
+    project_dir: Path,
+    sections: list[dict],
+    project_type: str = "dissertation",  # noqa: ARG001 (reserved for future use)
+) -> list[str]:
+    """Create draft/*.md files from ADR-016 sections list. Idempotent (skips existing files).
+
+    Each file gets a ## heading (ADR-016: no # top-level heading in draft files):
+      draft/chapter_1.md → "## 1. Chapter Title\\n\\n> _..._\\n"
+      draft/intro.md     → "## Введение\\n\\n> _..._\\n"
+      draft/paper.md     → "## Paper Title\\n\\n> _..._\\n"
+
+    Returns list of created filenames (relative to project_dir).
+    """
+    if not sections:
+        return []
+
+    draft_dir = project_dir / "draft"
+    draft_dir.mkdir(exist_ok=True)
+    created: list[str] = []
+
+    for sec in sections:
+        sec_id = sec.get("id", "")
+        sec_title = sec.get("title", sec_id)
+        if not sec_id:
+            continue
+
+        target = draft_dir / f"{sec_id}.md"
+        if target.exists():
+            continue
+
+        # chapter_N → "## N. Title"; intro/conclusion/paper/other → "## Title"
+        m = re.match(r"^chapter_(\d+)$", sec_id)
+        if m:
+            heading = f"## {m.group(1)}. {sec_title}"
+        else:
+            heading = f"## {sec_title}"
+
+        content = f"{heading}\n\n> _Добавьте текст здесь._\n"
+        target.write_text(content, encoding="utf-8")
+        created.append(f"draft/{sec_id}.md")
+
+    return created
+
+
 def _build_klemma_md(values: InitValues) -> str:
     """Build KLEMMA.md content with YAML frontmatter from wizard values.
 
@@ -340,6 +403,13 @@ def _build_klemma_md(values: InitValues) -> str:
     defaults_fallback = _get_default_structure(values.project_type, values.language)
     frontmatter.setdefault("min_sources_per_section", defaults_fallback.get("min_sources_per_section", 3))
     frontmatter.setdefault("auto_register", defaults_fallback.get("auto_register", "mapped"))
+
+    # ADR-016: sections list for draft/ scaffold (always set, drives klemma init draft files)
+    frontmatter["sections"] = _chapters_to_sections(
+        values.project_type,
+        frontmatter.get("chapters", {}),
+        frontmatter.get("title", ""),
+    )
 
     fm_text = _yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
@@ -519,6 +589,12 @@ def init_project(
                     encoding="utf-8",
                 )
         created.append("KLEMMA.md")
+
+    # Draft scaffold (ADR-016): create draft/*.md from sections list
+    from .config import parse_klemma_md as _parse_fm  # noqa: I001
+    _fm, _ = _parse_fm(klemma_md)
+    draft_files = _create_draft_scaffold(project_dir, _fm.get("sections", []), project_type)
+    created.extend(draft_files)
 
     # Claude Code skills (symlink from package)
     _setup_claude_skills(project_dir, created, skipped)

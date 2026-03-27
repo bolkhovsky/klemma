@@ -452,6 +452,8 @@ class ProjectConfig(BaseModel):
     section_type_weights: dict[str, float] = Field(default_factory=dict)
     # Optional weights by semantic type for gap scoring: {"methodology": 1.0, "appendix": 0.3}
     auto_register: str = "mapped"  # "mapped" | "all" — filter new sources by chapter_mapping match
+    sections: list[dict] = Field(default_factory=list)
+    # ADR-016: [{id: str, title: str}] — draft file manifest; drives draft/ scaffold creation
 
     @property
     def current_chapter(self) -> int:
