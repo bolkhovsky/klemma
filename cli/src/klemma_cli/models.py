@@ -49,10 +49,7 @@ class DecisionPayload(BaseModel):
 class SyncConfig(BaseModel):
     """Persisted in .klemma/sync_config.json."""
 
-    project_id: str
     api_url: str
-    git_url: str
-    access_token: str
-    dashboard_project_id: str = ""  # UUID for /projects/{id}/drafts API
+    dashboard_project_id: str  # UUID for /projects/{id}/drafts API
     last_push: str = ""
     last_pull: str = ""
