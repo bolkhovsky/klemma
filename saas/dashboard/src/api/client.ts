@@ -252,25 +252,6 @@ export const write = {
     }),
 }
 
-// Block drafts (MD files on disk)
-export const blocks = {
-  get: (projectId: string, sectionId: string, blockId: string) =>
-    request<{ section_id: string; block_id: string; text: string; word_count: number }>(
-      `/projects/${projectId}/blocks/${sectionId}/${blockId}`
-    ),
-
-  save: (projectId: string, sectionId: string, blockId: string, text: string) =>
-    request<{ section_id: string; block_id: string; text: string; word_count: number }>(
-      `/projects/${projectId}/blocks/${sectionId}/${blockId}`,
-      { method: 'PUT', body: JSON.stringify({ text }) }
-    ),
-
-  getStatus: (projectId: string) =>
-    request<{ statuses: Record<string, { has_draft: boolean; word_count: number }> }>(
-      `/projects/${projectId}/blocks/status`
-    ),
-}
-
 // Draft files (Markdown-first, single .md per project)
 export interface DraftHeading {
   level: number
