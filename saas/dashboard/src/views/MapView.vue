@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import AppLayout from '@/components/AppLayout.vue'
-import { userProjects, projects as apiProjects, drafts, computeSectionWordCounts, type DraftHeading, type OutlineSection } from '@/api/client'
+import { userProjects, projects as apiProjects, drafts, type OutlineSection } from '@/api/client'
 
 const router = useRouter()
 const route = useRoute()
@@ -234,22 +234,19 @@ const DEMO_CHAPTERS: Chapter[] = [
 const loading = ref(false)
 const error = ref<string | null>(null)
 const projectName = ref('')
-const draftHeadings = ref<DraftHeading[]>([])
-const draftContent = ref('')
-const draftHasContent = ref(false)
+const draftFiles = ref<import('@/api/client').DraftFile[]>([])
 const dbOutline = ref<OutlineSection[] | null>(null)
 const sectionSourceCounts = ref<Record<string, number>>({})
-const sectionWordCounts = ref<Record<string, number>>({})
 
 async function loadMapData() {
   if (isDemoMode.value) return
   loading.value = true
   error.value = null
   try {
-    const [projectsData, coverageResult, draftData] = await Promise.all([
+    const [projectsData, coverageResult, draftListData] = await Promise.all([
       userProjects.list(),
       apiProjects.coverage().catch(() => ({ total_sources: 0, sections: {} as Record<string, number>, chapters: {} as Record<string, number> })),
-      drafts.init(projectId.value!).catch(() => null),
+      drafts.list(projectId.value!).catch(() => null),
     ])
     const project = projectsData.projects.find(p => p.project_id === projectId.value)
     if (project) {
@@ -257,11 +254,8 @@ async function loadMapData() {
       dbOutline.value = project.outline
     }
     sectionSourceCounts.value = coverageResult.sections
-    if (draftData) {
-      draftHeadings.value = draftData.headings
-      draftContent.value = draftData.content
-      draftHasContent.value = draftData.word_count > 0
-      sectionWordCounts.value = computeSectionWordCounts(draftData.content, draftData.headings)
+    if (draftListData) {
+      draftFiles.value = draftListData.files
     }
   } catch (e: any) {
     error.value = (e as Error).message ?? 'Ошибка загрузки'
@@ -272,44 +266,62 @@ async function loadMapData() {
 
 /** Draft status per section: has word count > 0. */
 function sectionDraftStatus(sectionId: string): 'draft' | 'empty' {
-  return (sectionWordCounts.value[sectionId] ?? 0) > 0 ? 'draft' : 'empty'
+  // Find word count for this section across all draft files
+  for (const file of draftFiles.value) {
+    const heading = file.headings.find(h => h.section_id === sectionId)
+    if (heading) {
+      // Approximate: if any heading matches and file has content, it's a draft
+      return file.word_count > 0 ? 'draft' : 'empty'
+    }
+  }
+  return 'empty'
 }
 
 onMounted(loadMapData)
 
-// Build chapters from draft headings (level-2 = chapter, level-3+ = sections under that chapter)
+/** Derive chapter sort order from filename: abstract=-1, intro=0, chapter_N=N, appendix=95, conclusion=99, other=50 */
+function _fileOrder(filename: string): number {
+  const id = filename.replace('.md', '')
+  if (id === 'abstract') return -1
+  if (id === 'intro') return 0
+  const m = id.match(/^chapter_(\d+)$/)
+  if (m) return parseInt(m[1]!)
+  if (id === 'appendix') return 95
+  if (id === 'conclusion') return 99
+  return 50
+}
+
+// Build chapters from draft files (ADR-016: each file = one chapter/intro/conclusion)
 const realChapters = computed((): Chapter[] => {
-  // Primary source: draft file headings
-  if (draftHeadings.value.length) {
-    // Only level-2 (##) headings without dots are chapters.
-    // level-1 (#) headings produce slug IDs that cause artifact text.
-    const chapterHeadings = draftHeadings.value.filter(h => h.level === 2 && !h.section_id.includes('.'))
-    const sectionMap = new Map<string, DraftHeading[]>()
-    for (const h of draftHeadings.value) {
-      if (!h.section_id.includes('.')) continue
-      const chKey = h.section_id.split('.')[0]!
-      if (!sectionMap.has(chKey)) sectionMap.set(chKey, [])
-      sectionMap.get(chKey)!.push(h)
-    }
-    return chapterHeadings
-      // Sort by line position to preserve file order (non-numeric IDs like 'введение' sort correctly)
-      .sort((a, b) => a.line - b.line)
-      .map(ch => ({
-        number: parseInt(ch.section_id) || 0,
-        name: ch.full_title,
-        thesis: '',
-        task: '',
-        sections: (sectionMap.get(ch.section_id) ?? []).map(s => ({
-          id: s.section_id,
-          name: s.full_title.replace(/^\d[\d.]*\s*/, ''),
-          thesis: undefined,
-          blocks: [],
-          sourceCount: sectionSourceCounts.value[s.section_id] ?? 0,
-          fragmentCount: 0,
-          insightCount: 0,
-          wordCount: sectionWordCounts.value[s.section_id] ?? 0,
-        })),
-      }))
+  // Primary source: draft file list (ADR-016)
+  if (draftFiles.value.length) {
+    return [...draftFiles.value]
+      .sort((a, b) => _fileOrder(a.name) - _fileOrder(b.name))
+      .map(file => {
+        const fileId = file.name.replace('.md', '')
+        // Chapter title = first ## heading; fallback to filename
+        const chapterHeading = file.headings.find(h => h.level === 2)
+        // Sections = all ### headings (level 3) within the file
+        const sections: Section[] = file.headings
+          .filter(h => h.level === 3)
+          .map(h => ({
+            id: h.section_id,
+            name: h.full_title.replace(/^[\d.]+\s*/, ''),
+            thesis: undefined,
+            blocks: [],
+            sourceCount: sectionSourceCounts.value[h.section_id] ?? 0,
+            fragmentCount: 0,
+            insightCount: 0,
+            wordCount: 0,
+          }))
+        return {
+          number: _fileOrder(file.name),
+          name: chapterHeading?.full_title ?? fileId,
+          thesis: '',
+          task: '',
+          sections,
+        }
+      })
   }
 
   // Fallback: DB outline (sections array from project)
@@ -340,7 +352,7 @@ const realChapters = computed((): Chapter[] => {
         sourceCount: sectionSourceCounts.value[s.id] ?? 0,
         fragmentCount: 0,
         insightCount: 0,
-        wordCount: sectionWordCounts.value[s.id] ?? 0,
+        wordCount: 0,
       })),
     }))
 })

@@ -1,8 +1,12 @@
 """Draft endpoints: Markdown-first file management with section extraction.
 
-Files are stored at KLEMMA_DATA_DIR/drafts/{project_id}/ (shared git repo with blocks).
-Scheme 'single': one file (dissertation.md / paper.md), ## headings per chapter,
-### headings per section.
+Files are stored at KLEMMA_DATA_DIR/drafts/{project_id}/draft/ (ADR-016).
+Git repo root: KLEMMA_DATA_DIR/drafts/{project_id}/
+Draft files:   KLEMMA_DATA_DIR/drafts/{project_id}/draft/
+
+Convention (ADR-016):
+  dissertation: intro.md, chapter_1.md, chapter_2.md, ..., conclusion.md
+  paper:        paper.md (single file, all sections as ## headings)
 
 Routes mounted under /projects in app.py:
   GET  /projects/{id}/drafts                              → list files + parsed headings
@@ -59,8 +63,14 @@ def _data_dir() -> Path:
     return Path(os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma")))
 
 
-def _drafts_dir(project_id: str) -> Path:
+def _project_dir(project_id: str) -> Path:
+    """Git repo root for a project's drafts."""
     return _data_dir() / "drafts" / project_id
+
+
+def _drafts_dir(project_id: str) -> Path:
+    """Directory where draft .md files live (inside the git repo)."""
+    return _data_dir() / "drafts" / project_id / "draft"
 
 
 def _validate_filename(name: str) -> str:
@@ -90,6 +100,8 @@ def _ensure_git_repo(project_dir: Path) -> None:
 
 
 def _git_commit(project_dir: Path, filepath: Path, message: str) -> str:
+    # project_dir = git repo root; filepath is absolute, e.g. .../drafts/{id}/draft/chapter_1.md
+    # rel becomes "draft/chapter_1.md" — the path git needs to stage
     rel = filepath.relative_to(project_dir)
     subprocess.run(["git", "-C", str(project_dir), "add", str(rel)],
                    capture_output=True, check=True, timeout=10)
@@ -282,10 +294,10 @@ def list_draft_files(
 ) -> FileListResponse:
     """List all .md draft files for a project with parsed headings."""
     _assert_project_owner(project_id, user)
-    project_dir = _drafts_dir(project_id)
+    draft_dir = _drafts_dir(project_id)
     files = []
-    if project_dir.exists():
-        for md in sorted(project_dir.glob("*.md")):
+    if draft_dir.exists():
+        for md in sorted(draft_dir.glob("*.md")):
             content = md.read_text(encoding="utf-8")
             headings = [HeadingInfo(**h) for h in parse_headings(content)]
             wc = len(content.split())
@@ -328,9 +340,11 @@ def save_draft_file(
     _validate_filename(filename)
     _assert_project_owner(project_id, user)
 
-    project_dir = _drafts_dir(project_id)
+    project_dir = _project_dir(project_id)
+    draft_dir = _drafts_dir(project_id)
     _ensure_git_repo(project_dir)
-    path = project_dir / filename
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    path = draft_dir / filename
     path.write_text(body.content, encoding="utf-8")
 
     wc = len(body.content.split())
@@ -361,9 +375,11 @@ def init_draft_file(
     filename = body.filename or _DEFAULT_FILENAME.get(project_type, "draft.md")
     _validate_filename(filename)
 
-    project_dir = _drafts_dir(project_id)
+    project_dir = _project_dir(project_id)
+    draft_dir = _drafts_dir(project_id)
     _ensure_git_repo(project_dir)
-    path = project_dir / filename
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    path = draft_dir / filename
 
     if path.exists():
         content = path.read_text(encoding="utf-8")
@@ -396,9 +412,11 @@ def upsert_draft_section(
     _validate_filename(filename)
     _assert_project_owner(project_id, user)
 
-    project_dir = _drafts_dir(project_id)
+    project_dir = _project_dir(project_id)
+    draft_dir = _drafts_dir(project_id)
     _ensure_git_repo(project_dir)
-    path = project_dir / filename
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    path = draft_dir / filename
 
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     updated = upsert_section(existing, section_id, body.body, body.heading_title)
