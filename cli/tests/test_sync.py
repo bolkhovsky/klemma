@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
+from unittest.mock import MagicMock
 
 import pytest
 
 from klemma_cli.sync import (
+    pull_drafts,
     read_local_fragments,
     read_local_sources,
 )
@@ -61,6 +63,77 @@ def project_with_db(tmp_path):
     conn.commit()
     conn.close()
     return tmp_path
+
+
+def _make_client(file_list: list[dict], contents: dict[str, str]) -> MagicMock:
+    """Build a mock KlemmaClient for pull_drafts tests."""
+    def _get(path, **_kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if path.endswith("/drafts"):
+            resp.json.return_value = {"files": file_list}
+        else:
+            filename = path.rsplit("/", 1)[-1]
+            resp.json.return_value = {
+                "name": filename,
+                "content": contents.get(filename, ""),
+                "word_count": len(contents.get(filename, "").split()),
+            }
+        return resp
+
+    client = MagicMock()
+    client.get.side_effect = _get
+    return client
+
+
+class TestPullDrafts:
+    def test_downloads_new_files(self, tmp_path):
+        contents = {"chapter_1.md": "## 1. Intro\n\nText here."}
+        client = _make_client(
+            [{"name": "chapter_1.md", "word_count": 3}],
+            contents,
+        )
+        result = pull_drafts(client, tmp_path, "proj-123")
+        assert result["files"] == 1
+        assert (tmp_path / "draft" / "chapter_1.md").read_text() == contents["chapter_1.md"]
+
+    def test_skips_unchanged_files(self, tmp_path):
+        content = "## 1. Intro\n\nText here."
+        (tmp_path / "draft").mkdir()
+        (tmp_path / "draft" / "chapter_1.md").write_text(content, encoding="utf-8")
+        client = _make_client(
+            [{"name": "chapter_1.md", "word_count": 3}],
+            {"chapter_1.md": content},
+        )
+        result = pull_drafts(client, tmp_path, "proj-123")
+        assert result["files"] == 0  # already up to date
+
+    def test_updates_changed_file(self, tmp_path):
+        (tmp_path / "draft").mkdir()
+        (tmp_path / "draft" / "chapter_1.md").write_text("old content", encoding="utf-8")
+        new_content = "## 1. New Content\n\nUpdated."
+        client = _make_client(
+            [{"name": "chapter_1.md", "word_count": 3}],
+            {"chapter_1.md": new_content},
+        )
+        result = pull_drafts(client, tmp_path, "proj-123")
+        assert result["files"] == 1
+        assert (tmp_path / "draft" / "chapter_1.md").read_text() == new_content
+
+    def test_skips_unsafe_filenames(self, tmp_path):
+        client = _make_client(
+            [{"name": "../evil.md", "word_count": 0},
+             {"name": "safe.md", "word_count": 2}],
+            {"safe.md": "## Safe\n\nOk."},
+        )
+        result = pull_drafts(client, tmp_path, "proj-123")
+        assert result["files"] == 1
+        assert not (tmp_path / "evil.md").exists()  # path traversal blocked
+
+    def test_empty_list_returns_zero(self, tmp_path):
+        client = _make_client([], {})
+        result = pull_drafts(client, tmp_path, "proj-123")
+        assert result == {"files": 0, "words": 0}
 
 
 class TestReadLocalSources:
