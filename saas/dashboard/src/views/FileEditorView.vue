@@ -51,7 +51,7 @@ function onSelectionChange() {
       .reverse()
       .find(h => h.line <= cursorLine)
     cursorSectionId.value = heading?.section_id ?? null
-  }, 50)
+  }, 300)
 }
 
 // ── Load file ─────────────────────────────────────────────────────────────
@@ -246,8 +246,8 @@ watch(() => route.params.filename, (filename) => {
           :sectionId="cursorSectionId"
           :projectId="projectId"
           :isDemoMode="false"
-          @attach="() => {}"
-          @detach="() => {}"
+          @attach="() => {/* SourcePanel persists server-side internally */}"
+          @detach="() => {/* detach is local-only in SourcePanel */}"
         />
       </div>
 

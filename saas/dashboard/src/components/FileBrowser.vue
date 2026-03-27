@@ -90,7 +90,7 @@ onMounted(async () => {
         <span class="flex-1 truncate">{{ displayName(file.name) }}</span>
         <span
           v-if="file.word_count > 0"
-          class="font-[var(--font-mono)] text-[10px] flex-shrink-0 opacity-50"
+          class="font-[var(--font-mono)] text-xs flex-shrink-0 opacity-50"
         >{{ file.word_count }}w</span>
       </button>
     </div>
