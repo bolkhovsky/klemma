@@ -196,10 +196,11 @@ def push_library(client: KlemmaClient, project_root: Path) -> dict:
 def push_drafts(client: KlemmaClient, project_root: Path, dashboard_project_id: str) -> dict:
     """Push local draft .md files to server's /projects/{id}/drafts API.
 
-    Reads all .md files from notes/drafts/ and uploads each one via PUT.
+    Reads all .md files from draft/ (ADR-016 canonical location) and uploads each
+    via PUT /projects/{id}/drafts/{filename}.
     Returns summary dict with 'files' and 'words' counts.
     """
-    drafts_dir = project_root / "notes" / "drafts"
+    drafts_dir = project_root / "draft"
     result: dict = {"files": 0, "words": 0}
 
     if not drafts_dir.exists():

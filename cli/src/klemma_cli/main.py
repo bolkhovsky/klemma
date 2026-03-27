@@ -74,7 +74,7 @@ def link(api_url: str, email: str | None, password: str | None) -> None:
             repo_data = {"git_url": f"{base}/git/{namespaced}.git", "access_token": ""}
             # Look up dashboard_project_id for this git project
             try:
-                lookup = client.get(f"/sync/dashboard-project", params={"project_id": namespaced})
+                lookup = client.get("/sync/dashboard-project", params={"project_id": namespaced})
                 repo_data["dashboard_project_id"] = lookup.json().get("dashboard_project_id", "")
             except Exception:
                 pass  # Non-fatal — draft push will be skipped until re-linked
@@ -105,7 +105,7 @@ def link(api_url: str, email: str | None, password: str | None) -> None:
     write_gitignore(project_root)
 
     # 7. Initial commit + push
-    add_files(project_root, ["KLEMMA.md", "notes/", ".gitignore"])
+    add_files(project_root, ["KLEMMA.md", "draft/", "notes/", ".gitignore"])
     commit_hash = commit(project_root, f"sync: initial link — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}")
     if commit_hash:
         click.echo(f"Initial commit: {commit_hash[:8]}")
@@ -145,7 +145,7 @@ def push() -> None:
     click.echo("Pushing files...")
     add_files(project_root, [
         "KLEMMA.md",
-        "notes/drafts/",
+        "draft/",
         "notes/research/",
         ".gitignore",
     ])
@@ -186,7 +186,7 @@ def push() -> None:
                     f"{draft_result['words']} words"
                 )
             else:
-                click.echo("No draft files found (notes/drafts/ is empty or missing).")
+                click.echo("No draft files found (draft/ is empty or missing — run migrate_drafts.py).")
         except Exception as exc:
             click.echo(f"Draft push failed: {exc}", err=True)
     else:
