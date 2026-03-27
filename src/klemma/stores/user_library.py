@@ -285,8 +285,16 @@ class LocalUserLibrary:
         self,
         project_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        since: Optional[str] = None,
     ) -> list["UserSource"]:
-        """Return all UserSource entries, optionally filtered by project and/or user."""
+        """Return all UserSource entries, optionally filtered by project, user, and time.
+
+        Args:
+            project_id: Restrict to sources belonging to this project.
+            user_id: Restrict to sources belonging to this user.
+            since: ISO 8601 timestamp. Only return sources added on or after this time.
+                   Used for incremental pull (#260 item 7).
+        """
         with self._conn() as conn:
             conditions = []
             params: list = []
@@ -298,6 +306,10 @@ class LocalUserLibrary:
             if project_id is not None:
                 conditions.append("(project_id = ? OR project_id IS NULL)")
                 params.append(project_id)
+
+            if since is not None:
+                conditions.append("added_at >= ?")
+                params.append(since)
 
             where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
             rows = conn.execute(

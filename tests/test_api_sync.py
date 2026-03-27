@@ -271,3 +271,43 @@ class TestVerifyGitToken:
             "project_id": "token-proj2",
         })
         assert resp.status_code == 401
+
+
+class TestIncrementalPullLibrary:
+    """Tests for incremental pull with 'since' parameter — issue #260 item 7."""
+
+    def test_pull_without_since_returns_all(self, client):
+        """No since parameter returns all sources."""
+        client.post("/sync/push/library", json={
+            "sources": [
+                {"citekey": "incr-a", "title": "Alpha", "status": "pending"},
+                {"citekey": "incr-b", "title": "Beta", "status": "pending"},
+            ],
+            "fragments": [],
+        })
+        resp = client.get("/sync/pull/library")
+        assert resp.status_code == 200
+        citekeys = {s["citekey"] for s in resp.json()["sources"]}
+        assert "incr-a" in citekeys
+        assert "incr-b" in citekeys
+
+    def test_pull_with_future_since_returns_empty(self, client):
+        """since=far-future returns zero sources (everything is older)."""
+        client.post("/sync/push/library", json={
+            "sources": [{"citekey": "incr-old", "title": "Old", "status": "pending"}],
+            "fragments": [],
+        })
+        resp = client.get("/sync/pull/library", params={"since": "2099-01-01T00:00:00+00:00"})
+        assert resp.status_code == 200
+        assert resp.json()["sources"] == []
+
+    def test_pull_with_epoch_since_returns_all(self, client):
+        """since=epoch (far past) returns all sources."""
+        client.post("/sync/push/library", json={
+            "sources": [{"citekey": "incr-epoch", "title": "Old", "status": "pending"}],
+            "fragments": [],
+        })
+        resp = client.get("/sync/pull/library", params={"since": "2000-01-01T00:00:00+00:00"})
+        assert resp.status_code == 200
+        citekeys = {s["citekey"] for s in resp.json()["sources"]}
+        assert "incr-epoch" in citekeys

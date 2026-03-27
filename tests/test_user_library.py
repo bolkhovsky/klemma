@@ -205,3 +205,19 @@ def test_project_id_preserved_on_status_upsert(lib):
     lib.add_source("pid1", "src_x", status="completed")  # no project_id
     src = lib.get_source_by_citekey("src_x")
     assert src.status == "completed"
+
+
+def test_get_all_sources_since_future_returns_empty(lib):
+    """since=far-future filters out all existing sources."""
+    lib.add_source("pid1", "alpha")
+    lib.add_source("pid2", "beta")
+    sources = lib.get_all_sources(since="2099-01-01T00:00:00")
+    assert sources == []
+
+
+def test_get_all_sources_since_past_returns_all(lib):
+    """since=far-past returns all sources."""
+    lib.add_source("pid1", "alpha")
+    lib.add_source("pid2", "beta")
+    sources = lib.get_all_sources(since="2000-01-01T00:00:00")
+    assert {s.citekey for s in sources} == {"alpha", "beta"}
