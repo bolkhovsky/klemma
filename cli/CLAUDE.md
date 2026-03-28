@@ -1,17 +1,17 @@
 # klemma-cli
 
-Lightweight git-native sync client for Klemma SaaS. Separate package (`pip install klemma-cli`).
+Lightweight API-native sync client for Klemma SaaS. Separate package (`pip install klemma-cli`).
 
 ## Architecture
 
-- Files sync via **git** (push/pull to bare repos on server)
-- Library data syncs via **REST API** (batch JSON for sources/fragments/embeddings)
-- No AI, no heavy deps — just click, requests, pydantic, pyyaml + git subprocess
+- All sync via **REST API only** (no server-side git)
+- Local git stays intact — power users use `git` directly; `k status` shows local uncommitted changes
+- No AI, no heavy deps — just click, requests, pydantic, pyyaml + git subprocess (local only)
 
 ## Modules
 
-### main.py (~280 lines)
-Click CLI entry point. 6 commands: `link`, `push`, `pull`, `status`, `rollback`, `login`.
+### main.py (~260 lines)
+Click CLI entry point. 5 commands: `link`, `push`, `pull`, `status`, `login`.
 
 ### auth.py (~80 lines)
 Login to Klemma API, token storage at `~/.klemma-cli/auth.json`.
@@ -22,11 +22,11 @@ Login to Klemma API, token storage at `~/.klemma-cli/auth.json`.
 `KlemmaClient` — HTTP client with auto-refresh on 401.
 - `get(path)`, `post(path, json)` — wrappers with auth headers
 
-### gitops.py (~180 lines)
-Git subprocess wrappers.
-- `init`, `add_remote`, `add_files`, `commit`, `push`, `pull`, `fetch`
-- `log`, `status`, `remote_log`, `revert_last_n`, `force_push`
-- `write_gitignore` — auto-generate .gitignore for klemma projects
+### gitops.py (~110 lines)
+Local git subprocess wrappers (no server transport functions).
+- `is_git_repo`, `init`, `add_files`, `has_changes`, `commit`, `log`
+- `status` — filtered to klemma-synced paths (`KLEMMA.md`, `draft/`, `notes/research/`, `.gitignore`)
+- `get_head_hash`, `write_gitignore`
 
 ### sync.py (~265 lines)
 Library and draft sync — read local SQLite DB and push/pull via API.
@@ -41,8 +41,9 @@ Library and draft sync — read local SQLite DB and push/pull via API.
 ### project.py (~50 lines)
 Project discovery — find `.klemma/` directory, parse KLEMMA.md.
 
-### models.py (~60 lines)
+### models.py (~55 lines)
 Pydantic schemas: `SourcePayload`, `FragmentPayload`, `EmbeddingPayload`, `DecisionPayload`, `SyncConfig`.
+`SyncConfig` fields: `api_url`, `dashboard_project_id`, `last_push`, `last_pull` (no `git_url`, no `access_token`).
 
 ### state.py (~30 lines)
 Sync state persistence — `.klemma/sync_config.json` CRUD.
@@ -51,30 +52,43 @@ Sync state persistence — `.klemma/sync_config.json` CRUD.
 
 ```
 klemma-cli push
-  1. git add KLEMMA.md notes/drafts/ notes/research/ .gitignore
-  2. git commit "sync: push from CLI — {date}"
-  3. git push klemma main
-  4. Read local library.db → POST /sync/push/library (sources + fragments)
-  5. Read local embeddings → POST /sync/push/embeddings (base64 chunks)
-  6. Update .klemma/sync_config.json last_push timestamp
+  1. Read local library.db → POST /sync/push/library (sources + fragments)
+  2. Read local embeddings → POST /sync/push/embeddings (base64 chunks)
+  3. PUT draft/*.md → POST /projects/{id}/drafts/{name} (each file)
+  4. Update .klemma/sync_config.json last_push timestamp
 ```
 
 ## Data flow: pull
 
 ```
 klemma-cli pull
-  1. git pull klemma main (conflicts → print instructions)
-  2. GET /sync/pull/library → write sources/fragments to local library.db
-  3. GET /projects/{id}/drafts → list; GET /projects/{id}/drafts/{name} per file
+  1. GET /sync/pull/library → write sources/fragments to local library.db
+  2. GET /projects/{id}/drafts → list; GET /projects/{id}/drafts/{name} per file
      → write to draft/{name} only if content differs (ADR-016)
-  4. Update .klemma/sync_config.json last_pull timestamp
+  3. Update .klemma/sync_config.json last_pull timestamp
 ```
+
+## Data flow: link
+
+```
+klemma-cli link
+  1. Login → GET /projects (find by name) or POST /projects (create)
+  2. write_gitignore(project_root)
+  3. Save SyncConfig {api_url, dashboard_project_id} to .klemma/sync_config.json
+```
+
+## Local git story
+
+- `k status` shows local uncommitted changes via `git status --short` (filtered to synced paths)
+- Power users: use `git add / commit / log` directly in the dissertation directory
+- `k link` writes `.gitignore` with klemma-specific exclusions
+- Server has no bare repos — all file sync via `/projects/{id}/drafts` REST API
 
 ## Tests
 
-- `cli/tests/test_gitops.py` — git subprocess wrapper tests
+- `cli/tests/test_gitops.py` — git subprocess wrapper tests (local ops only)
 - `cli/tests/test_project.py` — project discovery tests
 - `cli/tests/test_sync.py` — library DB read tests + pull_drafts tests (5 cases)
-- `tests/test_api_sync.py` — backend sync API endpoint tests (15 tests)
+- `tests/test_api_sync.py` — backend sync API endpoint tests (library sync only)
 
 See: [API Routes](../src/klemma/api/routes/CLAUDE.md) | [Root](../CLAUDE.md)

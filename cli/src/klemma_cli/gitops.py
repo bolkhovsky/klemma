@@ -1,8 +1,11 @@
-"""Git subprocess wrappers for klemma-cli sync operations."""
+"""Git subprocess wrappers for local klemma-cli operations.
+
+Only local git operations — no server transport (push/pull to remote).
+Server sync is handled exclusively via the REST API (sync.py).
+"""
 
 from __future__ import annotations
 
-import base64
 import subprocess
 from pathlib import Path
 
@@ -47,16 +50,6 @@ def init(path: Path) -> None:
     _run(["init"], cwd=path)
 
 
-def add_remote(path: Path, name: str, url: str) -> None:
-    """Add a git remote. Removes existing remote with same name first."""
-    # Check if remote exists
-    result = _run(["remote", "get-url", name], cwd=path, check=False)
-    if result.returncode == 0:
-        _run(["remote", "set-url", name, url], cwd=path)
-    else:
-        _run(["remote", "add", name, url], cwd=path)
-
-
 def add_files(path: Path, patterns: list[str]) -> None:
     """Stage files matching patterns."""
     for pattern in patterns:
@@ -85,41 +78,6 @@ def commit(path: Path, message: str) -> str | None:
     return hash_result.stdout.strip()
 
 
-def current_branch(path: Path) -> str:
-    """Return the current branch name, or 'main' as fallback."""
-    result = _run(["rev-parse", "--abbrev-ref", "HEAD"], cwd=path, check=False)
-    if result.returncode == 0 and result.stdout.strip():
-        return result.stdout.strip()
-    return "main"
-
-
-def push(path: Path, remote: str = "klemma", branch: str | None = None) -> bool:
-    """Push to remote. Returns True on success, False if rejected."""
-    branch = branch or current_branch(path)
-    result = _run(["push", remote, branch], cwd=path, check=False)
-    if result.returncode != 0:
-        if "rejected" in result.stderr or "non-fast-forward" in result.stderr:
-            return False
-        raise GitError("push", result.stderr.strip())
-    return True
-
-
-def pull(path: Path, remote: str = "klemma", branch: str | None = None) -> str:
-    """Pull from remote. Returns output text."""
-    branch = branch or current_branch(path)
-    result = _run(["pull", remote, branch, "--no-rebase"], cwd=path, check=False)
-    if result.returncode != 0:
-        if "CONFLICT" in result.stdout + result.stderr:
-            return f"CONFLICT: {result.stdout}\n{result.stderr}"
-        raise GitError("pull", result.stderr.strip())
-    return result.stdout.strip()
-
-
-def fetch(path: Path, remote: str = "klemma") -> None:
-    """Fetch from remote."""
-    _run(["fetch", remote], cwd=path, check=False)
-
-
 def log(path: Path, count: int = 10, format_str: str = "%h %s") -> list[str]:
     """Return recent commit log entries."""
     result = _run(
@@ -145,59 +103,12 @@ def status(path: Path) -> str:
     return "\n".join(lines)
 
 
-def remote_log(path: Path, remote: str = "klemma", branch: str | None = None) -> list[str]:
-    """Return commits on remote that are not in local HEAD."""
-    branch = branch or current_branch(path)
-    fetch(path, remote)
-    result = _run(
-        ["log", f"HEAD..{remote}/{branch}", "--oneline"],
-        cwd=path,
-        check=False,
-    )
-    if result.returncode != 0:
-        return []
-    return [line for line in result.stdout.strip().split("\n") if line]
-
-
-def revert_last_n(path: Path, n: int) -> None:
-    """Revert the last N commits (creates revert commits)."""
-    if n <= 0:
-        return
-    _run(["revert", "--no-edit", f"HEAD~{n}..HEAD"], cwd=path)
-
-
-def force_push(path: Path, remote: str = "klemma", branch: str | None = None) -> None:
-    """Force push with lease (safe force push)."""
-    branch = branch or current_branch(path)
-    _run(["push", "--force-with-lease", remote, branch], cwd=path)
-
-
 def get_head_hash(path: Path) -> str | None:
     """Return HEAD commit hash or None if no commits."""
     result = _run(["rev-parse", "HEAD"], cwd=path, check=False)
     if result.returncode != 0:
         return None
     return result.stdout.strip()
-
-
-def set_http_auth_header(path: Path, server_url: str, token: str) -> None:
-    """Configure git to use an Authorization header for requests to server_url.
-
-    Stores auth in the local repo git config (.git/config), not embedded in
-    the remote URL — so tokens are never visible in 'git remote -v' or pushed
-    to the server.
-
-    Args:
-        path: Path to the local git repository.
-        server_url: URL prefix to match, e.g. 'https://litresearch.ru'.
-        token: Raw access token (encoded as 'Basic token:<token>').
-    """
-    encoded = base64.b64encode(f"token:{token}".encode()).decode()
-    _run(
-        ["config", "--local", f"http.{server_url}/.extraHeader",
-         f"Authorization: Basic {encoded}"],
-        cwd=path,
-    )
 
 
 def write_gitignore(path: Path) -> None:

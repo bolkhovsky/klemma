@@ -49,12 +49,12 @@ class KlemmaClient:
         resp.raise_for_status()
         return resp
 
-    def post(self, path: str, json: Any = None, **kwargs: Any) -> requests.Response:
+    def post(self, path: str, json: Any = None, timeout: int = 120, **kwargs: Any) -> requests.Response:
         """POST request with auto-refresh on 401."""
         url = f"{self.api_url}{path}"
-        resp = requests.post(url, headers=self._headers(), json=json, timeout=30, **kwargs)
+        resp = requests.post(url, headers=self._headers(), json=json, timeout=timeout, **kwargs)
         if self._maybe_refresh(resp):
-            resp = requests.post(url, headers=self._headers(), json=json, timeout=30, **kwargs)
+            resp = requests.post(url, headers=self._headers(), json=json, timeout=timeout, **kwargs)
         resp.raise_for_status()
         return resp
 

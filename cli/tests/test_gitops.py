@@ -14,7 +14,6 @@ from klemma_cli.gitops import (
     init,
     is_git_repo,
     log,
-    set_http_auth_header,
     status,
     write_gitignore,
 )
@@ -126,37 +125,6 @@ class TestGetHeadHash:
         h = get_head_hash(git_repo)
         assert h is not None
         assert len(h) == 40
-
-
-class TestSetHttpAuthHeader:
-    def test_stores_authorization_header_in_local_config(self, git_repo):
-        set_http_auth_header(git_repo, "https://litresearch.ru", "mytoken123")
-        result = subprocess.run(
-            ["git", "config", "--local", "http.https://litresearch.ru/.extraHeader"],
-            cwd=str(git_repo), capture_output=True, text=True,
-        )
-        assert result.returncode == 0
-        assert "Authorization: Basic" in result.stdout
-
-    def test_token_not_stored_in_plaintext(self, git_repo):
-        set_http_auth_header(git_repo, "https://litresearch.ru", "supersecrettoken")
-        result = subprocess.run(
-            ["git", "config", "--local", "--list"],
-            cwd=str(git_repo), capture_output=True, text=True,
-        )
-        assert "supersecrettoken" not in result.stdout
-
-    def test_overwrites_existing_header_on_relink(self, git_repo):
-        import base64
-
-        set_http_auth_header(git_repo, "https://litresearch.ru", "old_token")
-        set_http_auth_header(git_repo, "https://litresearch.ru", "new_token")
-        result = subprocess.run(
-            ["git", "config", "--local", "http.https://litresearch.ru/.extraHeader"],
-            cwd=str(git_repo), capture_output=True, text=True,
-        )
-        expected = base64.b64encode(b"token:new_token").decode()
-        assert expected in result.stdout
 
 
 class TestWriteGitignore:
