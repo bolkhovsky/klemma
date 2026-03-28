@@ -242,8 +242,11 @@ def push_drafts(client: KlemmaClient, project_root: Path, dashboard_project_id: 
                     server_times[f["name"]] = datetime.fromisoformat(ts)
                 except ValueError:
                     pass
-    except Exception:
-        pass  # if list fails, push everything
+    except Exception as e:
+        # Re-raise auth errors so caller can show helpful message
+        if "401" in str(e) or "Unauthorized" in str(e):
+            raise
+        # Other errors (network, 404) — proceed without timestamps, push everything
 
     for md_file in sorted(drafts_dir.glob("*.md")):
         filename = md_file.name

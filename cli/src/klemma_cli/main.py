@@ -154,7 +154,11 @@ def push() -> None:
         )
         library_ok = True
     except Exception as exc:
-        click.echo(f"Library push failed: {exc}", err=True)
+        msg = str(exc)
+        if "401" in msg or "Unauthorized" in msg:
+            click.echo("Library push failed: session expired. Run 'klemma-cli login' to refresh.", err=True)
+        else:
+            click.echo(f"Library push failed: {exc}", err=True)
 
     # Phase 2: Drafts
     drafts_ok = False
@@ -175,7 +179,11 @@ def push() -> None:
                 click.echo("No draft files found (draft/ is empty or missing).")
             drafts_ok = True
         except Exception as exc:
-            click.echo(f"Draft push failed: {exc}", err=True)
+            msg = str(exc)
+            if "401" in msg or "Unauthorized" in msg:
+                click.echo("Draft push failed: session expired. Run 'klemma-cli login' to refresh.", err=True)
+            else:
+                click.echo(f"Draft push failed: {exc}", err=True)
     else:
         click.echo("Draft push skipped (no dashboard_project_id — re-run 'klemma-cli link').")
         drafts_ok = True  # N/A, not a failure
@@ -214,7 +222,11 @@ def pull() -> None:
         config.last_pull = datetime.now(timezone.utc).isoformat()
         save_sync_config(project_root, config)
     except Exception as exc:
-        click.echo(f"Library pull failed: {exc}", err=True)
+        msg = str(exc)
+        if "401" in msg or "Unauthorized" in msg:
+            click.echo("Library pull failed: session expired. Run 'klemma-cli login' to refresh.", err=True)
+        else:
+            click.echo(f"Library pull failed: {exc}", err=True)
 
     # Phase 2: Drafts
     if config.dashboard_project_id:
@@ -233,7 +245,11 @@ def pull() -> None:
             else:
                 click.echo("Draft files up to date.")
         except Exception as exc:
-            click.echo(f"Draft pull failed: {exc}", err=True)
+            msg = str(exc)
+            if "401" in msg or "Unauthorized" in msg:
+                click.echo("Draft pull failed: session expired. Run 'klemma-cli login' to refresh.", err=True)
+            else:
+                click.echo(f"Draft pull failed: {exc}", err=True)
     else:
         click.echo("Draft pull skipped (no dashboard_project_id — re-run 'klemma-cli link').")
 
