@@ -367,17 +367,25 @@ const thesis = computed(() =>
 
 // ── Navigation ────────────────────────────────────────────────────────────
 
+function sectionToFilename(sectionId: string): string {
+  const chapter = sectionId.split('.')[0]
+  if (!chapter || chapter === '0') return 'intro.md'
+  return `chapter_${chapter}.md`
+}
+
 function navigateToBlock(sectionId: string, blockId: string) {
   if (isDemoMode.value) {
     router.push(`/demo/map/${sectionId}/${blockId}`)
   } else {
-    router.push(`/${projectId.value}/map/${sectionId}/b1`)
+    const filename = sectionToFilename(sectionId)
+    router.push(`/${projectId.value}/write?section=${sectionId}&file=${filename}`)
   }
 }
 
 function navigateToSection(sectionId: string) {
   if (isDemoMode.value) return // demo uses toggleSection
-  router.push(`/${projectId.value}/map/${sectionId}/b1`)
+  const filename = sectionToFilename(sectionId)
+  router.push(`/${projectId.value}/write?section=${sectionId}&file=${filename}`)
 }
 
 // ── State ────────────────────────────────────────────────────────────────

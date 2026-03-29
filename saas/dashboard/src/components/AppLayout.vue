@@ -16,7 +16,7 @@ function switchProject(projectId: string) {
   const currentParam = route.params.projectId as string | undefined
   if (currentParam) {
     // Navigate to same module within new project
-    const modules = ['map', 'feed', 'library', 'health', 'outline', 'coverage', 'research', 'edit']
+    const modules = ['map', 'feed', 'library', 'health', 'outline', 'coverage', 'research', 'write', 'edit']
     const suffix = route.path.slice(currentParam.length + 2) // strip /projectId/
     const module = modules.find(m => suffix === m || suffix.startsWith(m + '/')) ?? 'map'
     router.push(`/${projectId}/${module}`)
@@ -232,9 +232,9 @@ async function createProject() {
           Библиотека
         </RouterLink>
         <RouterLink
-          :to="`/${route.params.projectId}/edit`"
+          :to="`/${route.params.projectId}/write`"
           class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-          :class="route.path.startsWith(`/${route.params.projectId}/edit`)
+          :class="route.path.startsWith(`/${route.params.projectId}/write`)
             ? 'text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]'
             : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-rule-light)]'"
         >
