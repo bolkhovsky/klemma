@@ -6,6 +6,7 @@ import {
   process as processApi,
   type DraftFile, type DraftHeading,
 } from '@/api/client'
+import SourceDrawer from '@/components/SourceDrawer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -154,10 +155,26 @@ function selectPreset(id: string, preset: string) {
   cardPromptText.value[id] = labels[preset] ?? ''
 }
 
+// ── File content (for diff "before") ─────────────────────────────────────────
+const fileContent = ref<Record<string, string>>({})
+
+watch(activeFile, async (name) => {
+  if (name && !fileContent.value[name]) {
+    try {
+      const data = await drafts.get(projectId.value, name)
+      fileContent.value[name] = data.content
+    } catch { /* before will show "(пустой раздел)" */ }
+  }
+}, { immediate: true })
+
 function currentSectionText(sectionId: string): string {
-  // Find section heading line + next heading line in active file content
-  // We'll store it from the last fetch — for now return empty (diff will show just before=empty)
-  return ''
+  const content = fileContent.value[activeFile.value]
+  if (!content) return ''
+  const lines = content.split('\n')
+  const h = activeSections.value.find(x => x.section_id === sectionId)
+  if (!h) return ''
+  const nextH = activeSections.value.find(x => x.line > h.line)
+  return lines.slice(h.line + 1, nextH?.line ?? lines.length).join('\n').trim()
 }
 
 async function runGenerate(sectionId: string) {
@@ -229,6 +246,43 @@ function rejectDraft(sectionId: string) {
 function editPrompt(sectionId: string) {
   cardStates.value[sectionId] = 'prompt'
 }
+
+// ── Citekey click → source drawer ────────────────────────────────────────────
+const drawerCitekey = ref<string | null>(null)
+
+function renderWithCitekeys(text: string): string {
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  return escaped
+    .replace(/\[@([\w\d_:.-]+)\]/g,
+      '<span class="citekey-link" data-citekey="$1">[@$1]</span>')
+    .replace(/\n/g, '<br>')
+}
+
+function handleCitekeyClick(e: MouseEvent) {
+  const key = (e.target as HTMLElement).dataset?.citekey
+  if (key) drawerCitekey.value = key
+}
+
+// ── Right panel: sources for active section ──────────────────────────────────
+const panelSources = ref<string[]>([])
+const panelLoading = ref(false)
+
+watch(activeSectionId, async (id) => {
+  panelSources.value = []
+  if (!id) return
+  panelLoading.value = true
+  try {
+    const r = await apiProjects.sectionSources(id)
+    panelSources.value = r.citekeys
+  } catch {
+    panelSources.value = []
+  } finally {
+    panelLoading.value = false
+  }
+})
 
 // ── Data loading ─────────────────────────────────────────────────────────────
 async function loadAll() {
@@ -690,9 +744,11 @@ const tokenBarCls = computed(() => {
                   </div>
                   <div class="px-4 py-3 bg-[#f8fff9]">
                     <div class="text-[10px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ok)] mb-2">Станет</div>
-                    <p class="text-[13px] text-[var(--color-ink)] leading-relaxed whitespace-pre-wrap">
-                      {{ cardGenResult[heading.section_id] }}
-                    </p>
+                    <div
+                      v-html="renderWithCitekeys(cardGenResult[heading.section_id] ?? '')"
+                      @click="handleCitekeyClick($event)"
+                      class="text-[13px] text-[var(--color-ink)] leading-relaxed [&_.citekey-link]:text-[var(--color-accent)] [&_.citekey-link]:underline [&_.citekey-link]:decoration-dotted [&_.citekey-link]:cursor-pointer [&_.citekey-link:hover]:no-underline"
+                    />
                   </div>
                 </div>
                 <!-- Diff actions -->
@@ -725,7 +781,77 @@ const tokenBarCls = computed(() => {
           </div>
         </template>
       </main>
+
+      <!-- ── Right panel ──────────────────────────────────────────────── -->
+      <aside class="w-64 flex-shrink-0 bg-[var(--color-paper-white)] border-l border-[var(--color-rule)] flex flex-col overflow-y-auto">
+        <div class="px-4 pt-4 pb-2">
+          <div class="text-[10px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-3">Контекст раздела</div>
+
+          <!-- Active section info -->
+          <template v-if="activeSectionId">
+            <div class="text-[13px] font-semibold text-[var(--color-ink)] leading-snug mb-0.5">
+              {{ activeSections.find(h => h.section_id === activeSectionId)?.full_title?.replace(/^[\d.]+\s*/, '') || activeSectionId }}
+            </div>
+            <div class="text-[11px] font-mono text-[var(--color-ink-muted)] mb-4">{{ activeSectionId }}</div>
+
+            <!-- CTA: Close gaps -->
+            <RouterLink
+              :to="`/${projectId}/library`"
+              class="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-md bg-[var(--color-accent)] text-white text-[12px] font-medium mb-4 hover:bg-[var(--color-accent-deep)] transition-colors"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              Закрыть пробелы
+            </RouterLink>
+
+            <!-- Stats -->
+            <div class="grid grid-cols-2 gap-2 mb-4">
+              <div class="bg-[var(--color-rule-light)] rounded-md px-2 py-2 text-center">
+                <div class="text-[18px] font-bold font-mono text-[var(--color-ink)]">{{ sectionCounts[activeSectionId] ?? 0 }}</div>
+                <div class="text-[10px] text-[var(--color-ink-muted)]">источников</div>
+              </div>
+              <div class="bg-[var(--color-rule-light)] rounded-md px-2 py-2 text-center">
+                <div class="text-[18px] font-bold font-mono text-[var(--color-ink)]">{{ panelSources.length }}</div>
+                <div class="text-[10px] text-[var(--color-ink-muted)]">прикреплено</div>
+              </div>
+            </div>
+
+            <!-- Source list -->
+            <div class="text-[10px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-2">
+              Источники раздела
+            </div>
+            <div v-if="panelLoading" class="text-[12px] text-[var(--color-ink-muted)] py-1">Загрузка…</div>
+            <div v-else-if="panelSources.length === 0" class="text-[12px] text-[var(--color-ink-muted)] italic py-1">
+              Нет источников
+            </div>
+            <div
+              v-for="key in panelSources"
+              :key="key"
+              @click="drawerCitekey = key"
+              class="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-[var(--color-rule-light)] group mb-0.5"
+            >
+              <span class="text-[11px] font-mono text-[var(--color-accent)] flex-1 truncate">{{ key }}</span>
+              <svg class="w-3 h-3 text-[var(--color-ink-muted)] opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+          </template>
+
+          <!-- Nothing selected -->
+          <div v-else class="text-center py-8 text-[var(--color-ink-muted)]">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" class="mx-auto mb-2 opacity-30"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+            <p class="text-[12px]">Выберите раздел</p>
+          </div>
+        </div>
+      </aside>
+
     </div>
+
+    <!-- ── Source drawer ─────────────────────────────────────────────────── -->
+    <SourceDrawer
+      v-if="drawerCitekey"
+      :citekey="drawerCitekey"
+      :project-id="projectId"
+      :active-section-id="activeSectionId"
+      @close="drawerCitekey = null"
+    />
 
     <!-- ── Toast ────────────────────────────────────────────────────────── -->
     <div :class="['fixed bottom-5 right-5 bg-[var(--color-ink)] text-white px-4 py-2 rounded-lg text-[13px] shadow-lg transition-all duration-250 pointer-events-none z-50', toastVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10']">

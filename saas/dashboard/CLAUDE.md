@@ -14,7 +14,7 @@ saas/dashboard/
 │   ├── api/client.ts      — typed API client, JWT management, token refresh
 │   ├── router/index.ts    — routes + auth guard
 │   ├── components/        — shared components
-│   │   └── AppLayout      — sidebar nav (Здоровье / Библиотека / Исследование) + project switcher + token meter
+│   │   └── AppLayout      — sidebar nav (Карта / Лента / Библиотека / Редактор→/write) + project switcher + token meter
 │   ├── views/             — page components
 │   │   ├── LandingView    — public landing page (Russian)
 │   │   ├── LoginView      — email/password login
@@ -26,7 +26,11 @@ saas/dashboard/
 │   │   ├── ReportView     — structured research report: argument blocks, citations
 │   │   ├── OutlineView    — structure editor (accessible via settings icon, not in primary nav)
 │   │   ├── CoverageView   — coverage heatmap (accessible via direct URL, not in primary nav)
-│   │   ├── DashboardView  — legacy, redirects to HealthView
+│   │   ├── SectionEditorView — /:projectId/write — section-card write paradigm (Phase 5A, #273)
+│   │   │     standalone layout (no AppLayout), topbar, doc-structure sidebar, section cards
+│   │   │     3-state draft machine (0/1-4/5+ sources), prompt+presets, polling draft gen, diff review
+│   │   ├── FileEditorView — /:projectId/edit/:filename — raw markdown editor (fallback)
+│   │   ├── DashboardView  — legacy, redirects to MapView
 │   │   └── GlobalLibraryView — all sources across projects
 │   └── assets/main.css    — Tailwind entry point
 ├── vite.config.ts         — Tailwind plugin + /api proxy
