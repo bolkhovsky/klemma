@@ -13,6 +13,7 @@ const props = defineProps<{
   sectionId: string | null
   projectId: string
   isDemoMode?: boolean
+  sectionName?: string
 }>()
 
 const emit = defineEmits<{
@@ -127,7 +128,7 @@ function detachItem(citekey: string) {
     <!-- Section header -->
     <div class="flex-shrink-0 px-3 pt-3 pb-2 border-b border-[var(--color-rule-light)]">
       <p v-if="sectionId" class="text-xs font-semibold text-[var(--color-accent-deep)] truncate">
-        {{ sectionId }}
+        {{ sectionName ?? sectionId }}
       </p>
       <p v-else class="text-xs text-[var(--color-ink-muted)] italic">
         Поставьте курсор в раздел

@@ -337,9 +337,9 @@ async function handleQuerySection() {
     } else {
       // Infer file from section id
       const chapter = sec.split('.')[0]
-      if (sec === 'intro') activeFile.value = 'intro.md'
-      else if (sec === 'conclusion') activeFile.value = 'conclusion.md'
-      else if (chapter) activeFile.value = `chapter_${chapter}.md`
+      if (!chapter || chapter === 'intro' || chapter === '0') activeFile.value = 'intro.md'
+      else if (chapter === 'conclusion') activeFile.value = 'conclusion.md'
+      else activeFile.value = `chapter_${chapter}.md`
     }
     activeSectionId.value = sec
     await nextTick()

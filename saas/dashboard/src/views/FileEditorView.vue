@@ -68,6 +68,27 @@ watch(isViewMode, async (viewMode) => {
 // ── Cursor section detection ──────────────────────────────────────────────
 const cursorSectionId = ref<string | null>(null)
 const editorEl = ref<HTMLDivElement>()
+const viewEl = ref<HTMLDivElement>()
+
+const cursorSectionName = computed<string | null>(() => {
+  if (!cursorSectionId.value) return null
+  const h = draftHeadings.value.find(h => h.section_id === cursorSectionId.value)
+  return h?.full_title ?? null
+})
+
+async function scrollToSection(sectionId: string) {
+  await nextTick()
+  if (!viewEl.value) return
+  const h = draftHeadings.value.find(h => h.section_id === sectionId)
+  if (!h) return
+  const els = viewEl.value.querySelectorAll(`h${h.level}`)
+  for (const el of Array.from(els)) {
+    if (el.textContent?.includes(h.title)) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+  }
+}
 let detectTimer: ReturnType<typeof setTimeout> | null = null
 
 function onSelectionChange() {
@@ -205,8 +226,13 @@ onMounted(async () => {
   document.addEventListener('selectionchange', onSelectionChange)
 
   const filenameParam = route.params.filename as string | undefined
+  const sectionQuery = route.query.section as string | undefined
   if (filenameParam) {
     await loadFile(decodeURIComponent(filenameParam))
+    if (sectionQuery) {
+      cursorSectionId.value = sectionQuery
+      await scrollToSection(sectionQuery)
+    }
   } else if (projectId.value) {
     try {
       const listData = await drafts.list(projectId.value)
@@ -283,6 +309,23 @@ watch(() => route.params.filename, (filename) => {
             >{{ isViewMode ? 'Редактировать' : 'Просмотр' }}</button>
           </div>
 
+          <!-- Section breadcrumb (visible when cursor is in a named section) -->
+          <div v-if="cursorSectionId && draftFilename" class="flex items-center gap-2 text-sm min-h-[28px]">
+            <span class="text-[var(--color-ink-muted)]">{{ displayName(draftFilename) }}</span>
+            <span class="text-[var(--color-rule)] select-none">›</span>
+            <span class="text-[var(--color-ink)] font-medium truncate flex-1">{{ cursorSectionName ?? cursorSectionId }}</span>
+            <button
+              disabled
+              title="Скоро: генерация черновика секции"
+              class="flex-shrink-0 flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium opacity-40 cursor-not-allowed border-[var(--color-rule)] text-[var(--color-ink-muted)]"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-3.5 w-3.5">
+                <path d="M7.539 14.841a.75.75 0 0 1-.479-.439l-1.074-3.026A8.97 8.97 0 0 0 3.71 9.096l-3.026-1.074a.75.75 0 0 1 0-1.044l3.026-1.074A8.97 8.97 0 0 0 6 3.804l1.073-3.026a.75.75 0 0 1 1.044 0l1.074 3.026A8.97 8.97 0 0 0 12.29 5.904l3.025 1.074a.75.75 0 0 1 0 1.044l-3.025 1.074a8.97 8.97 0 0 0-3.1 2.099l-1.075 3.026a.75.75 0 0 1-.576.62Z" />
+              </svg>
+              Сгенерировать черновик
+            </button>
+          </div>
+
           <!-- Editor block -->
           <div class="rounded-lg border bg-[var(--color-paper-white)] transition-colors"
             :class="!isViewMode && draftFilename ? 'border-[var(--color-accent)]/40 shadow-sm' : 'border-[var(--color-rule)]'"
@@ -297,6 +340,7 @@ watch(() => route.params.filename, (filename) => {
 
             <!-- VIEW mode: rendered markdown -->
             <div v-else-if="draftFilename && isViewMode"
+              ref="viewEl"
               class="draft-prose px-8 py-6 text-[15px] text-[var(--color-ink)] leading-[1.8] font-[var(--font-body)] cursor-text"
               @click="isViewMode = false"
               v-html="editingBody ? renderDraft(editingBody) : '<p class=\'text-[var(--color-ink-muted)] italic\'>Файл пуст — нажмите для редактирования</p>'"
@@ -383,6 +427,7 @@ watch(() => route.params.filename, (filename) => {
         <div class="w-52 flex-shrink-0" style="max-height: calc(100vh - 9rem);">
           <SourcePanel
             :sectionId="cursorSectionId"
+            :sectionName="cursorSectionName ?? undefined"
             :projectId="projectId"
             :isDemoMode="false"
             @attach="() => {/* SourcePanel persists server-side internally */}"

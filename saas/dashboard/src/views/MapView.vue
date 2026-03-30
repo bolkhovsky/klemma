@@ -369,7 +369,8 @@ const thesis = computed(() =>
 
 function sectionToFilename(sectionId: string): string {
   const chapter = sectionId.split('.')[0]
-  if (!chapter || chapter === '0') return 'intro.md'
+  if (!chapter || chapter === '0' || chapter === 'intro') return 'intro.md'
+  if (chapter === 'conclusion') return 'conclusion.md'
   return `chapter_${chapter}.md`
 }
 
