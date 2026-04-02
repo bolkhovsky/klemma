@@ -2,8 +2,8 @@
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  auth, usage, userProjects, projects as apiProjects, drafts, write as writeApi,
-  process as processApi,
+  projects as apiProjects, drafts, write as writeApi,
+  process as processApi, library as apiLibrary,
   type DraftFile, type DraftHeading,
 } from '@/api/client'
 import SourceDrawer from '@/components/SourceDrawer.vue'
@@ -19,10 +19,6 @@ const loadError = ref('')
 const draftFiles = ref<DraftFile[]>([])
 const sectionCounts = ref<Record<string, number>>({})  // section_id → source count
 const totalSources = ref(0)
-const projectName = ref('')
-const userName = ref('')
-const userInitials = ref('?')
-const tokenBalance = ref<{ total_granted: number; total_used: number; remaining: number } | null>(null)
 
 // ── Active chapter (sidebar nav) ────────────────────────────────────────────
 const activeFile = ref<string>('')          // e.g. "chapter_1.md"
@@ -50,6 +46,57 @@ function showToast(msg: string) {
   toastTimer = setTimeout(() => { toastVisible.value = false }, 3000)
 }
 
+// ── Citation search (per section) ───────────────────────────────────────────
+interface FragmentResult {
+  fragment_id: string
+  citekey: string
+  title: string
+  year: number | null
+  text: string
+  fragment_type: string
+}
+const citeSearchOpen = ref<Record<string, boolean>>({})
+const citeSearchQuery = ref<Record<string, string>>({})
+const citeSearchResults = ref<Record<string, FragmentResult[]>>({})
+const citeSearchLoading = ref<Record<string, boolean>>({})
+let citeSearchTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+
+const CITE_PRESETS = [
+  'Запрос на автоматизацию',
+  'Из A следует B',
+  'Субъективность экспертов',
+  'Точность метода',
+]
+
+function toggleCiteSearch(sectionId: string) {
+  citeSearchOpen.value[sectionId] = !citeSearchOpen.value[sectionId]
+}
+
+function setCiteQuery(sectionId: string, q: string) {
+  citeSearchQuery.value[sectionId] = q
+  if (citeSearchTimers[sectionId]) clearTimeout(citeSearchTimers[sectionId])
+  if (!q.trim() || q.trim().length < 2) { citeSearchResults.value[sectionId] = []; return }
+  citeSearchTimers[sectionId] = setTimeout(() => runCiteSearch(sectionId, q), 400)
+}
+
+async function runCiteSearch(sectionId: string, q: string) {
+  citeSearchLoading.value[sectionId] = true
+  try {
+    const data = await apiLibrary.fragmentSearch(q, 8)
+    citeSearchResults.value[sectionId] = data.results
+  } catch { citeSearchResults.value[sectionId] = [] }
+  finally { citeSearchLoading.value[sectionId] = false }
+}
+
+async function attachFragmentSource(sectionId: string, citekey: string) {
+  try {
+    await apiProjects.assignSections(citekey, [sectionId])
+    // Update local source count
+    sectionCounts.value[sectionId] = (sectionCounts.value[sectionId] ?? 0) + 1
+    showToast(`[@${citekey}] прикреплён к разделу`)
+  } catch { showToast('Ошибка при прикреплении') }
+}
+
 // ── Computed chapter list ────────────────────────────────────────────────────
 function fileDisplayName(name: string): string {
   const map: Record<string, string> = { 'intro.md': 'Введение', 'conclusion.md': 'Заключение' }
@@ -71,7 +118,9 @@ function fileOrder(name: string): number {
 }
 
 const sortedFiles = computed(() =>
-  [...draftFiles.value].sort((a, b) => fileOrder(a.name) - fileOrder(b.name))
+  [...draftFiles.value]
+    .filter(f => f.name !== 'dissertation.md')
+    .sort((a, b) => fileOrder(a.name) - fileOrder(b.name))
 )
 
 const activeFileData = computed(() =>
@@ -289,12 +338,9 @@ async function loadAll() {
   loading.value = true
   loadError.value = ''
   try {
-    const [filesData, coverageData, projectsData, meData, usageData] = await Promise.allSettled([
+    const [filesData, coverageData] = await Promise.allSettled([
       drafts.list(projectId.value),
       apiProjects.coverage(),
-      userProjects.list(),
-      auth.me(),
-      usage.me(),
     ])
 
     if (filesData.status === 'fulfilled') {
@@ -303,18 +349,6 @@ async function loadAll() {
     if (coverageData.status === 'fulfilled') {
       sectionCounts.value = coverageData.value.sections
       totalSources.value = coverageData.value.total_sources
-    }
-    if (projectsData.status === 'fulfilled') {
-      const p = projectsData.value.projects.find(p => p.project_id === projectId.value)
-      if (p) projectName.value = p.name
-    }
-    if (meData.status === 'fulfilled') {
-      userName.value = meData.value.name || meData.value.email
-      const parts = (meData.value.name || meData.value.email || '?').split(' ')
-      userInitials.value = parts.map(w => w[0]?.toUpperCase() ?? '').slice(0, 2).join('')
-    }
-    if (usageData.status === 'fulfilled') {
-      tokenBalance.value = usageData.value
     }
   } catch (e: any) {
     loadError.value = e.message ?? 'Ошибка загрузки'
@@ -360,86 +394,23 @@ onUnmounted(() => {
   if (toastTimer) clearTimeout(toastTimer)
 })
 
-// ── Sync ─────────────────────────────────────────────────────────────────────
-function handleSync() {
-  showToast('Синхронизация — используйте klemma pull/push из CLI')
-}
-
-// ── Token bar ─────────────────────────────────────────────────────────────────
-const tokenPercent = computed(() => {
-  if (!tokenBalance.value || tokenBalance.value.total_granted === 0) return 0
-  return Math.round((tokenBalance.value.total_used / tokenBalance.value.total_granted) * 100)
-})
-
-const tokenBarCls = computed(() => {
-  const p = tokenPercent.value
-  if (p >= 90) return 'bg-[var(--color-err)]'
-  if (p >= 75) return 'bg-[var(--color-warn)]'
-  return 'bg-gradient-to-r from-violet-400 to-[var(--color-accent)]'
-})
 </script>
 
 <template>
-  <div class="flex flex-col h-screen bg-[var(--color-paper)]">
-
-    <!-- ── Topbar ───────────────────────────────────────────────────────── -->
-    <header class="h-12 flex-shrink-0 bg-white border-b border-[var(--color-rule)] flex items-center gap-3 px-5">
-      <!-- Logo -->
-      <RouterLink :to="`/${projectId}/map`" class="font-bold text-[15px] tracking-tight text-[var(--color-ink)] hover:opacity-80">
-        k<span class="text-[var(--color-accent)]">lemma</span>
-      </RouterLink>
-      <!-- Project badge -->
-      <span v-if="projectName" class="text-xs font-mono bg-[var(--color-rule-light)] border border-[var(--color-rule)] rounded px-2 py-0.5 text-[var(--color-ink-muted)] max-w-[180px] truncate">
-        {{ projectName }}
-      </span>
-
-      <div class="flex-1" />
-
-      <!-- Stats -->
-      <span class="text-[11px] font-mono text-[var(--color-ink-muted)] hidden sm:block">
-        {{ totalSources }} источников · {{ sortedFiles.length }} файлов · {{ coveragePercent }}%
-      </span>
-
-      <!-- Bell → Feed -->
-      <RouterLink
-        :to="`/${projectId}/feed`"
-        class="relative w-8 h-8 rounded-lg flex items-center justify-center border border-[var(--color-rule)] text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)] transition-colors"
-        title="Лента событий"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-        </svg>
-        <span class="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-red-500 border border-white" />
-      </RouterLink>
-
-      <!-- Sync -->
-      <button
-        @click="handleSync"
-        class="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg border border-[var(--color-rule)] bg-transparent text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)] transition-colors"
-        title="Синхронизировать с локальным черновиком"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"/>
-        </svg>
-        Синхронизировать
-      </button>
-    </header>
-
-    <!-- ── Workspace ────────────────────────────────────────────────────── -->
-    <div class="flex flex-1 overflow-hidden">
+  <div class="flex flex-1 overflow-hidden">
 
       <!-- ── Sidebar ───────────────────────────────────────────────────── -->
       <nav class="w-44 flex-shrink-0 bg-white border-r border-[var(--color-rule)] flex flex-col overflow-y-auto">
         <!-- Chapter structure -->
         <div class="px-3.5 pt-3 pb-1.5">
-          <div class="text-[10px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-1.5">Структура</div>
+          <div class="text-[11px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-1.5">Структура</div>
         </div>
         <div
           v-for="file in sortedFiles"
           :key="file.name"
           @click="activeFile = file.name; activeSectionId = null"
           :class="[
-            'flex items-center gap-2 px-3.5 py-1.5 text-[13px] cursor-pointer transition-colors',
+            'flex items-center gap-2 px-3.5 py-1.5 text-sm cursor-pointer transition-colors',
             activeFile === file.name
               ? 'bg-[var(--color-accent-pale)] text-[var(--color-accent-deep)] font-medium'
               : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)]'
@@ -452,64 +423,6 @@ const tokenBarCls = computed(() => {
           {{ fileDisplayName(file.name) }}
         </div>
 
-        <div class="flex-1" />
-
-        <!-- App nav -->
-        <div class="border-t border-[var(--color-rule)] pt-1 pb-1">
-          <div class="text-[10px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] px-3.5 pt-2 pb-1">Навигация</div>
-          <RouterLink
-            :to="`/${projectId}/map`"
-            class="flex items-center gap-2 px-3.5 py-1.5 text-[13px] text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)] transition-colors"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="flex-shrink-0">
-              <rect x="1" y="1" width="5.5" height="5.5" rx="1.2" stroke="currentColor" stroke-width="1.3"/>
-              <rect x="7.5" y="1" width="5.5" height="5.5" rx="1.2" stroke="currentColor" stroke-width="1.3"/>
-              <rect x="1" y="7.5" width="5.5" height="5.5" rx="1.2" stroke="currentColor" stroke-width="1.3"/>
-              <rect x="7.5" y="7.5" width="5.5" height="5.5" rx="1.2" stroke="currentColor" stroke-width="1.3"/>
-            </svg>
-            Карта
-          </RouterLink>
-          <RouterLink
-            :to="`/${projectId}/library`"
-            class="flex items-center gap-2 px-3.5 py-1.5 text-[13px] text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)] transition-colors"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="flex-shrink-0">
-              <path d="M2 2h6l3 3v7a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3"/>
-              <path d="M8 2v3h3" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-              <path d="M4 7.5h6M4 9.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-            </svg>
-            Библиотека
-          </RouterLink>
-        </div>
-
-        <!-- User profile + credits -->
-        <div class="border-t border-[var(--color-rule)] px-3 py-2.5">
-          <div class="flex items-center gap-2 mb-2.5">
-            <div class="w-7 h-7 rounded-full flex-shrink-0 bg-gradient-to-br from-violet-400 to-[var(--color-accent)] flex items-center justify-center text-[11px] font-bold text-white">
-              {{ userInitials }}
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="text-[12px] font-semibold text-[var(--color-ink)] truncate">{{ userName || '...' }}</div>
-              <div class="inline-flex items-center gap-0.5 text-[10px] font-semibold text-violet-600 bg-violet-50 border border-violet-200 rounded px-1 mt-0.5">
-                <svg width="8" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
-                Pro
-              </div>
-            </div>
-          </div>
-          <!-- Credits bar -->
-          <template v-if="tokenBalance">
-            <div class="flex justify-between items-center text-[10px] text-[var(--color-ink-muted)] mb-1">
-              <span>Кредиты</span>
-              <span class="font-semibold font-mono text-[var(--color-ink-muted)]">{{ tokenBalance.remaining.toLocaleString() }}</span>
-            </div>
-            <div class="h-1 rounded-full bg-[var(--color-rule)] overflow-hidden mb-1">
-              <div :class="['h-full rounded-full transition-all', tokenBarCls]" :style="{ width: `${100 - tokenPercent}%` }" />
-            </div>
-            <div class="text-[10px] text-right text-[var(--color-ink-muted)]">
-              из {{ tokenBalance.total_granted.toLocaleString() }}
-            </div>
-          </template>
-        </div>
       </nav>
 
       <!-- ── Main content ───────────────────────────────────────────────── -->
@@ -538,10 +451,10 @@ const tokenBarCls = computed(() => {
         <!-- Chapter heading -->
         <template v-else-if="activeFileData">
           <div class="mb-5">
-            <h1 class="text-[18px] font-semibold tracking-tight text-[var(--color-ink)]">
+            <h1 class="font-display text-[18px] font-semibold tracking-tight text-[var(--color-ink)]">
               {{ fileDisplayName(activeFile) }}
             </h1>
-            <p class="text-[12px] font-mono text-[var(--color-ink-muted)] mt-1">
+            <p class="text-[13px] font-mono text-[var(--color-ink-muted)] mt-1">
               {{ activeFile }} · {{ activeFileData.word_count }} слов · {{ activeSections.length }} разделов
             </p>
           </div>
@@ -588,7 +501,7 @@ const tokenBarCls = computed(() => {
                 <span
                   v-for="badge in getBadges(heading.section_id)"
                   :key="badge.label"
-                  :class="['text-[10px] font-mono rounded px-1.5 py-0.5', badge.cls]"
+                  :class="['text-[11px] font-mono rounded px-1.5 py-0.5', badge.cls]"
                 >
                   {{ badge.label }}
                 </span>
@@ -640,7 +553,7 @@ const tokenBarCls = computed(() => {
 
                   <!-- Prompt box (shows when state=prompt or always for state 2) -->
                   <div :id="`prompt-${heading.section_id}`" v-if="cardStates[heading.section_id] === 'prompt'" class="bg-[#fafaf9] border border-[var(--color-rule)] rounded-lg px-3.5 py-3 mb-3">
-                    <label class="text-[10px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-[0.5px] block mb-2">Запрос к черновику</label>
+                    <label class="text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-[0.5px] block mb-2">Запрос к черновику</label>
                     <!-- Preset chips -->
                     <div class="flex flex-wrap gap-1.5 mb-2.5">
                       <button
@@ -665,7 +578,7 @@ const tokenBarCls = computed(() => {
                       />
                       <button
                         @click="runGenerate(heading.section_id)"
-                        class="flex-shrink-0 bg-[var(--color-accent)] text-white border-none rounded-md px-3.5 py-1.5 text-[12px] font-medium cursor-pointer hover:bg-[var(--color-accent-deep)] whitespace-nowrap"
+                        class="flex-shrink-0 bg-[var(--color-accent)] text-white border-none rounded-md px-3.5 py-1.5 text-[13px] font-medium cursor-pointer hover:bg-[var(--color-accent-deep)] whitespace-nowrap"
                       >
                         Написать черновик →
                       </button>
@@ -693,7 +606,7 @@ const tokenBarCls = computed(() => {
                   <!-- Primary: Close gaps -->
                   <RouterLink
                     :to="`/${projectId}/library`"
-                    class="inline-flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-md border-[var(--color-accent)] text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-deep)] transition-colors"
+                    class="inline-flex items-center gap-1.5 text-[13px] px-3 py-1.5 rounded-md border-[var(--color-accent)] text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-deep)] transition-colors"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
                     Закрыть пробелы
@@ -701,7 +614,7 @@ const tokenBarCls = computed(() => {
                   <!-- Secondary: Research -->
                   <RouterLink
                     :to="`/${projectId}/research/${heading.section_id}`"
-                    class="inline-flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-md border border-[var(--color-rule)] text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)] hover:text-[var(--color-ink)] transition-colors"
+                    class="inline-flex items-center gap-1.5 text-[13px] px-3 py-1.5 rounded-md border border-[var(--color-rule)] text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)] hover:text-[var(--color-ink)] transition-colors"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
                     Исследовать
@@ -709,11 +622,68 @@ const tokenBarCls = computed(() => {
                   <!-- Edit raw -->
                   <RouterLink
                     :to="`/${projectId}/edit/${activeFile}?section=${heading.section_id}`"
-                    class="inline-flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-md border border-[var(--color-rule)] text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)] hover:text-[var(--color-ink)] transition-colors"
+                    class="inline-flex items-center gap-1.5 text-[13px] px-3 py-1.5 rounded-md border border-[var(--color-rule)] text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)] hover:text-[var(--color-ink)] transition-colors"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     Редактировать
                   </RouterLink>
+                  <!-- Citation search toggle -->
+                  <button
+                    @click="toggleCiteSearch(heading.section_id)"
+                    :class="[
+                      'inline-flex items-center gap-1.5 text-[13px] px-3 py-1.5 rounded-md border transition-colors ml-auto',
+                      citeSearchOpen[heading.section_id]
+                        ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent-pale)]'
+                        : 'border-[var(--color-rule)] text-[var(--color-ink-muted)] hover:bg-[var(--color-rule-light)]'
+                    ]"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="M11 8v6M8 11h6"/></svg>
+                    Найти цитату
+                  </button>
+                </div>
+
+                <!-- Citation search panel -->
+                <div v-if="citeSearchOpen[heading.section_id]" class="mt-3 border border-[var(--color-accent)]/30 rounded-lg bg-[var(--color-accent-pale)]/10 overflow-hidden">
+                  <div class="px-3 py-2 border-b border-[var(--color-accent)]/20 flex items-center gap-2">
+                    <input
+                      :value="citeSearchQuery[heading.section_id] ?? ''"
+                      @input="setCiteQuery(heading.section_id, ($event.target as HTMLInputElement).value)"
+                      type="text"
+                      class="flex-1 text-[13px] border border-[var(--color-rule)] rounded-md px-2.5 py-1 bg-white focus:outline-none focus:border-[var(--color-accent)]"
+                      placeholder="Тезис или ключевое слово…"
+                      autocomplete="off"
+                    />
+                  </div>
+                  <!-- Preset chips -->
+                  <div class="flex flex-wrap gap-1.5 px-3 py-2 border-b border-[var(--color-accent)]/10">
+                    <button
+                      v-for="preset in CITE_PRESETS"
+                      :key="preset"
+                      @click="setCiteQuery(heading.section_id, preset)"
+                      class="text-[11px] px-2 py-0.5 rounded border border-[var(--color-accent)]/40 text-[var(--color-accent-deep)] bg-white hover:bg-[var(--color-accent-pale)] transition-colors"
+                    >{{ preset }}</button>
+                  </div>
+                  <!-- Results -->
+                  <div v-if="citeSearchLoading[heading.section_id]" class="px-3 py-3 text-center text-[12px] text-[var(--color-ink-muted)]">Ищу…</div>
+                  <div v-else-if="(citeSearchResults[heading.section_id] ?? []).length === 0 && (citeSearchQuery[heading.section_id] ?? '').length >= 2" class="px-3 py-3 text-center text-[12px] text-[var(--color-ink-muted)]">Не найдено</div>
+                  <div v-else class="divide-y divide-[var(--color-rule-light)] max-h-60 overflow-y-auto">
+                    <div
+                      v-for="r in citeSearchResults[heading.section_id] ?? []"
+                      :key="r.fragment_id"
+                      class="px-3 py-2 hover:bg-white/60"
+                    >
+                      <div class="flex items-center gap-1.5 mb-0.5">
+                        <span class="font-mono text-[11px] text-[var(--color-accent)] font-semibold">@{{ r.citekey }}</span>
+                        <span class="text-[11px] text-[var(--color-ink-muted)]">{{ r.year }}</span>
+                        <span class="text-[11px] text-[var(--color-ink-muted)] truncate flex-1">{{ r.title }}</span>
+                        <button
+                          @click="attachFragmentSource(heading.section_id, r.citekey)"
+                          class="flex-shrink-0 text-[11px] px-2 py-0.5 rounded bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-deep)] transition-colors"
+                        >+ прикрепить</button>
+                      </div>
+                      <p class="text-[12px] text-[var(--color-ink)] leading-relaxed line-clamp-2">{{ r.text }}</p>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -737,13 +707,13 @@ const tokenBarCls = computed(() => {
                 <!-- Before / after columns -->
                 <div class="grid grid-cols-2 divide-x divide-[var(--color-rule-light)]">
                   <div class="px-4 py-3 bg-[#fff8f8]">
-                    <div class="text-[10px] font-semibold uppercase tracking-[0.5px] text-[var(--color-err)] mb-2">Было</div>
+                    <div class="text-[11px] font-semibold uppercase tracking-[0.5px] text-[var(--color-err)] mb-2">Было</div>
                     <p class="text-[13px] text-[var(--color-ink-muted)] leading-relaxed italic">
                       {{ cardGenBefore[heading.section_id] || '(пустой раздел)' }}
                     </p>
                   </div>
                   <div class="px-4 py-3 bg-[#f8fff9]">
-                    <div class="text-[10px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ok)] mb-2">Станет</div>
+                    <div class="text-[11px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ok)] mb-2">Станет</div>
                     <div
                       v-html="renderWithCitekeys(cardGenResult[heading.section_id] ?? '')"
                       @click="handleCitekeyClick($event)"
@@ -755,21 +725,21 @@ const tokenBarCls = computed(() => {
                 <div class="flex items-center gap-2 px-4 py-2.5 border-t border-[var(--color-rule-light)] bg-white">
                   <button
                     @click="acceptDraft(heading.section_id)"
-                    class="inline-flex items-center gap-1.5 bg-[var(--color-ok)] text-white border-none rounded-md px-3.5 py-1.5 text-[12px] font-medium cursor-pointer hover:bg-green-700 transition-colors"
+                    class="inline-flex items-center gap-1.5 bg-[var(--color-ok)] text-white border-none rounded-md px-3.5 py-1.5 text-[13px] font-medium cursor-pointer hover:bg-green-700 transition-colors"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
                     Принять
                   </button>
                   <button
                     @click="rejectDraft(heading.section_id)"
-                    class="inline-flex items-center gap-1.5 bg-transparent text-[var(--color-err)] border border-red-200 rounded-md px-3.5 py-1.5 text-[12px] cursor-pointer hover:bg-[var(--color-err-bg)] transition-colors"
+                    class="inline-flex items-center gap-1.5 bg-transparent text-[var(--color-err)] border border-red-200 rounded-md px-3.5 py-1.5 text-[13px] cursor-pointer hover:bg-[var(--color-err-bg)] transition-colors"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                     Отклонить
                   </button>
                   <button
                     @click="editPrompt(heading.section_id)"
-                    class="inline-flex items-center gap-1.5 bg-transparent text-[var(--color-ink-muted)] border border-[var(--color-rule)] rounded-md px-3 py-1.5 text-[12px] cursor-pointer hover:bg-[var(--color-rule-light)] transition-colors"
+                    class="inline-flex items-center gap-1.5 bg-transparent text-[var(--color-ink-muted)] border border-[var(--color-rule)] rounded-md px-3 py-1.5 text-[13px] cursor-pointer hover:bg-[var(--color-rule-light)] transition-colors"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     Изменить запрос
@@ -785,7 +755,7 @@ const tokenBarCls = computed(() => {
       <!-- ── Right panel ──────────────────────────────────────────────── -->
       <aside class="w-64 flex-shrink-0 bg-[var(--color-paper-white)] border-l border-[var(--color-rule)] flex flex-col overflow-y-auto">
         <div class="px-4 pt-4 pb-2">
-          <div class="text-[10px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-3">Контекст раздела</div>
+          <div class="text-[11px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-3">Контекст раздела</div>
 
           <!-- Active section info -->
           <template v-if="activeSectionId">
@@ -797,7 +767,7 @@ const tokenBarCls = computed(() => {
             <!-- CTA: Close gaps -->
             <RouterLink
               :to="`/${projectId}/library`"
-              class="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-md bg-[var(--color-accent)] text-white text-[12px] font-medium mb-4 hover:bg-[var(--color-accent-deep)] transition-colors"
+              class="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-md bg-[var(--color-accent)] text-white text-[13px] font-medium mb-4 hover:bg-[var(--color-accent-deep)] transition-colors"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
               Закрыть пробелы
@@ -807,16 +777,16 @@ const tokenBarCls = computed(() => {
             <div class="grid grid-cols-2 gap-2 mb-4">
               <div class="bg-[var(--color-rule-light)] rounded-md px-2 py-2 text-center">
                 <div class="text-[18px] font-bold font-mono text-[var(--color-ink)]">{{ sectionCounts[activeSectionId] ?? 0 }}</div>
-                <div class="text-[10px] text-[var(--color-ink-muted)]">источников</div>
+                <div class="text-[11px] text-[var(--color-ink-muted)]">источников</div>
               </div>
               <div class="bg-[var(--color-rule-light)] rounded-md px-2 py-2 text-center">
                 <div class="text-[18px] font-bold font-mono text-[var(--color-ink)]">{{ panelSources.length }}</div>
-                <div class="text-[10px] text-[var(--color-ink-muted)]">прикреплено</div>
+                <div class="text-[11px] text-[var(--color-ink-muted)]">прикреплено</div>
               </div>
             </div>
 
             <!-- Source list -->
-            <div class="text-[10px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-2">
+            <div class="text-[11px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-2">
               Источники раздела
             </div>
             <div v-if="panelLoading" class="text-[12px] text-[var(--color-ink-muted)] py-1">Загрузка…</div>
@@ -837,12 +807,10 @@ const tokenBarCls = computed(() => {
           <!-- Nothing selected -->
           <div v-else class="text-center py-8 text-[var(--color-ink-muted)]">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" class="mx-auto mb-2 opacity-30"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-            <p class="text-[12px]">Выберите раздел</p>
+            <p class="text-[13px]">Выберите раздел</p>
           </div>
         </div>
       </aside>
-
-    </div>
 
     <!-- ── Source drawer ─────────────────────────────────────────────────── -->
     <SourceDrawer

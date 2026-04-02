@@ -23,14 +23,15 @@ Registration disabled on frontend. Use `scripts/create_user.sh`:
 # Set Klemma_ADMIN_EMAIL + Klemma_ADMIN_PASSWORD to auto-grant tokens
 ```
 
-### library.py (~220 lines)
+### library.py (~280 lines)
 Library CRUD endpoints — mounted with `prefix="/library"`. All require Bearer auth.
-- `GET /library/sources` → `SourceListResponse` — list all user sources with paper metadata
+- `GET /library/sources` → `SourceListResponse` — list all user sources with paper metadata; accepts `?q=` for full-text filter on title, authors, citekey
 - `GET /library/sources/{citekey}` → `SourceDetailResponse` — source details + fragments
+- `GET /library/fragments/search?q={text}&limit=N` → `FragmentSearchResponse` — text search over fragment_text for user's library; requires `q` ≥ 2 chars; returns up to `limit` (default 10, max 50) results ordered by length; uses `LocalPaperStore.search_fragments_for_user()` (JOIN fragments + papers + user_sources in library.db)
 - `POST /library/sources` → `SourceResponse` (201) — add source by metadata (DOI dedup); uses caller-supplied `citekey` as primary key (no UUID generated)
 - `DELETE /library/sources/{citekey}` → 204 — remove from user library (keeps global corpus)
 - `POST /library/upload` → `UploadResponse` (201) — upload PDF with content-addressable dedup (`pdf_hash`); citekey derived from filename; **if same user re-uploads the same PDF, returns existing citekey unchanged** (citekey stability guarantee — issue #268)
-- Schemas: `SourceResponse`, `SourceListResponse`, `SourceCreateRequest`, `FragmentResponse`, `SourceDetailResponse`, `UploadResponse`
+- Schemas: `SourceResponse`, `SourceListResponse`, `SourceCreateRequest`, `FragmentResponse`, `SourceDetailResponse`, `UploadResponse`, `FragmentSearchResult`, `FragmentSearchResponse`
 
 **Citekey stability guarantee** (issue #268): citekeys must remain stable across push/pull round-trips because `draft/*.md` files embed `[@citekey]` references and section assignments are keyed by citekey.
 - `POST /library/sources` — uses caller-provided `citekey` verbatim. ✅
@@ -48,11 +49,23 @@ Project CRUD + coverage + section assignment endpoints — mounted with `prefix=
 - `GET /projects/coverage` → `CoverageStatsResponse` — total sources, per-section/chapter counts
 - `GET /projects/sections/{section}/sources` → `SectionSourcesResponse` — citekeys assigned to a section
 - `POST /projects/sections/assign` → assign source to sections (validates source exists in library)
+- `DELETE /projects/sections/{section}/sources/{citekey}` → 204 — remove a specific section assignment; returns 404 if assignment not found; scoped by user_id
 - `GET /projects/sources/{citekey}/sections` → sections assigned to a source
 - `GET /projects/{project_id}/research` → list research reports for a project
 - `GET /projects/{project_id}/research/{section:path}` → get research report for a section
 - Schemas: `ProjectResponse`, `ProjectListResponse`, `ProjectCreateRequest`, `ProjectRenameRequest`, `OutlineSection`, `OutlineUpdateRequest`, `OutlineGenerateRequest`, `CoverageStatsResponse`, `SectionSourcesResponse`, `AssignSectionRequest`
 - Block draft endpoints were in `blocks.py` (removed in #260 item 2 — BlockView migrated to `drafts.py`)
+
+### drafts.py (~210 lines)
+Draft file management — mounted under `prefix="/projects"`. All require Bearer auth.
+Files stored at `KLEMMA_DATA_DIR/drafts/{project_id}/draft/` (ADR-016).
+- `GET /projects/{id}/drafts` → `FileListResponse` — list `.md` files with parsed headings + word count
+- `GET /projects/{id}/drafts/{filename}` → `FileContentResponse` — full content + headings
+- `PUT /projects/{id}/drafts/{filename}` → `FileContentResponse` — save full file (git commit)
+- `POST /projects/{id}/drafts/init` → `FileContentResponse` (201) — create file from project outline; idempotent
+- `DELETE /projects/{id}/drafts/{filename}` → 204 — git rm + commit
+- `PUT /projects/{id}/drafts/{filename}/sections/{section_id}` → `SectionUpsertResponse` — upsert one section body; used by klemma-cli push
+- `POST /projects/{id}/drafts/migrate` → `MigrateResponse` — split monolithic `dissertation.md` into ADR-016 chapter files (`intro.md`, `chapter_N.md`, `conclusion.md`); idempotent (skips existing files); deletes source when ≥1 chapter written; accepts optional `?source_filename=` query param
 
 ### process.py (~120 lines)
 Process endpoints — mounted with `prefix="/process"`. All require Bearer auth.

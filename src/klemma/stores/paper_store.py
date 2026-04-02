@@ -476,6 +476,50 @@ class LocalPaperStore:
                 (fragment_id, model, blob, len(vector)),
             )
 
+    # ---------------------------------------------------------------- #
+    # Fragment search (SaaS — searches across a user's library)         #
+    # ---------------------------------------------------------------- #
+
+    def search_fragments_for_user(
+        self,
+        user_id: str,
+        query: str,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Full-text search over fragments belonging to a user's library.
+
+        Joins ``fragments`` → ``papers`` → ``user_sources`` (all in the same
+        library.db).  Filters by ``user_id`` and ``fragment_text LIKE %query%``.
+        Returns up to *limit* rows ordered by fragment length ascending
+        (shorter fragments tend to be more focused / higher quality).
+        """
+        like = f"%{query}%"
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT f.fragment_id, f.fragment_text, f.fragment_type,
+                          us.citekey, p.title, p.authors, p.year
+                   FROM fragments f
+                   JOIN papers p ON f.paper_id = p.paper_id
+                   JOIN user_sources us ON f.paper_id = us.paper_id
+                   WHERE us.user_id = ?
+                     AND f.fragment_text LIKE ?
+                   ORDER BY LENGTH(f.fragment_text) ASC
+                   LIMIT ?""",
+                (user_id, like, limit),
+            ).fetchall()
+        return [
+            {
+                "fragment_id": row["fragment_id"],
+                "text": row["fragment_text"],
+                "fragment_type": row["fragment_type"] or "key_idea",
+                "citekey": row["citekey"],
+                "title": row["title"] or "",
+                "authors": row["authors"] or "",
+                "year": row["year"],
+            }
+            for row in rows
+        ]
+
 
 # ------------------------------------------------------------------ #
 # Helpers                                                             #

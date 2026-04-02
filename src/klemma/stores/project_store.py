@@ -220,6 +220,31 @@ class LocalProjectStore:
     # Additional helpers                                                  #
     # ------------------------------------------------------------------ #
 
+    def remove_source_from_section(
+        self, citekey: str, section: str, user_id: Optional[str] = None
+    ) -> bool:
+        """Remove a single section assignment for *citekey*.
+
+        Optionally checks *user_id* ownership via ``project_sources``.
+        Returns ``True`` if a row was deleted, ``False`` if nothing matched.
+        """
+        with self._conn() as conn:
+            if user_id is not None:
+                cursor = conn.execute(
+                    """DELETE FROM project_source_sections
+                       WHERE citekey = ? AND section = ?
+                         AND citekey IN (
+                             SELECT citekey FROM project_sources WHERE user_id = ?
+                         )""",
+                    (citekey, section, user_id),
+                )
+            else:
+                cursor = conn.execute(
+                    "DELETE FROM project_source_sections WHERE citekey = ? AND section = ?",
+                    (citekey, section),
+                )
+        return cursor.rowcount > 0
+
     def get_source_sections(
         self, citekey: str, user_id: Optional[str] = None
     ) -> list[str]:

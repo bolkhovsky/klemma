@@ -104,12 +104,32 @@ export const auth = {
 
 // Library
 export const library = {
-  list: (projectId?: string) => {
-    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
+  list: (projectId?: string, q?: string) => {
+    const params = new URLSearchParams()
+    if (projectId) params.set('project_id', projectId)
+    if (q) params.set('q', q)
+    const qs = params.size ? `?${params}` : ''
     return request<{ sources: any[]; total: number }>(`/library/sources${qs}`)
   },
 
   get: (citekey: string) => request<any>(`/library/sources/${citekey}`),
+
+  fragmentSearch: (q: string, limit = 10) => {
+    const params = new URLSearchParams({ q, limit: String(limit) })
+    return request<{
+      results: {
+        fragment_id: string
+        citekey: string
+        title: string
+        authors: string
+        year: number | null
+        text: string
+        fragment_type: string
+      }[]
+      total: number
+      query: string
+    }>(`/library/fragments/search?${params}`)
+  },
 
   add: (data: { citekey: string; title: string; authors?: string; year?: number; doi?: string }) =>
     request<any>('/library/sources', { method: 'POST', body: JSON.stringify(data) }),
@@ -216,6 +236,11 @@ export const projects = {
 
   sourceSections: (citekey: string) =>
     request<{ citekey: string; sections: string[] }>(`/projects/sources/${citekey}/sections`),
+
+  detachSection: (citekey: string, section: string) =>
+    request<void>(`/projects/sections/${encodeURIComponent(section)}/sources/${encodeURIComponent(citekey)}`, {
+      method: 'DELETE',
+    }),
 }
 
 // Process

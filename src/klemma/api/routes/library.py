@@ -84,6 +84,26 @@ class SourceDetailResponse(SourceResponse):
     fragments: list[FragmentResponse] = []
 
 
+class FragmentSearchResult(BaseModel):
+    """A single fragment result from semantic/text search."""
+
+    fragment_id: str
+    citekey: str
+    title: str
+    authors: str = ""
+    year: int | None = None
+    text: str
+    fragment_type: str = "key_idea"
+
+
+class FragmentSearchResponse(BaseModel):
+    """Response from GET /library/fragments/search."""
+
+    results: list[FragmentSearchResult]
+    total: int
+    query: str
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -93,16 +113,29 @@ class SourceDetailResponse(SourceResponse):
 async def list_sources(
     user: UserRecord = Depends(get_current_user),
     project_id: str | None = Query(default=None, description="Filter by project"),
+    q: str | None = Query(default=None, description="Full-text search on title, authors, citekey"),
 ) -> SourceListResponse:
-    """List sources in the authenticated user's library."""
+    """List sources in the authenticated user's library.
+
+    Optional ``q`` filters by full-text match on title, authors, or citekey.
+    """
     library = get_user_library()
     paper_store = get_paper_store()
     project_store = get_project_store()
 
     all_sources = library.get_all_sources(project_id=project_id, user_id=user.user_id)
     results: list[SourceResponse] = []
+    q_lower = q.lower().strip() if q else None
     for src in all_sources:
         paper = paper_store.get_paper_by_id(src.paper_id)
+        title = paper.title if paper else ""
+        authors = paper.authors if paper else ""
+        if q_lower and not (
+            q_lower in title.lower()
+            or q_lower in authors.lower()
+            or q_lower in src.citekey.lower()
+        ):
+            continue
         project_sections = project_store.get_source_sections(src.citekey, user_id=user.user_id)
         sections = project_sections if project_sections else src.sections
         results.append(
@@ -110,8 +143,8 @@ async def list_sources(
                 citekey=src.citekey,
                 paper_id=src.paper_id,
                 status=src.status,
-                title=paper.title if paper else "",
-                authors=paper.authors if paper else "",
+                title=title,
+                authors=authors,
                 year=paper.year if paper else None,
                 doi=paper.doi if paper else None,
                 abstract=paper.abstract if paper else "",
@@ -121,6 +154,40 @@ async def list_sources(
         )
 
     return SourceListResponse(sources=results, total=len(results))
+
+
+@router.get("/fragments/search", response_model=FragmentSearchResponse)
+async def search_fragments(
+    q: str = Query(..., min_length=2, description="Search query (minimum 2 characters)"),
+    limit: int = Query(default=10, ge=1, le=50, description="Maximum results to return"),
+    user: UserRecord = Depends(get_current_user),
+) -> FragmentSearchResponse:
+    """Search citation fragments across the user's library by text.
+
+    Returns up to *limit* fragments whose text contains the query string,
+    ranked by length (shorter = more focused).  Only fragments from papers
+    in the authenticated user's library are returned.
+    """
+    from klemma.stores.paper_store import LocalPaperStore
+
+    paper_store = get_paper_store()
+    if not isinstance(paper_store, LocalPaperStore):
+        return FragmentSearchResponse(results=[], total=0, query=q)
+
+    raw = paper_store.search_fragments_for_user(user.user_id, q, limit)
+    results = [
+        FragmentSearchResult(
+            fragment_id=r["fragment_id"],
+            citekey=r["citekey"],
+            title=r["title"],
+            authors=r["authors"],
+            year=r["year"],
+            text=r["text"],
+            fragment_type=r["fragment_type"],
+        )
+        for r in raw
+    ]
+    return FragmentSearchResponse(results=results, total=len(results), query=q)
 
 
 @router.get("/sources/{citekey}", response_model=SourceDetailResponse)

@@ -117,9 +117,12 @@ async function attachItem(item: LibraryItem) {
   }
 }
 
-function detachItem(citekey: string) {
+async function detachItem(citekey: string) {
   attachedCitekeys.value = attachedCitekeys.value.filter(k => k !== citekey)
   emit('detach', citekey)
+  if (!props.isDemoMode && props.sectionId) {
+    try { await apiProjects.detachSection(citekey, props.sectionId) } catch { /* non-fatal */ }
+  }
 }
 </script>
 
