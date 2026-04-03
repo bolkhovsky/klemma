@@ -68,30 +68,11 @@ const router = createRouter({
       component: () => import('../views/SourceView.vue'),
       meta: { requiresAuth: true },
     },
-    {
-      path: '/:projectId/coverage',
-      name: 'coverage',
-      component: () => import('../views/CoverageView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/:projectId/outline',
-      name: 'outline',
-      component: () => import('../views/OutlineView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/:projectId/research',
-      name: 'research',
-      component: () => import('../views/ResearchView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/:projectId/research/:section',
-      name: 'research-report',
-      component: () => import('../views/ReportView.vue'),
-      meta: { requiresAuth: true },
-    },
+    // Removed views redirect to /write
+    { path: '/:projectId/coverage', redirect: (to) => `/${to.params.projectId}/write` },
+    { path: '/:projectId/outline', redirect: (to) => `/${to.params.projectId}/write` },
+    { path: '/:projectId/research', redirect: (to) => `/${to.params.projectId}/write` },
+    { path: '/:projectId/research/:section', redirect: (to) => `/${to.params.projectId}/write` },
     {
       path: '/:projectId/write',
       name: 'write',

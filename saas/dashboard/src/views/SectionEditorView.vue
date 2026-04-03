@@ -21,6 +21,7 @@ const loadError = ref('')
 const draftFiles = ref<DraftFile[]>([])
 const sectionCounts = ref<Record<string, number>>({})  // section_id → source count
 const totalSources = ref(0)
+const gapsList = ref<{ title: string; cited_by_count: number }[]>([])
 
 // ── Active chapter (sidebar nav) ────────────────────────────────────────────
 const activeFile = ref<string>('')          // e.g. "chapter_1.md"
@@ -293,7 +294,8 @@ async function runGenerate(sectionId: string) {
   cardGenBefore.value[sectionId] = currentSectionText(sectionId)
 
   try {
-    const resp = await writeApi.draft(sectionId, projectId.value)
+    const prompt = cardPromptText.value[sectionId] ?? ''
+    const resp = await writeApi.draft(sectionId, projectId.value, prompt)
     cardGenJobId.value[sectionId] = resp.job_id
     startPoll(sectionId)
   } catch (e: any) {
@@ -397,9 +399,10 @@ async function loadAll() {
   loading.value = true
   loadError.value = ''
   try {
-    const [filesData, coverageData] = await Promise.allSettled([
+    const [filesData, coverageData, gapsData] = await Promise.allSettled([
       drafts.list(projectId.value),
       apiProjects.coverage(),
+      apiLibrary.gaps(),
     ])
 
     if (filesData.status === 'fulfilled') {
@@ -408,6 +411,9 @@ async function loadAll() {
     if (coverageData.status === 'fulfilled') {
       sectionCounts.value = coverageData.value.sections
       totalSources.value = coverageData.value.total_sources
+    }
+    if (gapsData.status === 'fulfilled') {
+      gapsList.value = gapsData.value.gaps
     }
   } catch (e: any) {
     loadError.value = e.message ?? 'Ошибка загрузки'
@@ -424,13 +430,12 @@ async function loadAll() {
 async function handleQuerySection() {
   const sec = route.query.section as string | undefined
   const file = route.query.file as string | undefined
-  if (file && draftFiles.value.some(f => f.name === file)) {
+  if (file) {
     activeFile.value = file
-    activeSectionId.value = null
+    if (!sec) activeSectionId.value = null
   }
   if (sec) {
     if (!file) {
-      // Infer file from section id
       const chapter = sec.split('.')[0]
       if (!chapter || chapter === 'intro' || chapter === '0') activeFile.value = 'intro.md'
       else if (chapter === 'conclusion') activeFile.value = 'conclusion.md'
@@ -867,6 +872,22 @@ onUnmounted(() => {
               </div>
             </div>
           </template>
+        </div>
+
+        <!-- Reference gaps -->
+        <div v-if="gapsList.length > 0" class="border-b border-[var(--color-rule)] px-4 py-3">
+          <div class="text-[11px] font-semibold uppercase tracking-[0.5px] text-[var(--color-warn)] mb-2">Пробелы · {{ gapsList.length }}</div>
+          <div
+            v-for="(gap, i) in gapsList.slice(0, 5)"
+            :key="i"
+            class="text-[12px] leading-snug mb-1.5 text-[var(--color-ink-muted)]"
+          >
+            <span class="text-[var(--color-ink)]">{{ gap.title }}</span>
+            <span v-if="gap.cited_by_count > 1" class="font-mono text-[10px] ml-1 text-[var(--color-warn)]">×{{ gap.cited_by_count }}</span>
+          </div>
+          <div v-if="gapsList.length > 5" class="text-[11px] text-[var(--color-ink-muted)] italic">
+            +{{ gapsList.length - 5 }} ещё
+          </div>
         </div>
 
         <!-- Chapter stats -->

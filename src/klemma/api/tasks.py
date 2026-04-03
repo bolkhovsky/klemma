@@ -505,7 +505,7 @@ def generate_research(section: str, project_id: str, data_dir: str, user_id: str
         return {"status": "error", "detail": f"Research failed: {type(exc).__name__}: {exc}"}
 
 
-def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: str = "", word_target: int = 0) -> dict:
+def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: str = "", word_target: int = 0, instruction: str = "") -> dict:
     """Generate a section draft using drafter.py in headless SaaS mode.
 
     Loads fragments + research report from three-tier stores, calls
@@ -620,6 +620,7 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
             valid_citekeys=valid_citekeys or None,
             section_title=section_title,
             outline_context=outline_context,
+            custom_prompt=instruction,
         )
 
         if not result.text:
