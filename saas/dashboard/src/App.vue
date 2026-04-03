@@ -174,9 +174,7 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
           v-if="effectiveProjectId"
           :projectId="effectiveProjectId"
           :activeFile="null"
-          @select="(f: string) => route.name === 'write'
-            ? router.push({ name: 'write', params: { projectId: effectiveProjectId }, query: { ...route.query, file: f } })
-            : router.push(`/${effectiveProjectId}/edit/${f}`)"
+          @select="(f: string) => router.push({ name: 'write', params: { projectId: effectiveProjectId }, query: { file: f } })"
         />
         <div v-else class="px-3.5 py-3 text-[12px] italic" style="color: var(--color-ink-muted, #6b6b8a)">
           <div v-if="projectStore.loading">Загрузка…</div>

@@ -424,10 +424,12 @@ async function loadAll() {
 async function handleQuerySection() {
   const sec = route.query.section as string | undefined
   const file = route.query.file as string | undefined
+  if (file && draftFiles.value.some(f => f.name === file)) {
+    activeFile.value = file
+    activeSectionId.value = null
+  }
   if (sec) {
-    if (file && draftFiles.value.some(f => f.name === file)) {
-      activeFile.value = file
-    } else {
+    if (!file) {
       // Infer file from section id
       const chapter = sec.split('.')[0]
       if (!chapter || chapter === 'intro' || chapter === '0') activeFile.value = 'intro.md'
@@ -443,9 +445,8 @@ async function handleQuerySection() {
 
 onMounted(loadAll)
 
-// Re-scroll when navigating to a different ?section= without unmounting
-watch(() => route.query.section, async (sec) => {
-  if (sec) await handleQuerySection()
+watch(() => [route.query.section, route.query.file], async () => {
+  await handleQuerySection()
 })
 
 onUnmounted(() => {
