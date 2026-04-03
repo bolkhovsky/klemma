@@ -298,6 +298,18 @@ class SectionUpsertResponse(BaseModel):
     commit: str
 
 
+class MigrateChapterResult(BaseModel):
+    filename: str
+    word_count: int
+    skipped: bool  # True if file already existed
+
+
+class MigrateResponse(BaseModel):
+    source_file: str
+    chapters: list[MigrateChapterResult]
+    deleted_source: bool
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -416,6 +428,143 @@ def init_draft_file(
     headings = [HeadingInfo(**h) for h in parse_headings(content)]
     return FileContentResponse(name=filename, content=content,
                                headings=headings, word_count=len(content.split()))
+
+
+def _heading_to_filename(heading: str) -> str:
+    """Map a ## heading text to an ADR-016 canonical filename.
+
+    Priority order:
+      1. Explicit intro keywords → intro.md
+      2. Explicit conclusion keywords → conclusion.md
+      3. Leading section number "1 Title" or "1. Title" → chapter_1.md
+      4. "Глава N" / "Chapter N" pattern → chapter_N.md
+      5. Fallback: slug → <slug>.md
+    """
+    lower = heading.lower()
+
+    if re.search(r"введени|вступлени|\bintro\b|introduction", lower):
+        return "intro.md"
+    if re.search(r"заключени|conclusion|выводы|итог", lower):
+        return "conclusion.md"
+
+    # "1 Title" or "1. Title" (outline-generated format)
+    m = re.match(r"^(\d+)[.\s]", heading)
+    if m:
+        return f"chapter_{m.group(1)}.md"
+
+    # "Глава 1" / "Chapter 1"
+    m = re.search(r"(?:глав[ауы]|chapter)\s+(\d+)", lower)
+    if m:
+        return f"chapter_{m.group(1)}.md"
+
+    slug = re.sub(r"[^\w\s-]", "", lower)
+    slug = re.sub(r"[\s_]+", "-", slug).strip("-")
+    return f"{slug}.md"
+
+
+def _split_dissertation(content: str) -> list[tuple[str, str]]:
+    """Split monolithic file by ## headings.
+
+    Returns list of (canonical_filename, chapter_content) in document order.
+    Each chunk includes its own ## heading as the first line.
+    """
+    lines = content.splitlines(keepends=True)
+
+    # Locate all level-2 (##) headings
+    splits: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        m = re.match(r"^## (.+)$", line.rstrip())
+        if m:
+            splits.append((i, m.group(1).strip()))
+
+    if not splits:
+        return []
+
+    chunks: list[tuple[str, str]] = []
+    for j, (start_line, heading_text) in enumerate(splits):
+        end_line = splits[j + 1][0] if j + 1 < len(splits) else len(lines)
+        chunk = "".join(lines[start_line:end_line]).strip()
+        filename = _heading_to_filename(heading_text)
+        chunks.append((filename, chunk))
+
+    return chunks
+
+
+@router.post("/{project_id}/drafts/migrate", response_model=MigrateResponse)
+def migrate_dissertation(
+    project_id: str,
+    source_filename: str = "dissertation.md",
+    user: UserRecord = Depends(get_current_user),
+) -> MigrateResponse:
+    """Split a monolithic draft file into ADR-016 chapter files.
+
+    Reads ``source_filename`` (default ``dissertation.md``), splits it by
+    ``##`` headings, writes each chunk to its canonical file
+    (``intro.md``, ``chapter_N.md``, ``conclusion.md``), then removes the
+    source file.  Idempotent: chapters that already exist on disk are skipped
+    (their content is NOT overwritten — merge manually if needed).
+    """
+    _assert_project_owner(project_id, user)
+
+    draft_dir = _drafts_dir(project_id)
+    project_dir = _project_dir(project_id)
+    source_path = draft_dir / source_filename
+    _validate_filename(source_filename)
+
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail=f"{source_filename} not found")
+
+    content = source_path.read_text(encoding="utf-8")
+    chunks = _split_dissertation(content)
+
+    if not chunks:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{source_filename} has no ## headings — cannot split",
+        )
+
+    _ensure_git_repo(project_dir)
+    draft_dir.mkdir(parents=True, exist_ok=True)
+
+    results: list[MigrateChapterResult] = []
+    for filename, chunk_content in chunks:
+        _validate_filename(filename)
+        target = draft_dir / filename
+        if target.exists():
+            results.append(MigrateChapterResult(
+                filename=filename,
+                word_count=len(chunk_content.split()),
+                skipped=True,
+            ))
+            continue
+        target.write_text(chunk_content, encoding="utf-8")
+        try:
+            _git_commit(project_dir, target, f"migrate: {filename}")
+        except Exception as exc:
+            logger.warning("git commit failed for %s: %s", filename, exc)
+        results.append(MigrateChapterResult(
+            filename=filename,
+            word_count=len(chunk_content.split()),
+            skipped=False,
+        ))
+
+    # Remove source only if at least one chapter was written (not all skipped)
+    deleted = False
+    if any(not r.skipped for r in results):
+        try:
+            _git_remove(project_dir, source_path, f"migrate: remove {source_filename}")
+            deleted = True
+        except Exception as exc:
+            logger.warning("git remove failed for %s: %s", source_filename, exc)
+            if source_path.exists():
+                source_path.unlink()
+                deleted = True
+
+    return MigrateResponse(
+        source_file=source_filename,
+        chapters=results,
+        deleted_source=deleted,
+    )
 
 
 @router.delete("/{project_id}/drafts/{filename}", status_code=status.HTTP_204_NO_CONTENT)

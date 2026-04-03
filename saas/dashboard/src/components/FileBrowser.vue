@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { drafts } from '@/api/client'
 import type { DraftFile } from '@/api/client'
 
@@ -38,18 +38,20 @@ const sortedFiles = computed(() =>
   [...files.value].sort((a, b) => fileOrder(a.name) - fileOrder(b.name))
 )
 
-onMounted(async () => {
-  if (!props.projectId) return
+async function loadFiles(pid: string) {
+  if (!pid) return
   loading.value = true
   try {
-    const data = await drafts.list(props.projectId)
+    const data = await drafts.list(pid)
     files.value = data.files
   } catch {
     files.value = []
   } finally {
     loading.value = false
   }
-})
+}
+
+watch(() => props.projectId, loadFiles, { immediate: true })
 </script>
 
 <template>

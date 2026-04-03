@@ -25,39 +25,18 @@ const router = createRouter({
       component: () => import('../views/GlobalLibraryView.vue'),
       meta: { requiresAuth: true },
     },
-    // Demo routes (no auth, for UX prototyping)
-    {
-      path: '/demo/feed',
-      name: 'demo-feed',
-      component: () => import('../views/FeedView.vue'),
-    },
-    {
-      path: '/demo/feed/:insightId',
-      name: 'demo-insight',
-      component: () => import('../views/InsightView.vue'),
-    },
-    {
-      path: '/demo/map',
-      name: 'demo-map',
-      component: () => import('../views/MapView.vue'),
-    },
-    {
-      path: '/demo/map/:sectionId/:blockId',
-      name: 'demo-block',
-      component: () => import('../views/BlockView.vue'),
-    },
     // Project-scoped routes
     {
       path: '/:projectId/map',
-      name: 'map',
-      component: () => import('../views/MapView.vue'),
-      meta: { requiresAuth: true },
+      redirect: (to) => `/${to.params.projectId}/write`,
     },
     {
-      path: '/:projectId/map/:sectionId/:blockId',
-      name: 'block',
-      component: () => import('../views/BlockView.vue'),
-      meta: { requiresAuth: true },
+      path: '/:projectId/dashboard',
+      redirect: (to) => `/${to.params.projectId}/write`,
+    },
+    {
+      path: '/:projectId/draft',
+      redirect: (to) => `/${to.params.projectId}/write`,
     },
     {
       path: '/:projectId/feed',
@@ -76,10 +55,6 @@ const router = createRouter({
       name: 'health',
       component: () => import('../views/HealthView.vue'),
       meta: { requiresAuth: true },
-    },
-    {
-      path: '/:projectId/dashboard',
-      redirect: (to) => `/${to.params.projectId}/map`,
     },
     {
       path: '/:projectId/library',
@@ -118,25 +93,9 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
-      path: '/:projectId/draft',
-      redirect: (to) => `/${to.params.projectId}/map`,
-    },
-    {
       path: '/:projectId/write',
       name: 'write',
       component: () => import('../views/SectionEditorView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/:projectId/edit',
-      name: 'edit',
-      component: () => import('../views/FileEditorView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/:projectId/edit/:filename',
-      name: 'edit-file',
-      component: () => import('../views/FileEditorView.vue'),
       meta: { requiresAuth: true },
     },
   ],
@@ -145,7 +104,6 @@ const router = createRouter({
 router.beforeEach((to) => {
   const token = localStorage.getItem('access_token')
   if (to.meta.requiresAuth && !token) return { name: 'login' }
-  // Авторизованным пользователям на /login или /register — в библиотеку
   if ((to.name === 'login' || to.name === 'register') && token) return { path: '/library' }
 })
 
