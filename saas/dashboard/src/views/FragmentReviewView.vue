@@ -286,7 +286,7 @@ onUnmounted(stopPolling)
     <div class="max-w-[780px] mx-auto py-6 px-5">
       <!-- Breadcrumb -->
       <div class="mb-5">
-        <router-link :to="`/${projectId}/library`" class="text-[13px] text-[#0d7377] no-underline hover:underline">&larr; Библиотека</router-link>
+        <router-link :to="`/${projectId}/library`" class="text-sm text-[#0d7377] no-underline hover:underline">&larr; Библиотека</router-link>
       </div>
       <!-- Loading -->
       <div v-if="loading" class="flex items-center justify-center py-24">
@@ -299,7 +299,7 @@ onUnmounted(stopPolling)
           <div class="flex items-start justify-between gap-3">
             <div>
               <h1 class="text-lg font-semibold mb-1">{{ sourceTitle || citekey }}</h1>
-              <div class="text-[13px] text-[#6b6b8a]">
+              <div class="text-sm text-[#6b6b8a]">
                 {{ sourceDisplay }}
                 <template v-if="totalCount > 0"> &middot; {{ totalCount }} фрагментов</template>
               </div>
@@ -337,7 +337,7 @@ onUnmounted(stopPolling)
           <div class="flex items-center gap-3">
             <div class="h-4 w-4 animate-spin rounded-full border-2 border-[#0d7377] border-t-transparent"></div>
             <span class="text-sm font-medium text-[#065a5e]">Извлекаем фрагменты из PDF...</span>
-            <span class="text-xs text-[#6b6b8a]">{{ jobStatus }}</span>
+            <span class="text-[13px] text-[#6b6b8a]">{{ jobStatus }}</span>
           </div>
         </div>
 
@@ -377,7 +377,7 @@ onUnmounted(stopPolling)
               :style="{ width: stats.pct + '%' }"
             />
           </div>
-          <div class="flex justify-between text-xs text-[#6b6b8a] mb-5">
+          <div class="flex justify-between text-[13px] text-[#6b6b8a] mb-5">
             <span>Отобрано: {{ stats.curated }} из {{ totalCount }}</span>
             <span>
               <span class="text-[#2d6a4f] font-semibold">{{ stats.accepted }}</span> принято &middot;
@@ -390,7 +390,7 @@ onUnmounted(stopPolling)
             <button
               v-for="filter in ['all', 'background', 'method', 'result_comparison', 'extends', 'contrasts', 'uses_data']"
               :key="filter"
-              class="px-3 py-1 rounded-md text-xs font-medium border cursor-pointer transition-all"
+              class="px-3 py-1 rounded-md text-[13px] font-medium border cursor-pointer transition-all"
               :class="activeFilter === filter
                 ? 'bg-[#0d7377] text-white border-[#0d7377]'
                 : 'bg-white text-[#6b6b8a] border-[#e8e5df] hover:border-[#ccc] hover:text-[#1a1a2e]'"
@@ -414,12 +414,12 @@ onUnmounted(stopPolling)
               <div class="flex items-center gap-1.5 flex-wrap mb-3">
                 <span
                   v-if="f.citation_intent"
-                  class="text-[11px] font-medium px-2 py-0.5 rounded"
+                  class="text-[12px] font-medium px-2 py-0.5 rounded"
                   :class="intentColor[f.citation_intent] || 'bg-gray-100 text-gray-600'"
                 >{{ intentLabel[f.citation_intent] || f.citation_intent }}</span>
-                <span v-if="f.page" class="font-mono text-[11px] text-[#6b6b8a]">стр. {{ f.page }}</span>
+                <span v-if="f.page" class="font-mono text-[12px] text-[#6b6b8a]">стр. {{ f.page }}</span>
                 <select
-                  class="text-[11px] text-[#065a5e] bg-[#e6f3f3] border border-[#0d7377] rounded py-0.5 pl-1.5 pr-5 cursor-pointer appearance-none max-w-[220px] truncate"
+                  class="text-[13px] text-[#065a5e] bg-[#e6f3f3] border border-[#0d7377] rounded py-1 pl-2 pr-6 cursor-pointer appearance-none max-w-[220px] truncate"
                   :value="assignedSections[f.fragment_id] || ''"
                   @change="setSection(f.fragment_id, ($event.target as HTMLSelectElement).value)"
                   :style="selectArrowStyle"
@@ -432,7 +432,7 @@ onUnmounted(stopPolling)
               <!-- Note area -->
               <div v-if="openNotes[f.fragment_id]" class="mt-2">
                 <template v-if="notes[f.fragment_id] && !editingNote[f.fragment_id]">
-                  <div class="text-xs text-[#6b6b8a] italic leading-6">
+                  <div class="text-[13px] text-[#6b6b8a] italic leading-6">
                     {{ notes[f.fragment_id] }}
                     <button class="text-[#0d7377] not-italic cursor-pointer ml-1 border-none bg-transparent" @click="startEditNote(f.fragment_id)">(изм.)</button>
                   </div>
@@ -448,7 +448,7 @@ onUnmounted(stopPolling)
               </div>
               <button
                 v-if="!openNotes[f.fragment_id]"
-                class="text-[11px] text-[#0d7377] cursor-pointer border-none bg-transparent p-0 hover:underline"
+                class="text-[13px] text-[#0d7377] cursor-pointer border-none bg-transparent p-0 hover:underline"
                 @click="toggleNote(f.fragment_id)"
               >добавить заметку &rarr;</button>
             </div>
@@ -457,13 +457,13 @@ onUnmounted(stopPolling)
             <div class="flex gap-2 px-4 py-3 border-t border-[#f0ede8]">
               <template v-if="verdicts[f.fragment_id]">
                 <div
-                  class="text-xs font-semibold flex items-center gap-1 flex-1"
+                  class="text-[13px] font-semibold flex items-center gap-1 flex-1"
                   :class="verdicts[f.fragment_id] === 'accepted' ? 'text-[#2d6a4f]' : 'text-[#c62828]'"
                 >
                   {{ verdicts[f.fragment_id] === 'accepted' ? '✓ Принято' : '✗ Отклонено' }}
                 </div>
                 <button
-                  class="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs cursor-pointer border border-[#e8e5df] bg-white text-[#6b6b8a] hover:bg-[#f0ede8]"
+                  class="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-[13px] cursor-pointer border border-[#e8e5df] bg-white text-[#6b6b8a] hover:bg-[#f0ede8]"
                   @click="undo(f.fragment_id)"
                 >Отменить</button>
               </template>

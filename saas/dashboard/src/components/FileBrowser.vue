@@ -58,16 +58,16 @@ watch(() => props.projectId, loadFiles, { immediate: true })
   <div class="flex flex-col h-full">
     <!-- Header -->
     <div class="px-3 pt-3 pb-2 border-b border-[var(--color-rule-light)] flex-shrink-0">
-      <p class="text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Файлы</p>
+      <p class="text-[13px] font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Файлы</p>
     </div>
 
     <!-- Loading -->
-    <div v-if="loading" class="px-3 py-4 text-xs text-[var(--color-ink-muted)]">Загрузка…</div>
+    <div v-if="loading" class="px-3 py-4 text-[13px] text-[var(--color-ink-muted)]">Загрузка…</div>
 
     <!-- Empty state -->
     <div
       v-else-if="files.length === 0"
-      class="px-3 py-4 text-xs text-[var(--color-ink-muted)] italic leading-relaxed"
+      class="px-3 py-4 text-[13px] text-[var(--color-ink-muted)] italic leading-relaxed"
     >
       Нет файлов.<br>
       Загрузите PDF в библиотеку.
@@ -92,7 +92,7 @@ watch(() => props.projectId, loadFiles, { immediate: true })
         <span class="flex-1 truncate">{{ displayName(file.name) }}</span>
         <span
           v-if="file.word_count > 0"
-          class="font-[var(--font-mono)] text-xs flex-shrink-0 opacity-50"
+          class="font-[var(--font-mono)] text-[13px] flex-shrink-0 opacity-50"
         >{{ file.word_count }}w</span>
       </button>
     </div>

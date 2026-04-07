@@ -63,7 +63,7 @@ const isCurrentSectionAssigned = () =>
 
       <!-- Header -->
       <div class="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--color-rule)] flex-shrink-0">
-        <span class="text-[12px] font-mono font-semibold text-[var(--color-accent)] bg-[var(--color-accent-pale)] rounded px-1.5 py-0.5 flex-1 truncate">
+        <span class="text-[13px] font-mono font-semibold text-[var(--color-accent)] bg-[var(--color-accent-pale)] rounded px-1.5 py-0.5 flex-1 truncate">
           @{{ citekey }}
         </span>
         <button
@@ -93,14 +93,14 @@ const isCurrentSectionAssigned = () =>
 
         <!-- Bibliographic info -->
         <div class="px-4 pt-4 pb-3 border-b border-[var(--color-rule-light)]">
-          <h3 class="text-[14px] font-semibold text-[var(--color-ink)] leading-snug mb-1.5">{{ source.title }}</h3>
-          <p v-if="source.authors" class="text-[12px] text-[var(--color-ink-muted)] mb-0.5">{{ source.authors }}</p>
-          <p v-if="source.year || source.journal" class="text-[11px] font-mono text-[var(--color-ink-muted)]">
+          <h3 class="text-[15px] font-semibold text-[var(--color-ink)] leading-snug mb-1.5">{{ source.title }}</h3>
+          <p v-if="source.authors" class="text-sm text-[var(--color-ink-muted)] mb-0.5">{{ source.authors }}</p>
+          <p v-if="source.year || source.journal" class="text-[13px] font-mono text-[var(--color-ink-muted)]">
             <span v-if="source.year">{{ source.year }}</span>
             <span v-if="source.journal && source.year"> · </span>
             <span v-if="source.journal">{{ source.journal }}</span>
           </p>
-          <p v-if="source.abstract" class="text-[12px] text-[var(--color-ink-muted)] mt-2 leading-relaxed line-clamp-4">
+          <p v-if="source.abstract" class="text-sm text-[var(--color-ink-muted)] mt-2 leading-relaxed line-clamp-4">
             {{ source.abstract }}
           </p>
         </div>
@@ -111,7 +111,7 @@ const isCurrentSectionAssigned = () =>
             @click="toggleSection(activeSectionId)"
             :disabled="attaching"
             :class="[
-              'w-full inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors',
+              'w-full inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
               isCurrentSectionAssigned()
                 ? 'border border-[var(--color-ok)] text-[var(--color-ok)] bg-[var(--color-ok-bg)] hover:bg-green-100'
                 : 'bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-deep)]',
@@ -126,10 +126,10 @@ const isCurrentSectionAssigned = () =>
 
         <!-- Fragments -->
         <div class="px-4 pt-3">
-          <div class="text-[10px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-2">
+          <div class="text-[12px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-2">
             Фрагменты {{ source.fragments?.length ? `(${source.fragments.length})` : '' }}
           </div>
-          <div v-if="!source.fragments?.length" class="text-[12px] text-[var(--color-ink-muted)] italic py-2">
+          <div v-if="!source.fragments?.length" class="text-[13px] text-[var(--color-ink-muted)] italic py-2">
             Фрагменты не загружены
           </div>
           <div
@@ -138,14 +138,14 @@ const isCurrentSectionAssigned = () =>
             class="mb-2 p-2.5 rounded-md bg-[var(--color-rule-light)] border border-[var(--color-rule)]"
           >
             <div class="flex items-center gap-1.5 mb-1.5">
-              <span class="text-[10px] font-mono text-[var(--color-ink-muted)] bg-white rounded px-1 py-0.5 border border-[var(--color-rule)]">
+              <span class="text-[12px] font-mono text-[var(--color-ink-muted)] bg-white rounded px-1 py-0.5 border border-[var(--color-rule)]">
                 {{ frag.fragment_type }}
               </span>
-              <span v-if="frag.section" class="text-[10px] font-mono text-[var(--color-accent)]">
+              <span v-if="frag.section" class="text-[12px] font-mono text-[var(--color-accent)]">
                 {{ frag.section }}
               </span>
             </div>
-            <p class="text-[12px] text-[var(--color-ink)] leading-relaxed">{{ frag.text }}</p>
+            <p class="text-sm text-[var(--color-ink)] leading-relaxed">{{ frag.text }}</p>
           </div>
         </div>
       </div>
@@ -154,7 +154,7 @@ const isCurrentSectionAssigned = () =>
       <div class="border-t border-[var(--color-rule)] px-4 py-2.5 flex-shrink-0">
         <RouterLink
           :to="`/${projectId}/library/${citekey}`"
-          class="flex items-center justify-center gap-1.5 text-[12px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] transition-colors"
+          class="flex items-center justify-center gap-1.5 text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] transition-colors"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
           Открыть полную карточку

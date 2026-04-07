@@ -252,7 +252,7 @@ onUnmounted(stopPolling)
           <!-- Status + Process button -->
           <div class="flex items-center gap-3 shrink-0">
             <span
-              class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium"
+              class="inline-flex items-center rounded-full px-2.5 py-1 text-[13px] font-medium"
               :class="{
                 'bg-[var(--color-ok-bg)] text-[var(--color-ok)]': source.status === 'completed',
                 'bg-[var(--color-warn-bg)] text-[var(--color-warn)]': source.status === 'pending' || source.status === 'processing',
@@ -289,7 +289,7 @@ onUnmounted(stopPolling)
           <span class="text-sm font-medium text-[var(--color-accent-deep)]">
             Извлекаем фрагменты из PDF...
           </span>
-          <span class="text-xs text-[var(--color-ink-muted)]">{{ jobStatus }}</span>
+          <span class="text-[13px] text-[var(--color-ink-muted)]">{{ jobStatus }}</span>
         </div>
       </div>
 
@@ -358,7 +358,7 @@ onUnmounted(stopPolling)
 
         <!-- Free-text fallback when no outline defined -->
         <div v-else>
-          <p class="mb-3 text-xs text-[var(--color-ink-muted)]">
+          <p class="mb-3 text-sm text-[var(--color-ink-muted)]">
             Структура не определена.
             <RouterLink :to="`/${route.params.projectId}/outline`" class="text-[var(--color-accent)] hover:underline">Определить структуру →</RouterLink>
           </p>

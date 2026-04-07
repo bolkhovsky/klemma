@@ -298,11 +298,11 @@ onUnmounted(() => { Object.keys(pollTimers).forEach(stopPoll); if (toastTimer) c
 
       <div v-else-if="draftFiles.length === 0" class="text-center py-16 px-6">
         <div class="text-4xl mb-4">📄</div>
-        <h2 class="text-[15px] font-semibold text-[var(--color-ink)] mb-2">Черновиков пока нет</h2>
-        <p class="text-[13px] text-[var(--color-ink-muted)] mb-5 leading-relaxed">Загрузите PDF-статьи в библиотеку, а Klemma поможет написать черновик на основе источников.</p>
+        <h2 class="text-base font-semibold text-[var(--color-ink)] mb-2">Черновиков пока нет</h2>
+        <p class="text-sm text-[var(--color-ink-muted)] mb-5 leading-relaxed">Загрузите PDF-статьи в библиотеку, а Klemma поможет написать черновик на основе источников.</p>
         <RouterLink
           :to="`/${projectId}/library`"
-          class="inline-flex items-center gap-2 bg-[var(--color-accent)] text-white rounded-md px-4 py-2 text-[13px] font-semibold hover:bg-[var(--color-accent-deep)] transition-colors no-underline"
+          class="inline-flex items-center gap-2 bg-[var(--color-accent)] text-white rounded-md px-4 py-2 text-sm font-semibold hover:bg-[var(--color-accent-deep)] transition-colors no-underline"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           Загрузить PDF
@@ -313,7 +313,7 @@ onUnmounted(() => { Object.keys(pollTimers).forEach(stopPoll); if (toastTimer) c
         <!-- Chapter heading -->
         <div class="mb-5">
           <h1 class="font-display text-[18px] font-semibold tracking-tight text-[var(--color-ink)]">{{ fileDisplayName(activeFile) }}</h1>
-          <p class="text-[13px] font-mono text-[var(--color-ink-muted)] mt-1">{{ activeFile }} · {{ activeFileData.word_count }} слов · {{ activeSections.length }} разделов</p>
+          <p class="text-sm font-mono text-[var(--color-ink-muted)] mt-1">{{ activeFile }} · {{ activeFileData.word_count }} слов · {{ activeSections.length }} разделов</p>
         </div>
 
         <div v-if="activeSections.length === 0" class="text-center py-8 text-[var(--color-ink-muted)] text-sm">
@@ -333,39 +333,39 @@ onUnmounted(() => { Object.keys(pollTimers).forEach(stopPoll); if (toastTimer) c
           <!-- Header -->
           <div @click="activeSectionId = activeSectionId === heading.section_id ? null : heading.section_id"
             class="flex items-center gap-2.5 px-4 py-3 cursor-pointer border-b border-[var(--color-rule-light)] hover:bg-[var(--color-rule-light)] transition-colors">
-            <span class="text-[11px] font-mono font-semibold text-[var(--color-accent)] bg-[var(--color-accent-pale)] rounded px-1.5 py-0.5 flex-shrink-0">{{ heading.section_id }}</span>
-            <span class="text-[14px] font-medium text-[var(--color-ink)] flex-1">{{ heading.full_title.replace(/^[\d.]+\s*/, '') }}</span>
-            <span v-for="badge in getBadges(heading.section_id)" :key="badge.label" :class="['text-[11px] font-mono rounded px-1.5 py-0.5', badge.cls]">{{ badge.label }}</span>
+            <span class="text-[12px] font-mono font-semibold text-[var(--color-accent)] bg-[var(--color-accent-pale)] rounded px-1.5 py-0.5 flex-shrink-0">{{ heading.section_id }}</span>
+            <span class="text-[15px] font-medium text-[var(--color-ink)] flex-1">{{ heading.full_title.replace(/^[\d.]+\s*/, '') }}</span>
+            <span v-for="badge in getBadges(heading.section_id)" :key="badge.label" :class="['text-[12px] font-mono rounded px-1.5 py-0.5', badge.cls]">{{ badge.label }}</span>
           </div>
 
           <!-- Generating -->
           <div v-if="cardStates[heading.section_id] === 'generating'" class="flex flex-col items-center py-7 gap-3">
             <div class="w-7 h-7 rounded-full border-[2.5px] border-[var(--color-rule)] border-t-amber-500 animate-spin" />
-            <p class="text-[13px] text-[var(--color-ink-muted)]">Анализирую источники…</p>
+            <p class="text-sm text-[var(--color-ink-muted)]">Анализирую источники…</p>
           </div>
 
           <!-- Diff -->
           <div v-else-if="cardStates[heading.section_id] === 'diff'">
-            <div class="flex items-center gap-2 px-4 py-2 bg-[var(--color-ok-bg)] border-b border-green-200 text-[12px] text-[var(--color-ok)]">
+            <div class="flex items-center gap-2 px-4 py-2 bg-[var(--color-ok-bg)] border-b border-green-200 text-[13px] text-[var(--color-ok)]">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
               Klemma предлагает правки
             </div>
             <div class="grid grid-cols-2 divide-x divide-[var(--color-rule-light)]">
               <div class="px-4 py-3 bg-[#fff8f8]">
-                <div class="text-[11px] font-semibold uppercase tracking-[0.5px] text-[var(--color-err)] mb-2">Было</div>
-                <p class="text-[13px] text-[var(--color-ink-muted)] leading-relaxed italic">{{ cardGenBefore[heading.section_id] || '(пустой раздел)' }}</p>
+                <div class="text-[12px] font-semibold uppercase tracking-[0.5px] text-[var(--color-err)] mb-2">Было</div>
+                <p class="text-sm text-[var(--color-ink-muted)] leading-relaxed italic">{{ cardGenBefore[heading.section_id] || '(пустой раздел)' }}</p>
               </div>
               <div class="px-4 py-3 bg-[#f8fff9]">
-                <div class="text-[11px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ok)] mb-2">Предложение</div>
+                <div class="text-[12px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ok)] mb-2">Предложение</div>
                 <div v-html="renderWithCitekeys(cardGenResult[heading.section_id] ?? '')" @click="handleCitekeyClick($event)"
-                  class="text-[13px] text-[var(--color-ink)] leading-relaxed [&_.citekey-link]:text-[var(--color-accent)] [&_.citekey-link]:underline [&_.citekey-link]:decoration-dotted [&_.citekey-link]:cursor-pointer" />
+                  class="text-sm text-[var(--color-ink)] leading-relaxed [&_.citekey-link]:text-[var(--color-accent)] [&_.citekey-link]:underline [&_.citekey-link]:decoration-dotted [&_.citekey-link]:cursor-pointer" />
               </div>
             </div>
             <div class="flex items-center gap-2 px-4 py-2.5 border-t border-[var(--color-rule-light)]">
-              <button @click="acceptDraft(heading.section_id)" class="inline-flex items-center gap-1.5 bg-[var(--color-ok)] text-white rounded-md px-3.5 py-1.5 text-[13px] font-medium cursor-pointer hover:bg-green-700 transition-colors">
+              <button @click="acceptDraft(heading.section_id)" class="inline-flex items-center gap-1.5 bg-[var(--color-ok)] text-white rounded-md px-3.5 py-1.5 text-sm font-medium cursor-pointer hover:bg-green-700 transition-colors">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Принять
               </button>
-              <button @click="rejectDraft(heading.section_id)" class="inline-flex items-center gap-1.5 text-[var(--color-err)] border border-red-200 rounded-md px-3.5 py-1.5 text-[13px] cursor-pointer hover:bg-[var(--color-err-bg)] transition-colors">
+              <button @click="rejectDraft(heading.section_id)" class="inline-flex items-center gap-1.5 text-[var(--color-err)] border border-red-200 rounded-md px-3.5 py-1.5 text-sm cursor-pointer hover:bg-[var(--color-err-bg)] transition-colors">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Отклонить
               </button>
             </div>
@@ -378,7 +378,7 @@ onUnmounted(() => { Object.keys(pollTimers).forEach(stopPoll); if (toastTimer) c
               <div v-html="renderWithCitekeys(currentSectionText(heading.section_id))" @click="handleCitekeyClick($event)"
                 class="text-[14px] leading-[1.75] text-[var(--color-ink-2,#3d3d5c)] [&_.citekey-link]:font-mono [&_.citekey-link]:text-[13px] [&_.citekey-link]:text-[var(--color-accent)] [&_.citekey-link]:bg-[var(--color-accent-pale)] [&_.citekey-link]:rounded [&_.citekey-link]:px-1 [&_.citekey-link]:cursor-pointer [&_.citekey-link:hover]:underline" />
             </div>
-            <div v-else class="px-4 py-5 text-center text-[13px] text-[var(--color-ink-muted)]">
+              <div v-else class="px-4 py-5 text-center text-sm text-[var(--color-ink-muted)]">
               {{ canGenerate(heading.section_id) ? 'Черновик ещё не написан — подберите источники' : 'Загрузите PDF в библиотеку' }}
             </div>
 
@@ -387,7 +387,7 @@ onUnmounted(() => { Object.keys(pollTimers).forEach(stopPoll); if (toastTimer) c
               <button
                 @click="runGenerate(heading.section_id)"
                 :disabled="!canGenerate(heading.section_id)"
-                :class="['inline-flex items-center gap-1.5 text-[13px] px-3.5 py-1.5 rounded-md font-medium transition-colors',
+                :class="['inline-flex items-center gap-1.5 text-sm px-3.5 py-1.5 rounded-md font-medium transition-colors',
                   canGenerate(heading.section_id)
                     ? 'bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-deep)] cursor-pointer'
                     : 'bg-[var(--color-rule-light)] text-[var(--color-ink-muted)] cursor-not-allowed']"
@@ -406,20 +406,20 @@ onUnmounted(() => { Object.keys(pollTimers).forEach(stopPoll); if (toastTimer) c
 
       <!-- Active section -->
       <div class="border-b border-[var(--color-rule)] px-4 py-3">
-        <div class="text-[11px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-1">Активная секция</div>
+        <div class="text-[12px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-1">Активная секция</div>
         <template v-if="activeSectionId">
-          <div class="text-[12px] font-semibold text-[var(--color-accent-deep)] leading-snug mb-0.5">
+          <div class="text-sm font-semibold text-[var(--color-accent-deep)] leading-snug mb-0.5">
             {{ activeSections.find(h => h.section_id === activeSectionId)?.full_title || activeSectionId }}
           </div>
-          <div class="text-[11px] text-[var(--color-ink-muted)]">{{ sectionWordCount(activeSectionId) }} сл · {{ panelSources.length }} ист.</div>
+          <div class="text-[12px] text-[var(--color-ink-muted)]">{{ sectionWordCount(activeSectionId) }} сл · {{ panelSources.length }} ист.</div>
         </template>
-        <div v-else class="text-[12px] text-[var(--color-ink-muted)] italic">Выберите раздел</div>
+        <div v-else class="text-sm text-[var(--color-ink-muted)] italic">Выберите раздел</div>
       </div>
 
       <!-- Add source -->
       <div class="border-b border-[var(--color-rule)] px-4 py-3">
         <button @click="addSourceOpen = true"
-          class="w-full flex items-center justify-center gap-2 py-2 rounded-md bg-[var(--color-accent)] text-white text-[13px] font-semibold hover:bg-[var(--color-accent-deep)] transition-colors"
+          class="w-full flex items-center justify-center gap-2 py-2 rounded-md bg-[var(--color-accent)] text-white text-sm font-semibold hover:bg-[var(--color-accent-deep)] transition-colors"
           title="Найти в вашей библиотеке и прикрепить к разделу">
           <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><circle cx="7.5" cy="7.5" r="6.5" stroke="white" stroke-width="1.4"/><path d="M7.5 4.5v6M4.5 7.5h6" stroke="white" stroke-width="1.6" stroke-linecap="round"/></svg>
           Найти в библиотеке
@@ -428,15 +428,15 @@ onUnmounted(() => { Object.keys(pollTimers).forEach(stopPoll); if (toastTimer) c
 
       <!-- Sources list -->
       <div class="border-b border-[var(--color-rule)] px-4 py-3 flex-1">
-        <div class="text-[11px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-2">Источники секции</div>
-        <div v-if="panelLoading" class="text-[12px] text-[var(--color-ink-muted)]">Загрузка…</div>
-        <div v-else-if="panelSources.length === 0" class="text-[12px] text-[var(--color-ink-muted)] italic">Нет источников</div>
+        <div class="text-[12px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-2">Источники секции</div>
+        <div v-if="panelLoading" class="text-[13px] text-[var(--color-ink-muted)]">Загрузка…</div>
+        <div v-else-if="panelSources.length === 0" class="text-[13px] text-[var(--color-ink-muted)] italic">Нет источников</div>
         <div v-for="key in panelSources" :key="key"
           :class="['flex items-center gap-1.5 px-2 py-1.5 rounded mb-1 group cursor-pointer hover:bg-[var(--color-rule-light)] transition-colors',
             isUsedInText(key) ? 'bg-[var(--color-ok-bg)]' : '']"
           @click="drawerCitekey = key"
         >
-          <span :class="['font-mono text-[11px] flex-1 truncate', isUsedInText(key) ? 'text-[var(--color-ok)]' : 'text-[var(--color-ink-muted)]']">
+          <span :class="['font-mono text-[12px] flex-1 truncate', isUsedInText(key) ? 'text-[var(--color-ok)]' : 'text-[var(--color-ink-muted)]']">
             @{{ key }}
             <template v-if="isUsedInText(key)"> ✓</template>
           </span>
@@ -448,14 +448,14 @@ onUnmounted(() => { Object.keys(pollTimers).forEach(stopPoll); if (toastTimer) c
 
       <!-- Stats -->
       <div class="px-4 py-3">
-        <div class="text-[11px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-2">Статистика</div>
+        <div class="text-[12px] font-semibold uppercase tracking-[0.5px] text-[var(--color-ink-muted)] mb-2">Статистика</div>
         <div class="flex justify-between text-[13px] mb-1"><span class="text-[var(--color-ink-muted)]">Слов</span><span class="font-mono font-semibold">{{ totalWordCount }}</span></div>
         <div class="flex justify-between text-[13px] mb-1"><span class="text-[var(--color-ink-muted)]">Источников</span><span class="font-mono font-semibold">{{ totalSources }}</span></div>
         <div class="flex justify-between text-[13px] mb-1"><span class="text-[var(--color-ink-muted)]">Разделов</span><span class="font-mono font-semibold">{{ activeSections.length }}</span></div>
         <div class="mt-2 bg-[var(--color-rule-light)] rounded h-1.5 overflow-hidden">
           <div :style="`width:${coveragePercent}%`" class="h-full bg-[var(--color-accent)] rounded transition-all duration-500" />
         </div>
-        <div class="text-[10px] text-[var(--color-ink-muted)] mt-1 text-right">{{ coveragePercent }}% покрыто</div>
+        <div class="text-[12px] text-[var(--color-ink-muted)] mt-1 text-right">{{ coveragePercent }}% покрыто</div>
       </div>
     </aside>
   </div>
@@ -469,7 +469,7 @@ onUnmounted(() => { Object.keys(pollTimers).forEach(stopPoll); if (toastTimer) c
       <div @click="addSourceOpen = false" class="fixed inset-0 bg-black/15 z-[99]" />
       <aside class="fixed right-0 top-0 h-full w-80 bg-white shadow-2xl border-l border-[var(--color-rule)] z-[100] flex flex-col">
         <div class="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-rule)] bg-[var(--color-rule-light)] flex-shrink-0">
-          <div class="text-[13px] font-semibold text-[var(--color-ink)] flex-1">Найти в библиотеке</div>
+          <div class="text-sm font-semibold text-[var(--color-ink)] flex-1">Найти в библиотеке</div>
           <button @click="addSourceOpen = false" class="w-7 h-7 flex items-center justify-center rounded-md border border-[var(--color-rule)] text-[var(--color-ink-muted)] hover:text-[var(--color-err)] transition-all">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 18L18 6M6 6l12 12"/></svg>
           </button>

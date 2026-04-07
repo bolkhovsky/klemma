@@ -56,6 +56,8 @@ button, [role="button"] { cursor: pointer; }
 /* Base */
 body {
   font-family: var(--font-body);
+  font-size: 1rem;
+  line-height: 1.5;
   color: var(--color-ink);
   background: var(--color-paper);
   -webkit-font-smoothing: antialiased;
@@ -148,12 +150,12 @@ body {
 .draft-prose code { font-family: var(--font-mono); font-size: 0.85em; background: var(--color-paper-warm); padding: 1px 4px; border-radius: 3px; }
 
 /* Citekey inline reference spans (from renderDraft) */
-.citekey-ref { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-accent); background: var(--color-accent-pale); padding: 1px 5px; border-radius: 4px; }
+.citekey-ref { font-family: var(--font-mono); font-size: 0.875rem; color: var(--color-accent); background: var(--color-accent-pale); padding: 1px 5px; border-radius: 4px; }
 
 /* Citekey links — clickable @source references */
 .citekey-link {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   color: var(--color-accent);
   background: var(--color-accent-pale);
   padding: 1px 5px;

@@ -130,10 +130,10 @@ async function detachItem(citekey: string) {
   <div class="flex flex-col h-full">
     <!-- Section header -->
     <div class="flex-shrink-0 px-3 pt-3 pb-2 border-b border-[var(--color-rule-light)]">
-      <p v-if="sectionId" class="text-xs font-semibold text-[var(--color-accent-deep)] truncate">
+      <p v-if="sectionId" class="text-sm font-semibold text-[var(--color-accent-deep)] truncate">
         {{ sectionName ?? sectionId }}
       </p>
-      <p v-else class="text-xs text-[var(--color-ink-muted)] italic">
+      <p v-else class="text-sm text-[var(--color-ink-muted)] italic">
         Поставьте курсор в раздел
       </p>
     </div>
@@ -160,41 +160,41 @@ async function detachItem(citekey: string) {
       v-if="searchQuery.trim() && (searchResults.length > 0 || searching)"
       class="flex-shrink-0 mx-3 mb-2 rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent-pale)]/20 overflow-hidden"
     >
-      <div class="px-3 py-1 text-xs font-semibold text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]/40">
+      <div class="px-3 py-1 text-[13px] font-semibold text-[var(--color-accent-deep)] bg-[var(--color-accent-pale)]/40">
         Результаты
       </div>
-      <div v-if="searching" class="px-3 py-3 text-center text-xs text-[var(--color-ink-muted)]">Ищу...</div>
-      <div v-else-if="searchResults.length === 0" class="px-3 py-2 text-center text-xs text-[var(--color-ink-muted)]">
+      <div v-if="searching" class="px-3 py-3 text-center text-[13px] text-[var(--color-ink-muted)]">Ищу...</div>
+      <div v-else-if="searchResults.length === 0" class="px-3 py-2 text-center text-[13px] text-[var(--color-ink-muted)]">
         Не найдено
       </div>
       <div v-else class="divide-y divide-[var(--color-rule-light)]">
         <div v-for="r in searchResults" :key="r.source" class="px-3 py-2 hover:bg-[var(--color-accent-pale)]/40">
           <div class="flex items-center gap-1 mb-0.5">
-            <span class="font-[var(--font-mono)] text-xs text-[var(--color-accent-deep)] truncate">
+            <span class="font-[var(--font-mono)] text-[13px] text-[var(--color-accent-deep)] truncate">
               @{{ r.source.length > 14 ? r.source.slice(0, 14) + '..' : r.source }}
             </span>
-            <span class="text-xs text-[var(--color-ink-muted)]">{{ r.year }}</span>
+            <span class="text-[13px] text-[var(--color-ink-muted)]">{{ r.year }}</span>
             <button
               @click="attachItem(r)"
               :disabled="!sectionId"
-              class="ml-auto rounded bg-[var(--color-accent)] px-1.5 py-0.5 text-xs font-medium text-white hover:bg-[var(--color-accent-deep)] disabled:opacity-40 disabled:cursor-not-allowed"
+              class="ml-auto rounded bg-[var(--color-accent)] px-1.5 py-0.5 text-[13px] font-medium text-white hover:bg-[var(--color-accent-deep)] disabled:opacity-40 disabled:cursor-not-allowed"
             >+</button>
           </div>
-          <p class="text-xs text-[var(--color-ink-light)] leading-relaxed line-clamp-2">{{ r.text }}</p>
+          <p class="text-[13px] text-[var(--color-ink-light)] leading-relaxed line-clamp-2">{{ r.text }}</p>
         </div>
       </div>
     </div>
 
     <!-- Attached list -->
     <div class="flex-1 overflow-y-auto px-3 pb-3 space-y-2">
-      <div class="text-xs font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider pt-1">
+      <div class="text-[13px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider pt-1">
         <span v-if="loading" class="opacity-50">Загрузка…</span>
         <span v-else>Привязано ({{ attachedCitekeys.length }})</span>
       </div>
-      <div v-if="!sectionId" class="text-xs text-[var(--color-ink-muted)] italic py-2 text-center">—</div>
+      <div v-if="!sectionId" class="text-[13px] text-[var(--color-ink-muted)] italic py-2 text-center">—</div>
       <div
         v-else-if="attachedItems.length === 0 && !loading"
-        class="text-xs text-[var(--color-ink-muted)] italic py-2 text-center"
+        class="text-[13px] text-[var(--color-ink-muted)] italic py-2 text-center"
       >
         Нет источников
       </div>
@@ -204,14 +204,14 @@ async function detachItem(citekey: string) {
         class="group rounded-md border border-[var(--color-rule-light)] bg-[var(--color-paper-white)] px-3 py-2 relative"
       >
         <div class="flex items-center gap-1">
-          <span class="font-[var(--font-mono)] text-xs text-[var(--color-accent-deep)] truncate flex-1">
+          <span class="font-[var(--font-mono)] text-[13px] text-[var(--color-accent-deep)] truncate flex-1">
             @{{ item.source.length > 16 ? item.source.slice(0, 16) + '..' : item.source }}
           </span>
-          <span class="text-xs text-[var(--color-ink-muted)] flex-shrink-0">{{ item.year }}</span>
+          <span class="text-[13px] text-[var(--color-ink-muted)] flex-shrink-0">{{ item.year }}</span>
         </div>
         <p
           v-if="item.sourceTitle !== item.source"
-          class="text-xs text-[var(--color-ink-light)] leading-snug truncate mt-0.5"
+          class="text-[13px] text-[var(--color-ink-light)] leading-snug truncate mt-0.5"
         >
           {{ item.sourceTitle }}
         </p>

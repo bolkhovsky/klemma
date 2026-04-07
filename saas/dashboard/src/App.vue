@@ -206,7 +206,7 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
     <header class="h-12 flex-shrink-0 bg-white flex items-center gap-3 px-5 z-20" style="border-bottom: 1px solid var(--color-rule, #e8e5df)">
       <RouterLink
         :to="projectId ? `/${projectId}/library` : '/library'"
-        class="font-display font-bold tracking-[-0.4px] text-[15px] no-underline"
+        class="font-display font-bold tracking-[-0.4px] text-base no-underline"
         style="color: var(--color-ink, #1a1a2e)"
       >k<span style="color: var(--color-accent, #0d7377)">lemma</span></RouterLink>
 
@@ -214,7 +214,7 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
       <div class="relative" @click.stop>
         <button
           @click="showProjectDropdown = !showProjectDropdown"
-          class="inline-flex items-center gap-1.5 text-[13px] font-medium rounded-md px-2.5 py-1 border-none bg-transparent cursor-pointer transition-colors"
+          class="inline-flex items-center gap-1.5 text-sm font-medium rounded-md px-2.5 py-1 border-none bg-transparent cursor-pointer transition-colors"
           style="color: var(--color-ink-2, #3d3d5c)"
         >
           <span v-if="projectStore.loading && !projectName" class="inline-block h-3 w-16 rounded animate-pulse" style="background: var(--color-rule, #e8e5df)" />
@@ -229,7 +229,7 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
           <div
             v-for="project in projectStore.projects" :key="project.project_id"
             @click="switchProject(project.project_id); showProjectDropdown = false"
-            class="flex items-center gap-2.5 px-2.5 py-[7px] rounded-md text-[13px] cursor-pointer transition-colors hover:bg-[var(--color-rule-light,#f0ede8)]"
+            class="flex items-center gap-2.5 px-2.5 py-[7px] rounded-md text-sm cursor-pointer transition-colors hover:bg-[var(--color-rule-light,#f0ede8)]"
             :class="project.project_id === projectId ? 'font-medium' : ''"
             :style="project.project_id === projectId ? 'color: var(--color-accent-deep, #065a5e)' : 'color: var(--color-ink-muted, #6b6b8a)'"
           >
@@ -239,7 +239,7 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
           <div style="border-top: 1px solid var(--color-rule-light, #f0ede8); margin-top: 4px; padding-top: 4px">
             <div
               @click="openWizard(); showProjectDropdown = false"
-              class="flex items-center gap-2 px-2.5 py-[7px] rounded-md text-[13px] cursor-pointer transition-colors hover:bg-[var(--color-rule-light,#f0ede8)]"
+              class="flex items-center gap-2 px-2.5 py-[7px] rounded-md text-sm cursor-pointer transition-colors hover:bg-[var(--color-rule-light,#f0ede8)]"
               style="color: var(--color-ink-muted, #6b6b8a)"
             >
               <svg viewBox="0 0 16 16" fill="currentColor" class="w-3 h-3 flex-shrink-0"><path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z"/></svg>
@@ -274,7 +274,7 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
 
         <!-- Nav links -->
         <div class="py-2">
-          <div class="px-3.5 py-1 text-[12px] font-semibold uppercase tracking-wide" style="color: var(--color-ink-muted, #6b6b8a)">Навигация</div>
+          <div class="px-3.5 py-1 text-[13px] font-semibold uppercase tracking-wide" style="color: var(--color-ink-muted, #6b6b8a)">Навигация</div>
           <RouterLink
             v-if="effectiveProjectId"
             :to="`/${effectiveProjectId}/library`"
@@ -301,7 +301,7 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
             </svg>
             Карта
           </RouterLink>
-          <div v-if="!effectiveProjectId" class="px-3.5 py-3 text-[12px] italic" style="color: var(--color-ink-muted, #6b6b8a)">
+          <div v-if="!effectiveProjectId" class="px-3.5 py-3 text-[13px] italic" style="color: var(--color-ink-muted, #6b6b8a)">
             <div v-if="projectStore.loading">Загрузка…</div>
             <div v-else>Выберите проект</div>
           </div>
@@ -326,10 +326,10 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
           <!-- Loaded -->
           <template v-else>
             <div class="flex items-center gap-2 mb-2 rounded-lg px-[2px] py-1">
-              <div class="w-[30px] h-[30px] rounded-full flex-shrink-0 flex items-center justify-center text-[13px] font-bold text-white" style="background: linear-gradient(135deg, #6366f1 0%, #2563eb 100%)">{{ userInitials }}</div>
+              <div class="w-[30px] h-[30px] rounded-full flex-shrink-0 flex items-center justify-center text-[14px] font-bold text-white" style="background: linear-gradient(135deg, #6366f1 0%, #2563eb 100%)">{{ userInitials }}</div>
               <div class="flex-1 min-w-0">
-                <div class="text-[13px] font-semibold truncate" style="color: var(--color-ink, #1a1a2e)">{{ userName || '…' }}</div>
-                <div class="inline-flex items-center gap-0.5 text-[11px] font-semibold rounded px-[5px] py-[1px] mt-0.5" style="color: #7c3aed; background: #f3e8ff; border: 1px solid #e9d5ff">
+                <div class="text-[14px] font-semibold truncate" style="color: var(--color-ink, #1a1a2e)">{{ userName || '…' }}</div>
+                <div class="inline-flex items-center gap-0.5 text-[12px] font-semibold rounded px-[5px] py-[1px] mt-0.5" style="color: #7c3aed; background: #f3e8ff; border: 1px solid #e9d5ff">
                   <svg width="9" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
                   Pro
                 </div>
@@ -339,7 +339,7 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
               </button>
             </div>
             <template v-if="tokenBalance && tokenBalance.total_granted > 0">
-              <div class="flex justify-between items-center mb-1" style="font-size: 11px; color: var(--color-ink-muted, #6b6b8a)">
+              <div class="flex justify-between items-center mb-1" style="font-size: 12px; color: var(--color-ink-muted, #6b6b8a)">
                 <span>Кредиты</span>
                 <strong style="font-family: var(--font-mono, monospace); color: var(--color-ink-2, #3d3d5c)">{{ tokenBalance.remaining.toLocaleString() }}</strong>
               </div>
@@ -350,7 +350,7 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
               >
                 <div class="h-full rounded-full transition-all" :style="{ width: `${100 - tokenPercent}%`, background: tokenBarLow ? 'linear-gradient(90deg, #f59e0b, #ef4444)' : 'linear-gradient(90deg, #6366f1, #2563eb)' }" />
               </div>
-              <div class="text-right" style="font-size: 11px; color: var(--color-ink-muted, #6b6b8a)">из {{ tokenBalance.total_granted.toLocaleString() }} в месяц</div>
+              <div class="text-right" style="font-size: 12px; color: var(--color-ink-muted, #6b6b8a)">из {{ tokenBalance.total_granted.toLocaleString() }} в месяц</div>
             </template>
           </template>
         </div>
@@ -377,14 +377,14 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
         <!-- Step 1: Name + Type -->
         <div v-if="wizardStep === 1" class="px-6 pb-6">
           <h2 class="text-lg font-semibold mb-1" style="color: var(--color-ink, #1a1a2e)">Новый проект</h2>
-          <p class="text-[13px] mb-4" style="color: var(--color-ink-muted, #6b6b8a)">Шаг 1 из 2 — название и тип работы</p>
+          <p class="text-sm mb-4" style="color: var(--color-ink-muted, #6b6b8a)">Шаг 1 из 2 — название и тип работы</p>
           <div class="space-y-3">
             <div>
-              <label class="mb-1 block text-xs font-medium" style="color: var(--color-ink-muted, #6b6b8a)">Название</label>
+              <label class="mb-1 block text-sm font-medium" style="color: var(--color-ink-muted, #6b6b8a)">Название</label>
               <input v-model="newProjectName" type="text" placeholder="Моя диссертация" class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none" style="border-color: var(--color-rule, #e8e5df); color: var(--color-ink, #1a1a2e)" @keydown.enter="wizardNext" autofocus />
             </div>
             <div>
-              <label class="mb-1 block text-xs font-medium" style="color: var(--color-ink-muted, #6b6b8a)">Тип</label>
+              <label class="mb-1 block text-sm font-medium" style="color: var(--color-ink-muted, #6b6b8a)">Тип</label>
               <select v-model="newProjectType" class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none" style="border-color: var(--color-rule, #e8e5df); color: var(--color-ink, #1a1a2e)">
                 <option value="dissertation">Диссертация</option>
                 <option value="paper">Статья</option>
@@ -402,7 +402,7 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
         <!-- Step 2: Outline -->
         <div v-else class="px-6 pb-6">
           <h2 class="text-lg font-semibold mb-1" style="color: var(--color-ink, #1a1a2e)">Структура работы</h2>
-          <p class="text-[13px] mb-4" style="color: var(--color-ink-muted, #6b6b8a)">Шаг 2 из 2 — Klemma распределит источники по разделам</p>
+          <p class="text-sm mb-4" style="color: var(--color-ink-muted, #6b6b8a)">Шаг 2 из 2 — Klemma распределит источники по разделам</p>
 
           <!-- Mode selector -->
           <div class="flex gap-1.5 mb-4 rounded-lg p-1" style="background: var(--color-rule-light, #f0ede8)">
@@ -414,33 +414,33 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
               ] as { key: OutlineMode; label: string }[])"
               :key="opt.key"
               @click="outlineMode = opt.key"
-              :class="['flex-1 rounded-md px-3 py-1.5 text-[13px] font-medium transition-all',
+              :class="['flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-all',
                 outlineMode === opt.key ? 'bg-white shadow-sm text-[var(--color-ink)]' : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]']"
             >{{ opt.label }}</button>
           </div>
 
           <!-- Preset mode -->
           <div v-if="outlineMode === 'preset'">
-            <div class="text-[12px] font-medium mb-2" style="color: var(--color-ink-muted, #6b6b8a)">
+            <div class="text-sm font-medium mb-2" style="color: var(--color-ink-muted, #6b6b8a)">
               Стандартная структура для типа «{{ { dissertation: 'Диссертация', paper: 'Статья', thesis: 'Дипломная работа' }[newProjectType] || newProjectType }}»
             </div>
             <div class="rounded-lg border overflow-hidden max-h-52 overflow-y-auto" style="border-color: var(--color-rule, #e8e5df)">
               <div
                 v-for="sec in activePreset" :key="sec.id"
-                :class="['px-3 py-1.5 text-[13px] border-b last:border-b-0',
+                :class="['px-3 py-1.5 text-sm border-b last:border-b-0',
                   sec.id.includes('.') ? 'pl-7 text-[var(--color-ink-muted)]' : 'font-medium text-[var(--color-ink)]']"
                 style="border-color: var(--color-rule-light, #f0ede8)"
               >
-                <span class="font-mono text-[11px] mr-2" style="color: var(--color-accent, #0d7377)">{{ sec.id }}</span>
+                <span class="font-mono text-[12px] mr-2" style="color: var(--color-accent, #0d7377)">{{ sec.id }}</span>
                 {{ sec.name }}
               </div>
             </div>
-            <p class="text-[11px] mt-2" style="color: var(--color-ink-muted, #6b6b8a)">Структуру можно изменить позже</p>
+            <p class="text-[12px] mt-2" style="color: var(--color-ink-muted, #6b6b8a)">Структуру можно изменить позже</p>
           </div>
 
           <!-- Paste mode -->
           <div v-else-if="outlineMode === 'paste'">
-            <div class="text-[12px] font-medium mb-2" style="color: var(--color-ink-muted, #6b6b8a)">
+            <div class="text-sm font-medium mb-2" style="color: var(--color-ink-muted, #6b6b8a)">
               Вставьте оглавление — каждый раздел на новой строке
             </div>
             <textarea
@@ -453,10 +453,10 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
 Глава 2. Методы
   2.1 Методика
 Заключение"
-              class="w-full rounded-md border px-3 py-2 text-[13px] font-mono focus:outline-none resize-none"
+              class="w-full rounded-md border px-3 py-2 text-sm font-mono focus:outline-none resize-none"
               style="border-color: var(--color-rule, #e8e5df); color: var(--color-ink, #1a1a2e)"
             />
-            <p v-if="outlinePasteText.trim()" class="text-[11px] mt-1" style="color: var(--color-ok, #2d6a4f)">
+            <p v-if="outlinePasteText.trim()" class="text-[12px] mt-1" style="color: var(--color-ok, #2d6a4f)">
               Распознано разделов: {{ parseOutlineText(outlinePasteText).length }}
             </p>
           </div>
@@ -464,7 +464,7 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
           <!-- Skip mode -->
           <div v-else class="rounded-lg border px-4 py-6 text-center" style="border-color: var(--color-rule, #e8e5df)">
             <div class="text-3xl mb-2">📝</div>
-            <p class="text-[13px]" style="color: var(--color-ink-muted, #6b6b8a)">Без структуры — можно добавить позже.<br/>Источники не будут привязаны к разделам.</p>
+            <p class="text-sm" style="color: var(--color-ink-muted, #6b6b8a)">Без структуры — можно добавить позже.<br/>Источники не будут привязаны к разделам.</p>
           </div>
 
           <div class="mt-5 flex gap-2 justify-between">

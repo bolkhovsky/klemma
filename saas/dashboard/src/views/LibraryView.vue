@@ -320,7 +320,7 @@ watch(sources, () => { loadFragmentCounts() })
               {{ cell.name || cell.id }} ({{ cell.count }})
             </option>
           </select>
-          <span class="text-[13px] text-[var(--color-ink-muted)]">
+          <span class="text-sm text-[var(--color-ink-muted)]">
             {{ totalAccepted }} цитат принято &middot; {{ coveragePct }}% покрыто
           </span>
         </div>
@@ -341,22 +341,22 @@ watch(sources, () => { loadFragmentCounts() })
           <div class="flex items-start gap-3">
             <div class="w-7 h-7 rounded-full bg-[var(--color-accent)] text-white flex items-center justify-center text-[13px] font-bold flex-shrink-0">1</div>
             <div>
-              <div class="text-[14px] font-medium text-[var(--color-ink)]">Загрузите PDF-статьи</div>
-              <div class="text-[13px] text-[var(--color-ink-muted)] mt-0.5">Перетащите файлы в зону выше. Минимум 3 статьи для анализа покрытия.</div>
+              <div class="text-[15px] font-medium text-[var(--color-ink)]">Загрузите PDF-статьи</div>
+              <div class="text-sm text-[var(--color-ink-muted)] mt-0.5">Перетащите файлы в зону выше. Минимум 3 статьи для анализа покрытия.</div>
             </div>
           </div>
           <div class="flex items-start gap-3">
             <div class="w-7 h-7 rounded-full bg-[var(--color-rule)] text-[var(--color-ink-muted)] flex items-center justify-center text-[13px] font-bold flex-shrink-0">2</div>
             <div>
-              <div class="text-[14px] font-medium text-[var(--color-ink-muted)]">Дождитесь обработки</div>
-              <div class="text-[13px] text-[var(--color-ink-muted)] mt-0.5">Klemma извлечёт цитаты, аргументы и ключевые фрагменты из каждой статьи.</div>
+              <div class="text-[15px] font-medium text-[var(--color-ink-muted)]">Дождитесь обработки</div>
+              <div class="text-sm text-[var(--color-ink-muted)] mt-0.5">Klemma извлечёт цитаты, аргументы и ключевые фрагменты из каждой статьи.</div>
             </div>
           </div>
           <div class="flex items-start gap-3">
             <div class="w-7 h-7 rounded-full bg-[var(--color-rule)] text-[var(--color-ink-muted)] flex items-center justify-center text-[13px] font-bold flex-shrink-0">3</div>
             <div>
-              <div class="text-[14px] font-medium text-[var(--color-ink-muted)]">Отберите цитаты</div>
-              <div class="text-[13px] text-[var(--color-ink-muted)] mt-0.5">Нажмите на источник и отберите полезные цитаты для вашей работы.</div>
+              <div class="text-[15px] font-medium text-[var(--color-ink-muted)]">Отберите цитаты</div>
+              <div class="text-sm text-[var(--color-ink-muted)] mt-0.5">Нажмите на источник и отберите полезные цитаты для вашей работы.</div>
             </div>
           </div>
         </div>
@@ -370,13 +370,13 @@ watch(sources, () => { loadFragmentCounts() })
         >
           <svg class="w-5 h-5 text-[var(--color-warn)] flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg>
           <div>
-            <div class="text-[13px] font-medium text-[var(--color-ink)]">Нет структуры работы</div>
-            <div class="text-[12px] text-[var(--color-ink-muted)] mt-0.5">Создайте новый проект с шаблоном структуры — Klemma распределит источники по разделам автоматически.</div>
+            <div class="text-sm font-medium text-[var(--color-ink)]">Нет структуры работы</div>
+            <div class="text-sm text-[var(--color-ink-muted)] mt-0.5">Создайте новый проект с шаблоном структуры — Klemma распределит источники по разделам автоматически.</div>
           </div>
         </div>
 
-        <div class="text-[15px] font-semibold text-[var(--color-ink)] mb-2.5 flex items-center gap-2">
-          Мои источники <span class="text-[13px] font-semibold text-[var(--color-ink-muted)] bg-[var(--color-rule-light)] px-2 py-0.5 rounded-full">{{ filteredSources.length }}</span>
+        <div class="text-base font-semibold text-[var(--color-ink)] mb-2.5 flex items-center gap-2">
+          Мои источники <span class="text-sm font-semibold text-[var(--color-ink-muted)] bg-[var(--color-rule-light)] px-2 py-0.5 rounded-full">{{ filteredSources.length }}</span>
         </div>
         <table class="source-table">
           <thead>
@@ -413,7 +413,7 @@ watch(sources, () => { loadFragmentCounts() })
                   <button
                     v-if="(src.status === 'pending' || src.status === 'failed') && !processingJobs[src.citekey]"
                     @click.stop="processSource(src.citekey, false)"
-                    class="text-xs text-[var(--color-accent)] hover:text-[var(--color-accent-deep)]"
+                    class="text-sm text-[var(--color-accent)] hover:text-[var(--color-accent-deep)]"
                   >обработать</button>
                   <div
                     v-if="processingJobs[src.citekey]"
@@ -435,8 +435,8 @@ watch(sources, () => { loadFragmentCounts() })
 
     <!-- Reference gaps -->
     <div v-if="gaps.length > 0 && sources.length > 0" class="mt-8 animate-in animate-in-delay-3">
-      <div class="text-[15px] font-semibold text-[var(--color-ink)] mb-2.5 flex items-center gap-2">
-        Рекомендуемая литература <span class="text-[13px] font-semibold text-[var(--color-ink-muted)] bg-[var(--color-rule-light)] px-2 py-0.5 rounded-full">{{ gaps.length }}</span>
+      <div class="text-base font-semibold text-[var(--color-ink)] mb-2.5 flex items-center gap-2">
+        Рекомендуемая литература <span class="text-sm font-semibold text-[var(--color-ink-muted)] bg-[var(--color-rule-light)] px-2 py-0.5 rounded-full">{{ gaps.length }}</span>
       </div>
       <table class="gaps-table">
         <thead>
@@ -525,7 +525,7 @@ watch(sources, () => { loadFragmentCounts() })
 .source-table th {
   text-align: left;
   padding: 10px 12px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.3px;
@@ -539,12 +539,12 @@ watch(sources, () => { loadFragmentCounts() })
 }
 .source-table tr:hover td { background: var(--color-rule-light); }
 
-.status-badge { font-size: 13px; padding: 3px 10px; border-radius: 4px; font-weight: 500; }
+.status-badge { font-size: 14px; padding: 3px 10px; border-radius: 4px; font-weight: 500; }
 .status-completed { background: var(--color-ok-bg); color: var(--color-ok); }
 .status-pending { background: var(--color-warn-bg); color: var(--color-warn); }
 .status-failed { background: var(--color-err-bg); color: var(--color-err); }
 
-.curation-badge { font-size: 13px; font-family: monospace; padding: 3px 10px; border-radius: 4px; }
+.curation-badge { font-size: 14px; font-family: monospace; padding: 3px 10px; border-radius: 4px; }
 .curation-done { background: var(--color-ok-bg); color: var(--color-ok); border: 1px solid #a7f3d0; }
 .curation-partial { background: var(--color-warn-bg); color: var(--color-warn); border: 1px solid #fcd34d; }
 .curation-none { background: var(--color-rule-light); color: var(--color-ink-muted); border: 1px solid var(--color-rule); }
@@ -554,7 +554,7 @@ watch(sources, () => { loadFragmentCounts() })
 .gaps-table th {
   text-align: left;
   padding: 10px 12px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.3px;
@@ -568,7 +568,7 @@ watch(sources, () => { loadFragmentCounts() })
 }
 .gaps-table tr:hover td { background: var(--color-rule-light); }
 .gap-title { color: var(--color-ink); font-weight: 500; }
-.gap-doi { font-size: 13px; color: var(--color-accent); text-decoration: none; }
+.gap-doi { font-size: 14px; color: var(--color-accent); text-decoration: none; }
 .gap-doi:hover { text-decoration: underline; }
-.gap-refs { font-family: monospace; font-size: 13px; color: var(--color-warn); text-align: center; }
+.gap-refs { font-family: monospace; font-size: 14px; color: var(--color-warn); text-align: center; }
 </style>
