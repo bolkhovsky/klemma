@@ -17,13 +17,13 @@ def store(tmp_path) -> LocalProjectStore:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_4(tmp_path):
+def test_schema_version_is_5(tmp_path):
     db_path = tmp_path / "project.db"
     LocalProjectStore(db_path)
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 4
+    assert version == 5
 
 
 def test_tables_created(tmp_path):
@@ -235,7 +235,7 @@ def test_migration_v1_to_v2_idempotent(tmp_path):
     version = conn2.execute("PRAGMA user_version").fetchone()[0]
     tables = {r[0] for r in conn2.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     conn2.close()
-    assert version == 4
+    assert version == 5
     assert "prune_verdicts" in tables
 
 
@@ -408,3 +408,90 @@ def test_count_sources_user_scoped(store):
     assert store.count_sources(user_id="x") == 2
     assert store.count_sources(user_id="y") == 1
     assert store.count_sources() == 3
+
+
+# ---------------------------------------------------------------------------
+# Prune verdicts — multi-user isolation (v5)
+# ---------------------------------------------------------------------------
+
+
+def test_prune_verdicts_user_scoped_save(store):
+    """save_prune_verdicts scoped to user — doesn't wipe other user's verdicts."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "alice_drop", "reason": "old"}],
+        maybe=[],
+        user_id="alice",
+    )
+    store.save_prune_verdicts(
+        drop=[{"citekey": "bob_drop", "reason": "dup"}],
+        maybe=[{"citekey": "bob_maybe", "reason": "weak"}],
+        user_id="bob",
+    )
+    # Alice's verdicts untouched by Bob's save
+    alice_items = store.get_prune_verdicts(user_id="alice")
+    bob_items = store.get_prune_verdicts(user_id="bob")
+    assert {i["source_id"] for i in alice_items} == {"alice_drop"}
+    assert {i["source_id"] for i in bob_items} == {"bob_drop", "bob_maybe"}
+
+
+def test_prune_verdicts_same_citekey_different_users(store):
+    """Same citekey can have different verdicts for different users."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "shared_ck", "reason": "alice says drop"}],
+        maybe=[],
+        user_id="alice",
+    )
+    store.save_prune_verdicts(
+        drop=[],
+        maybe=[{"citekey": "shared_ck", "reason": "bob says maybe"}],
+        user_id="bob",
+    )
+    alice = store.get_prune_verdicts(user_id="alice")
+    bob = store.get_prune_verdicts(user_id="bob")
+    assert alice[0]["verdict"] == "drop"
+    assert bob[0]["verdict"] == "maybe"
+
+
+def test_prune_summary_user_scoped(store):
+    """get_prune_summary returns counts only for the specified user."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "d1"}, {"citekey": "d2"}],
+        maybe=[{"citekey": "m1"}],
+        user_id="alice",
+    )
+    store.save_prune_verdicts(
+        drop=[{"citekey": "d3"}],
+        maybe=[],
+        user_id="bob",
+    )
+    alice_summary = store.get_prune_summary(user_id="alice")
+    bob_summary = store.get_prune_summary(user_id="bob")
+    assert alice_summary == {"drop": 2, "maybe": 1, "total": 3}
+    assert bob_summary == {"drop": 1, "maybe": 0, "total": 1}
+
+
+def test_prune_drop_ids_user_scoped(store):
+    """get_prune_drop_ids returns only the specified user's drops."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "a_drop"}], maybe=[], user_id="alice"
+    )
+    store.save_prune_verdicts(
+        drop=[{"citekey": "b_drop"}], maybe=[], user_id="bob"
+    )
+    assert store.get_prune_drop_ids(user_id="alice") == {"a_drop"}
+    assert store.get_prune_drop_ids(user_id="bob") == {"b_drop"}
+    # Unscoped returns both
+    assert store.get_prune_drop_ids() == {"a_drop", "b_drop"}
+
+
+def test_clear_prune_verdict_user_scoped(store):
+    """clear_prune_verdict only removes verdict for the specified user."""
+    store.save_prune_verdicts(
+        drop=[{"citekey": "shared"}], maybe=[], user_id="alice"
+    )
+    store.save_prune_verdicts(
+        drop=[{"citekey": "shared"}], maybe=[], user_id="bob"
+    )
+    store.clear_prune_verdict("shared", user_id="alice")
+    assert store.get_prune_verdicts(user_id="alice") == []
+    assert len(store.get_prune_verdicts(user_id="bob")) == 1

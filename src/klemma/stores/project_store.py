@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator, Optional
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS project_sources (
@@ -58,10 +58,12 @@ CREATE INDEX IF NOT EXISTS idx_pf_citekey ON project_fragments(citekey);
 
 _MIGRATE_V2 = """
 CREATE TABLE IF NOT EXISTS prune_verdicts (
-    source_id  TEXT PRIMARY KEY,
+    source_id  TEXT NOT NULL,
     verdict    TEXT NOT NULL CHECK(verdict IN ('drop', 'maybe')),
     reason     TEXT DEFAULT '',
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (datetime('now')),
+    user_id    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, source_id)
 );
 """
 
@@ -192,6 +194,30 @@ class LocalProjectStore:
                 CREATE INDEX IF NOT EXISTS idx_ps_paper ON project_sources(paper_id);
                 CREATE INDEX IF NOT EXISTS idx_ps_user ON project_sources(user_id);
                 CREATE INDEX IF NOT EXISTS idx_pss_section ON project_source_sections(section);
+            """)
+        # v5: add user_id to prune_verdicts for multi-user isolation.
+        # Check actual PK structure for idempotency.
+        pv_pk_cols = [
+            r[1] for r in conn.execute("PRAGMA table_info(prune_verdicts)").fetchall()
+            if r[5] > 0
+        ]
+        needs_pv_migration = pv_pk_cols == ["source_id"]  # old schema: source_id-only PK
+        if version < 5 or needs_pv_migration:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS prune_verdicts_v5 (
+                    source_id  TEXT NOT NULL,
+                    verdict    TEXT NOT NULL CHECK(verdict IN ('drop', 'maybe')),
+                    reason     TEXT DEFAULT '',
+                    updated_at TEXT DEFAULT (datetime('now')),
+                    user_id    TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (user_id, source_id)
+                );
+                INSERT OR IGNORE INTO prune_verdicts_v5
+                    (source_id, verdict, reason, updated_at, user_id)
+                SELECT source_id, verdict, reason, updated_at, ''
+                FROM prune_verdicts;
+                DROP TABLE prune_verdicts;
+                ALTER TABLE prune_verdicts_v5 RENAME TO prune_verdicts;
             """)
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
@@ -386,27 +412,32 @@ class LocalProjectStore:
     # Prune verdicts (schema v2)                                          #
     # ------------------------------------------------------------------ #
 
-    def save_prune_verdicts(self, drop: list[dict], maybe: list[dict]) -> None:
-        """Replace all prune verdicts with fresh results."""
+    def save_prune_verdicts(
+        self, drop: list[dict], maybe: list[dict], user_id: Optional[str] = None
+    ) -> None:
+        """Replace all prune verdicts for a user with fresh results."""
+        uid = self._uid(user_id)
         with self._conn() as conn:
-            conn.execute("DELETE FROM prune_verdicts")
+            conn.execute(
+                "DELETE FROM prune_verdicts WHERE user_id = ?", (uid,)
+            )
             for item in drop:
                 ck = item.get("citekey", "").lstrip("@")
                 if not ck:
                     continue
                 conn.execute(
-                    "INSERT OR REPLACE INTO prune_verdicts (source_id, verdict, reason)"
-                    " VALUES (?, 'drop', ?)",
-                    (ck, item.get("reason", "")),
+                    "INSERT OR REPLACE INTO prune_verdicts (source_id, verdict, reason, user_id)"
+                    " VALUES (?, 'drop', ?, ?)",
+                    (ck, item.get("reason", ""), uid),
                 )
             for item in maybe:
                 ck = item.get("citekey", "").lstrip("@")
                 if not ck:
                     continue
                 conn.execute(
-                    "INSERT OR REPLACE INTO prune_verdicts (source_id, verdict, reason)"
-                    " VALUES (?, 'maybe', ?)",
-                    (ck, item.get("reason", "")),
+                    "INSERT OR REPLACE INTO prune_verdicts (source_id, verdict, reason, user_id)"
+                    " VALUES (?, 'maybe', ?, ?)",
+                    (ck, item.get("reason", ""), uid),
                 )
 
     def get_prune_verdicts(
@@ -414,13 +445,19 @@ class LocalProjectStore:
         verdict: str | None = None,
         chapter: int | None = None,
         section_type: str | None = None,
+        user_id: Optional[str] = None,
     ) -> list[dict]:
-        """Return prune verdicts, optionally filtered by verdict type."""
+        """Return prune verdicts, optionally filtered by verdict type and user."""
+        uid = self._uid(user_id)
         with self._conn() as conn:
             conditions = [
                 f"pv.updated_at > datetime('now', '-{_PRUNE_EXPIRY_DAYS} days')"
             ]
             params: list = []
+
+            if user_id is not None:
+                conditions.append("pv.user_id = ?")
+                params.append(uid)
 
             if verdict:
                 conditions.append("pv.verdict = ?")
@@ -431,6 +468,7 @@ class LocalProjectStore:
                 conditions.append(
                     "EXISTS (SELECT 1 FROM project_source_sections pss"
                     " WHERE pss.citekey = pv.source_id"
+                    " AND pss.user_id = pv.user_id"
                     " AND (pss.section = ? OR pss.section LIKE ?))"
                 )
                 params.extend([ch, f"{ch}.%"])
@@ -438,7 +476,9 @@ class LocalProjectStore:
             if section_type:
                 conditions.append(
                     "EXISTS (SELECT 1 FROM project_source_sections pss2"
-                    " WHERE pss2.citekey = pv.source_id AND pss2.section_type = ?)"
+                    " WHERE pss2.citekey = pv.source_id"
+                    " AND pss2.user_id = pv.user_id"
+                    " AND pss2.section_type = ?)"
                 )
                 params.append(section_type)
 
@@ -447,34 +487,44 @@ class LocalProjectStore:
                 f"SELECT pv.source_id, pv.verdict, pv.reason,"
                 f" GROUP_CONCAT(DISTINCT pss3.section) as sections"
                 f" FROM prune_verdicts pv"
-                f" LEFT JOIN project_source_sections pss3 ON pss3.citekey = pv.source_id"
+                f" LEFT JOIN project_source_sections pss3"
+                f"   ON pss3.citekey = pv.source_id AND pss3.user_id = pv.user_id"
                 f" WHERE {where}"
-                f" GROUP BY pv.source_id"
+                f" GROUP BY pv.user_id, pv.source_id"
                 f" ORDER BY pv.verdict, pv.source_id",
                 params,
             )
             return [dict(row) for row in cur.fetchall()]
 
-    def get_prune_drop_ids(self, max_age_days: int = _PRUNE_EXPIRY_DAYS) -> set[str]:
+    def get_prune_drop_ids(
+        self, max_age_days: int = _PRUNE_EXPIRY_DAYS, user_id: Optional[str] = None
+    ) -> set[str]:
         """Return citekeys with verdict='drop' within expiry window."""
-        with self._conn() as conn:
-            cur = conn.execute(
-                "SELECT source_id FROM prune_verdicts"
-                " WHERE verdict='drop' AND updated_at > datetime('now', ?)",
-                (f"-{max_age_days} days",),
-            )
-            return {row["source_id"] for row in cur.fetchall()}
-
-    def get_prune_summary(self, user_id: Optional[str] = None) -> dict:
-        """Return prune verdict counts, optionally scoped to a user's sources."""
         with self._conn() as conn:
             if user_id is not None:
                 cur = conn.execute(
-                    """SELECT pv.verdict, COUNT(*) as cnt FROM prune_verdicts pv
-                       JOIN project_sources ps ON ps.citekey = pv.source_id AND ps.user_id = ?
-                       WHERE pv.updated_at > datetime('now', ?)
-                       GROUP BY pv.verdict""",
-                    (user_id, f"-{_PRUNE_EXPIRY_DAYS} days"),
+                    "SELECT source_id FROM prune_verdicts"
+                    " WHERE verdict='drop' AND updated_at > datetime('now', ?)"
+                    " AND user_id = ?",
+                    (f"-{max_age_days} days", self._uid(user_id)),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT source_id FROM prune_verdicts"
+                    " WHERE verdict='drop' AND updated_at > datetime('now', ?)",
+                    (f"-{max_age_days} days",),
+                )
+            return {row["source_id"] for row in cur.fetchall()}
+
+    def get_prune_summary(self, user_id: Optional[str] = None) -> dict:
+        """Return prune verdict counts, optionally scoped to a user."""
+        with self._conn() as conn:
+            if user_id is not None:
+                cur = conn.execute(
+                    "SELECT verdict, COUNT(*) as cnt FROM prune_verdicts"
+                    " WHERE updated_at > datetime('now', ?) AND user_id = ?"
+                    " GROUP BY verdict",
+                    (f"-{_PRUNE_EXPIRY_DAYS} days", self._uid(user_id)),
                 )
             else:
                 cur = conn.execute(
@@ -488,7 +538,17 @@ class LocalProjectStore:
             result["total"] = result["drop"] + result["maybe"]
             return result
 
-    def clear_prune_verdict(self, source_id: str) -> None:
-        """Remove prune verdict for a source."""
+    def clear_prune_verdict(
+        self, source_id: str, user_id: Optional[str] = None
+    ) -> None:
+        """Remove prune verdict for a source, optionally scoped to a user."""
         with self._conn() as conn:
-            conn.execute("DELETE FROM prune_verdicts WHERE source_id=?", (source_id,))
+            if user_id is not None:
+                conn.execute(
+                    "DELETE FROM prune_verdicts WHERE source_id=? AND user_id=?",
+                    (source_id, self._uid(user_id)),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM prune_verdicts WHERE source_id=?", (source_id,)
+                )
