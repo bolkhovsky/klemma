@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Klemma — Подобрать цитаты</title>
+<style>
+  :root {
+    --ink: #1a1a2e; --ink-2: #3d3d5c; --ink-muted: #6b6b8a;
+    --paper-bg: #faf9f7; --paper-white: #fff;
+    --rule: #e8e5df; --rule-light: #f0ede8;
+    --accent: #0d7377; --accent-deep: #065a5e; --accent-pale: #e6f3f3;
+    --ok: #2d6a4f; --ok-bg: #e8f5e9;
+    --err: #c62828; --err-bg: #fff0f0;
+    --warn: #b45309; --warn-bg: #fef3c7;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: var(--paper-bg); color: var(--ink); }
+
+  /* Topbar */
+  .topbar { height: 48px; background: white; border-bottom: 1px solid var(--rule); display: flex; align-items: center; padding: 0 20px; gap: 12px; }
+  .topbar-logo { font-weight: 700; font-size: 15px; letter-spacing: -0.4px; color: var(--ink); text-decoration: none; }
+  .topbar-logo span { color: var(--accent); }
+  .project-name { font-size: 14px; font-weight: 500; color: var(--ink-2); }
+
+  /* Layout */
+  .layout { display: flex; height: calc(100vh - 48px); }
+  .sidebar { width: 176px; background: white; border-right: 1px solid var(--rule); display: flex; flex-direction: column; flex-shrink: 0; }
+  .main { flex: 1; display: flex; overflow: hidden; }
+
+  /* Sidebar nav */
+  .nav-item { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 14px; color: var(--ink-2); text-decoration: none; transition: background 0.15s; }
+  .nav-item:hover { background: var(--rule-light); }
+  .nav-item.active { color: var(--accent-deep); font-weight: 600; background: var(--accent-pale); }
+  .nav-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--ink-muted); }
+  .nav-item.active .nav-icon { color: var(--accent); }
+  .sidebar-section { padding: 12px 14px 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--ink-muted); }
+  .sidebar-bottom { margin-top: auto; border-top: 1px solid var(--rule); padding: 10px 12px; }
+  .user-row { display: flex; align-items: center; gap: 8px; }
+  .avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #2563eb); display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: white; flex-shrink: 0; }
+  .user-name { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .nav-badge { font-size: 12px; font-weight: 600; background: var(--accent-pale); color: var(--accent); padding: 1px 6px; border-radius: 8px; margin-left: auto; }
+
+  /* Two-panel layout */
+  .sections-panel { width: 280px; border-right: 1px solid var(--rule); background: white; overflow-y: auto; flex-shrink: 0; }
+  .suggestions-panel { flex: 1; overflow-y: auto; background: var(--paper-bg); }
+
+  /* Sections panel */
+  .sections-header { padding: 16px 16px 12px; border-bottom: 1px solid var(--rule); }
+  .sections-header h2 { font-size: 15px; font-weight: 600; color: var(--ink); margin-bottom: 4px; }
+  .sections-header .subtitle { font-size: 12px; color: var(--ink-muted); }
+
+  .section-item { display: flex; align-items: center; gap: 8px; padding: 10px 16px; cursor: pointer; transition: background 0.1s; border-bottom: 1px solid var(--rule-light); }
+  .section-item:hover { background: var(--rule-light); }
+  .section-item.active { background: var(--accent-pale); border-left: 3px solid var(--accent); padding-left: 13px; }
+  .section-item .si-id { font-family: monospace; font-size: 12px; font-weight: 600; color: var(--accent); background: var(--accent-pale); padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
+  .section-item.active .si-id { background: white; }
+  .section-item .si-name { font-size: 13px; color: var(--ink-2); flex: 1; line-height: 1.4; }
+  .section-item .si-count { font-size: 12px; font-weight: 600; color: var(--ink-muted); background: var(--rule-light); padding: 1px 7px; border-radius: 8px; flex-shrink: 0; }
+  .section-item .si-empty { font-size: 12px; font-weight: 500; color: var(--warn); flex-shrink: 0; }
+  .section-item.has-gap { position: relative; }
+  .section-item.has-gap::after { content: ''; position: absolute; top: 50%; right: 56px; transform: translateY(-50%); width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+
+  /* Suggestions panel */
+  .suggest-header { padding: 20px 24px 16px; }
+  .suggest-header h2 { font-size: 17px; font-weight: 600; color: var(--ink); margin-bottom: 4px; }
+  .suggest-header .section-context { font-size: 13px; color: var(--ink-muted); }
+
+  .gap-alert { background: var(--warn-bg); border: 1px solid #fcd34d; border-radius: 8px; padding: 12px 16px; margin: 0 24px 16px; }
+  .gap-alert-title { font-size: 13px; font-weight: 600; color: var(--warn); margin-bottom: 2px; }
+  .gap-alert-text { font-size: 13px; color: var(--ink-muted); line-height: 1.5; }
+
+  .suggest-group-label { padding: 0 24px; margin-bottom: 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; color: var(--ink-muted); display: flex; align-items: center; gap: 8px; }
+  .suggest-group-label::after { content: ''; flex: 1; height: 1px; background: var(--rule); }
+
+  .suggest-card { background: white; border: 1px solid var(--rule); border-radius: 10px; margin: 0 24px 10px; padding: 14px 16px; transition: border-color 0.15s; }
+  .suggest-card:hover { border-color: #d4d0ca; }
+  .suggest-card-text { font-size: 14px; line-height: 1.7; color: var(--ink-2); margin-bottom: 10px; }
+  .suggest-card-footer { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .suggest-card-actions { margin-left: auto; display: flex; gap: 6px; }
+
+  .badge { font-size: 12px; font-weight: 500; padding: 3px 10px; border-radius: 4px; }
+  .intent-background { background: #dbeafe; color: #1d4ed8; }
+  .intent-method { background: #ede9fe; color: #6d28d9; }
+  .intent-result_comparison { background: #dcfce7; color: #15803d; }
+  .intent-extends { background: #ccfbf1; color: #0f766e; }
+  .intent-contrasts { background: #ffedd5; color: #c2410c; }
+  .intent-uses_data { background: #fef9c3; color: #a16207; }
+
+  .source-attr { font-size: 13px; color: var(--accent); }
+  .match-reason { font-size: 12px; font-weight: 500; }
+  .match-intent { color: var(--ok); }
+  .match-similarity { color: var(--accent); }
+
+  .btn-add { padding: 6px 16px; border-radius: 6px; border: 1px solid var(--accent); background: white; color: var(--accent); font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
+  .btn-add:hover { background: var(--accent-pale); }
+  .btn-added { padding: 6px 16px; border-radius: 6px; border: 1px solid #a7f3d0; background: var(--ok-bg); color: var(--ok); font-size: 13px; font-weight: 500; cursor: default; }
+
+  .suggest-empty { text-align: center; padding: 60px 24px; }
+  .suggest-empty .icon { font-size: 36px; margin-bottom: 12px; }
+  .suggest-empty h3 { font-size: 16px; font-weight: 600; color: var(--ink); margin-bottom: 6px; }
+  .suggest-empty p { font-size: 14px; color: var(--ink-muted); line-height: 1.6; }
+
+  /* Already in section — compact list */
+  .existing-section { padding: 0 24px 16px; }
+  .existing-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; color: var(--ink-muted); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .existing-label::after { content: ''; flex: 1; height: 1px; background: var(--rule); }
+  .existing-frag { font-size: 13px; color: var(--ink-muted); line-height: 1.6; padding: 6px 0; border-bottom: 1px solid var(--rule-light); }
+  .existing-frag:last-child { border-bottom: none; }
+  .existing-source { font-size: 12px; color: var(--accent); margin-top: 2px; }
+
+  /* Tabs */
+  .suggest-tabs { display: flex; gap: 0; padding: 0 24px; border-bottom: 1px solid var(--rule); margin-bottom: 16px; }
+  .suggest-tab { padding: 8px 16px; font-size: 13px; font-weight: 500; color: var(--ink-muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
+  .suggest-tab:hover { color: var(--ink); }
+  .suggest-tab.active { color: var(--accent-deep); border-bottom-color: var(--accent); }
+
+  /* Search */
+  .suggest-search { padding: 0 24px 12px; }
+  .suggest-search input { width: 100%; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 6px; font-size: 14px; outline: none; }
+  .suggest-search input:focus { border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <a href="library-curated.html" class="topbar-logo">k<span>lemma</span></a>
+  <div style="width: 1px; height: 20px; background: var(--rule)"></div>
+  <div class="project-name">Моя диссертация</div>
+</div>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-section">Навигация</div>
+    <a href="library-curated.html" class="nav-item">
+      <svg class="nav-icon" viewBox="0 0 14 14" fill="none"><path d="M2 2h6l3 3v7a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3"/><path d="M8 2v3h3" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      Библиотека
+    </a>
+    <a href="library-curated.html" class="nav-item">
+      <svg class="nav-icon" viewBox="0 0 14 14" fill="none"><path d="M1 3l4-1.5 4 1.5 4-1.5v9l-4 1.5-4-1.5-4 1.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5 1.5v9M9 3.5v9" stroke="currentColor" stroke-width="1.3"/></svg>
+      Карта <span class="nav-badge">14</span>
+    </a>
+    <a href="#" class="nav-item active">
+      <svg class="nav-icon" viewBox="0 0 14 14" fill="none"><circle cx="5.5" cy="5.5" r="4" stroke="currentColor" stroke-width="1.3"/><path d="M8.5 8.5L12.5 12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M5.5 3.5v4M3.5 5.5h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      Подобрать
+    </a>
+
+    <div class="sidebar-bottom">
+      <div class="user-row">
+        <div class="avatar">ИБ</div>
+        <div class="user-name">Илья</div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main: two panels -->
+  <div class="main">
+
+    <!-- Left: sections list -->
+    <div class="sections-panel">
+      <div class="sections-header">
+        <h2>Разделы</h2>
+        <div class="subtitle">9 разделов &middot; 3 без цитат</div>
+      </div>
+
+      <div class="section-item active" onclick="selectSection(this, '1')">
+        <span class="si-id">1</span>
+        <span class="si-name">Обзор литературы</span>
+        <span class="si-count">6</span>
+      </div>
+      <div class="section-item" onclick="selectSection(this, '1.1')">
+        <span class="si-id">1.1</span>
+        <span class="si-name">Наблюдаемые тенденции</span>
+        <span class="si-count">2</span>
+      </div>
+      <div class="section-item" onclick="selectSection(this, '1.2')">
+        <span class="si-id">1.2</span>
+        <span class="si-name">Анализ существующих подходов</span>
+        <span class="si-count">3</span>
+      </div>
+      <div class="section-item" onclick="selectSection(this, '2')">
+        <span class="si-id">2</span>
+        <span class="si-name">Методика исследования</span>
+        <span class="si-empty">0</span>
+      </div>
+      <div class="section-item has-gap" onclick="selectSection(this, '2.1')">
+        <span class="si-id">2.1</span>
+        <span class="si-name">Объект и предмет исследования</span>
+        <span class="si-count">2</span>
+      </div>
+      <div class="section-item" onclick="selectSection(this, '2.2')">
+        <span class="si-id">2.2</span>
+        <span class="si-name">Используемые данные</span>
+        <span class="si-empty">0</span>
+      </div>
+      <div class="section-item" onclick="selectSection(this, '3')">
+        <span class="si-id">3</span>
+        <span class="si-name">Результаты</span>
+        <span class="si-empty">0</span>
+      </div>
+      <div class="section-item" onclick="selectSection(this, '3.1')">
+        <span class="si-id">3.1</span>
+        <span class="si-name">Валидация модели</span>
+        <span class="si-count">1</span>
+      </div>
+      <div class="section-item" onclick="selectSection(this, '3.2')">
+        <span class="si-id">3.2</span>
+        <span class="si-name">Прогнозные сценарии</span>
+        <span class="si-empty">0</span>
+      </div>
+    </div>
+
+    <!-- Right: suggestions for selected section -->
+    <div class="suggestions-panel" id="suggestPanel">
+
+      <div class="suggest-header">
+        <h2>Подобрать цитаты</h2>
+        <div class="section-context"><span style="font-weight:600;color:var(--accent)">1</span> &mdash; Обзор литературы &middot; 6 цитат уже есть</div>
+      </div>
+
+      <!-- Gap alert -->
+      <div class="gap-alert">
+        <div class="gap-alert-title">Не хватает цитат типа <span class="badge intent-method" style="font-size: 11px; vertical-align: 1px;">метод</span></div>
+        <div class="gap-alert-text">Klemma нашла 2 подходящих фрагмента в вашей библиотеке</div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="suggest-tabs">
+        <div class="suggest-tab active" onclick="showTab('recommend', this)">Рекомендации</div>
+        <div class="suggest-tab" onclick="showTab('all', this)">Все фрагменты</div>
+      </div>
+
+      <!-- Recommendations tab -->
+      <div id="tab-recommend">
+
+        <div class="suggest-group-label">По совпадению intent</div>
+
+        <div class="suggest-card">
+          <div class="suggest-card-text">We compare observed trends in Arctic sea ice extent with simulations from 18 coupled global climate models participating in CMIP3, using both greenhouse gas forcing scenarios and natural variability runs.</div>
+          <div class="suggest-card-footer">
+            <span class="badge intent-method">метод</span>
+            <span class="source-attr">Stroeve et al., 2007</span>
+            <span class="match-reason match-intent">intent match</span>
+            <div class="suggest-card-actions">
+              <button class="btn-add" onclick="this.outerHTML='<span class=\'btn-added\'>Добавлено ✓</span>'">Добавить</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="suggest-card">
+          <div class="suggest-card-text">Our analysis extends previous work by Holland et al. (2006) by incorporating the full CMIP3 multi-model ensemble rather than individual model runs, providing a more robust statistical comparison framework.</div>
+          <div class="suggest-card-footer">
+            <span class="badge intent-method">метод</span>
+            <span class="source-attr">Stroeve et al., 2007</span>
+            <span class="match-reason match-intent">intent match</span>
+            <div class="suggest-card-actions">
+              <button class="btn-add">Добавить</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="height: 20px"></div>
+        <div class="suggest-group-label">Похожий контекст</div>
+
+        <div class="suggest-card">
+          <div class="suggest-card-text">Model evaluation reveals systematic biases: most CMIP3 models overestimate the initial (1979) September ice extent by 10-20%, which partly explains their conservative decline projections.</div>
+          <div class="suggest-card-footer">
+            <span class="badge intent-contrasts">контраст</span>
+            <span class="source-attr">Stroeve et al., 2007</span>
+            <span class="match-reason match-similarity">похожий контекст</span>
+            <div class="suggest-card-actions">
+              <button class="btn-add">Добавить</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="suggest-card">
+          <div class="suggest-card-text">The discrepancy between observed and simulated trends cannot be explained by natural variability alone and suggests that current models significantly underestimate the sensitivity of Arctic sea ice to anthropogenic forcing.</div>
+          <div class="suggest-card-footer">
+            <span class="badge intent-result_comparison">результат</span>
+            <span class="source-attr">Stroeve et al., 2007</span>
+            <span class="match-reason match-similarity">похожий контекст</span>
+            <div class="suggest-card-actions">
+              <button class="btn-add">Добавить</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="suggest-card">
+          <div class="suggest-card-text">Sea ice extent data are derived from passive microwave satellite measurements using the NASA Team algorithm, covering the period 1953-2006 with consistent spatial resolution.</div>
+          <div class="suggest-card-footer">
+            <span class="badge intent-uses_data">данные</span>
+            <span class="source-attr">Stroeve et al., 2007</span>
+            <span class="match-reason match-similarity">похожий контекст</span>
+            <div class="suggest-card-actions">
+              <button class="btn-add">Добавить</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Already in this section -->
+        <div style="height: 24px"></div>
+        <div class="existing-section">
+          <div class="existing-label">Уже в этом разделе (6)</div>
+          <div class="existing-frag">
+            September sea ice extent has decreased by approximately 7.8% per decade over the satellite era (1979-2006), with the trend accelerating markedly after 1996.
+            <div class="existing-source">Stroeve et al., 2007</div>
+          </div>
+          <div class="existing-frag">
+            Several positive feedback mechanisms accelerate ice loss, including the ice-albedo feedback...
+            <div class="existing-source">Stroeve et al., 2007</div>
+          </div>
+          <div class="existing-frag">
+            The Arctic has warmed at approximately twice the global average rate over the past three decades...
+            <div class="existing-source">Serreze et al., 2007</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- All fragments tab (hidden) -->
+      <div id="tab-all" style="display:none">
+        <div class="suggest-search">
+          <input type="text" placeholder="Поиск по тексту фрагмента...">
+        </div>
+
+        <div class="suggest-card">
+          <div class="suggest-card-text">While internal variability can produce decadal-scale fluctuations of 1-2 million km² in September extent, the observed 2.5 million km² decline exceeds the 95th percentile of all control run variations.</div>
+          <div class="suggest-card-footer">
+            <span class="badge intent-result_comparison">результат</span>
+            <span class="source-attr">Stroeve et al., 2007</span>
+            <div class="suggest-card-actions">
+              <button class="btn-add">Добавить</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="suggest-card">
+          <div class="suggest-card-text">Rapid ice loss events in CCSM3 are triggered by the interplay of ocean heat transport anomalies and preconditioning by thinning ice cover over preceding decades.</div>
+          <div class="suggest-card-footer">
+            <span class="badge intent-extends">расширяет</span>
+            <span class="source-attr">Holland et al., 2006</span>
+            <div class="suggest-card-actions">
+              <button class="btn-add">Добавить</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="suggest-card">
+          <div class="suggest-card-text">Recent observations suggest that the minimum sea ice extent could reach near-zero levels within the next 30 years under current emission trajectories.</div>
+          <div class="suggest-card-footer">
+            <span class="badge intent-background">фон</span>
+            <span class="source-attr">Serreze et al., 2007</span>
+            <div class="suggest-card-actions">
+              <button class="btn-add">Добавить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+function selectSection(el, id) {
+  document.querySelectorAll('.section-item').forEach(s => s.classList.remove('active'));
+  el.classList.add('active');
+  // In real app: load suggestions for this section
+}
+
+function showTab(tab, el) {
+  el.parentElement.querySelectorAll('.suggest-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-recommend').style.display = tab === 'recommend' ? 'block' : 'none';
+  document.getElementById('tab-all').style.display = tab === 'all' ? 'block' : 'none';
+}
+</script>
+</body>
+</html>
