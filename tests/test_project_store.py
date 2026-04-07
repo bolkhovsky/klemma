@@ -17,13 +17,13 @@ def store(tmp_path) -> LocalProjectStore:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_3(tmp_path):
+def test_schema_version_is_4(tmp_path):
     db_path = tmp_path / "project.db"
     LocalProjectStore(db_path)
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 3
+    assert version == 4
 
 
 def test_tables_created(tmp_path):
@@ -235,7 +235,7 @@ def test_migration_v1_to_v2_idempotent(tmp_path):
     version = conn2.execute("PRAGMA user_version").fetchone()[0]
     tables = {r[0] for r in conn2.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     conn2.close()
-    assert version == 3
+    assert version == 4
     assert "prune_verdicts" in tables
 
 
@@ -355,3 +355,56 @@ def test_prune_verdicts_empty_citekeys_skipped(store):
     items = store.get_prune_verdicts()
     assert len(items) == 1
     assert items[0]["source_id"] == "valid2020"
+
+
+# ---------------------------------------------------------------------------
+# Multi-user isolation (v4 composite PK)
+# ---------------------------------------------------------------------------
+
+
+def test_same_citekey_different_users_no_collision(store):
+    """Two users can register the same citekey without collision."""
+    store.set_source_sections("shared_ck", "paper-a", ["1.1"], [1], user_id="user-A")
+    store.set_source_sections("shared_ck", "paper-b", ["2.1"], [2], user_id="user-B")
+
+    assert store.get_source_sections("shared_ck", user_id="user-A") == ["1.1"]
+    assert store.get_source_sections("shared_ck", user_id="user-B") == ["2.1"]
+
+
+def test_sources_by_section_user_scoped(store):
+    """get_sources_by_section only returns citekeys for the requested user."""
+    store.set_source_sections("src1", "p1", ["1.1"], [1], user_id="alice")
+    store.set_source_sections("src2", "p2", ["1.1"], [1], user_id="bob")
+
+    assert store.get_sources_by_section("1.1", user_id="alice") == ["src1"]
+    assert store.get_sources_by_section("1.1", user_id="bob") == ["src2"]
+    # Unscoped returns both
+    assert set(store.get_sources_by_section("1.1")) == {"src1", "src2"}
+
+
+def test_coverage_stats_user_scoped(store):
+    """get_coverage_stats only counts sources for the requested user."""
+    store.set_source_sections("s1", "p1", ["1.1", "1.2"], [1], user_id="u1")
+    store.set_source_sections("s2", "p2", ["1.1"], [1], user_id="u2")
+    store.set_source_sections("s3", "p3", ["2.1"], [2], user_id="u1")
+
+    stats_u1 = store.get_coverage_stats(user_id="u1")
+    assert stats_u1["total_sources"] == 2
+    assert stats_u1["sections"].get("1.1") == 1
+    assert stats_u1["sections"].get("2.1") == 1
+
+    stats_u2 = store.get_coverage_stats(user_id="u2")
+    assert stats_u2["total_sources"] == 1
+    assert stats_u2["sections"].get("1.1") == 1
+    assert stats_u2["sections"].get("2.1") is None
+
+
+def test_count_sources_user_scoped(store):
+    """count_sources respects user_id scoping."""
+    store.set_source_sections("a", "p1", ["1.1"], [1], user_id="x")
+    store.set_source_sections("b", "p2", ["1.1"], [1], user_id="y")
+    store.set_source_sections("c", "p3", ["1.1"], [1], user_id="x")
+
+    assert store.count_sources(user_id="x") == 2
+    assert store.count_sources(user_id="y") == 1
+    assert store.count_sources() == 3

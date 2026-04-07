@@ -77,16 +77,16 @@ class _SaaSStateAdapter:
     # ── source queries ────────────────────────────────────────────────
 
     def get_by_section(self, section: str, section_type: str | None = None) -> list[dict]:
-        citekeys = self._project.get_sources_by_section(section)
+        citekeys = self._project.get_sources_by_section(section, user_id=self._user_id)
         return self._enrich_sources(citekeys)
 
     def get_by_chapter(self, chapter: int) -> list[dict]:
-        stats = self._project.get_coverage_stats()
+        stats = self._project.get_coverage_stats(user_id=self._user_id)
         chapter_prefix = f"{chapter}."
         citekeys: set[str] = set()
         for sec in stats.get("sections", {}):
             if sec == str(chapter) or sec.startswith(chapter_prefix):
-                citekeys.update(self._project.get_sources_by_section(sec))
+                citekeys.update(self._project.get_sources_by_section(sec, user_id=self._user_id))
         return self._enrich_sources(list(citekeys))
 
     def get_source(self, source_id: str) -> dict | None:
@@ -141,13 +141,13 @@ class _SaaSStateAdapter:
 
         citekeys: list[str] = []
         if section:
-            citekeys = self._project.get_sources_by_section(section)
+            citekeys = self._project.get_sources_by_section(section, user_id=self._user_id)
         elif chapter:
-            stats = self._project.get_coverage_stats()
+            stats = self._project.get_coverage_stats(user_id=self._user_id)
             prefix = f"{chapter}."
             for sec in stats.get("sections", {}):
                 if sec == str(chapter) or sec.startswith(prefix):
-                    citekeys.extend(self._project.get_sources_by_section(sec))
+                    citekeys.extend(self._project.get_sources_by_section(sec, user_id=self._user_id))
             citekeys = list(set(citekeys))
 
         result: list[dict] = []
@@ -170,7 +170,7 @@ class _SaaSStateAdapter:
     # ── coverage / gaps ───────────────────────────────────────────────
 
     def get_coverage_stats(self) -> dict:
-        return self._project.get_coverage_stats()
+        return self._project.get_coverage_stats(user_id=self._user_id)
 
     def get_gaps(self, min_sources: int = 3) -> list[dict]:
         return []

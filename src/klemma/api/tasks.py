@@ -80,19 +80,19 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
 
     # Check token limit
     if user_store and user_id and not user_store.check_token_limit(user_id):
-        user_library.update_status(citekey, "pending")
+        user_library.update_status(citekey, "pending", user_id=user_id or None)
         return {"status": "error", "detail": "Token limit exhausted"}
 
     # Check paper exists
     paper = paper_store.get_paper_by_id(paper_id)
     if paper is None:
-        user_library.update_status(citekey, "failed")
+        user_library.update_status(citekey, "failed", user_id=user_id or None)
         return {"status": "error", "detail": f"Paper {paper_id} not found"}
 
     # Check if already processed (has fragments)
     existing = paper_store.get_fragments(paper_id)
     if existing and not force:
-        user_library.update_status(citekey, "completed")
+        user_library.update_status(citekey, "completed", user_id=user_id or None)
         return {
             "status": "already_processed",
             "citekey": citekey,
@@ -106,7 +106,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 "Force reprocess skipped for %s — paper %s is shared by %d users",
                 citekey, paper_id, other_owners,
             )
-            user_library.update_status(citekey, "completed")
+            user_library.update_status(citekey, "completed", user_id=user_id or None)
             return {
                 "status": "already_processed",
                 "citekey": citekey,
@@ -116,13 +116,13 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         logger.info("Force reprocess: deleted %d existing fragments for %s", deleted, citekey)
 
     # Mark as processing
-    user_library.update_status(citekey, "processing")
+    user_library.update_status(citekey, "processing", user_id=user_id or None)
 
     # Find PDF file in FileStore
     paper_dir = file_store.get_paper_dir(paper_id)
     pdf_files = list(paper_dir.glob("*.pdf")) if paper_dir.is_dir() else []
     if not pdf_files:
-        user_library.update_status(citekey, "failed")
+        user_library.update_status(citekey, "failed", user_id=user_id or None)
         return {"status": "error", "detail": f"PDF not found for paper {paper_id}"}
 
     # Extract PDF text
@@ -134,13 +134,13 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         extractor = PDFExtractor()
         pdf_text = extractor.extract(pdf_path)
         if not pdf_text or len(pdf_text) < 500:
-            user_library.update_status(citekey, "failed")
+            user_library.update_status(citekey, "failed", user_id=user_id or None)
             return {"status": "error", "detail": "PDF text too short or extraction failed"}
 
         logger.info("Extracted %d chars from PDF for %s", len(pdf_text), citekey)
     except Exception as exc:
         logger.error("PDF extraction failed for %s: %s", citekey, exc)
-        user_library.update_status(citekey, "failed")
+        user_library.update_status(citekey, "failed", user_id=user_id or None)
         return {"status": "error", "detail": f"PDF extraction failed: {exc}"}
 
     # Extract and enrich metadata (title, authors, year, DOI, abstract)
@@ -168,7 +168,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
 
     # Check AI config
     if not os.getenv("ANTHROPIC_API_KEY") and not os.getenv("OPENAI_API_KEY"):
-        user_library.update_status(citekey, "pending")
+        user_library.update_status(citekey, "pending", user_id=user_id or None)
         return {
             "status": "pending",
             "citekey": citekey,
@@ -234,7 +234,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
 
         result = ai.call_with_meta(system, user_prompt, max_tokens=8192)
         if not result or not result.text:
-            user_library.update_status(citekey, "failed")
+            user_library.update_status(citekey, "failed", user_id=user_id or None)
             return {"status": "error", "detail": "AI extraction returned no data"}
 
         # Record token usage
@@ -252,7 +252,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         from klemma.ai import extract_json
         data = extract_json(result.text)
         if not data:
-            user_library.update_status(citekey, "failed")
+            user_library.update_status(citekey, "failed", user_id=user_id or None)
             return {"status": "error", "detail": "Failed to parse AI response as JSON"}
 
         # Parse and save fragments; collect AI-predicted section assignments
@@ -281,7 +281,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 predicted_chapters.add(chap)
 
         if not fragments:
-            user_library.update_status(citekey, "failed")
+            user_library.update_status(citekey, "failed", user_id=user_id or None)
             return {"status": "error", "detail": "No fragments extracted from PDF"}
 
         # Save to paper store
@@ -297,6 +297,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 citekey, paper_id,
                 sorted(predicted_sections),
                 sorted(predicted_chapters),
+                user_id=user_id or None,
             )
             logger.info(
                 "Auto-assigned sections %s for %s (project %s)",
@@ -352,7 +353,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             links_saved = paper_store.save_citation_links(paper_id, key_refs)
             logger.info("Saved %d citation links for %s", links_saved, citekey)
 
-        user_library.update_status(citekey, "completed")
+        user_library.update_status(citekey, "completed", user_id=user_id or None)
         logger.info("Extracted %d fragments for %s (%s)", saved, citekey, paper_id)
 
         return {
@@ -363,7 +364,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
 
     except Exception as exc:
         logger.error("AI extraction failed for %s: %s", citekey, exc, exc_info=True)
-        user_library.update_status(citekey, "failed")
+        user_library.update_status(citekey, "failed", user_id=user_id or None)
         return {"status": "error", "detail": f"Extraction failed: {type(exc).__name__}: {exc}"}
 
 
@@ -619,7 +620,7 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
     valid_citekeys: set[str] = set()
 
     try:
-        section_citekeys = project_store.get_sources_by_section(section)
+        section_citekeys = project_store.get_sources_by_section(section, user_id=user_id or None)
         for citekey in section_citekeys:
             valid_citekeys.add(citekey)
             src = user_library.get_source_by_citekey(citekey, user_id=user_id or None)

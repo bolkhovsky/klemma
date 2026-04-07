@@ -14,27 +14,31 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator, Optional
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS project_sources (
-    citekey          TEXT PRIMARY KEY,
+    citekey          TEXT NOT NULL,
     paper_id         TEXT NOT NULL,
     primary_chapter  INTEGER,
     primary_section  TEXT,
     relevance_nr1    INTEGER DEFAULT 0,
     relevance_nr2    INTEGER DEFAULT 0,
     citation_priority TEXT DEFAULT 'medium',
-    added_at         TEXT DEFAULT (datetime('now'))
+    added_at         TEXT DEFAULT (datetime('now')),
+    user_id          TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, citekey)
 );
 CREATE INDEX IF NOT EXISTS idx_ps_paper ON project_sources(paper_id);
+CREATE INDEX IF NOT EXISTS idx_ps_user ON project_sources(user_id);
 
 CREATE TABLE IF NOT EXISTS project_source_sections (
-    citekey      TEXT NOT NULL REFERENCES project_sources(citekey) ON DELETE CASCADE,
+    citekey      TEXT NOT NULL,
     section      TEXT NOT NULL,
     section_type TEXT,
     chapter      INTEGER,
-    PRIMARY KEY (citekey, section)
+    user_id      TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, citekey, section)
 );
 CREATE INDEX IF NOT EXISTS idx_pss_section ON project_source_sections(section);
 
@@ -101,21 +105,94 @@ class LocalProjectStore:
         finally:
             conn.close()
 
+    @staticmethod
+    def _uid(user_id: Optional[str]) -> str:
+        """Normalize user_id: None → '' for composite PK compatibility."""
+        return user_id if user_id is not None else ""
+
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        # Always ensure base V1 schema exists (CREATE TABLE IF NOT EXISTS — idempotent).
-        # This guards against DBs that somehow have user_version=1 but missing tables.
-        conn.executescript(_CREATE_SCHEMA)
+        if version < 1:
+            # Fresh DB — create with v4 schema directly
+            conn.executescript(_CREATE_SCHEMA)
+        else:
+            # Ensure all expected columns exist on old DBs (v1 may be minimal)
+            for col, typ in [
+                ("primary_chapter", "INTEGER"),
+                ("primary_section", "TEXT"),
+                ("relevance_nr1", "INTEGER DEFAULT 0"),
+                ("relevance_nr2", "INTEGER DEFAULT 0"),
+                ("citation_priority", "TEXT DEFAULT 'medium'"),
+                ("added_at", "TEXT"),
+                ("user_id", "TEXT"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE project_sources ADD COLUMN {col} {typ}")
+                except sqlite3.OperationalError:
+                    pass  # column already exists
         if version < 2:
             conn.executescript(_MIGRATE_V2)
         if version < 3:
-            # Multi-user support: scope project data to a specific SaaS user.
-            conn.execute(
-                "ALTER TABLE project_sources ADD COLUMN user_id TEXT"
-            )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ps_user ON project_sources(user_id)"
             )
+        # Ensure junction table exists before v4 migration reads from it
+        conn.execute("""CREATE TABLE IF NOT EXISTS project_source_sections (
+            citekey TEXT NOT NULL, section TEXT NOT NULL, section_type TEXT,
+            chapter INTEGER, PRIMARY KEY (citekey, section))""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pss_section ON project_source_sections(section)")
+        # v4: composite PK (user_id, citekey) to prevent cross-user collision.
+        # Check actual PK structure for idempotency.
+        pk_cols = [
+            r[1] for r in conn.execute("PRAGMA table_info(project_sources)").fetchall()
+            if r[5] > 0
+        ]
+        needs_pk_migration = pk_cols == ["citekey"]
+        if version < 4 or needs_pk_migration:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS project_sources_v4 (
+                    citekey          TEXT NOT NULL,
+                    paper_id         TEXT NOT NULL,
+                    primary_chapter  INTEGER,
+                    primary_section  TEXT,
+                    relevance_nr1    INTEGER DEFAULT 0,
+                    relevance_nr2    INTEGER DEFAULT 0,
+                    citation_priority TEXT DEFAULT 'medium',
+                    added_at         TEXT DEFAULT (datetime('now')),
+                    user_id          TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (user_id, citekey)
+                );
+                INSERT OR IGNORE INTO project_sources_v4
+                    (citekey, paper_id, primary_chapter, primary_section,
+                     relevance_nr1, relevance_nr2, citation_priority, added_at, user_id)
+                SELECT citekey, paper_id, primary_chapter, primary_section,
+                       relevance_nr1, relevance_nr2, citation_priority, added_at,
+                       COALESCE(user_id, '')
+                FROM project_sources;
+
+                CREATE TABLE IF NOT EXISTS project_source_sections_v4 (
+                    citekey      TEXT NOT NULL,
+                    section      TEXT NOT NULL,
+                    section_type TEXT,
+                    chapter      INTEGER,
+                    user_id      TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (user_id, citekey, section)
+                );
+                INSERT OR IGNORE INTO project_source_sections_v4
+                    (citekey, section, section_type, chapter, user_id)
+                SELECT pss.citekey, pss.section, pss.section_type, pss.chapter,
+                       COALESCE(ps.user_id, '')
+                FROM project_source_sections pss
+                LEFT JOIN project_sources ps ON ps.citekey = pss.citekey;
+
+                DROP TABLE project_source_sections;
+                DROP TABLE project_sources;
+                ALTER TABLE project_sources_v4 RENAME TO project_sources;
+                ALTER TABLE project_source_sections_v4 RENAME TO project_source_sections;
+                CREATE INDEX IF NOT EXISTS idx_ps_paper ON project_sources(paper_id);
+                CREATE INDEX IF NOT EXISTS idx_ps_user ON project_sources(user_id);
+                CREATE INDEX IF NOT EXISTS idx_pss_section ON project_source_sections(section);
+            """)
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -132,6 +209,7 @@ class LocalProjectStore:
         user_id: Optional[str] = None,
     ) -> None:
         """Upsert project_sources row and replace section assignments."""
+        uid = self._uid(user_id)
         primary_section = sections[0] if sections else None
         primary_chapter = chapters[0] if chapters else None
         with self._conn() as conn:
@@ -139,21 +217,21 @@ class LocalProjectStore:
                 """INSERT INTO project_sources
                    (citekey, paper_id, primary_chapter, primary_section, user_id)
                    VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT(citekey) DO UPDATE SET
+                   ON CONFLICT(user_id, citekey) DO UPDATE SET
                        paper_id=excluded.paper_id,
                        primary_chapter=excluded.primary_chapter,
-                       primary_section=excluded.primary_section,
-                       user_id=COALESCE(excluded.user_id, project_sources.user_id)""",
-                (citekey, paper_id, primary_chapter, primary_section, user_id),
+                       primary_section=excluded.primary_section""",
+                (citekey, paper_id, primary_chapter, primary_section, uid),
             )
             conn.execute(
-                "DELETE FROM project_source_sections WHERE citekey = ?", (citekey,)
+                "DELETE FROM project_source_sections WHERE citekey = ? AND user_id = ?",
+                (citekey, uid),
             )
             conn.executemany(
                 """INSERT OR IGNORE INTO project_source_sections
-                   (citekey, section, chapter) VALUES (?, ?, ?)""",
+                   (citekey, section, chapter, user_id) VALUES (?, ?, ?, ?)""",
                 [
-                    (citekey, s, chapters[i] if i < len(chapters) else primary_chapter)
+                    (citekey, s, chapters[i] if i < len(chapters) else primary_chapter, uid)
                     for i, s in enumerate(sections)
                 ],
             )
@@ -170,19 +248,17 @@ class LocalProjectStore:
                     "SELECT COUNT(*) FROM project_sources WHERE user_id = ?", (user_id,)
                 ).fetchone()[0]
                 by_section = conn.execute(
-                    """SELECT pss.section, COUNT(DISTINCT pss.citekey) as cnt
-                       FROM project_source_sections pss
-                       JOIN project_sources ps ON ps.citekey = pss.citekey
-                       WHERE ps.user_id = ?
-                       GROUP BY pss.section ORDER BY pss.section""",
+                    """SELECT section, COUNT(DISTINCT citekey) as cnt
+                       FROM project_source_sections
+                       WHERE user_id = ?
+                       GROUP BY section ORDER BY section""",
                     (user_id,),
                 ).fetchall()
                 by_chapter = conn.execute(
-                    """SELECT pss.chapter, COUNT(DISTINCT pss.citekey) as cnt
-                       FROM project_source_sections pss
-                       JOIN project_sources ps ON ps.citekey = pss.citekey
-                       WHERE pss.chapter IS NOT NULL AND ps.user_id = ?
-                       GROUP BY pss.chapter ORDER BY pss.chapter""",
+                    """SELECT chapter, COUNT(DISTINCT citekey) as cnt
+                       FROM project_source_sections
+                       WHERE chapter IS NOT NULL AND user_id = ?
+                       GROUP BY chapter ORDER BY chapter""",
                     (user_id,),
                 ).fetchall()
             else:
@@ -225,17 +301,13 @@ class LocalProjectStore:
     ) -> bool:
         """Remove a single section assignment for *citekey*.
 
-        Optionally checks *user_id* ownership via ``project_sources``.
+        Optionally checks *user_id* ownership.
         Returns ``True`` if a row was deleted, ``False`` if nothing matched.
         """
         with self._conn() as conn:
             if user_id is not None:
                 cursor = conn.execute(
-                    """DELETE FROM project_source_sections
-                       WHERE citekey = ? AND section = ?
-                         AND citekey IN (
-                             SELECT citekey FROM project_sources WHERE user_id = ?
-                         )""",
+                    "DELETE FROM project_source_sections WHERE citekey = ? AND section = ? AND user_id = ?",
                     (citekey, section, user_id),
                 )
             else:
@@ -252,10 +324,9 @@ class LocalProjectStore:
         with self._conn() as conn:
             if user_id is not None:
                 rows = conn.execute(
-                    """SELECT pss.section FROM project_source_sections pss
-                       JOIN project_sources ps ON ps.citekey = pss.citekey
-                       WHERE pss.citekey = ? AND ps.user_id = ?
-                       ORDER BY pss.section""",
+                    """SELECT section FROM project_source_sections
+                       WHERE citekey = ? AND user_id = ?
+                       ORDER BY section""",
                     (citekey, user_id),
                 ).fetchall()
             else:
@@ -292,8 +363,7 @@ class LocalProjectStore:
             if user_id is not None:
                 rows = conn.execute(
                     """SELECT pss.citekey FROM project_source_sections pss
-                       JOIN project_sources ps ON ps.citekey = pss.citekey
-                       WHERE pss.section = ? AND ps.user_id = ?
+                       WHERE pss.section = ? AND pss.user_id = ?
                        ORDER BY pss.citekey""",
                     (section, user_id),
                 ).fetchall()
@@ -395,14 +465,23 @@ class LocalProjectStore:
             )
             return {row["source_id"] for row in cur.fetchall()}
 
-    def get_prune_summary(self) -> dict:
-        """Return prune verdict counts."""
+    def get_prune_summary(self, user_id: Optional[str] = None) -> dict:
+        """Return prune verdict counts, optionally scoped to a user's sources."""
         with self._conn() as conn:
-            cur = conn.execute(
-                "SELECT verdict, COUNT(*) as cnt FROM prune_verdicts"
-                " WHERE updated_at > datetime('now', ?) GROUP BY verdict",
-                (f"-{_PRUNE_EXPIRY_DAYS} days",),
-            )
+            if user_id is not None:
+                cur = conn.execute(
+                    """SELECT pv.verdict, COUNT(*) as cnt FROM prune_verdicts pv
+                       JOIN project_sources ps ON ps.citekey = pv.source_id AND ps.user_id = ?
+                       WHERE pv.updated_at > datetime('now', ?)
+                       GROUP BY pv.verdict""",
+                    (user_id, f"-{_PRUNE_EXPIRY_DAYS} days"),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT verdict, COUNT(*) as cnt FROM prune_verdicts"
+                    " WHERE updated_at > datetime('now', ?) GROUP BY verdict",
+                    (f"-{_PRUNE_EXPIRY_DAYS} days",),
+                )
             result = {"drop": 0, "maybe": 0}
             for row in cur.fetchall():
                 result[row["verdict"]] = row["cnt"]

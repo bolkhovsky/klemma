@@ -421,17 +421,33 @@ class LocalPaperStore:
                 ).fetchall()
         return [dict(r) for r in rows]
 
-    def count_citation_gaps(self) -> int:
-        """Count unique cited papers not in the library."""
+    def count_citation_gaps(self, paper_ids: list[str] | None = None) -> int:
+        """Count unique cited papers not in the library.
+
+        When paper_ids is provided, only count gaps from those papers (user-scoped).
+        """
         with self._conn() as conn:
-            row = conn.execute(
-                """SELECT COUNT(DISTINCT cg.cited_title_hash)
-                   FROM citation_graph cg
-                   WHERE NOT EXISTS (
-                     SELECT 1 FROM papers p
-                     WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
-                   )"""
-            ).fetchone()
+            if paper_ids:
+                placeholders = ",".join("?" for _ in paper_ids)
+                row = conn.execute(
+                    f"""SELECT COUNT(DISTINCT cg.cited_title_hash)
+                       FROM citation_graph cg
+                       WHERE cg.citing_paper_id IN ({placeholders})
+                         AND NOT EXISTS (
+                           SELECT 1 FROM papers p
+                           WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
+                         )""",
+                    paper_ids,
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """SELECT COUNT(DISTINCT cg.cited_title_hash)
+                       FROM citation_graph cg
+                       WHERE NOT EXISTS (
+                         SELECT 1 FROM papers p
+                         WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
+                       )"""
+                ).fetchone()
         return row[0] if row else 0
 
     # ------------------------------------------------------------------ #
