@@ -28,15 +28,17 @@ const router = createRouter({
     // Project-scoped routes
     {
       path: '/:projectId/map',
-      redirect: (to) => `/${to.params.projectId}/write`,
+      name: 'map',
+      component: () => import('../views/MapView.vue'),
+      meta: { requiresAuth: true },
     },
     {
       path: '/:projectId/dashboard',
-      redirect: (to) => `/${to.params.projectId}/write`,
+      redirect: (to) => `/${to.params.projectId}/library`,
     },
     {
       path: '/:projectId/draft',
-      redirect: (to) => `/${to.params.projectId}/write`,
+      redirect: (to) => `/${to.params.projectId}/library`,
     },
     {
       path: '/:projectId/feed',
@@ -66,6 +68,12 @@ const router = createRouter({
       path: '/:projectId/library/:citekey',
       name: 'source',
       component: () => import('../views/SourceView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/:projectId/library/:citekey/review',
+      name: 'fragment-review',
+      component: () => import('../views/FragmentReviewView.vue'),
       meta: { requiresAuth: true },
     },
     // Removed views redirect to /write

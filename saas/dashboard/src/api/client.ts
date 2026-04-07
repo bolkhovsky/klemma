@@ -327,6 +327,11 @@ export const drafts = {
       body: JSON.stringify({ filename: filename ?? null }),
     }),
 
+  scaffold: (projectId: string) =>
+    request<{ files: DraftFile[] }>(`/projects/${projectId}/drafts/scaffold`, {
+      method: 'POST',
+    }),
+
   upsertSection: (
     projectId: string,
     filename: string,
@@ -341,6 +346,43 @@ export const drafts = {
         body: JSON.stringify({ body, heading_title: headingTitle ?? null }),
       },
     ),
+}
+
+// Curation (fragment accept/reject + curated bank)
+export const curation = {
+  pending: (projectId: string, citekey: string) =>
+    request<{
+      fragments: { fragment_id: string; text: string; citation_intent: string; fragment_type: string; page: number | null; citekey: string }[]
+      total: number
+      curated_count: number
+    }>(`/projects/${projectId}/fragments/pending?citekey=${encodeURIComponent(citekey)}`),
+
+  curate: (projectId: string, decisions: { fragment_id: string; citekey: string; verdict: string; assigned_section?: string; note?: string }[]) =>
+    request<{ curated: number; accepted: number; rejected: number }>(`/projects/${projectId}/fragments/curate`, {
+      method: 'POST',
+      body: JSON.stringify({ decisions }),
+    }),
+
+  curated: (projectId: string, params?: { verdict?: string; section?: string; citekey?: string }) => {
+    const qs = params ? `?${new URLSearchParams(params as Record<string, string>)}` : ''
+    return request<{
+      fragments: { fragment_id: string; citekey: string; text: string; citation_intent: string; assigned_section: string | null; note: string | null; verdict: string; curated_at: string }[]
+      total: number
+      by_section: Record<string, number>
+    }>(`/projects/${projectId}/fragments/curated${qs}`)
+  },
+
+  update: (projectId: string, fragmentId: string, patch: { verdict?: string; assigned_section?: string; note?: string }) =>
+    request<{ ok: boolean }>(`/projects/${projectId}/fragments/curate/${fragmentId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  suggest: (projectId: string, section: string) =>
+    request<{
+      gap_alert: { missing_intents: string[]; message: string } | null
+      suggestions: { fragment_id: string; text: string; citation_intent: string; source: string; citekey: string; match_reason: string; score: number }[]
+    }>(`/projects/${projectId}/fragments/suggest?section=${encodeURIComponent(section)}`),
 }
 
 // Research (literature review generation + stored reports)

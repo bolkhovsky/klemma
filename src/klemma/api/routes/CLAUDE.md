@@ -56,16 +56,18 @@ Project CRUD + coverage + section assignment endpoints — mounted with `prefix=
 - Schemas: `ProjectResponse`, `ProjectListResponse`, `ProjectCreateRequest`, `ProjectRenameRequest`, `OutlineSection`, `OutlineUpdateRequest`, `OutlineGenerateRequest`, `CoverageStatsResponse`, `SectionSourcesResponse`, `AssignSectionRequest`
 - Block draft endpoints were in `blocks.py` (removed in #260 item 2 — BlockView migrated to `drafts.py`)
 
-### drafts.py (~210 lines)
+### drafts.py (~280 lines)
 Draft file management — mounted under `prefix="/projects"`. All require Bearer auth.
 Files stored at `KLEMMA_DATA_DIR/drafts/{project_id}/draft/` (ADR-016).
 - `GET /projects/{id}/drafts` → `FileListResponse` — list `.md` files with parsed headings + word count
 - `GET /projects/{id}/drafts/{filename}` → `FileContentResponse` — full content + headings
 - `PUT /projects/{id}/drafts/{filename}` → `FileContentResponse` — save full file (git commit)
 - `POST /projects/{id}/drafts/init` → `FileContentResponse` (201) — create file from project outline; idempotent
+- `POST /projects/{id}/drafts/scaffold` → `ScaffoldResponse` (201) — create ADR-016 multi-file structure from outline; dissertation/thesis: intro.md + chapter_N.md + conclusion.md; paper: single paper.md; idempotent (existing files not overwritten); returns 422 if no outline
 - `DELETE /projects/{id}/drafts/{filename}` → 204 — git rm + commit
 - `PUT /projects/{id}/drafts/{filename}/sections/{section_id}` → `SectionUpsertResponse` — upsert one section body; used by klemma-cli push
 - `POST /projects/{id}/drafts/migrate` → `MigrateResponse` — split monolithic `dissertation.md` into ADR-016 chapter files (`intro.md`, `chapter_N.md`, `conclusion.md`); idempotent (skips existing files); deletes source when ≥1 chapter written; accepts optional `?source_filename=` query param
+- Schemas: `FileInfo`, `FileListResponse`, `FileContentResponse`, `FileSaveRequest`, `InitDraftRequest`, `ScaffoldResponse`, `SectionUpsertRequest`, `SectionUpsertResponse`, `MigrateChapterResult`, `MigrateResponse`
 
 ### process.py (~120 lines)
 Process endpoints — mounted with `prefix="/process"`. All require Bearer auth.
@@ -98,6 +100,18 @@ Server-side for `klemma-cli` sync client. No server-side git — all file sync v
 
 **Status:**
 - `GET /sync/status/{project_id}` → `SyncStatusResponse` — library counts (`source_count`, `fragment_count`)
+
+### curation.py (~300 lines)
+Citation curation endpoints — mounted with `prefix="/projects"`. All require Bearer auth.
+Library-first pivot: users accept/reject fragments, assign them to outline sections, and curate a bank of citations per chapter.
+- `GET /projects/{id}/fragments/pending?citekey=X` → `PendingFragmentsResponse` — uncurated fragments for a source; excludes already-curated fragment IDs
+- `POST /projects/{id}/fragments/curate` → `{curated, accepted, rejected}` — batch accept/reject with optional section assignment + note; auto-assigns section via `INTENT_TO_SECTION_TYPES` mapping if not provided
+- `GET /projects/{id}/fragments/curated?verdict=&section=&citekey=` → `CuratedBankResponse` — curated fragments with full text, grouped stats by section
+- `PATCH /projects/{id}/fragments/curate/{fragment_id}` → partial update (verdict, section, note)
+- `GET /projects/{id}/fragments/suggest?section=X` → `SuggestFragmentsResponse` — smart suggestions: intent match + gap alerts for missing intents
+- Uses `INTENT_TO_SECTION_TYPES` mapping (citation_intent → SectionType list) for auto-assignment
+- Depends on: `user_store`, `paper_store`, `user_library` from `deps.py`
+- Schemas: `PendingFragmentsResponse`, `CurateRequest`, `CuratedBankResponse`, `CuratedFragmentResponse`, `SuggestFragmentsResponse`
 
 ## Adding a new router
 

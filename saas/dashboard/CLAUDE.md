@@ -14,23 +14,23 @@ saas/dashboard/
 │   ├── api/client.ts      — typed API client, JWT management, token refresh
 │   ├── router/index.ts    — routes + auth guard
 │   ├── components/        — shared components
-│   │   └── AppLayout      — sidebar nav (Карта / Лента / Библиотека / Редактор→/write) + project switcher + token meter
+│   │   └── AppLayout      — sidebar nav (Библиотека / Карта) + project switcher + token meter
 │   ├── views/             — page components
 │   │   ├── LandingView    — public landing page (Russian)
 │   │   ├── LoginView      — email/password login
 │   │   ├── RegisterView   — registration form
 │   │   ├── HealthView     — library health diagnostics: health score, chapter verdicts, gaps, stats
 │   │   ├── LibraryView    — source table + PDF upload + reference gaps
-│   │   ├── SourceView     — source detail: fragments, section assignment, processing
-│   │   ├── ResearchView   — research roadmap: section readiness statuses + generation
-│   │   ├── ReportView     — structured research report: argument blocks, citations
-│   │   ├── OutlineView    — structure editor (accessible via settings icon, not in primary nav)
-│   │   ├── CoverageView   — coverage heatmap (accessible via direct URL, not in primary nav)
+│   │   ├── SourceView     — source detail: fragments, section assignment, processing + "Отобрать цитаты" CTA
+│   │   ├── FragmentReviewView — /:projectId/library/:citekey/review — citation curation cards
+│   │   │     standalone layout, accept/reject per fragment, intent color badges, section dropdown,
+│   │   │     notes, progress bar, batch accept, undo support
+│   │   ├── MapView        — /:projectId/map — curated citation bank grouped by outline sections
+│   │   │     AppLayout, accepted fragments per section, suggest popup, move/exclude actions
 │   │   ├── SectionEditorView — /:projectId/write — section-card write paradigm (Phase 5A, #273)
 │   │   │     standalone layout (no AppLayout), topbar, doc-structure sidebar, section cards
 │   │   │     3-state draft machine (0/1-4/5+ sources), prompt+presets, polling draft gen, diff review
 │   │   ├── FileEditorView — /:projectId/edit/:filename — raw markdown editor (fallback)
-│   │   ├── DashboardView  — legacy, redirects to MapView
 │   │   └── GlobalLibraryView — all sources across projects
 │   └── assets/main.css    — Tailwind entry point
 ├── vite.config.ts         — Tailwind plugin + /api proxy

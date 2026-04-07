@@ -171,9 +171,9 @@ SQLite backends implementing the three-tier library protocols.
 - `clear_prune_verdict(source_id) -> None` — remove single verdict
 - Tables: `project_sources`, `project_source_sections`, `project_fragments`, `prune_verdicts` (v2)
 
-#### stores/user_store.py (~210 lines)
-`LocalUserStore` — SQLite-backed `UserStore` at `~/.klemma/users.db` (separate from library.db). User accounts and refresh token storage for the SaaS auth layer (ADR-009).
-- `__init__(db_path)` — creates dirs, runs `_migrate_schema()` (schema version 2)
+#### stores/user_store.py (~350 lines)
+`LocalUserStore` — SQLite-backed `UserStore` at `~/.klemma/users.db` (separate from library.db). User accounts, projects, and fragment curation for the SaaS auth layer (ADR-009).
+- `__init__(db_path)` — creates dirs, runs `_migrate_schema()` (schema version 11)
 - `create_user(email, password_hash, name?) -> UserRecord` — normalizes email to lowercase; raises `ValueError` on duplicate
 - `get_user_by_email(email) -> UserRecord | None` — normalizes email to lowercase before lookup
 - `get_user_by_id(user_id) -> UserRecord | None`
@@ -182,7 +182,12 @@ SQLite backends implementing the three-tier library protocols.
 - `get_refresh_token(token_hash) -> dict | None` — returns `{user_id, expires_at}` or None
 - `delete_refresh_token(token_hash) -> None` — token rotation on use
 - `delete_all_refresh_tokens(user_id) -> None` — logout-all
-- Tables: `users` (user_id PK, email UNIQUE, password_hash, name, email_verified, created_at), `refresh_tokens` (hashed, FK→users ON DELETE CASCADE)
+- `curate_fragments(project_id, decisions) -> int` — batch INSERT OR REPLACE curation decisions
+- `get_curated(project_id, *, verdict?, section?, citekey?) -> list[dict]` — filtered curation query
+- `get_curation_stats(project_id, citekey) -> dict` — {curated, accepted, rejected}
+- `get_curated_fragment_ids(project_id) -> set[str]` — IDs for filtering pending
+- `update_curation(project_id, fragment_id, *, verdict?, assigned_section?, note?) -> bool` — partial update
+- Tables: `users`, `refresh_tokens`, `projects`, `fragment_curation` (project_id FK, fragment_id, citekey, verdict, assigned_section, note)
 
 ### errors.py (32 lines)
 Klemma error taxonomy for AI backends.

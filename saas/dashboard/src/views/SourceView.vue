@@ -391,6 +391,14 @@ onUnmounted(stopPolling)
           </span>
         </div>
 
+        <!-- Curation CTA -->
+        <div v-if="projectStore.activeProjectId" class="flex items-center gap-3">
+          <router-link
+            :to="`/${projectStore.activeProjectId}/library/${citekey}/review`"
+            class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium no-underline bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-deep)] transition-colors"
+          >Отобрать цитаты &rarr;</router-link>
+        </div>
+
         <!-- Fragment groups by type -->
         <div v-for="(frags, type) in fragmentsByType" :key="type" class="space-y-3">
           <h3 class="text-sm font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">
