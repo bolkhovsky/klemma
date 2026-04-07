@@ -67,28 +67,30 @@ class _SaaSStateAdapter:
         paper_store: LocalPaperStore,
         project_store: LocalProjectStore,
         user_library: LocalUserLibrary,
+        user_id: str | None = None,
     ) -> None:
         self._paper = paper_store
         self._project = project_store
         self._library = user_library
+        self._user_id = user_id
 
     # ── source queries ────────────────────────────────────────────────
 
     def get_by_section(self, section: str, section_type: str | None = None) -> list[dict]:
-        citekeys = self._project.get_sources_by_section(section)
+        citekeys = self._project.get_sources_by_section(section, user_id=self._user_id)
         return self._enrich_sources(citekeys)
 
     def get_by_chapter(self, chapter: int) -> list[dict]:
-        stats = self._project.get_coverage_stats()
+        stats = self._project.get_coverage_stats(user_id=self._user_id)
         chapter_prefix = f"{chapter}."
         citekeys: set[str] = set()
         for sec in stats.get("sections", {}):
             if sec == str(chapter) or sec.startswith(chapter_prefix):
-                citekeys.update(self._project.get_sources_by_section(sec))
+                citekeys.update(self._project.get_sources_by_section(sec, user_id=self._user_id))
         return self._enrich_sources(list(citekeys))
 
     def get_source(self, source_id: str) -> dict | None:
-        src = self._library.get_source_by_citekey(source_id)
+        src = self._library.get_source_by_citekey(source_id, user_id=self._user_id)
         if not src:
             return None
         paper = self._paper.get_paper_by_id(src.paper_id)
@@ -113,11 +115,11 @@ class _SaaSStateAdapter:
         }
 
     def get_all_sources(self) -> list[dict]:
-        all_src = self._library.get_all_sources()
+        all_src = self._library.get_all_sources(user_id=self._user_id)
         return self._enrich_sources([s.citekey for s in all_src])
 
     def get_existing_source_ids(self) -> set[str]:
-        return self._library.get_existing_citekeys()
+        return self._library.get_existing_citekeys(user_id=self._user_id)
 
     # ── fragment queries ──────────────────────────────────────────────
 
@@ -131,7 +133,7 @@ class _SaaSStateAdapter:
         section_type: str | None = None,
     ) -> list[dict]:
         if source_id:
-            src = self._library.get_source_by_citekey(source_id)
+            src = self._library.get_source_by_citekey(source_id, user_id=self._user_id)
             if not src:
                 return []
             frags = self._paper.get_fragments(src.paper_id)
@@ -139,18 +141,18 @@ class _SaaSStateAdapter:
 
         citekeys: list[str] = []
         if section:
-            citekeys = self._project.get_sources_by_section(section)
+            citekeys = self._project.get_sources_by_section(section, user_id=self._user_id)
         elif chapter:
-            stats = self._project.get_coverage_stats()
+            stats = self._project.get_coverage_stats(user_id=self._user_id)
             prefix = f"{chapter}."
             for sec in stats.get("sections", {}):
                 if sec == str(chapter) or sec.startswith(prefix):
-                    citekeys.extend(self._project.get_sources_by_section(sec))
+                    citekeys.extend(self._project.get_sources_by_section(sec, user_id=self._user_id))
             citekeys = list(set(citekeys))
 
         result: list[dict] = []
         for ck in citekeys:
-            src = self._library.get_source_by_citekey(ck)
+            src = self._library.get_source_by_citekey(ck, user_id=self._user_id)
             if not src:
                 continue
             frags = self._paper.get_fragments(src.paper_id)
@@ -168,13 +170,13 @@ class _SaaSStateAdapter:
     # ── coverage / gaps ───────────────────────────────────────────────
 
     def get_coverage_stats(self) -> dict:
-        return self._project.get_coverage_stats()
+        return self._project.get_coverage_stats(user_id=self._user_id)
 
     def get_gaps(self, min_sources: int = 3) -> list[dict]:
         return []
 
     def get_fragment_stats(self) -> dict:
-        all_sources = self._library.get_all_sources()
+        all_sources = self._library.get_all_sources(user_id=self._user_id)
         total = 0
         by_type: dict[str, int] = {}
         for src in all_sources:

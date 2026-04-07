@@ -18,7 +18,7 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 10
+_SCHEMA_VERSION = 11
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -184,6 +184,23 @@ class LocalUserStore:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_git_id ON projects(git_project_id) "
                 "WHERE git_project_id IS NOT NULL"
             )
+        if version < 11:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS fragment_curation (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id       TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+                    fragment_id      TEXT NOT NULL,
+                    citekey          TEXT NOT NULL,
+                    verdict          TEXT NOT NULL CHECK(verdict IN ('accepted', 'rejected')),
+                    assigned_section TEXT,
+                    note             TEXT,
+                    curated_at       TEXT DEFAULT (datetime('now')),
+                    UNIQUE(project_id, fragment_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_fc_project ON fragment_curation(project_id);
+                CREATE INDEX IF NOT EXISTS idx_fc_citekey ON fragment_curation(project_id, citekey);
+                CREATE INDEX IF NOT EXISTS idx_fc_verdict ON fragment_curation(project_id, verdict);
+            """)
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -540,6 +557,125 @@ class LocalUserStore:
             for r in rows
         ]
         return {**balance, "operations": operations}
+
+    # ------------------------------------------------------------------ #
+    # Fragment curation                                                    #
+    # ------------------------------------------------------------------ #
+
+    def curate_fragments(self, project_id: str, decisions: list[dict]) -> int:
+        """Batch insert or replace curation decisions.
+
+        Each decision: {fragment_id, citekey, verdict, assigned_section?, note?}
+        Returns count of rows upserted.
+        """
+        if not decisions:
+            return 0
+        with self._conn() as conn:
+            for d in decisions:
+                conn.execute(
+                    """INSERT INTO fragment_curation
+                       (project_id, fragment_id, citekey, verdict, assigned_section, note, curated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                       ON CONFLICT(project_id, fragment_id) DO UPDATE SET
+                         verdict = excluded.verdict,
+                         assigned_section = excluded.assigned_section,
+                         note = excluded.note,
+                         curated_at = datetime('now')""",
+                    (
+                        project_id,
+                        d["fragment_id"],
+                        d["citekey"],
+                        d["verdict"],
+                        d.get("assigned_section"),
+                        d.get("note"),
+                    ),
+                )
+        return len(decisions)
+
+    def get_curated(
+        self,
+        project_id: str,
+        *,
+        verdict: Optional[str] = None,
+        section: Optional[str] = None,
+        citekey: Optional[str] = None,
+    ) -> list[dict]:
+        """Get curated fragments with optional filters."""
+        sql = "SELECT * FROM fragment_curation WHERE project_id = ?"
+        params: list[object] = [project_id]
+        if verdict:
+            sql += " AND verdict = ?"
+            params.append(verdict)
+        if section:
+            sql += " AND assigned_section = ?"
+            params.append(section)
+        if citekey:
+            sql += " AND citekey = ?"
+            params.append(citekey)
+        sql += " ORDER BY curated_at"
+        with self._conn() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_curation_stats(self, project_id: str, citekey: str) -> dict:
+        """Get curation stats for a specific source in a project."""
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT
+                     COUNT(*) as curated,
+                     SUM(CASE WHEN verdict = 'accepted' THEN 1 ELSE 0 END) as accepted,
+                     SUM(CASE WHEN verdict = 'rejected' THEN 1 ELSE 0 END) as rejected
+                   FROM fragment_curation
+                   WHERE project_id = ? AND citekey = ?""",
+                (project_id, citekey),
+            ).fetchone()
+        return {
+            "curated": row["curated"] or 0,
+            "accepted": row["accepted"] or 0,
+            "rejected": row["rejected"] or 0,
+        }
+
+    def get_curated_fragment_ids(self, project_id: str) -> set[str]:
+        """Get set of already-curated fragment IDs for a project."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT fragment_id FROM fragment_curation WHERE project_id = ?",
+                (project_id,),
+            ).fetchall()
+        return {r["fragment_id"] for r in rows}
+
+    def update_curation(
+        self,
+        project_id: str,
+        fragment_id: str,
+        *,
+        verdict: Optional[str] = None,
+        assigned_section: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> bool:
+        """Partial update of a curation decision. Returns True if row existed."""
+        updates: list[str] = []
+        params: list[object] = []
+        if verdict is not None:
+            updates.append("verdict = ?")
+            params.append(verdict)
+        if assigned_section is not None:
+            updates.append("assigned_section = ?")
+            params.append(assigned_section)
+        if note is not None:
+            updates.append("note = ?")
+            params.append(note)
+        if not updates:
+            return False
+        updates.append("curated_at = datetime('now')")
+        params.extend([project_id, fragment_id])
+        with self._conn() as conn:
+            cursor = conn.execute(
+                f"UPDATE fragment_curation SET {', '.join(updates)} "
+                "WHERE project_id = ? AND fragment_id = ?",
+                tuple(params),
+            )
+        return cursor.rowcount > 0
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #

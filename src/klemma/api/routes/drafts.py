@@ -298,6 +298,22 @@ class SectionUpsertResponse(BaseModel):
     commit: str
 
 
+class ScaffoldResponse(BaseModel):
+    files: list[FileInfo]
+
+
+class MigrateChapterResult(BaseModel):
+    filename: str
+    word_count: int
+    skipped: bool  # True if file already existed
+
+
+class MigrateResponse(BaseModel):
+    source_file: str
+    chapters: list[MigrateChapterResult]
+    deleted_source: bool
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -416,6 +432,251 @@ def init_draft_file(
     headings = [HeadingInfo(**h) for h in parse_headings(content)]
     return FileContentResponse(name=filename, content=content,
                                headings=headings, word_count=len(content.split()))
+
+
+@router.post("/{project_id}/drafts/scaffold", response_model=ScaffoldResponse,
+             status_code=status.HTTP_201_CREATED)
+def scaffold_draft_files(
+    project_id: str,
+    user: UserRecord = Depends(get_current_user),
+) -> ScaffoldResponse:
+    """Create ADR-016 multi-file draft structure from the project outline.
+
+    Dissertation/thesis: creates intro.md, chapter_1.md, ..., conclusion.md.
+    Paper: creates paper.md (single file).
+    Idempotent: existing files are not overwritten.
+    """
+    project = _assert_project_owner(project_id, user)
+    project_type = project.get("type", "dissertation")
+
+    import json
+    outline_raw = project.get("outline") or "[]"
+    outline = json.loads(outline_raw) if isinstance(outline_raw, str) else outline_raw
+
+    if not outline:
+        raise HTTPException(status_code=422, detail="Project has no outline — create one first")
+
+    project_dir = _project_dir(project_id)
+    draft_dir = _drafts_dir(project_id)
+
+    files = _init_multi_file(project_dir, draft_dir, project_type, outline)
+    return ScaffoldResponse(files=files)
+
+
+def _heading_to_filename(heading: str) -> str:
+    """Map a ## heading text to an ADR-016 canonical filename.
+
+    Priority order:
+      1. Explicit intro keywords → intro.md
+      2. Explicit conclusion keywords → conclusion.md
+      3. Leading section number "1 Title" or "1. Title" → chapter_1.md
+      4. "Глава N" / "Chapter N" pattern → chapter_N.md
+      5. Fallback: slug → <slug>.md
+    """
+    lower = heading.lower()
+
+    if re.search(r"введени|вступлени|\bintro\b|introduction", lower):
+        return "intro.md"
+    if re.search(r"заключени|conclusion|выводы|итог", lower):
+        return "conclusion.md"
+
+    # "1 Title" or "1. Title" (outline-generated format)
+    m = re.match(r"^(\d+)[.\s]", heading)
+    if m:
+        return f"chapter_{m.group(1)}.md"
+
+    # "Глава 1" / "Chapter 1"
+    m = re.search(r"(?:глав[ауы]|chapter)\s+(\d+)", lower)
+    if m:
+        return f"chapter_{m.group(1)}.md"
+
+    slug = re.sub(r"[^\w\s-]", "", lower)
+    slug = re.sub(r"[\s_]+", "-", slug).strip("-")
+    return f"{slug}.md"
+
+
+def _init_multi_file(project_dir: Path, draft_dir: Path,
+                     project_type: str, outline: list[dict]) -> list[FileInfo]:
+    """Create ADR-016 multi-file draft structure from outline.
+
+    Groups outline sections by target filename (intro.md, chapter_N.md,
+    conclusion.md) and creates one file per group.  Idempotent: existing
+    files are returned unchanged.
+
+    Paper projects get a single paper.md with all sections.
+    """
+    _ensure_git_repo(project_dir)
+    draft_dir.mkdir(parents=True, exist_ok=True)
+
+    # Paper: single file, all sections as ## headings
+    if project_type == "paper":
+        filename = "paper.md"
+        path = draft_dir / filename
+        if not path.exists():
+            content = _init_content(project_type, outline)
+            path.write_text(content, encoding="utf-8")
+            try:
+                _git_commit(project_dir, path, f"scaffold {filename}")
+            except Exception as exc:
+                logger.warning("git commit failed on scaffold: %s", exc)
+        content = path.read_text(encoding="utf-8")
+        headings = [HeadingInfo(**h) for h in parse_headings(content)]
+        mtime = path.stat().st_mtime
+        updated_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+        return [FileInfo(name=filename, headings=headings,
+                         word_count=len(content.split()), updated_at=updated_at)]
+
+    # Dissertation/thesis: group sections by chapter file
+    file_sections: dict[str, list[dict]] = {}
+    file_order: list[str] = []
+    for sec in outline:
+        sid = sec.get("id", "")
+        name = sec.get("name", sid)
+        heading_text = f"{sid} {name}".strip()
+        filename = _heading_to_filename(heading_text)
+        if filename not in file_sections:
+            file_sections[filename] = []
+            file_order.append(filename)
+        file_sections[filename].append(sec)
+
+    if not file_sections:
+        return []
+
+    created: list[FileInfo] = []
+    for filename in file_order:
+        sections = file_sections[filename]
+        path = draft_dir / filename
+        if path.exists():
+            content = path.read_text(encoding="utf-8")
+        else:
+            lines: list[str] = []
+            for sec in sections:
+                sid = sec.get("id", "")
+                name = sec.get("name", sid)
+                marker = _heading_marker(sid)
+                lines.append(f"{marker} {sid} {name}")
+                lines.append("")
+                lines.append("> _Добавьте текст раздела здесь._")
+                lines.append("")
+            content = "\n".join(lines)
+            path.write_text(content, encoding="utf-8")
+            try:
+                _git_commit(project_dir, path, f"scaffold {filename}")
+            except Exception as exc:
+                logger.warning("git commit failed on scaffold: %s", exc)
+        headings = [HeadingInfo(**h) for h in parse_headings(content)]
+        mtime = path.stat().st_mtime
+        updated_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+        created.append(FileInfo(name=filename, headings=headings,
+                                word_count=len(content.split()),
+                                updated_at=updated_at))
+
+    return created
+
+
+def _split_dissertation(content: str) -> list[tuple[str, str]]:
+    """Split monolithic file by ## headings.
+
+    Returns list of (canonical_filename, chapter_content) in document order.
+    Each chunk includes its own ## heading as the first line.
+    """
+    lines = content.splitlines(keepends=True)
+
+    # Locate all level-2 (##) headings
+    splits: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        m = re.match(r"^## (.+)$", line.rstrip())
+        if m:
+            splits.append((i, m.group(1).strip()))
+
+    if not splits:
+        return []
+
+    chunks: list[tuple[str, str]] = []
+    for j, (start_line, heading_text) in enumerate(splits):
+        end_line = splits[j + 1][0] if j + 1 < len(splits) else len(lines)
+        chunk = "".join(lines[start_line:end_line]).strip()
+        filename = _heading_to_filename(heading_text)
+        chunks.append((filename, chunk))
+
+    return chunks
+
+
+@router.post("/{project_id}/drafts/migrate", response_model=MigrateResponse)
+def migrate_dissertation(
+    project_id: str,
+    source_filename: str = "dissertation.md",
+    user: UserRecord = Depends(get_current_user),
+) -> MigrateResponse:
+    """Split a monolithic draft file into ADR-016 chapter files.
+
+    Reads ``source_filename`` (default ``dissertation.md``), splits it by
+    ``##`` headings, writes each chunk to its canonical file
+    (``intro.md``, ``chapter_N.md``, ``conclusion.md``), then removes the
+    source file.  Idempotent: chapters that already exist on disk are skipped
+    (their content is NOT overwritten — merge manually if needed).
+    """
+    _assert_project_owner(project_id, user)
+
+    draft_dir = _drafts_dir(project_id)
+    project_dir = _project_dir(project_id)
+    source_path = draft_dir / source_filename
+    _validate_filename(source_filename)
+
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail=f"{source_filename} not found")
+
+    content = source_path.read_text(encoding="utf-8")
+    chunks = _split_dissertation(content)
+
+    if not chunks:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{source_filename} has no ## headings — cannot split",
+        )
+
+    _ensure_git_repo(project_dir)
+    draft_dir.mkdir(parents=True, exist_ok=True)
+
+    results: list[MigrateChapterResult] = []
+    for filename, chunk_content in chunks:
+        _validate_filename(filename)
+        target = draft_dir / filename
+        if target.exists():
+            results.append(MigrateChapterResult(
+                filename=filename,
+                word_count=len(chunk_content.split()),
+                skipped=True,
+            ))
+            continue
+        target.write_text(chunk_content, encoding="utf-8")
+        try:
+            _git_commit(project_dir, target, f"migrate: {filename}")
+        except Exception as exc:
+            logger.warning("git commit failed for %s: %s", filename, exc)
+        results.append(MigrateChapterResult(
+            filename=filename,
+            word_count=len(chunk_content.split()),
+            skipped=False,
+        ))
+
+    # Remove source only if at least one chapter was written (not all skipped)
+    deleted = False
+    if any(not r.skipped for r in results):
+        try:
+            _git_remove(project_dir, source_path, f"migrate: remove {source_filename}")
+            deleted = True
+        except Exception as exc:
+            logger.warning("git remove failed for %s: %s", source_filename, exc)
+            if source_path.exists():
+                source_path.unlink()
+                deleted = True
+
+    return MigrateResponse(
+        source_file=source_filename,
+        chapters=results,
+        deleted_source=deleted,
+    )
 
 
 @router.delete("/{project_id}/drafts/{filename}", status_code=status.HTTP_204_NO_CONTENT)

@@ -1,695 +1,460 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
-import AppLayout from '@/components/AppLayout.vue'
-import { userProjects, projects as apiProjects, drafts, type OutlineSection } from '@/api/client'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { useProjectStore } from '@/stores/project'
+import { curation, library } from '@/api/client'
 
-const router = useRouter()
 const route = useRoute()
+const projectStore = useProjectStore()
+const projectId = computed(() => route.params.projectId as string || projectStore.activeProjectId || '')
 
-const projectId = computed(() => route.params.projectId as string | undefined)
-const isDemoMode = computed(() => !route.params.projectId)
-
-// ── Types ────────────────────────────────────────────────────────────────
-
-interface ArgumentBlock {
-  id: string
-  title: string
-  sources: string[]
-  wordTarget: number
-  status: 'draft' | 'outlined' | 'empty'
+// ── Types ───────────────────────────────────────────────────────────────────
+interface CuratedFrag {
+  fragment_id: string
+  citekey: string
+  text: string
+  citation_intent: string
+  assigned_section: string | null
+  note: string | null
+  verdict: string
+  curated_at: string
+  source_display?: string
 }
 
-interface Section {
-  id: string
-  name: string
-  thesis?: string
-  blocks: ArgumentBlock[]
-  sourceCount: number
-  fragmentCount: number
-  insightCount: number
-  wordCount: number
+// ── State ───────────────────────────────────────────────────────────────────
+const fragments = ref<CuratedFrag[]>([])
+const totalAccepted = ref(0)
+const loading = ref(true)
+const sourceCache = ref<Record<string, { title: string; authors: string; year: number | null }>>({})
+
+// Selected section + tab
+const selectedSectionId = ref<string>('')
+const activeTab = ref<'citations' | 'suggest'>('citations')
+
+// Fragment actions
+const openMenuId = ref<string | null>(null)
+const confirmId = ref<string | null>(null)
+const moveFragmentId = ref<string | null>(null)
+
+// Expand/collapse for >3 fragments
+const COLLAPSE_THRESHOLD = 3
+const expandedSection = ref(false)
+
+// Suggestions
+const suggestions = ref<any[]>([])
+const gapAlert = ref<{ missing_intents: string[]; message: string } | null>(null)
+const suggestLoading = ref(false)
+
+// ── Intent labels & colors ──────────────────────────────────────────────────
+const intentLabel: Record<string, string> = {
+  background: 'фон', method: 'метод', result_comparison: 'результат',
+  extends: 'расширяет', contrasts: 'контраст', uses_data: 'данные',
+}
+const intentColor: Record<string, string> = {
+  background: 'bg-[#dbeafe] text-[#1d4ed8]',
+  method: 'bg-[#ede9fe] text-[#6d28d9]',
+  result_comparison: 'bg-[#dcfce7] text-[#15803d]',
+  extends: 'bg-[#ccfbf1] text-[#0f766e]',
+  contrasts: 'bg-[#ffedd5] text-[#c2410c]',
+  uses_data: 'bg-[#fef9c3] text-[#a16207]',
 }
 
-interface Chapter {
-  number: number
-  name: string
-  thesis: string
-  task: string
-  sections: Section[]
+// ── Computed ────────────────────────────────────────────────────────────────
+const outline = computed(() => projectStore.activeOutline || [])
+
+// Count of curated fragments per section
+const sectionCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const f of fragments.value) {
+    const sec = f.assigned_section || ''
+    counts[sec] = (counts[sec] || 0) + 1
+  }
+  return counts
+})
+
+const emptySectionCount = computed(() =>
+  outline.value.filter(s => !sectionCounts.value[s.id]).length
+)
+
+// Sections for the left panel: outline + unassigned
+const sectionList = computed(() => {
+  const list = outline.value.map(s => ({
+    id: s.id,
+    name: s.name,
+    count: sectionCounts.value[s.id] || 0,
+  }))
+  const unassigned = sectionCounts.value[''] || 0
+  if (unassigned > 0) {
+    list.push({ id: '', name: 'Не распределены', count: unassigned })
+  }
+  return list
+})
+
+// Fragments for currently selected section
+const selectedFragments = computed(() =>
+  fragments.value.filter(f => (f.assigned_section || '') === selectedSectionId.value)
+)
+
+const selectedSection = computed(() =>
+  sectionList.value.find(s => s.id === selectedSectionId.value)
+)
+
+// Visible fragments (expand/collapse)
+const visibleFragments = computed(() => {
+  if (selectedFragments.value.length <= COLLAPSE_THRESHOLD || expandedSection.value) {
+    return selectedFragments.value
+  }
+  return selectedFragments.value.slice(0, COLLAPSE_THRESHOLD)
+})
+
+const hiddenCount = computed(() => {
+  if (selectedFragments.value.length <= COLLAPSE_THRESHOLD || expandedSection.value) return 0
+  return selectedFragments.value.length - COLLAPSE_THRESHOLD
+})
+
+function pluralCitation(n: number): string {
+  const mod10 = n % 10, mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return 'цитата'
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'цитаты'
+  return 'цитат'
 }
 
-interface WorkThesis {
-  title: string
-  goal: string
-  nr1: string
-  nr2: string
+// ── Source display ──────────────────────────────────────────────────────────
+function sourceDisplay(f: CuratedFrag): string {
+  const cached = sourceCache.value[f.citekey]
+  if (!cached) return f.citekey
+  const a = cached.authors
+  if (!a) return cached.title || f.citekey
+  const short = a.includes(',') ? a.split(',')[0]!.trim() + ' et al.' : a
+  return cached.year ? `${short}, ${cached.year}` : short
 }
 
-// ── Demo mock data ────────────────────────────────────────────────────────
-
-const DEMO_THESIS: WorkThesis = {
-  title: 'Геоинформационная методика валидации нейросетевых прогнозов ледовой обстановки',
-  goal: 'Разработка методики оценки качества нейросетевых прогнозов для навигационно-гидрографического обеспечения арктического судоходства',
-  nr1: 'Геоинформационная модель валидации прогнозов',
-  nr2: 'Геоинформационная методика валидации прогнозов ледовой обстановки',
-}
-
-const DEMO_CHAPTERS: Chapter[] = [
-  {
-    number: 1,
-    name: 'Анализ предметной области',
-    thesis: 'Существующие системы НГО не обеспечивают достаточную точность прогнозов ледовой обстановки для безопасного круглогодичного судоходства по СМП',
-    task: 'T1: Проанализировать системы НГО в Арктике и специфику прогнозирования',
-    sections: [
-      {
-        id: '1.1', name: 'Потребности пользователей НГГМИ',
-        thesis: 'Рост грузопотока по СМП создаёт потребность в оперативных ледовых прогнозах',
-        blocks: [
-          { id: 'b1.1.1', title: 'Стратегическое значение СМП и рост грузопотока', sources: ['zhuravelSevernyyMorckoyPut2020', 'kuvatovPotencialSevernogoMorskogo2014', 'Angudovich2025'], wordTarget: 350, status: 'draft' },
-          { id: 'b1.1.2', title: 'Потребности навигации в ледовой информации', sources: ['alekseevaVliyanieIntensivnogoSudohodstva2024', 'butakovRezultatyPrognozaGidrometeorologicheskih2025'], wordTarget: 350, status: 'draft' },
-          { id: 'b1.1.3', title: 'Ледовые условия АЗРФ и их изменчивость', sources: ['trofimovIzmenchivostTrendyLedovitosti2024', 'kirillovVozmozhnostiIssledovaniyaVozrastnyh2023'], wordTarget: 300, status: 'draft' },
-          { id: 'b1.1.4', title: 'Ледовые карты как инструмент навигации', sources: ['arcticandantarcticresearchinstituteUSINGNEURALNETWORK2024', 'stokholmAutoICEChallenge2024'], wordTarget: 350, status: 'outlined' },
-          { id: 'b1.1.5', title: 'Спутниковое ДЗЗ и информационные пробелы', sources: ['zabolotskihSputnikovoeMikrovolnovoeZondirovanie2023', 'bidenkoGeoinformacionnayaProceduraOcenki2022'], wordTarget: 300, status: 'outlined' },
-        ],
-        sourceCount: 23, fragmentCount: 40, insightCount: 0, wordCount: 0,
-      },
-      {
-        id: '1.2', name: 'Источники НГГМИ в АЗРФ',
-        thesis: 'Данные наблюдений фрагментированы между ведомствами и недостаточны для валидации',
-        blocks: [
-          { id: 'b1.2.1', title: 'Морские гидрометеорологические станции и их покрытие', sources: ['smirnovMonitoringFizikomehanicheskogoSostoyaniya2020', 'abuzVVEDENIE'], wordTarget: 300, status: 'outlined' },
-          { id: 'b1.2.2', title: 'Автоматические буйковые станции и дрифтеры', sources: ['kirillovVozmozhnostiIssledovaniyaVozrastnyh2023'], wordTarget: 250, status: 'empty' },
-          { id: 'b1.2.3', title: 'Зависимость предсказуемости от сезона инициализации', sources: ['tietsche2014', 'day2014', 'collow2015'], wordTarget: 350, status: 'empty' },
-        ],
-        sourceCount: 18, fragmentCount: 31, insightCount: 1, wordCount: 0,
-      },
-      {
-        id: '1.3', name: 'Данные ДЗЗ и ИНС',
-        thesis: 'Спутниковое ДЗЗ — единственный источник регулярного покрытия Арктики',
-        blocks: [
-          { id: 'b1.3.1', title: 'Пассивная микроволновая радиометрия (AMSR2, SSM/I)', sources: ['zabolotskihSputnikovoeMikrovolnovoeZondirovanie2023'], wordTarget: 350, status: 'draft' },
-          { id: 'b1.3.2', title: 'Радарная съёмка (SAR) и проблема отечественных спутников', sources: ['Tsepelev2023', 'bidenkoGeoinformacionnayaProceduraOcenki2022'], wordTarget: 300, status: 'outlined' },
-          { id: 'b1.3.3', title: 'ИНС для тематической интерпретации спутниковых данных', sources: ['arcticandantarcticresearchinstituteUSINGNEURALNETWORK2024'], wordTarget: 250, status: 'empty' },
-        ],
-        sourceCount: 15, fragmentCount: 22, insightCount: 1, wordCount: 0,
-      },
-      {
-        id: '1.4', name: 'Методы и технологии НГГМИ',
-        thesis: 'Существующие методы либо точны на коротких горизонтах, либо ресурсоёмки',
-        blocks: [
-          { id: 'b1.4.1', title: 'Физические численные модели (CICE, NEMO-LIM)', sources: ['chevallier2013', 'massonnet2012'], wordTarget: 350, status: 'outlined' },
-          { id: 'b1.4.2', title: 'Статистические методы и ML-подходы', sources: ['stokholmAutoICEChallenge2024'], wordTarget: 300, status: 'outlined' },
-          { id: 'b1.4.3', title: 'Нейросетевые архитектуры: LSTM, U-Net, ConvLSTM', sources: ['arcticandantarcticresearchinstituteUSINGNEURALNETWORK2024'], wordTarget: 350, status: 'empty' },
-          { id: 'b1.4.4', title: 'Сравнительный анализ горизонтов и ресурсов', sources: ['collow2015', 'tietsche2014'], wordTarget: 300, status: 'empty' },
-        ],
-        sourceCount: 12, fragmentCount: 19, insightCount: 1, wordCount: 0,
-      },
-    ],
-  },
-  {
-    number: 2,
-    name: 'Геоинформационная модель',
-    thesis: 'Модель валидации должна объединять компоненты временного анализа (LSTM), пространственной сегментации (U-Net) и пространственно-временной динамики (ConvLSTM)',
-    task: 'T2-T3: Исследовать факторы геосреды и обосновать выбор нейросетевой модели',
-    sections: [
-      {
-        id: '2.1', name: 'Концептуальная модель',
-        thesis: 'Валидация нейросетевых прогнозов требует многокомпонентной модели',
-        blocks: [
-          { id: 'b2.1.1', title: 'Обоснование многокомпонентного подхода', sources: ['bidenkoGeoinformacionnayaProceduraOcenki2022'], wordTarget: 400, status: 'draft' },
-          { id: 'b2.1.2', title: 'Архитектура модели: входы, обработка, выходы', sources: ['bidenkoGeoinformacionnayaProceduraOcenki2022'], wordTarget: 350, status: 'outlined' },
-        ],
-        sourceCount: 8, fragmentCount: 14, insightCount: 0, wordCount: 0,
-      },
-      {
-        id: '2.2', name: 'Состав модели',
-        thesis: undefined,
-        blocks: [
-          { id: 'b2.2.1', title: 'Компонент временного анализа (LSTM)', sources: ['arcticandantarcticresearchinstituteUSINGNEURALNETWORK2024'], wordTarget: 300, status: 'outlined' },
-          { id: 'b2.2.2', title: 'Компонент пространственной сегментации (U-Net)', sources: ['stokholmAutoICEChallenge2024'], wordTarget: 300, status: 'empty' },
-          { id: 'b2.2.3', title: 'Компонент пространственно-временной динамики (ConvLSTM)', sources: [], wordTarget: 300, status: 'empty' },
-        ],
-        sourceCount: 6, fragmentCount: 10, insightCount: 0, wordCount: 0,
-      },
-      {
-        id: '2.3', name: 'Содержание модели',
-        thesis: undefined,
-        blocks: [
-          { id: 'b2.3.1', title: 'Требования к данным наблюдений ДЗЗ', sources: ['zabolotskihSputnikovoeMikrovolnovoeZondirovanie2023', 'Tsepelev2023'], wordTarget: 350, status: 'draft' },
-          { id: 'b2.3.2', title: 'Предобработка и нормализация', sources: [], wordTarget: 250, status: 'empty' },
-          { id: 'b2.3.3', title: 'Функции потерь и критерии обучения', sources: [], wordTarget: 300, status: 'empty' },
-        ],
-        sourceCount: 11, fragmentCount: 18, insightCount: 0, wordCount: 0,
-      },
-    ],
-  },
-  {
-    number: 3,
-    name: 'Методика валидации',
-    thesis: 'Специализированные метрики (IIEE, SPS) превосходят стандартные (RMSE, MAE) для пространственных прогнозов льда',
-    task: 'T4: Разработать методику оценки качества прогнозов',
-    sections: [
-      {
-        id: '3.1', name: 'Информационное наполнение',
-        thesis: 'Качество валидации определяется качеством входных данных — нужна формализованная процедура',
-        blocks: [
-          { id: 'b3.1.1', title: 'Источники данных для валидации', sources: ['zabolotskihSputnikovoeMikrovolnovoeZondirovanie2023'], wordTarget: 300, status: 'outlined' },
-          { id: 'b3.1.2', title: 'Процедура контроля качества входных данных', sources: ['bidenkoGeoinformacionnayaProceduraOcenki2022'], wordTarget: 350, status: 'empty' },
-        ],
-        sourceCount: 5, fragmentCount: 8, insightCount: 0, wordCount: 0,
-      },
-      {
-        id: '3.2', name: 'Методы верификации прогнозов',
-        thesis: 'IIEE декомпозирует ошибку на miss, false alarm и displacement — это критично для навигации',
-        blocks: [
-          { id: 'b3.2.1', title: 'Стандартные метрики: RMSE, MAE, R²', sources: ['butakovRezultatyPrognozaGidrometeorologicheskih2025'], wordTarget: 300, status: 'draft' },
-          { id: 'b3.2.2', title: 'IIEE: декомпозиция на AEE и ME', sources: ['goessling2016'], wordTarget: 400, status: 'draft' },
-          { id: 'b3.2.3', title: 'Spatial Probability Score (SPS)', sources: ['dukhovskoy2015'], wordTarget: 300, status: 'empty' },
-          { id: 'b3.2.4', title: 'Сравнительный анализ метрик для навигационных задач', sources: ['goessling2016', 'dukhovskoy2015'], wordTarget: 350, status: 'empty' },
-          { id: 'b3.2.5', title: 'Стратификация по условиям инициализации', sources: ['collow2015', 'chevallier2013', 'tietsche2014'], wordTarget: 350, status: 'empty' },
-        ],
-        sourceCount: 14, fragmentCount: 25, insightCount: 2, wordCount: 0,
-      },
-      {
-        id: '3.3', name: 'Алгоритм оценки качества',
-        thesis: 'Алгоритм должен комбинировать метрики с учётом навигационного контекста',
-        blocks: [
-          { id: 'b3.3.1', title: 'Взвешенная комбинация метрик', sources: [], wordTarget: 300, status: 'empty' },
-          { id: 'b3.3.2', title: 'Пороги приемлемости для навигации', sources: [], wordTarget: 250, status: 'empty' },
-        ],
-        sourceCount: 3, fragmentCount: 5, insightCount: 1, wordCount: 0,
-      },
-    ],
-  },
-  {
-    number: 4,
-    name: 'Программная реализация',
-    thesis: 'Модуль валидации реализуем как воспроизводимый Python-пакет с открытыми данными',
-    task: 'T5-T6: Разработать программный модуль и провести валидацию',
-    sections: [
-      {
-        id: '4.1', name: 'Постановка задачи',
-        thesis: 'Программная реализация должна обеспечить воспроизводимость результатов',
-        blocks: [
-          { id: 'b4.1.1', title: 'Функциональные требования к модулю', sources: ['bidenkoGeoinformacionnayaProceduraOcenki2022'], wordTarget: 300, status: 'draft' },
-          { id: 'b4.1.2', title: 'Нефункциональные требования: воспроизводимость, производительность', sources: [], wordTarget: 250, status: 'outlined' },
-        ],
-        sourceCount: 4, fragmentCount: 7, insightCount: 0, wordCount: 0,
-      },
-      {
-        id: '4.2', name: 'Алгоритм валидации',
-        thesis: undefined,
-        blocks: [
-          { id: 'b4.2.1', title: 'Пошаговый алгоритм валидации', sources: [], wordTarget: 400, status: 'outlined' },
-          { id: 'b4.2.2', title: 'Обработка граничных случаев: пропуски данных, полярная ночь', sources: [], wordTarget: 300, status: 'empty' },
-        ],
-        sourceCount: 6, fragmentCount: 11, insightCount: 0, wordCount: 0,
-      },
-      {
-        id: '4.3', name: 'Программная реализация',
-        thesis: undefined,
-        blocks: [
-          { id: 'b4.3.1', title: 'Архитектура Python-модуля', sources: [], wordTarget: 350, status: 'draft' },
-          { id: 'b4.3.2', title: 'Формат входных/выходных данных (NetCDF, GeoTIFF)', sources: [], wordTarget: 250, status: 'outlined' },
-          { id: 'b4.3.3', title: 'Визуализация результатов (карты, графики)', sources: [], wordTarget: 300, status: 'empty' },
-        ],
-        sourceCount: 5, fragmentCount: 9, insightCount: 0, wordCount: 0,
-      },
-      {
-        id: '4.4', name: 'Технологический суверенитет',
-        thesis: 'Модуль должен работать на отечественной инфраструктуре без зависимости от иностранных сервисов',
-        blocks: [
-          { id: 'b4.4.1', title: 'Импортозамещение в ПО для обработки ДЗЗ', sources: ['Tsepelev2023'], wordTarget: 300, status: 'empty' },
-          { id: 'b4.4.2', title: 'Связь с работами кафедры РГГМУ', sources: [], wordTarget: 250, status: 'empty' },
-        ],
-        sourceCount: 3, fragmentCount: 4, insightCount: 1, wordCount: 0,
-      },
-    ],
-  },
-]
-
-// ── Real API state ────────────────────────────────────────────────────────
-
-const loading = ref(false)
-const error = ref<string | null>(null)
-const projectName = ref('')
-const draftFiles = ref<import('@/api/client').DraftFile[]>([])
-const dbOutline = ref<OutlineSection[] | null>(null)
-const sectionSourceCounts = ref<Record<string, number>>({})
-
-async function loadMapData() {
-  if (isDemoMode.value) return
+// ── Data loading ────────────────────────────────────────────────────────────
+async function loadData() {
+  if (!projectId.value) return
   loading.value = true
-  error.value = null
   try {
-    const [projectsData, coverageResult, draftListData] = await Promise.all([
-      userProjects.list(),
-      apiProjects.coverage().catch(() => ({ total_sources: 0, sections: {} as Record<string, number>, chapters: {} as Record<string, number> })),
-      drafts.list(projectId.value!).catch(() => null),
-    ])
-    const project = projectsData.projects.find(p => p.project_id === projectId.value)
-    if (project) {
-      projectName.value = project.name
-      dbOutline.value = project.outline
+    const data = await curation.curated(projectId.value, { verdict: 'accepted' })
+    fragments.value = data.fragments
+    totalAccepted.value = data.total
+
+    // Auto-select first section if none selected
+    if (!selectedSectionId.value && outline.value.length > 0) {
+      selectedSectionId.value = outline.value[0]!.id
     }
-    sectionSourceCounts.value = coverageResult.sections
-    if (draftListData) {
-      draftFiles.value = draftListData.files
+
+    // Fetch source metadata
+    const citekeys = [...new Set(data.fragments.map(f => f.citekey))]
+    for (const ck of citekeys) {
+      if (!sourceCache.value[ck]) {
+        try {
+          const src = await library.get(ck)
+          sourceCache.value[ck] = { title: src.title || '', authors: src.authors || '', year: src.year }
+        } catch { /* skip */ }
+      }
     }
-  } catch (e: any) {
-    error.value = (e as Error).message ?? 'Ошибка загрузки'
+  } catch (e) {
+    console.error('Failed to load curated fragments', e)
   } finally {
     loading.value = false
   }
 }
 
-/** Draft status per section: has word count > 0. */
-function sectionDraftStatus(sectionId: string): 'draft' | 'empty' {
-  // Find word count for this section across all draft files
-  for (const file of draftFiles.value) {
-    const heading = file.headings.find(h => h.section_id === sectionId)
-    if (heading) {
-      // Approximate: if any heading matches and file has content, it's a draft
-      return file.word_count > 0 ? 'draft' : 'empty'
-    }
-  }
-  return 'empty'
+// ── Section selection ───────────────────────────────────────────────────────
+function selectSection(sectionId: string) {
+  selectedSectionId.value = sectionId
+  activeTab.value = 'citations'
+  expandedSection.value = false
+  suggestions.value = []
+  gapAlert.value = null
+  closeMenus()
 }
 
-onMounted(loadMapData)
-
-/** Derive chapter sort order from filename: abstract=-1, intro=0, chapter_N=N, appendix=95, conclusion=99, other=50 */
-function _fileOrder(filename: string): number {
-  const id = filename.replace('.md', '')
-  if (id === 'abstract') return -1
-  if (id === 'intro') return 0
-  const m = id.match(/^chapter_(\d+)$/)
-  if (m) return parseInt(m[1]!)
-  if (id === 'appendix') return 95
-  if (id === 'conclusion') return 99
-  return 50
+// ── Tab switching ───────────────────────────────────────────────────────────
+async function switchTab(tab: 'citations' | 'suggest') {
+  activeTab.value = tab
+  if (tab === 'suggest' && suggestions.value.length === 0) {
+    await loadSuggestions()
+  }
 }
 
-// Build chapters from draft files (ADR-016: each file = one chapter/intro/conclusion)
-const realChapters = computed((): Chapter[] => {
-  // Primary source: draft file list (ADR-016)
-  if (draftFiles.value.length) {
-    return [...draftFiles.value]
-      .sort((a, b) => _fileOrder(a.name) - _fileOrder(b.name))
-      .map(file => {
-        const fileId = file.name.replace('.md', '')
-        // Chapter title = first ## heading; fallback to filename
-        const chapterHeading = file.headings.find(h => h.level === 2)
-        // Sections = all ### headings (level 3) within the file
-        const sections: Section[] = file.headings
-          .filter(h => h.level === 3)
-          .map(h => ({
-            id: h.section_id,
-            name: h.full_title.replace(/^[\d.]+\s*/, ''),
-            thesis: undefined,
-            blocks: [],
-            sourceCount: sectionSourceCounts.value[h.section_id] ?? 0,
-            fragmentCount: 0,
-            insightCount: 0,
-            wordCount: 0,
-          }))
-        return {
-          number: _fileOrder(file.name),
-          name: chapterHeading?.full_title ?? fileId,
-          thesis: '',
-          task: '',
-          sections,
-        }
-      })
+async function loadSuggestions() {
+  if (!selectedSectionId.value) return
+  suggestLoading.value = true
+  try {
+    const data = await curation.suggest(projectId.value, selectedSectionId.value)
+    suggestions.value = data.suggestions
+    gapAlert.value = data.gap_alert
+  } catch (e) {
+    console.error('Failed to load suggestions', e)
+    suggestions.value = []
+    gapAlert.value = null
+  } finally {
+    suggestLoading.value = false
   }
+}
 
-  // Fallback: DB outline (sections array from project)
-  const outline = dbOutline.value
-  if (!outline?.length) return []
+// ── Fragment actions ────────────────────────────────────────────────────────
+function toggleMenu(fragId: string) {
+  openMenuId.value = openMenuId.value === fragId ? null : fragId
+}
 
-  const chapterSections = outline.filter(s => !s.id.includes('.'))
-  const sectionMap = new Map<string, OutlineSection[]>()
-  for (const s of outline) {
-    if (!s.id.includes('.')) continue
-    const chKey = s.id.split('.')[0]!
-    if (!sectionMap.has(chKey)) sectionMap.set(chKey, [])
-    sectionMap.get(chKey)!.push(s)
-  }
+function closeMenus() {
+  openMenuId.value = null
+}
 
-  return chapterSections
-    .sort((a, b) => parseInt(a.id) - parseInt(b.id))
-    .map(ch => ({
-      number: parseInt(ch.id),
-      name: ch.name,
-      thesis: '',
-      task: '',
-      sections: (sectionMap.get(ch.id) ?? []).map(s => ({
-        id: s.id,
-        name: s.name,
-        thesis: undefined,
-        blocks: [],
-        sourceCount: sectionSourceCounts.value[s.id] ?? 0,
-        fragmentCount: 0,
-        insightCount: 0,
-        wordCount: 0,
-      })),
-    }))
+function showMove(fragId: string) {
+  closeMenus()
+  moveFragmentId.value = fragId
+}
+
+async function moveToSection(fragId: string, sectionId: string) {
+  await curation.update(projectId.value, fragId, { assigned_section: sectionId })
+  moveFragmentId.value = null
+  await loadData()
+}
+
+function showConfirm(fragId: string) {
+  closeMenus()
+  confirmId.value = fragId
+}
+
+async function excludeFragment(fragId: string) {
+  await curation.update(projectId.value, fragId, { verdict: 'rejected' })
+  confirmId.value = null
+  await loadData()
+}
+
+async function addSuggested(s: any) {
+  await curation.curate(projectId.value, [{
+    fragment_id: s.fragment_id,
+    citekey: s.citekey,
+    verdict: 'accepted',
+    assigned_section: selectedSectionId.value,
+  }])
+  s._added = true
+  await loadData()
+}
+
+// ── Lifecycle ───────────────────────────────────────────────────────────────
+onMounted(async () => {
+  if (!projectStore.activeProject) await projectStore.loadProjects()
+  await loadData()
 })
 
-// Active data (demo or real)
-const chapters = computed(() => isDemoMode.value ? DEMO_CHAPTERS : realChapters.value)
-const thesis = computed(() =>
-  isDemoMode.value
-    ? DEMO_THESIS
-    : { title: projectName.value, goal: '', nr1: '', nr2: '' }
-)
-
-// ── Navigation ────────────────────────────────────────────────────────────
-
-function navigateToBlock(sectionId: string, blockId: string) {
-  if (isDemoMode.value) {
-    router.push(`/demo/map/${sectionId}/${blockId}`)
-  } else {
-    router.push(`/${projectId.value}/map/${sectionId}/b1`)
-  }
-}
-
-function navigateToSection(sectionId: string) {
-  if (isDemoMode.value) return // demo uses toggleSection
-  router.push(`/${projectId.value}/map/${sectionId}/b1`)
-}
-
-// ── State ────────────────────────────────────────────────────────────────
-
-const expandedChapter = ref<number | null>(1)
-const expandedSection = ref<string | null>('1.1')
-
-function toggleChapter(n: number) {
-  expandedChapter.value = expandedChapter.value === n ? null : n
-  expandedSection.value = null
-}
-
-function toggleSection(id: string) {
-  if (!isDemoMode.value) {
-    navigateToSection(id)
-    return
-  }
-  expandedSection.value = expandedSection.value === id ? null : id
-}
-
-// ── Computed ─────────────────────────────────────────────────────────────
-
-const totalInsights = computed(() =>
-  isDemoMode.value
-    ? DEMO_CHAPTERS.reduce((acc, ch) =>
-        acc + ch.sections.reduce((a, s) => a + s.insightCount, 0), 0)
-    : 0
-)
-
-function sectionStrength(s: Section): 'strong' | 'moderate' | 'weak' {
-  if (isDemoMode.value) {
-    if (s.sourceCount >= 10 && s.fragmentCount >= 15) return 'strong'
-    if (s.sourceCount >= 5) return 'moderate'
-    return 'weak'
-  }
-  if (s.sourceCount >= 10) return 'strong'
-  if (s.sourceCount >= 5) return 'moderate'
-  return 'weak'
-}
-
-const strengthColors = {
-  strong: { bg: 'bg-[var(--color-ok)]', text: 'text-[var(--color-ok)]', bar: 'var(--color-ok)' },
-  moderate: { bg: 'bg-[var(--color-amber)]', text: 'text-[var(--color-amber)]', bar: 'var(--color-amber)' },
-  weak: { bg: 'bg-[var(--color-err)]', text: 'text-[var(--color-err)]', bar: 'var(--color-err)' },
-}
-
-function blockStatusIcon(status: string): string {
-  if (status === 'draft') return '●'
-  if (status === 'outlined') return '◐'
-  return '○'
-}
-
-function blockStatusColor(status: string): string {
-  if (status === 'draft') return 'text-[var(--color-ok)]'
-  if (status === 'outlined') return 'text-[var(--color-amber)]'
-  return 'text-[var(--color-ink-muted)]'
-}
+watch(projectId, loadData)
 </script>
 
 <template>
-  <AppLayout>
-    <div class="max-w-4xl mx-auto">
+  <!-- Loading -->
+  <div v-if="loading" class="flex-1 flex items-center justify-center text-[#6b6b8a]">Загрузка...</div>
 
-      <!-- Loading -->
-      <div v-if="loading" class="flex items-center justify-center py-16">
-        <div class="h-5 w-5 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
-      </div>
-
-      <!-- Error -->
-      <div v-else-if="error" class="mb-6 rounded-md bg-[var(--color-err-pale)] px-4 py-3 text-sm text-[var(--color-err)]">
-        {{ error }}
-      </div>
-
-      <!-- Content -->
-      <template v-else>
-        <!-- Thesis: the A→Z view -->
-        <div class="mb-8 rounded-lg border border-[var(--color-accent)]/20 bg-[var(--color-accent-pale)]/30 p-6">
-          <div class="flex items-start gap-4">
-            <div class="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-accent)] text-white font-[var(--font-display)] text-sm font-bold flex-shrink-0">
-              А
-            </div>
-            <div class="flex-1 min-w-0">
-              <h1 class="font-[var(--font-display)] text-xl font-semibold text-[var(--color-ink)] leading-snug">
-                {{ thesis.title || '—' }}
-              </h1>
-              <p v-if="thesis.goal" class="mt-1 text-sm text-[var(--color-ink-light)] leading-relaxed">
-                {{ thesis.goal }}
-              </p>
-              <div v-if="thesis.nr1 || thesis.nr2" class="mt-3 flex items-center gap-4">
-                <div v-if="thesis.nr1" class="flex items-center gap-1.5">
-                  <span class="text-xs font-semibold text-[var(--color-accent)]">NR1</span>
-                  <span class="text-xs text-[var(--color-ink-muted)]">{{ thesis.nr1 }}</span>
-                </div>
-                <div v-if="thesis.nr2" class="flex items-center gap-1.5">
-                  <span class="text-xs font-semibold text-[var(--color-violet)]">NR2</span>
-                  <span class="text-xs text-[var(--color-ink-muted)]">{{ thesis.nr2 }}</span>
-                </div>
-              </div>
-            </div>
-            <div class="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-accent)] text-white font-[var(--font-display)] text-sm font-bold flex-shrink-0">
-              Я
-            </div>
-          </div>
-
-          <!-- Route line -->
-          <div class="mt-4 flex items-center gap-1">
-            <div
-              v-for="ch in chapters"
-              :key="ch.number"
-              class="flex-1 h-1.5 rounded-full transition-colors"
-              :class="expandedChapter === ch.number ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-rule)]'"
-              :title="`Глава ${ch.number}`"
-            />
-          </div>
-        </div>
-
-        <!-- No draft file yet (real mode) -->
-        <div
-          v-if="!isDemoMode && chapters.length === 0"
-          class="rounded-lg border border-[var(--color-rule)] bg-[var(--color-paper-white)] px-6 py-10 text-center"
-        >
-          <p class="text-sm text-[var(--color-ink-muted)]">Структура черновика не задана</p>
-          <p class="mt-1 text-xs text-[var(--color-ink-muted)]">
-            Задайте структуру в настройках проекта — черновик создастся автоматически
-          </p>
-          <button
-            class="mt-4 text-sm font-medium text-[var(--color-accent)] hover:underline"
-            @click="router.push(`/${projectId}/outline`)"
-          >
-            Настроить структуру →
-          </button>
-        </div>
-
-        <!-- Pending insights banner (demo only) -->
-        <div v-if="totalInsights > 0" class="mb-6 flex items-center gap-2 rounded-md bg-[var(--color-amber-pale)] px-4 py-2.5">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-4 w-4 text-[var(--color-amber)]">
-            <path fill-rule="evenodd" d="M8 1a.75.75 0 0 1 .75.75V5h3.5a.75.75 0 0 1 .6 1.2L9.5 10.5h2.75a.75.75 0 0 1 .6 1.2l-4.5 6a.75.75 0 0 1-1.35-.45V13H4.25a.75.75 0 0 1-.6-1.2L7 7.5H4.25a.75.75 0 0 1-.6-1.2l3.75-5A.75.75 0 0 1 8 1Z" clip-rule="evenodd" />
-          </svg>
-          <span class="text-sm font-medium text-[var(--color-amber-deep)]">
-            {{ totalInsights }} открыт{{ totalInsights === 1 ? 'ие' : totalInsights < 5 ? 'ия' : 'ий' }} на карте
-          </span>
-          <button class="ml-auto text-sm font-medium text-[var(--color-accent)] hover:underline">
-            Показать
-          </button>
-        </div>
-
-        <!-- Chapters (zoom level 1) -->
-        <div class="space-y-3">
-          <div
-            v-for="ch in chapters"
-            :key="ch.number"
-            class="rounded-lg border bg-[var(--color-paper-white)] transition-all duration-200"
-            :class="expandedChapter === ch.number
-              ? 'border-[var(--color-accent)]/30 shadow-sm'
-              : 'border-[var(--color-rule)]'"
-          >
-            <!-- Chapter header -->
-            <div class="flex items-start gap-4 w-full px-5 py-4">
-              <!-- Title area: click → navigate to chapter view (real) or toggle (demo) -->
-              <div
-                class="flex items-start gap-4 flex-1 min-w-0 cursor-pointer"
-                @click="isDemoMode ? toggleChapter(ch.number) : navigateToBlock(String(ch.number), 'b1')"
-              >
-                <span
-                  class="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-bold font-[var(--font-display)] flex-shrink-0"
-                  :class="expandedChapter === ch.number
-                    ? 'bg-[var(--color-accent)] text-white'
-                    : 'bg-[var(--color-rule-light)] text-[var(--color-ink-muted)]'"
-                >
-                  {{ ch.number }}
-                </span>
-                <div class="flex-1 min-w-0">
-                  <h2 class="font-[var(--font-display)] text-base font-semibold text-[var(--color-ink)] leading-snug">
-                    {{ ch.name }}
-                  </h2>
-                  <p v-if="ch.thesis" class="mt-0.5 text-sm text-[var(--color-ink-light)] leading-relaxed italic">
-                    {{ ch.thesis }}
-                  </p>
-                  <p v-if="ch.task" class="mt-1 text-xs text-[var(--color-ink-muted)]">{{ ch.task }}</p>
-                </div>
-              </div>
-              <!-- Chevron: toggle expand/collapse only -->
-              <button
-                @click.stop="toggleChapter(ch.number)"
-                class="mt-1 flex-shrink-0 p-1 rounded hover:bg-[var(--color-rule-light)] transition-colors"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor"
-                  class="h-4 w-4 text-[var(--color-ink-muted)] transition-transform"
-                  :class="expandedChapter === ch.number ? 'rotate-180' : ''"
-                >
-                  <path fill-rule="evenodd" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
-                </svg>
-              </button>
-            </div>
-
-            <!-- Sections (zoom level 2) -->
-            <div v-if="expandedChapter === ch.number" class="border-t border-[var(--color-rule-light)] px-5 pb-4 pt-2">
-              <div class="space-y-2">
-                <div
-                  v-for="sec in ch.sections"
-                  :key="sec.id"
-                  class="rounded-md border border-[var(--color-rule-light)] transition-all"
-                  :class="[
-                    expandedSection === sec.id ? 'bg-[var(--color-paper)]' : '',
-                    !isDemoMode ? 'cursor-pointer hover:border-[var(--color-accent)]/40' : '',
-                  ]"
-                >
-                  <button
-                    @click="toggleSection(sec.id)"
-                    class="flex items-center gap-3 w-full px-4 py-2.5 text-left"
-                  >
-                    <!-- Strength indicator -->
-                    <span
-                      class="h-2 w-2 rounded-full flex-shrink-0"
-                      :class="strengthColors[sectionStrength(sec)].bg"
-                      :title="sectionStrength(sec)"
-                    />
-
-                    <span class="font-[var(--font-mono)] text-xs text-[var(--color-ink-muted)] w-8 flex-shrink-0">{{ sec.id }}</span>
-                    <span class="text-sm font-medium text-[var(--color-ink)] flex-1 truncate">{{ sec.name }}</span>
-
-                    <!-- Insight badge (demo only) -->
-                    <span
-                      v-if="sec.insightCount > 0"
-                      class="inline-flex items-center rounded-full bg-[var(--color-amber-pale)] px-1.5 py-0.5 text-xs font-medium text-[var(--color-amber)]"
-                    >
-                      {{ sec.insightCount }}
-                    </span>
-
-                    <!-- Stats -->
-                    <span class="text-xs text-[var(--color-ink-muted)] flex-shrink-0">
-                      {{ sec.sourceCount }}s<template v-if="isDemoMode"> &middot; {{ sec.fragmentCount }}f</template>
-                    </span>
-
-                    <!-- Real mode: word count + draft status dot -->
-                    <template v-if="!isDemoMode">
-                      <span
-                        v-if="sec.wordCount > 0"
-                        class="font-[var(--font-mono)] text-xs flex-shrink-0 text-[var(--color-ok)]"
-                        :title="`${sec.wordCount} слов в черновике`"
-                      >{{ sec.wordCount }}w</span>
-                      <span
-                        class="text-xs flex-shrink-0"
-                        :class="sec.wordCount > 0 ? 'text-[var(--color-ok)]' : 'text-[var(--color-ink-muted)]'"
-                        :title="sec.wordCount > 0 ? 'Черновик сохранён' : 'Пусто'"
-                      >{{ sec.wordCount > 0 ? '●' : '○' }}</span>
-                    </template>
-
-                    <!-- Real mode: open arrow instead of expand -->
-                    <svg
-                      v-if="!isDemoMode"
-                      xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor"
-                      class="h-3.5 w-3.5 text-[var(--color-ink-muted)] flex-shrink-0"
-                    >
-                      <path fill-rule="evenodd" d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
-                    </svg>
-                  </button>
-
-                  <!-- Section detail — demo mode only (zoom level 3) -->
-                  <div v-if="isDemoMode && expandedSection === sec.id" class="border-t border-[var(--color-rule-light)] px-4 py-3">
-                    <!-- Section thesis -->
-                    <p v-if="sec.thesis" class="text-sm text-[var(--color-ink-light)] italic mb-3 leading-relaxed">
-                      &laquo; {{ sec.thesis }} &raquo;
-                    </p>
-
-                    <!-- Argument blocks (zoom level 4) -->
-                    <div v-if="sec.blocks.length > 0" class="space-y-1.5">
-                      <div
-                        v-for="block in sec.blocks"
-                        :key="block.id"
-                        class="flex items-start gap-2 rounded-md px-3 py-2 hover:bg-[var(--color-rule-light)] transition-colors cursor-pointer"
-                        @click="navigateToBlock(sec.id, block.id)"
-                      >
-                        <span class="mt-0.5 text-xs" :class="blockStatusColor(block.status)">
-                          {{ blockStatusIcon(block.status) }}
-                        </span>
-                        <div class="flex-1 min-w-0">
-                          <p class="text-sm text-[var(--color-ink)]">{{ block.title }}</p>
-                          <div class="mt-0.5 flex items-center gap-2">
-                            <a
-                              v-for="src in block.sources.slice(0, 3)"
-                              :key="src"
-                              :href="`/demo/library/${src}`"
-                              class="citekey-link"
-                              @click.stop
-                            >@{{ src.slice(0, 15) }}</a>
-                            <span v-if="block.sources.length > 3" class="text-xs text-[var(--color-ink-muted)]">
-                              +{{ block.sources.length - 3 }}
-                            </span>
-                          </div>
-                        </div>
-                        <span class="text-xs text-[var(--color-ink-muted)] flex-shrink-0">~{{ block.wordTarget }}w</span>
-                      </div>
-                    </div>
-
-                    <!-- Empty blocks state -->
-                    <div v-else class="text-center py-4">
-                      <p class="text-xs text-[var(--color-ink-muted)]">
-                        Структура аргументации не сгенерирована
-                      </p>
-                      <button class="mt-2 text-xs font-medium text-[var(--color-accent)] hover:underline">
-                        Сгенерировать research report
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </template>
+  <!-- Empty state: no outline -->
+  <div v-else-if="outline.length === 0 && fragments.length === 0" class="flex-1 flex items-center justify-center">
+    <div class="text-center py-12">
+      <div class="text-4xl mb-3">&#128218;</div>
+      <h3 class="text-lg font-semibold text-[#1a1a2e] mb-2">Нет отобранных цитат</h3>
+      <p class="text-[15px] text-[#6b6b8a] leading-6">
+        Загрузите источник в <router-link :to="`/${projectId}/library`" class="text-[#0d7377] no-underline hover:underline">Библиотеку</router-link>
+        и отберите цитаты
+      </p>
     </div>
-  </AppLayout>
+  </div>
+
+  <!-- Two-panel layout -->
+  <template v-else>
+    <!-- Left: sections panel -->
+    <div class="w-[272px] flex-shrink-0 bg-white overflow-y-auto" style="border-right: 1px solid #e8e5df">
+      <div class="px-4 pt-4 pb-3" style="border-bottom: 1px solid #e8e5df">
+        <h2 class="text-[15px] font-semibold text-[#1a1a2e] mb-0.5">Разделы</h2>
+        <div class="text-xs text-[#6b6b8a]">{{ totalAccepted }} {{ pluralCitation(totalAccepted) }} &middot; {{ emptySectionCount }} без цитат</div>
+      </div>
+
+      <div
+        v-for="s in sectionList"
+        :key="s.id"
+        class="flex items-center gap-2 px-4 py-2.5 cursor-pointer transition-colors"
+        :class="s.id === selectedSectionId
+          ? 'bg-[#e6f3f3] border-l-[3px] border-l-[#0d7377] pl-[13px]'
+          : 'hover:bg-[#f0ede8] border-l-[3px] border-l-transparent'"
+        style="border-bottom: 1px solid #f0ede8"
+        @click="selectSection(s.id)"
+      >
+        <span
+          class="font-mono text-xs font-semibold px-[7px] py-0.5 rounded flex-shrink-0"
+          :class="s.id ? 'text-[#0d7377]' : 'text-[#6b6b8a]'"
+          :style="s.id === selectedSectionId ? 'background: white' : 'background: #e6f3f3'"
+        >{{ s.id || '?' }}</span>
+        <span class="text-[13px] text-[#3d3d5c] flex-1 leading-snug">{{ s.name }}</span>
+        <span v-if="s.count > 0" class="text-xs font-semibold text-[#6b6b8a] bg-[#f0ede8] px-[7px] py-0.5 rounded-full flex-shrink-0">{{ s.count }}</span>
+        <span v-else class="text-xs font-medium text-[#b45309] flex-shrink-0">0</span>
+      </div>
+    </div>
+
+    <!-- Right: content panel -->
+    <div class="flex-1 overflow-y-auto" style="background: #faf9f7" @click="closeMenus">
+      <!-- Panel header -->
+      <div class="px-6 pt-5">
+        <h2 class="text-[17px] font-semibold text-[#1a1a2e] mb-0.5">
+          <span v-if="selectedSection?.id" class="font-mono text-sm font-semibold text-[#0d7377] bg-[#e6f3f3] px-2.5 py-0.5 rounded mr-2">{{ selectedSection.id }}</span>
+          {{ selectedSection?.name || 'Выберите раздел' }}
+        </h2>
+        <div class="text-[13px] text-[#6b6b8a]">{{ selectedFragments.length }} {{ pluralCitation(selectedFragments.length) }} в разделе</div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="flex gap-0 px-6 mt-4" style="border-bottom: 1px solid #e8e5df">
+        <button
+          class="px-4 py-2 text-[13px] font-medium cursor-pointer border-b-2 transition-colors bg-transparent"
+          :class="activeTab === 'citations' ? 'text-[#065a5e] border-[#0d7377]' : 'text-[#6b6b8a] border-transparent hover:text-[#1a1a2e]'"
+          @click="switchTab('citations')"
+        >
+          Цитаты
+          <span class="text-[11px] font-semibold ml-1 px-1.5 py-0.5 rounded-full" :class="activeTab === 'citations' ? 'bg-[#e6f3f3] text-[#0d7377]' : 'bg-[#f0ede8] text-[#6b6b8a]'">{{ selectedFragments.length }}</span>
+        </button>
+        <button
+          v-if="selectedSection?.id"
+          class="px-4 py-2 text-[13px] font-medium cursor-pointer border-b-2 transition-colors bg-transparent"
+          :class="activeTab === 'suggest' ? 'text-[#065a5e] border-[#0d7377]' : 'text-[#6b6b8a] border-transparent hover:text-[#1a1a2e]'"
+          @click="switchTab('suggest')"
+        >
+          Подобрать
+        </button>
+      </div>
+
+      <!-- Tab: Citations -->
+      <div v-if="activeTab === 'citations'" class="px-6 py-4">
+        <!-- Empty section -->
+        <div v-if="selectedFragments.length === 0" class="text-center py-12">
+          <div class="text-3xl mb-2 opacity-50">&#128237;</div>
+          <p class="text-sm text-[#6b6b8a] mb-3">В этом разделе пока нет цитат</p>
+          <a v-if="selectedSection?.id" class="text-sm text-[#0d7377] font-medium cursor-pointer hover:underline" @click="switchTab('suggest')">Подобрать цитаты &rarr;</a>
+        </div>
+
+        <!-- Fragment cards -->
+        <template v-else>
+          <div
+            v-for="f in visibleFragments"
+            :key="f.fragment_id"
+            class="frag-card relative bg-white border border-[#e8e5df] rounded-[10px] px-4 py-3.5 mb-2.5 transition-colors hover:border-[#d4d0ca]"
+          >
+            <!-- Menu trigger -->
+            <button
+              class="frag-menu-btn absolute top-2.5 right-2.5 w-7 h-7 rounded-md border-none bg-transparent cursor-pointer text-[16px] text-[#6b6b8a] flex items-center justify-center hover:bg-[#f0ede8] hover:text-[#1a1a2e]"
+              @click.stop="toggleMenu(f.fragment_id)"
+            >&#8943;</button>
+
+            <!-- Dropdown menu -->
+            <div
+              v-if="openMenuId === f.fragment_id"
+              class="absolute top-9 right-2.5 bg-white border border-[#e8e5df] rounded-lg shadow-lg z-20 min-w-[180px] overflow-hidden"
+              @click.stop
+            >
+              <button class="block w-full px-3.5 py-2.5 text-sm border-none bg-transparent cursor-pointer text-left text-[#3d3d5c] hover:bg-[#f0ede8]" @click="showMove(f.fragment_id)">Переместить в другой раздел</button>
+              <div class="h-px bg-[#f0ede8]" />
+              <button class="block w-full px-3.5 py-2.5 text-sm border-none bg-transparent cursor-pointer text-left text-[#c62828] hover:bg-[#fff0f0]" @click="showConfirm(f.fragment_id)">Исключить из подборки</button>
+            </div>
+
+            <div class="text-sm leading-[1.7] text-[#3d3d5c] mb-2 pr-8">{{ f.text }}</div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <span
+                v-if="f.citation_intent"
+                class="text-xs font-medium px-2.5 py-0.5 rounded"
+                :class="intentColor[f.citation_intent] || 'bg-gray-100 text-gray-600'"
+              >{{ intentLabel[f.citation_intent] || f.citation_intent }}</span>
+              <router-link :to="`/${projectId}/library/${f.citekey}/review`" class="text-[13px] text-[#0d7377] no-underline hover:underline">{{ sourceDisplay(f) }}</router-link>
+            </div>
+            <div v-if="f.note" class="text-[13px] text-[#6b6b8a] italic mt-1.5 leading-6">{{ f.note }}</div>
+
+            <!-- Confirm bar -->
+            <div v-if="confirmId === f.fragment_id" class="flex items-center gap-2 pt-2.5 mt-2 border-t border-[#f0ede8] bg-[#fff0f0] -mx-4 -mb-3.5 px-4 py-2.5 rounded-b-[10px]">
+              <span class="text-[13px] text-[#c62828] flex-1">Исключить цитату из подборки?</span>
+              <button class="text-[13px] px-3.5 py-1 rounded bg-white text-[#6b6b8a] border border-[#e8e5df] cursor-pointer hover:bg-[#f0ede8]" @click="confirmId = null">Отмена</button>
+              <button class="text-[13px] px-3.5 py-1 rounded bg-[#c62828] text-white border-none cursor-pointer font-medium hover:bg-[#a31f1f]" @click="excludeFragment(f.fragment_id)">Исключить</button>
+            </div>
+
+            <!-- Move section picker -->
+            <div v-if="moveFragmentId === f.fragment_id" class="pt-2.5 mt-2 border-t border-[#f0ede8] -mx-4 -mb-3.5 px-4 py-2.5 rounded-b-[10px] bg-[#f9f8f6]">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-[13px] font-medium text-[#3d3d5c]">Переместить в раздел:</span>
+                <button class="text-[13px] text-[#6b6b8a] cursor-pointer bg-transparent border-none hover:text-[#1a1a2e]" @click="moveFragmentId = null">Отмена</button>
+              </div>
+              <div class="flex flex-wrap gap-1.5">
+                <button
+                  v-for="sec in outline.filter(sec => sec.id !== selectedSectionId)"
+                  :key="sec.id"
+                  class="text-[13px] px-2.5 py-1 rounded-md border border-[#e8e5df] bg-white text-[#3d3d5c] cursor-pointer hover:border-[#0d7377] hover:text-[#0d7377] transition-colors"
+                  @click="moveToSection(f.fragment_id, sec.id)"
+                >{{ sec.id }}. {{ sec.name }}</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Expand/collapse -->
+          <span
+            v-if="selectedFragments.length > COLLAPSE_THRESHOLD"
+            class="text-sm text-[#0d7377] cursor-pointer inline-block py-1.5 hover:underline"
+            @click="expandedSection = !expandedSection"
+          >{{ expandedSection
+              ? 'свернуть'
+              : `+ ещё ${hiddenCount} ${pluralCitation(hiddenCount)}` }}</span>
+        </template>
+      </div>
+
+      <!-- Tab: Suggest -->
+      <div v-if="activeTab === 'suggest'" class="py-4">
+        <!-- Gap alert -->
+        <div v-if="gapAlert" class="mx-6 mb-4 bg-[#fef3c7] border border-[#fcd34d] rounded-lg px-4 py-3">
+          <div class="text-[13px] font-semibold text-[#b45309]">{{ gapAlert.message }}</div>
+        </div>
+
+        <!-- Loading -->
+        <div v-if="suggestLoading" class="text-center py-12 text-[#6b6b8a] text-sm">Загрузка рекомендаций...</div>
+
+        <!-- No suggestions -->
+        <div v-else-if="suggestions.length === 0" class="text-center py-12 text-[#6b6b8a] text-sm">Нет рекомендаций для этого раздела</div>
+
+        <!-- Suggestion cards -->
+        <template v-else>
+          <div class="px-6">
+            <div
+              v-for="s in suggestions"
+              :key="s.fragment_id"
+              class="bg-white border border-[#e8e5df] rounded-[10px] px-4 py-3.5 mb-2.5 transition-colors hover:border-[#d4d0ca]"
+            >
+              <div class="text-sm leading-[1.7] text-[#3d3d5c] mb-2">{{ s.text }}</div>
+              <div class="flex items-center gap-2 flex-wrap">
+                <span
+                  v-if="s.citation_intent"
+                  class="text-xs font-medium px-2.5 py-0.5 rounded"
+                  :class="intentColor[s.citation_intent] || 'bg-gray-100 text-gray-600'"
+                >{{ intentLabel[s.citation_intent] || s.citation_intent }}</span>
+                <span class="text-[13px] text-[#0d7377]">{{ s.source }}</span>
+                <span
+                  class="text-xs font-medium"
+                  :class="s.match_reason === 'intent_match' ? 'text-[#2d6a4f]' : 'text-[#0d7377]'"
+                >{{ s.match_reason === 'intent_match' ? 'intent match' : 'похожий контекст' }}</span>
+                <button
+                  class="ml-auto px-4 py-1.5 rounded-md border text-[13px] font-medium cursor-pointer whitespace-nowrap shrink-0"
+                  :class="s._added ? 'bg-[#e8f5e9] text-[#2d6a4f] border-[#a7f3d0]' : 'bg-white text-[#0d7377] border-[#0d7377] hover:bg-[#e6f3f3]'"
+                  :disabled="s._added"
+                  @click="addSuggested(s)"
+                >{{ s._added ? 'Добавлено' : 'Добавить' }}</button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
 </template>
+
+<style scoped>
+.frag-card:hover .frag-menu-btn {
+  opacity: 1 !important;
+}
+.frag-menu-btn {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+</style>

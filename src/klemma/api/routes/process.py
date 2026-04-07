@@ -89,7 +89,7 @@ async def submit_process_job(
     Falls back to in-process thread execution when Redis is unavailable.
     """
     library = get_user_library()
-    src = library.get_source_by_citekey(citekey)
+    src = library.get_source_by_citekey(citekey, user_id=user.user_id)
     if src is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

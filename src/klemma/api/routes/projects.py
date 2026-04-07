@@ -306,6 +306,37 @@ async def get_source_sections(
     return {"citekey": citekey, "sections": sections}
 
 
+@router.delete(
+    "/sections/{section}/sources/{citekey}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def detach_source_from_section(
+    section: str,
+    citekey: str,
+    user: UserRecord = Depends(get_current_user),
+) -> None:
+    """Remove a source's assignment to a specific section.
+
+    Returns 204 on success, 404 if the assignment didn't exist.
+    """
+    from klemma.stores.project_store import LocalProjectStore
+
+    store = get_project_store()
+    if not isinstance(store, LocalProjectStore):
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="detach not supported on this backend",
+        )
+
+    removed = store.remove_source_from_section(citekey, section, user_id=user.user_id)
+    if not removed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assignment of '{citekey}' to section '{section}' not found",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints — Research Reports
 # ---------------------------------------------------------------------------

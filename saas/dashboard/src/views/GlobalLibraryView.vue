@@ -71,16 +71,16 @@ const statusLabel: Record<string, string> = {
       <!-- Table -->
       <div v-else class="overflow-hidden rounded-xl border border-[var(--color-rule)] bg-[var(--color-paper-white)]">
         <div class="px-5 py-3 bg-[var(--color-paper-warm)] border-b border-[var(--color-rule-light)]">
-          <span class="text-xs font-semibold text-[var(--color-ink-muted)]">{{ sources.length }} источник(ов)</span>
+          <span class="text-sm font-semibold text-[var(--color-ink-muted)]">{{ sources.length }} источник(ов)</span>
         </div>
         <table class="min-w-full divide-y divide-[var(--color-rule-light)]">
           <thead class="bg-[var(--color-paper-warm)]">
             <tr>
-              <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Citekey</th>
-              <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Название</th>
-              <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Авторы</th>
-              <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Год</th>
-              <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Статус</th>
+              <th class="px-5 py-3 text-left text-sm font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Citekey</th>
+              <th class="px-5 py-3 text-left text-sm font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Название</th>
+              <th class="px-5 py-3 text-left text-sm font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Авторы</th>
+              <th class="px-5 py-3 text-left text-sm font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Год</th>
+              <th class="px-5 py-3 text-left text-sm font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">Статус</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-[var(--color-rule-light)]">
@@ -93,7 +93,7 @@ const statusLabel: Record<string, string> = {
               <td class="px-5 py-3.5 text-sm font-[var(--font-mono)] text-[var(--color-ink-muted)]">{{ src.year || '—' }}</td>
               <td class="px-5 py-3.5">
                 <span
-                  class="inline-block rounded-full px-2 py-0.5 text-xs font-medium"
+                  class="inline-block rounded-full px-2.5 py-1 text-sm font-medium"
                   :class="{
                     'bg-[var(--color-ok-bg)] text-[var(--color-ok)]': src.status === 'completed',
                     'bg-[var(--color-warn-bg)] text-[var(--color-warn)]': src.status === 'pending' || src.status === 'processing' || src.status === 'queued',

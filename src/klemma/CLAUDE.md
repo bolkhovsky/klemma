@@ -138,8 +138,8 @@ SQLite backends implementing the three-tier library protocols.
 - Tables: `papers`, `extractions`, `fragments`, `paper_embeddings`, `fragment_embeddings`, `citation_graph`
 - Used by: `_init_components()` in `cli.py` (always created); `_process_single()` in `cli.py` (dedup check + dual-write)
 
-#### stores/user_library.py (~210 lines)
-`LocalUserLibrary` — SQLite-backed `UserLibrary` at `~/.klemma/library.db` (same file as `LocalPaperStore`, schema version 2). Maps citekey → paper_id for the User Library tier.
+#### stores/user_library.py (~460 lines)
+`LocalUserLibrary` — SQLite-backed `UserLibrary` at `~/.klemma/library.db` (same file as `LocalPaperStore`, schema version 5). Maps citekey → paper_id for the User Library tier. Composite PK `(user_id, citekey)` for multi-user SaaS isolation (v5).
 - `add_source(paper_id, citekey, *, status, pdf_path, ...) -> None` — upsert on citekey conflict; replaces chapters/sections
 - `get_source_by_citekey(citekey) -> UserSource | None`
 - `resolve_paper_id(citekey) -> str | None`
@@ -157,23 +157,24 @@ SQLite backends implementing the three-tier library protocols.
 - `get_paper_dir(paper_id)` / `delete_paper_files(paper_id)` — bulk paper-level operations
 
 #### stores/project_store.py (~310 lines)
-`LocalProjectStore` — SQLite-backed `ProjectStore` at `project/.klemma/data/project.db`. Per-project section assignments, coverage stats, and prune verdicts (schema v2).
-- `set_source_sections(citekey, paper_id, sections, chapters) -> None` — upsert + replace section assignments
-- `get_coverage_stats() -> dict` — `{total_sources, by_section: {section: count}}`
+`LocalProjectStore` — SQLite-backed `ProjectStore` at `project/.klemma/data/project.db`. Per-project section assignments, coverage stats, and prune verdicts (schema v5). Composite PK `(user_id, citekey)` for multi-user SaaS isolation.
+- `_uid(user_id) -> str` — normalizes `None` → `""` for composite PK compatibility
+- `set_source_sections(citekey, paper_id, sections, chapters, user_id=None) -> None` — upsert + replace section assignments; user-scoped
+- `get_coverage_stats(user_id=None) -> dict` — `{total_sources, by_section: {section: count}}`; user-scoped
 - `get_reference_gaps(**kwargs) -> list[dict]` — returns `[]` (Phase 1D stub)
-- `get_source_sections(citekey) -> list[str]`, `get_sources_by_section(section) -> list[str]`
+- `get_source_sections(citekey, user_id=None) -> list[str]`, `get_sources_by_section(section, user_id=None) -> list[str]` — user-scoped
 - `register_fragment(fragment_id, *, citekey, section, ...) -> None` — INSERT OR IGNORE
-- `count_sources() -> int`
-- `save_prune_verdicts(drop, maybe) -> None` — replace all verdicts; skips blank citekeys
-- `get_prune_verdicts(verdict?, chapter?, section_type?) -> list[dict]` — filtered; expires after 14 days
-- `get_prune_drop_ids(max_age_days?) -> set[str]` — citekeys with 'drop' verdict
-- `get_prune_summary() -> dict` — `{drop, maybe, total}` counts
-- `clear_prune_verdict(source_id) -> None` — remove single verdict
-- Tables: `project_sources`, `project_source_sections`, `project_fragments`, `prune_verdicts` (v2)
+- `count_sources(user_id=None) -> int` — user-scoped
+- `save_prune_verdicts(drop, maybe, user_id=None) -> None` — replace user's verdicts; skips blank citekeys
+- `get_prune_verdicts(verdict?, chapter?, section_type?, user_id=None) -> list[dict]` — filtered; expires after 14 days; user-scoped
+- `get_prune_drop_ids(max_age_days?, user_id=None) -> set[str]` — citekeys with 'drop' verdict; user-scoped
+- `get_prune_summary(user_id=None) -> dict` — `{drop, maybe, total}` counts; user-scoped
+- `clear_prune_verdict(source_id, user_id=None) -> None` — remove single verdict; user-scoped
+- Tables: `project_sources` (PK: user_id, citekey), `project_source_sections` (PK: user_id, citekey, section), `project_fragments`, `prune_verdicts` (PK: user_id, source_id) (v5)
 
-#### stores/user_store.py (~210 lines)
-`LocalUserStore` — SQLite-backed `UserStore` at `~/.klemma/users.db` (separate from library.db). User accounts and refresh token storage for the SaaS auth layer (ADR-009).
-- `__init__(db_path)` — creates dirs, runs `_migrate_schema()` (schema version 2)
+#### stores/user_store.py (~350 lines)
+`LocalUserStore` — SQLite-backed `UserStore` at `~/.klemma/users.db` (separate from library.db). User accounts, projects, and fragment curation for the SaaS auth layer (ADR-009).
+- `__init__(db_path)` — creates dirs, runs `_migrate_schema()` (schema version 11)
 - `create_user(email, password_hash, name?) -> UserRecord` — normalizes email to lowercase; raises `ValueError` on duplicate
 - `get_user_by_email(email) -> UserRecord | None` — normalizes email to lowercase before lookup
 - `get_user_by_id(user_id) -> UserRecord | None`
@@ -182,7 +183,12 @@ SQLite backends implementing the three-tier library protocols.
 - `get_refresh_token(token_hash) -> dict | None` — returns `{user_id, expires_at}` or None
 - `delete_refresh_token(token_hash) -> None` — token rotation on use
 - `delete_all_refresh_tokens(user_id) -> None` — logout-all
-- Tables: `users` (user_id PK, email UNIQUE, password_hash, name, email_verified, created_at), `refresh_tokens` (hashed, FK→users ON DELETE CASCADE)
+- `curate_fragments(project_id, decisions) -> int` — batch INSERT OR REPLACE curation decisions
+- `get_curated(project_id, *, verdict?, section?, citekey?) -> list[dict]` — filtered curation query
+- `get_curation_stats(project_id, citekey) -> dict` — {curated, accepted, rejected}
+- `get_curated_fragment_ids(project_id) -> set[str]` — IDs for filtering pending
+- `update_curation(project_id, fragment_id, *, verdict?, assigned_section?, note?) -> bool` — partial update
+- Tables: `users`, `refresh_tokens`, `projects`, `fragment_curation` (project_id FK, fragment_id, citekey, verdict, assigned_section, note)
 
 ### errors.py (32 lines)
 Klemma error taxonomy for AI backends.

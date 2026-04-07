@@ -27,13 +27,82 @@ def test_schema_version(tmp_path):
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 10
+    assert version == 11
 
 
 def test_creates_db_file(tmp_path):
     db_path = tmp_path / "subdir" / "users.db"
     LocalUserStore(db_path)
     assert db_path.exists()
+
+
+def test_fragment_curation_table_exists(tmp_path):
+    db_path = tmp_path / "users.db"
+    LocalUserStore(db_path)
+    conn = sqlite3.connect(str(db_path))
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    conn.close()
+    assert "fragment_curation" in tables
+
+
+def _make_project(store):
+    """Helper: create a user + project, return project_id."""
+    user = store.create_user(email="test@test.com", password_hash="h", name="Test")
+    proj = store.create_project(user.user_id, "Test Project")
+    return proj["project_id"]
+
+
+def test_curate_fragments(store):
+    pid = _make_project(store)
+    decisions = [
+        {"fragment_id": "f1", "citekey": "smith2020", "verdict": "accepted", "assigned_section": "intro"},
+        {"fragment_id": "f2", "citekey": "smith2020", "verdict": "rejected"},
+    ]
+    n = store.curate_fragments(pid, decisions)
+    assert n == 2
+    curated = store.get_curated(pid)
+    assert len(curated) == 2
+    accepted = store.get_curated(pid, verdict="accepted")
+    assert len(accepted) == 1
+    assert accepted[0]["fragment_id"] == "f1"
+    assert accepted[0]["assigned_section"] == "intro"
+
+
+def test_curation_stats(store):
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck1", "verdict": "accepted"},
+        {"fragment_id": "f2", "citekey": "ck1", "verdict": "rejected"},
+        {"fragment_id": "f3", "citekey": "ck1", "verdict": "accepted"},
+    ])
+    stats = store.get_curation_stats(pid, "ck1")
+    assert stats["accepted"] == 2
+    assert stats["rejected"] == 1
+    assert stats["curated"] == 3
+
+
+def test_get_curated_fragment_ids(store):
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck1", "verdict": "accepted"},
+        {"fragment_id": "f2", "citekey": "ck1", "verdict": "rejected"},
+    ])
+    ids = store.get_curated_fragment_ids(pid)
+    assert ids == {"f1", "f2"}
+
+
+def test_update_curation(store):
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck1", "verdict": "accepted"},
+    ])
+    ok = store.update_curation(pid, "f1", note="my note", assigned_section="ch2")
+    assert ok is True
+    curated = store.get_curated(pid)
+    assert curated[0]["note"] == "my note"
+    assert curated[0]["assigned_section"] == "ch2"
 
 
 # ---------------------------------------------------------------------------

@@ -104,12 +104,32 @@ export const auth = {
 
 // Library
 export const library = {
-  list: (projectId?: string) => {
-    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
+  list: (projectId?: string, q?: string) => {
+    const params = new URLSearchParams()
+    if (projectId) params.set('project_id', projectId)
+    if (q) params.set('q', q)
+    const qs = params.size ? `?${params}` : ''
     return request<{ sources: any[]; total: number }>(`/library/sources${qs}`)
   },
 
   get: (citekey: string) => request<any>(`/library/sources/${citekey}`),
+
+  fragmentSearch: (q: string, limit = 10) => {
+    const params = new URLSearchParams({ q, limit: String(limit) })
+    return request<{
+      results: {
+        fragment_id: string
+        citekey: string
+        title: string
+        authors: string
+        year: number | null
+        text: string
+        fragment_type: string
+      }[]
+      total: number
+      query: string
+    }>(`/library/fragments/search?${params}`)
+  },
 
   add: (data: { citekey: string; title: string; authors?: string; year?: number; doi?: string }) =>
     request<any>('/library/sources', { method: 'POST', body: JSON.stringify(data) }),
@@ -137,6 +157,7 @@ export const library = {
       pdf_hash: string
       status: string
       deduplicated: boolean
+      already_owned: boolean
       job_id: string | null
     }>
   },
@@ -216,6 +237,11 @@ export const projects = {
 
   sourceSections: (citekey: string) =>
     request<{ citekey: string; sections: string[] }>(`/projects/sources/${citekey}/sections`),
+
+  detachSection: (citekey: string, section: string) =>
+    request<void>(`/projects/sections/${encodeURIComponent(section)}/sources/${encodeURIComponent(citekey)}`, {
+      method: 'DELETE',
+    }),
 }
 
 // Process
@@ -245,10 +271,10 @@ export const usage = {
 
 // Write (draft generation)
 export const write = {
-  draft: (section: string, projectId?: string, wordTarget?: number) =>
+  draft: (section: string, projectId?: string, instruction?: string, wordTarget?: number) =>
     request<{ job_id: string; status: string; section: string; task_type: string }>('/write/draft', {
       method: 'POST',
-      body: JSON.stringify({ section, project_id: projectId, word_target: wordTarget }),
+      body: JSON.stringify({ section, project_id: projectId, instruction: instruction || undefined, word_target: wordTarget }),
     }),
 }
 
@@ -302,6 +328,11 @@ export const drafts = {
       body: JSON.stringify({ filename: filename ?? null }),
     }),
 
+  scaffold: (projectId: string) =>
+    request<{ files: DraftFile[] }>(`/projects/${projectId}/drafts/scaffold`, {
+      method: 'POST',
+    }),
+
   upsertSection: (
     projectId: string,
     filename: string,
@@ -316,6 +347,43 @@ export const drafts = {
         body: JSON.stringify({ body, heading_title: headingTitle ?? null }),
       },
     ),
+}
+
+// Curation (fragment accept/reject + curated bank)
+export const curation = {
+  pending: (projectId: string, citekey: string) =>
+    request<{
+      fragments: { fragment_id: string; text: string; citation_intent: string; fragment_type: string; page: number | null; citekey: string }[]
+      total: number
+      curated_count: number
+    }>(`/projects/${projectId}/fragments/pending?citekey=${encodeURIComponent(citekey)}`),
+
+  curate: (projectId: string, decisions: { fragment_id: string; citekey: string; verdict: string; assigned_section?: string; note?: string }[]) =>
+    request<{ curated: number; accepted: number; rejected: number }>(`/projects/${projectId}/fragments/curate`, {
+      method: 'POST',
+      body: JSON.stringify({ decisions }),
+    }),
+
+  curated: (projectId: string, params?: { verdict?: string; section?: string; citekey?: string }) => {
+    const qs = params ? `?${new URLSearchParams(params as Record<string, string>)}` : ''
+    return request<{
+      fragments: { fragment_id: string; citekey: string; text: string; citation_intent: string; assigned_section: string | null; note: string | null; verdict: string; curated_at: string }[]
+      total: number
+      by_section: Record<string, number>
+    }>(`/projects/${projectId}/fragments/curated${qs}`)
+  },
+
+  update: (projectId: string, fragmentId: string, patch: { verdict?: string; assigned_section?: string; note?: string }) =>
+    request<{ ok: boolean }>(`/projects/${projectId}/fragments/curate/${fragmentId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  suggest: (projectId: string, section: string) =>
+    request<{
+      gap_alert: { missing_intents: string[]; message: string } | null
+      suggestions: { fragment_id: string; text: string; citation_intent: string; source: string; citekey: string; match_reason: string; score: number }[]
+    }>(`/projects/${projectId}/fragments/suggest?section=${encodeURIComponent(section)}`),
 }
 
 // Research (literature review generation + stored reports)

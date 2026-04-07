@@ -25,27 +25,6 @@ const router = createRouter({
       component: () => import('../views/GlobalLibraryView.vue'),
       meta: { requiresAuth: true },
     },
-    // Demo routes (no auth, for UX prototyping)
-    {
-      path: '/demo/feed',
-      name: 'demo-feed',
-      component: () => import('../views/FeedView.vue'),
-    },
-    {
-      path: '/demo/feed/:insightId',
-      name: 'demo-insight',
-      component: () => import('../views/InsightView.vue'),
-    },
-    {
-      path: '/demo/map',
-      name: 'demo-map',
-      component: () => import('../views/MapView.vue'),
-    },
-    {
-      path: '/demo/map/:sectionId/:blockId',
-      name: 'demo-block',
-      component: () => import('../views/BlockView.vue'),
-    },
     // Project-scoped routes
     {
       path: '/:projectId/map',
@@ -54,10 +33,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
-      path: '/:projectId/map/:sectionId/:blockId',
-      name: 'block',
-      component: () => import('../views/BlockView.vue'),
-      meta: { requiresAuth: true },
+      path: '/:projectId/dashboard',
+      redirect: (to) => `/${to.params.projectId}/library`,
+    },
+    {
+      path: '/:projectId/draft',
+      redirect: (to) => `/${to.params.projectId}/library`,
     },
     {
       path: '/:projectId/feed',
@@ -78,10 +59,6 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
-      path: '/:projectId/dashboard',
-      redirect: (to) => `/${to.params.projectId}/map`,
-    },
-    {
       path: '/:projectId/library',
       name: 'library',
       component: () => import('../views/LibraryView.vue'),
@@ -89,58 +66,40 @@ const router = createRouter({
     },
     {
       path: '/:projectId/library/:citekey',
-      name: 'source',
-      component: () => import('../views/SourceView.vue'),
+      redirect: (to) => `/${to.params.projectId}/library/${to.params.citekey}/review`,
+    },
+    {
+      path: '/:projectId/library/:citekey/review',
+      name: 'fragment-review',
+      component: () => import('../views/FragmentReviewView.vue'),
       meta: { requiresAuth: true },
     },
+    // Removed views redirect to /write
+    { path: '/:projectId/coverage', redirect: (to) => `/${to.params.projectId}/write` },
+    { path: '/:projectId/outline', redirect: (to) => `/${to.params.projectId}/write` },
+    { path: '/:projectId/research', redirect: (to) => `/${to.params.projectId}/write` },
+    { path: '/:projectId/research/:section', redirect: (to) => `/${to.params.projectId}/write` },
     {
-      path: '/:projectId/coverage',
-      name: 'coverage',
-      component: () => import('../views/CoverageView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/:projectId/outline',
-      name: 'outline',
-      component: () => import('../views/OutlineView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/:projectId/research',
-      name: 'research',
-      component: () => import('../views/ResearchView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/:projectId/research/:section',
-      name: 'research-report',
-      component: () => import('../views/ReportView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/:projectId/draft',
-      redirect: (to) => `/${to.params.projectId}/map`,
-    },
-    {
-      path: '/:projectId/edit',
-      name: 'edit',
-      component: () => import('../views/FileEditorView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/:projectId/edit/:filename',
-      name: 'edit-file',
-      component: () => import('../views/FileEditorView.vue'),
+      path: '/:projectId/write',
+      name: 'write',
+      component: () => import('../views/SectionEditorView.vue'),
       meta: { requiresAuth: true },
     },
   ],
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const token = localStorage.getItem('access_token')
   if (to.meta.requiresAuth && !token) return { name: 'login' }
-  // Авторизованным пользователям на /login или /register — в библиотеку
-  if ((to.name === 'login' || to.name === 'register') && token) return { path: '/library' }
+  if ((to.name === 'login' || to.name === 'register') && token) {
+    try {
+      const { userProjects } = await import('../api/client')
+      const data = await userProjects.list()
+      const first = data.projects[0]
+      if (first) return { path: `/${first.project_id}/library` }
+    } catch { /* fall through */ }
+    return { path: '/library' }
+  }
 })
 
 router.afterEach((to) => {

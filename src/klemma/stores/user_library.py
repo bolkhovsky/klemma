@@ -17,31 +17,37 @@ from typing import TYPE_CHECKING, Generator, Optional
 if TYPE_CHECKING:
     from ..models import UserSource
 
-_SCHEMA_VERSION = 4  # v4: user_id column for multi-user SaaS isolation
+_SCHEMA_VERSION = 5  # v5: composite PK (user_id, citekey) for multi-user isolation
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS user_sources (
-    citekey     TEXT PRIMARY KEY,
+    citekey     TEXT NOT NULL,
     paper_id    TEXT NOT NULL,
     status      TEXT DEFAULT 'pending',
     pdf_path    TEXT,
     note_path   TEXT,
     quality_score INTEGER,
     added_at    TEXT DEFAULT (datetime('now')),
-    updated_at  TEXT DEFAULT (datetime('now'))
+    updated_at  TEXT DEFAULT (datetime('now')),
+    project_id  TEXT,
+    user_id     TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, citekey)
 );
 CREATE INDEX IF NOT EXISTS idx_user_sources_paper ON user_sources(paper_id);
+CREATE INDEX IF NOT EXISTS idx_user_sources_user ON user_sources(user_id);
 
 CREATE TABLE IF NOT EXISTS user_source_chapters (
-    citekey TEXT NOT NULL REFERENCES user_sources(citekey) ON DELETE CASCADE,
+    citekey TEXT NOT NULL,
     chapter INTEGER NOT NULL,
-    PRIMARY KEY (citekey, chapter)
+    user_id TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, citekey, chapter)
 );
 
 CREATE TABLE IF NOT EXISTS user_source_sections (
-    citekey TEXT NOT NULL REFERENCES user_sources(citekey) ON DELETE CASCADE,
+    citekey TEXT NOT NULL,
     section TEXT NOT NULL,
-    PRIMARY KEY (citekey, section)
+    user_id TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, citekey, section)
 );
 """
 
@@ -92,20 +98,82 @@ class LocalUserLibrary:
         if version < 2:
             conn.executescript(_CREATE_SCHEMA)
         if version < 3:
-            conn.execute(
-                "ALTER TABLE user_sources ADD COLUMN project_id TEXT"
-            )
+            try:
+                conn.execute(
+                    "ALTER TABLE user_sources ADD COLUMN project_id TEXT"
+                )
+            except sqlite3.OperationalError:
+                pass  # column already exists
         if version < 4:
             # Multi-user support: scope all sources to a specific user.
             # NULL = legacy CLI sources (owned by no particular SaaS user).
-            conn.execute(
-                "ALTER TABLE user_sources ADD COLUMN user_id TEXT"
-            )
+            try:
+                conn.execute(
+                    "ALTER TABLE user_sources ADD COLUMN user_id TEXT"
+                )
+            except sqlite3.OperationalError:
+                pass  # column already exists
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_user_sources_user ON user_sources(user_id)"
             )
+        # v5: composite PK (user_id, citekey) to prevent cross-user collision.
+        # Check actual PK structure (not just version) for idempotency — version
+        # may have been bumped without the migration running (e.g. interrupted).
+        pk_cols = [
+            r[1] for r in conn.execute("PRAGMA table_info(user_sources)").fetchall()
+            if r[5] > 0
+        ]
+        needs_pk_migration = pk_cols == ["citekey"]  # old schema: citekey-only PK
+        if version < 5 or needs_pk_migration:
+            # NULL user_id → '' (empty string) for PK compatibility.
+            # SQLite doesn't support ALTER PRIMARY KEY — recreate tables.
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS user_sources_v5 (
+                    citekey     TEXT NOT NULL,
+                    paper_id    TEXT NOT NULL,
+                    status      TEXT DEFAULT 'pending',
+                    pdf_path    TEXT,
+                    note_path   TEXT,
+                    quality_score INTEGER,
+                    added_at    TEXT DEFAULT (datetime('now')),
+                    updated_at  TEXT DEFAULT (datetime('now')),
+                    project_id  TEXT,
+                    user_id     TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (user_id, citekey)
+                );
+                INSERT OR IGNORE INTO user_sources_v5
+                    (citekey, paper_id, status, pdf_path, note_path,
+                     quality_score, added_at, updated_at, project_id, user_id)
+                SELECT citekey, paper_id, status, pdf_path, note_path,
+                       quality_score, added_at, updated_at, project_id,
+                       COALESCE(user_id, '')
+                FROM user_sources;
+                DROP TABLE IF EXISTS user_source_chapters;
+                DROP TABLE IF EXISTS user_source_sections;
+                DROP TABLE user_sources;
+                ALTER TABLE user_sources_v5 RENAME TO user_sources;
+                CREATE INDEX IF NOT EXISTS idx_user_sources_paper ON user_sources(paper_id);
+                CREATE INDEX IF NOT EXISTS idx_user_sources_user ON user_sources(user_id);
+                CREATE TABLE IF NOT EXISTS user_source_chapters (
+                    citekey TEXT NOT NULL,
+                    chapter INTEGER NOT NULL,
+                    user_id TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (user_id, citekey, chapter)
+                );
+                CREATE TABLE IF NOT EXISTS user_source_sections (
+                    citekey TEXT NOT NULL,
+                    section TEXT NOT NULL,
+                    user_id TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (user_id, citekey, section)
+                );
+            """)
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+
+    @staticmethod
+    def _uid(user_id: Optional[str]) -> str:
+        """Normalize user_id: None → '' for composite PK compatibility."""
+        return user_id if user_id is not None else ""
 
     # ------------------------------------------------------------------ #
     # UserLibrary Protocol implementation                                 #
@@ -132,39 +200,41 @@ class LocalUserLibrary:
         Two different users may register the same citekey (they point to the
         same global paper but are independent library entries).
         """
+        uid = self._uid(user_id)
         with self._conn() as conn:
             conn.execute(
                 """INSERT INTO user_sources
                    (citekey, paper_id, status, pdf_path, note_path, quality_score,
                     project_id, user_id)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(citekey) DO UPDATE SET
+                   ON CONFLICT(user_id, citekey) DO UPDATE SET
                        paper_id=excluded.paper_id,
                        status=excluded.status,
                        pdf_path=excluded.pdf_path,
                        note_path=excluded.note_path,
                        quality_score=excluded.quality_score,
                        project_id=COALESCE(excluded.project_id, user_sources.project_id),
-                       user_id=COALESCE(excluded.user_id, user_sources.user_id),
                        updated_at=datetime('now')""",
                 (citekey, paper_id, status, pdf_path, note_path, quality_score,
-                 project_id, user_id),
+                 project_id, uid),
             )
             if chapters:
                 conn.execute(
-                    "DELETE FROM user_source_chapters WHERE citekey = ?", (citekey,)
+                    "DELETE FROM user_source_chapters WHERE citekey = ? AND user_id = ?",
+                    (citekey, uid),
                 )
                 conn.executemany(
-                    "INSERT OR IGNORE INTO user_source_chapters (citekey, chapter) VALUES (?,?)",
-                    [(citekey, ch) for ch in chapters],
+                    "INSERT OR IGNORE INTO user_source_chapters (citekey, chapter, user_id) VALUES (?,?,?)",
+                    [(citekey, ch, uid) for ch in chapters],
                 )
             if sections:
                 conn.execute(
-                    "DELETE FROM user_source_sections WHERE citekey = ?", (citekey,)
+                    "DELETE FROM user_source_sections WHERE citekey = ? AND user_id = ?",
+                    (citekey, uid),
                 )
                 conn.executemany(
-                    "INSERT OR IGNORE INTO user_source_sections (citekey, section) VALUES (?,?)",
-                    [(citekey, s) for s in sections],
+                    "INSERT OR IGNORE INTO user_source_sections (citekey, section, user_id) VALUES (?,?,?)",
+                    [(citekey, s, uid) for s in sections],
                 )
 
     def get_source_by_citekey(
@@ -188,18 +258,19 @@ class LocalUserLibrary:
                 ).fetchone()
             if not row:
                 return None
+            row_uid = row["user_id"] or ""
             chapters = [
                 r[0]
                 for r in conn.execute(
-                    "SELECT chapter FROM user_source_chapters WHERE citekey = ? ORDER BY chapter",
-                    (citekey,),
+                    "SELECT chapter FROM user_source_chapters WHERE citekey = ? AND user_id = ? ORDER BY chapter",
+                    (citekey, row_uid),
                 ).fetchall()
             ]
             sections = [
                 r[0]
                 for r in conn.execute(
-                    "SELECT section FROM user_source_sections WHERE citekey = ? ORDER BY section",
-                    (citekey,),
+                    "SELECT section FROM user_source_sections WHERE citekey = ? AND user_id = ? ORDER BY section",
+                    (citekey, row_uid),
                 ).fetchall()
             ]
         return UserSource(
@@ -264,18 +335,20 @@ class LocalUserLibrary:
             if not row:
                 return None
             citekey = row["citekey"]
+            _uid = row["user_id"]
+            row_uid = row["user_id"] or ""
             chapters = [
                 r[0]
                 for r in conn.execute(
-                    "SELECT chapter FROM user_source_chapters WHERE citekey = ? ORDER BY chapter",
-                    (citekey,),
+                    "SELECT chapter FROM user_source_chapters WHERE citekey = ? AND user_id = ? ORDER BY chapter",
+                    (citekey, row_uid),
                 ).fetchall()
             ]
             sections = [
                 r[0]
                 for r in conn.execute(
-                    "SELECT section FROM user_source_sections WHERE citekey = ? ORDER BY section",
-                    (citekey,),
+                    "SELECT section FROM user_source_sections WHERE citekey = ? AND user_id = ? ORDER BY section",
+                    (citekey, row_uid),
                 ).fetchall()
             ]
         return UserSource(
@@ -307,9 +380,22 @@ class LocalUserLibrary:
                 ).fetchone()
                 if not row:
                     return False
-            conn.execute("DELETE FROM user_source_chapters WHERE citekey = ?", (citekey,))
-            conn.execute("DELETE FROM user_source_sections WHERE citekey = ?", (citekey,))
-            cursor = conn.execute("DELETE FROM user_sources WHERE citekey = ?", (citekey,))
+                conn.execute(
+                    "DELETE FROM user_source_chapters WHERE citekey = ? AND user_id = ?",
+                    (citekey, user_id),
+                )
+                conn.execute(
+                    "DELETE FROM user_source_sections WHERE citekey = ? AND user_id = ?",
+                    (citekey, user_id),
+                )
+                cursor = conn.execute(
+                    "DELETE FROM user_sources WHERE citekey = ? AND user_id = ?",
+                    (citekey, user_id),
+                )
+            else:
+                conn.execute("DELETE FROM user_source_chapters WHERE citekey = ?", (citekey,))
+                conn.execute("DELETE FROM user_source_sections WHERE citekey = ?", (citekey,))
+                cursor = conn.execute("DELETE FROM user_sources WHERE citekey = ?", (citekey,))
         return cursor.rowcount > 0
 
     def update_status(
@@ -362,10 +448,16 @@ class LocalUserLibrary:
 
             where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
             rows = conn.execute(
-                f"SELECT citekey FROM user_sources {where} ORDER BY added_at",
+                f"SELECT citekey, user_id FROM user_sources {where} ORDER BY added_at",
                 params,
             ).fetchall()
-        return [self.get_source_by_citekey(row["citekey"]) for row in rows]  # type: ignore[return-value]
+        return [  # type: ignore[return-value]
+            self.get_source_by_citekey(
+                row["citekey"],
+                user_id=row["user_id"] if row["user_id"] else None,
+            )
+            for row in rows
+        ]
 
     def count(self, user_id: Optional[str] = None) -> int:
         """Return total number of registered sources, optionally scoped to a user."""

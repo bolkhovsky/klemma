@@ -153,8 +153,8 @@ async def get_health(
     project_store = get_project_store()
     paper_store = get_paper_store()
 
-    all_sources = library.get_all_sources()
-    coverage_stats = project_store.get_coverage_stats()
+    all_sources = library.get_all_sources(user_id=user.user_id)
+    coverage_stats = project_store.get_coverage_stats(user_id=user.user_id)
     sections = coverage_stats.get("sections", {})
     chapters_data = coverage_stats.get("chapters", {})
 
@@ -259,8 +259,8 @@ async def get_health(
                 action="search",
             ))
 
-    # Prune pending
-    prune_summary = project_store.get_prune_summary()
+    # Prune pending — scoped to user's sources
+    prune_summary = project_store.get_prune_summary(user_id=user.user_id)
     drop_count = prune_summary.get("drop", 0)
     maybe_count = prune_summary.get("maybe", 0)
     if drop_count > 0 or maybe_count > 0:
@@ -277,11 +277,12 @@ async def get_health(
         frags = paper_store.get_fragments(src.paper_id)
         total_fragments += len(frags)
 
-    # --- Ref gaps count (best-effort) ---
-    # Count entries in citation_graph not marked as in_library.
+    # --- Ref gaps count (best-effort, user-scoped) ---
     ref_gaps_open = 0
     try:
-        ref_gaps_open = paper_store.count_citation_gaps()
+        user_paper_ids = [s.paper_id for s in all_sources]
+        if user_paper_ids:
+            ref_gaps_open = paper_store.count_citation_gaps(paper_ids=user_paper_ids)
     except Exception:
         pass  # method may not exist yet or table empty
 

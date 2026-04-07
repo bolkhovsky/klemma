@@ -97,7 +97,7 @@ const faqs = [
         </p>
         <div class="animate-in animate-in-delay-3 mt-12 flex justify-center gap-4">
           <RouterLink
-            to="/demo/map"
+            to="/register"
             class="beam-border rounded-lg bg-cta px-8 py-4 text-base font-semibold text-white shadow-sm hover:bg-cta-light transition-colors"
           >
             Открыть карту →
@@ -565,7 +565,7 @@ const faqs = [
         </p>
         <div class="mt-10 flex justify-center gap-4">
           <RouterLink
-            to="/demo/map"
+            to="/register"
             class="beam-border rounded-lg bg-cta px-8 py-4 text-base font-semibold text-white shadow-sm hover:bg-cta-light transition-colors"
           >
             Открыть карту →

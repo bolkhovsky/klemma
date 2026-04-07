@@ -178,7 +178,7 @@ const tagConfig: Record<string, { label: string; color: string; bg: string }> = 
                 :key="s.citekey"
                 class="flex items-start gap-2"
               >
-                <a :href="`/demo/library/${s.citekey}`" class="citekey-link mt-0.5 flex-shrink-0">@{{ s.citekey }}</a>
+                <span class="citekey-link mt-0.5 flex-shrink-0">@{{ s.citekey }}</span>
                 <div class="min-w-0">
                   <p class="text-sm text-[var(--color-ink-light)] leading-snug">{{ s.title }}</p>
                   <p class="text-xs text-[var(--color-ink-muted)]">{{ s.year }}</p>

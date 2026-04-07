@@ -192,4 +192,23 @@ def resolve_metadata(
             if not result["doi"]:
                 result["doi"] = s2.get("doi", "")
 
+    # Layer 4: CrossRef fallback (if S2 didn't fill year or DOI)
+    if result["title"] and (result["year"] is None or not result["doi"]):
+        try:
+            from klemma.search import CrossRefSearchProvider
+
+            cr = CrossRefSearchProvider()
+            hit = cr.resolve(result["title"])
+            if hit:
+                if result["year"] is None and hit.year:
+                    result["year"] = hit.year
+                if not result["doi"] and hit.doi:
+                    result["doi"] = hit.doi
+                if not result["authors"] and hit.authors:
+                    result["authors"] = hit.authors
+                if not result["abstract"] and hit.abstract:
+                    result["abstract"] = hit.abstract
+        except Exception:
+            pass  # non-fatal
+
     return result

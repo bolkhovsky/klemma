@@ -371,43 +371,83 @@ class LocalPaperStore:
     # Citation graph — reference gaps                                      #
     # ------------------------------------------------------------------ #
 
-    def get_reference_gaps(self, limit: int = 50) -> list[dict]:
+    def get_reference_gaps(self, limit: int = 50, paper_ids: list[str] | None = None) -> list[dict]:
         """Return cited papers not in the library, sorted by citation frequency.
 
         A "gap" is a paper referenced in citation_graph but whose normalized
         title doesn't match any paper in the library.
+
+        When paper_ids is provided, only consider citations FROM those papers
+        (user-scoped mode for SaaS).
         """
         with self._conn() as conn:
-            rows = conn.execute(
-                """SELECT
-                     cg.cited_title as title,
-                     cg.cited_authors as authors,
-                     cg.cited_year as year,
-                     COUNT(DISTINCT cg.citing_paper_id) as cited_by_count,
-                     GROUP_CONCAT(DISTINCT cg.citation_intent) as intents
-                   FROM citation_graph cg
-                   WHERE NOT EXISTS (
-                     SELECT 1 FROM papers p
-                     WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
-                   )
-                   GROUP BY cg.cited_title_hash
-                   ORDER BY cited_by_count DESC
-                   LIMIT ?""",
-                (limit,),
-            ).fetchall()
+            if paper_ids:
+                placeholders = ",".join("?" for _ in paper_ids)
+                rows = conn.execute(
+                    f"""SELECT
+                         cg.cited_title as title,
+                         cg.cited_authors as authors,
+                         cg.cited_year as year,
+                         COUNT(DISTINCT cg.citing_paper_id) as cited_by_count,
+                         GROUP_CONCAT(DISTINCT cg.citation_intent) as intents
+                       FROM citation_graph cg
+                       WHERE cg.citing_paper_id IN ({placeholders})
+                         AND NOT EXISTS (
+                           SELECT 1 FROM papers p
+                           WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
+                         )
+                       GROUP BY cg.cited_title_hash
+                       ORDER BY cited_by_count DESC
+                       LIMIT ?""",
+                    (*paper_ids, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT
+                         cg.cited_title as title,
+                         cg.cited_authors as authors,
+                         cg.cited_year as year,
+                         COUNT(DISTINCT cg.citing_paper_id) as cited_by_count,
+                         GROUP_CONCAT(DISTINCT cg.citation_intent) as intents
+                       FROM citation_graph cg
+                       WHERE NOT EXISTS (
+                         SELECT 1 FROM papers p
+                         WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
+                       )
+                       GROUP BY cg.cited_title_hash
+                       ORDER BY cited_by_count DESC
+                       LIMIT ?""",
+                    (limit,),
+                ).fetchall()
         return [dict(r) for r in rows]
 
-    def count_citation_gaps(self) -> int:
-        """Count unique cited papers not in the library."""
+    def count_citation_gaps(self, paper_ids: list[str] | None = None) -> int:
+        """Count unique cited papers not in the library.
+
+        When paper_ids is provided, only count gaps from those papers (user-scoped).
+        """
         with self._conn() as conn:
-            row = conn.execute(
-                """SELECT COUNT(DISTINCT cg.cited_title_hash)
-                   FROM citation_graph cg
-                   WHERE NOT EXISTS (
-                     SELECT 1 FROM papers p
-                     WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
-                   )"""
-            ).fetchone()
+            if paper_ids:
+                placeholders = ",".join("?" for _ in paper_ids)
+                row = conn.execute(
+                    f"""SELECT COUNT(DISTINCT cg.cited_title_hash)
+                       FROM citation_graph cg
+                       WHERE cg.citing_paper_id IN ({placeholders})
+                         AND NOT EXISTS (
+                           SELECT 1 FROM papers p
+                           WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
+                         )""",
+                    paper_ids,
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """SELECT COUNT(DISTINCT cg.cited_title_hash)
+                       FROM citation_graph cg
+                       WHERE NOT EXISTS (
+                         SELECT 1 FROM papers p
+                         WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
+                       )"""
+                ).fetchone()
         return row[0] if row else 0
 
     # ------------------------------------------------------------------ #
@@ -475,6 +515,67 @@ class LocalPaperStore:
                    VALUES (?, ?, ?, ?)""",
                 (fragment_id, model, blob, len(vector)),
             )
+
+    # ---------------------------------------------------------------- #
+    # Multi-user safety                                                 #
+    # ---------------------------------------------------------------- #
+
+    def count_paper_owners(self, paper_id: str) -> int:
+        """Count distinct users referencing this paper_id in user_sources.
+
+        Used to guard force-reprocess: if >1 user owns the paper, deleting
+        its fragments would affect all of them.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT user_id) FROM user_sources WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchone()
+        return row[0] if row else 0
+
+    # ---------------------------------------------------------------- #
+    # Fragment search (SaaS — searches across a user's library)         #
+    # ---------------------------------------------------------------- #
+
+    def search_fragments_for_user(
+        self,
+        user_id: str,
+        query: str,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Full-text search over fragments belonging to a user's library.
+
+        Joins ``fragments`` → ``papers`` → ``user_sources`` (all in the same
+        library.db).  Filters by ``user_id`` and ``fragment_text LIKE %query%``.
+        Returns up to *limit* rows ordered by fragment length ascending
+        (shorter fragments tend to be more focused / higher quality).
+        """
+        like = f"%{query}%"
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT f.fragment_id, f.fragment_text, f.fragment_type,
+                          us.citekey, p.title, p.authors, p.year
+                   FROM fragments f
+                   JOIN papers p ON f.paper_id = p.paper_id
+                   JOIN user_sources us ON f.paper_id = us.paper_id
+                   WHERE us.user_id = ?
+                     AND f.fragment_text LIKE ?
+                   ORDER BY LENGTH(f.fragment_text) ASC
+                   LIMIT ?""",
+                (user_id, like, limit),
+            ).fetchall()
+        return [
+            {
+                "fragment_id": row["fragment_id"],
+                "text": row["fragment_text"],
+                "fragment_type": row["fragment_type"] or "key_idea",
+                "citekey": row["citekey"],
+                "title": row["title"] or "",
+                "authors": row["authors"] or "",
+                "year": row["year"],
+            }
+            for row in rows
+        ]
 
 
 # ------------------------------------------------------------------ #

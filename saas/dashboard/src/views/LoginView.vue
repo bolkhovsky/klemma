@@ -19,9 +19,9 @@ async function handleLogin() {
     try {
       const projectsData = await userProjects.list()
       const first = projectsData.projects[0]
-      router.push(first ? `/${first.project_id}/map` : '/demo/map')
+      router.push(first ? `/${first.project_id}/library` : '/library')
     } catch {
-      router.push('/demo/map')
+      router.push('/library')
     }
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : 'Ошибка входа'
