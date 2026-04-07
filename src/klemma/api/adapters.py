@@ -67,10 +67,12 @@ class _SaaSStateAdapter:
         paper_store: LocalPaperStore,
         project_store: LocalProjectStore,
         user_library: LocalUserLibrary,
+        user_id: str | None = None,
     ) -> None:
         self._paper = paper_store
         self._project = project_store
         self._library = user_library
+        self._user_id = user_id
 
     # ── source queries ────────────────────────────────────────────────
 
@@ -88,7 +90,7 @@ class _SaaSStateAdapter:
         return self._enrich_sources(list(citekeys))
 
     def get_source(self, source_id: str) -> dict | None:
-        src = self._library.get_source_by_citekey(source_id)
+        src = self._library.get_source_by_citekey(source_id, user_id=self._user_id)
         if not src:
             return None
         paper = self._paper.get_paper_by_id(src.paper_id)
@@ -113,11 +115,11 @@ class _SaaSStateAdapter:
         }
 
     def get_all_sources(self) -> list[dict]:
-        all_src = self._library.get_all_sources()
+        all_src = self._library.get_all_sources(user_id=self._user_id)
         return self._enrich_sources([s.citekey for s in all_src])
 
     def get_existing_source_ids(self) -> set[str]:
-        return self._library.get_existing_citekeys()
+        return self._library.get_existing_citekeys(user_id=self._user_id)
 
     # ── fragment queries ──────────────────────────────────────────────
 
@@ -131,7 +133,7 @@ class _SaaSStateAdapter:
         section_type: str | None = None,
     ) -> list[dict]:
         if source_id:
-            src = self._library.get_source_by_citekey(source_id)
+            src = self._library.get_source_by_citekey(source_id, user_id=self._user_id)
             if not src:
                 return []
             frags = self._paper.get_fragments(src.paper_id)
@@ -150,7 +152,7 @@ class _SaaSStateAdapter:
 
         result: list[dict] = []
         for ck in citekeys:
-            src = self._library.get_source_by_citekey(ck)
+            src = self._library.get_source_by_citekey(ck, user_id=self._user_id)
             if not src:
                 continue
             frags = self._paper.get_fragments(src.paper_id)
@@ -174,7 +176,7 @@ class _SaaSStateAdapter:
         return []
 
     def get_fragment_stats(self) -> dict:
-        all_sources = self._library.get_all_sources()
+        all_sources = self._library.get_all_sources(user_id=self._user_id)
         total = 0
         by_type: dict[str, int] = {}
         for src in all_sources:

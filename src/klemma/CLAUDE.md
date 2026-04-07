@@ -138,8 +138,8 @@ SQLite backends implementing the three-tier library protocols.
 - Tables: `papers`, `extractions`, `fragments`, `paper_embeddings`, `fragment_embeddings`, `citation_graph`
 - Used by: `_init_components()` in `cli.py` (always created); `_process_single()` in `cli.py` (dedup check + dual-write)
 
-#### stores/user_library.py (~210 lines)
-`LocalUserLibrary` — SQLite-backed `UserLibrary` at `~/.klemma/library.db` (same file as `LocalPaperStore`, schema version 2). Maps citekey → paper_id for the User Library tier.
+#### stores/user_library.py (~460 lines)
+`LocalUserLibrary` — SQLite-backed `UserLibrary` at `~/.klemma/library.db` (same file as `LocalPaperStore`, schema version 5). Maps citekey → paper_id for the User Library tier. Composite PK `(user_id, citekey)` for multi-user SaaS isolation (v5).
 - `add_source(paper_id, citekey, *, status, pdf_path, ...) -> None` — upsert on citekey conflict; replaces chapters/sections
 - `get_source_by_citekey(citekey) -> UserSource | None`
 - `resolve_paper_id(citekey) -> str | None`

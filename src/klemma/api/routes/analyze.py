@@ -153,8 +153,8 @@ async def get_health(
     project_store = get_project_store()
     paper_store = get_paper_store()
 
-    all_sources = library.get_all_sources()
-    coverage_stats = project_store.get_coverage_stats()
+    all_sources = library.get_all_sources(user_id=user.user_id)
+    coverage_stats = project_store.get_coverage_stats(user_id=user.user_id)
     sections = coverage_stats.get("sections", {})
     chapters_data = coverage_stats.get("chapters", {})
 

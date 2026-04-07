@@ -99,6 +99,19 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             "fragment_count": len(existing),
         }
     if existing and force:
+        # Safety: don't delete shared global fragments if other users reference this paper
+        other_owners = paper_store.count_paper_owners(paper_id)
+        if other_owners > 1:
+            logger.warning(
+                "Force reprocess skipped for %s — paper %s is shared by %d users",
+                citekey, paper_id, other_owners,
+            )
+            user_library.update_status(citekey, "completed")
+            return {
+                "status": "already_processed",
+                "citekey": citekey,
+                "fragment_count": len(existing),
+            }
         deleted = paper_store.delete_fragments(paper_id)
         logger.info("Force reprocess: deleted %d existing fragments for %s", deleted, citekey)
 
@@ -488,7 +501,7 @@ def generate_research(section: str, project_id: str, data_dir: str, user_id: str
 
     try:
         ai, ai_config = _create_ai_provider()
-        state_adapter = _SaaSStateAdapter(paper_store, project_store, user_library)
+        state_adapter = _SaaSStateAdapter(paper_store, project_store, user_library, user_id=user_id or None)
         vault = _NullVault()
         config = KlemmaConfig()
 
@@ -609,7 +622,7 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
         section_citekeys = project_store.get_sources_by_section(section)
         for citekey in section_citekeys:
             valid_citekeys.add(citekey)
-            src = user_library.get_source_by_citekey(citekey)
+            src = user_library.get_source_by_citekey(citekey, user_id=user_id or None)
             if not src:
                 continue
             paper = paper_store.get_paper_by_id(src.paper_id)

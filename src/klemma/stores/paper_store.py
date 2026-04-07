@@ -501,6 +501,23 @@ class LocalPaperStore:
             )
 
     # ---------------------------------------------------------------- #
+    # Multi-user safety                                                 #
+    # ---------------------------------------------------------------- #
+
+    def count_paper_owners(self, paper_id: str) -> int:
+        """Count distinct users referencing this paper_id in user_sources.
+
+        Used to guard force-reprocess: if >1 user owns the paper, deleting
+        its fragments would affect all of them.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT user_id) FROM user_sources WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchone()
+        return row[0] if row else 0
+
+    # ---------------------------------------------------------------- #
     # Fragment search (SaaS — searches across a user's library)         #
     # ---------------------------------------------------------------- #
 
