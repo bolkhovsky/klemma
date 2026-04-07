@@ -305,28 +305,21 @@ watch(sources, () => { loadFragmentCounts() })
 
     <!-- Coverage bar -->
     <div v-if="outline.length > 0 && sources.length > 0" class="mt-5 animate-in animate-in-delay-1">
-      <div class="text-[15px] font-semibold text-[var(--color-ink)] mb-2.5">Покрытие по разделам</div>
       <div class="coverage-filter">
-        <div class="coverage-bar">
-          <div
-            v-for="cell in coverageCells"
-            :key="cell.id"
-            class="coverage-cell"
-            :class="{
-              'coverage-full': cell.count >= 3,
-              'coverage-partial': cell.count > 0 && cell.count < 3,
-              'coverage-empty': cell.count === 0,
-              active: activeSectionFilter === cell.id,
-            }"
-            :title="`${cell.count} цитат`"
-            @click="filterBySection(cell.id)"
-          >{{ cell.name || cell.id }}</div>
-        </div>
-        <div class="coverage-summary">
-          {{ totalAccepted }} цитат принято &middot; {{ coveragePct }}% покрыто
-          <span v-if="activeSectionFilter" class="text-[var(--color-accent)] font-medium">
-            &middot; фильтр активен
-            <span class="cursor-pointer underline" @click="activeSectionFilter = null">сбросить</span>
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="text-[14px] font-semibold text-[var(--color-ink)]">Покрытие по разделам</span>
+          <select
+            class="coverage-select"
+            :value="activeSectionFilter || ''"
+            @change="activeSectionFilter = ($event.target as HTMLSelectElement).value || null"
+          >
+            <option value="">Все разделы</option>
+            <option v-for="cell in coverageCells" :key="cell.id" :value="cell.id">
+              {{ cell.name || cell.id }} ({{ cell.count }})
+            </option>
+          </select>
+          <span class="text-[13px] text-[var(--color-ink-muted)]">
+            {{ totalAccepted }} цитат принято &middot; {{ coveragePct }}% покрыто
           </span>
         </div>
       </div>
@@ -500,34 +493,30 @@ watch(sources, () => { loadFragmentCounts() })
 .upload-label { font-size: 16px; font-weight: 500; color: var(--color-ink-2); }
 .upload-hint { font-size: 14px; color: var(--color-ink-muted); margin-top: 4px; }
 
-/* Coverage bar */
+/* Coverage */
 .coverage-filter {
   background: white;
   border: 1px solid var(--color-rule);
   border-radius: 10px;
-  padding: 12px 16px;
+  padding: 10px 16px;
 }
-.coverage-bar { display: flex; gap: 4px; flex-wrap: wrap; }
-.coverage-cell {
-  height: 34px;
-  min-width: 44px;
-  padding: 0 12px;
+.coverage-select {
+  font-size: 14px;
+  color: var(--color-accent-deep);
+  background: var(--color-accent-pale);
+  border: 1px solid var(--color-accent);
   border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  font-weight: 600;
+  padding: 5px 28px 5px 10px;
   cursor: pointer;
-  transition: all 0.15s;
-  border: 2px solid transparent;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%230d7377'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.coverage-cell:hover { transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-.coverage-cell.active { border-color: var(--color-ink); box-shadow: 0 0 0 2px rgba(26,26,46,0.15); }
-.coverage-full { background: var(--color-ok-bg); color: var(--color-ok); }
-.coverage-partial { background: var(--color-warn-bg); color: var(--color-warn); }
-.coverage-empty { background: var(--color-rule-light); color: var(--color-ink-muted); }
-.coverage-summary { font-size: 13px; color: var(--color-ink-muted); margin-top: 8px; }
 
 /* Sources table */
 .source-table { width: 100%; border-collapse: collapse; }
