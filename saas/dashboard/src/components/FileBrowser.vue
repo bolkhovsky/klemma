@@ -69,8 +69,8 @@ watch(() => props.projectId, loadFiles, { immediate: true })
       v-else-if="files.length === 0"
       class="px-3 py-4 text-xs text-[var(--color-ink-muted)] italic leading-relaxed"
     >
-      Нет файлов — запустите<br>
-      <code class="font-[var(--font-mono)] text-[var(--color-accent)] not-italic">klemma-cli push</code>
+      Нет файлов.<br>
+      Загрузите PDF в библиотеку.
     </div>
 
     <!-- File list -->

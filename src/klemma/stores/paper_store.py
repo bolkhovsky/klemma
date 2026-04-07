@@ -371,30 +371,54 @@ class LocalPaperStore:
     # Citation graph — reference gaps                                      #
     # ------------------------------------------------------------------ #
 
-    def get_reference_gaps(self, limit: int = 50) -> list[dict]:
+    def get_reference_gaps(self, limit: int = 50, paper_ids: list[str] | None = None) -> list[dict]:
         """Return cited papers not in the library, sorted by citation frequency.
 
         A "gap" is a paper referenced in citation_graph but whose normalized
         title doesn't match any paper in the library.
+
+        When paper_ids is provided, only consider citations FROM those papers
+        (user-scoped mode for SaaS).
         """
         with self._conn() as conn:
-            rows = conn.execute(
-                """SELECT
-                     cg.cited_title as title,
-                     cg.cited_authors as authors,
-                     cg.cited_year as year,
-                     COUNT(DISTINCT cg.citing_paper_id) as cited_by_count,
-                     GROUP_CONCAT(DISTINCT cg.citation_intent) as intents
-                   FROM citation_graph cg
-                   WHERE NOT EXISTS (
-                     SELECT 1 FROM papers p
-                     WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
-                   )
-                   GROUP BY cg.cited_title_hash
-                   ORDER BY cited_by_count DESC
-                   LIMIT ?""",
-                (limit,),
-            ).fetchall()
+            if paper_ids:
+                placeholders = ",".join("?" for _ in paper_ids)
+                rows = conn.execute(
+                    f"""SELECT
+                         cg.cited_title as title,
+                         cg.cited_authors as authors,
+                         cg.cited_year as year,
+                         COUNT(DISTINCT cg.citing_paper_id) as cited_by_count,
+                         GROUP_CONCAT(DISTINCT cg.citation_intent) as intents
+                       FROM citation_graph cg
+                       WHERE cg.citing_paper_id IN ({placeholders})
+                         AND NOT EXISTS (
+                           SELECT 1 FROM papers p
+                           WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
+                         )
+                       GROUP BY cg.cited_title_hash
+                       ORDER BY cited_by_count DESC
+                       LIMIT ?""",
+                    (*paper_ids, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT
+                         cg.cited_title as title,
+                         cg.cited_authors as authors,
+                         cg.cited_year as year,
+                         COUNT(DISTINCT cg.citing_paper_id) as cited_by_count,
+                         GROUP_CONCAT(DISTINCT cg.citation_intent) as intents
+                       FROM citation_graph cg
+                       WHERE NOT EXISTS (
+                         SELECT 1 FROM papers p
+                         WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
+                       )
+                       GROUP BY cg.cited_title_hash
+                       ORDER BY cited_by_count DESC
+                       LIMIT ?""",
+                    (limit,),
+                ).fetchall()
         return [dict(r) for r in rows]
 
     def count_citation_gaps(self) -> int:

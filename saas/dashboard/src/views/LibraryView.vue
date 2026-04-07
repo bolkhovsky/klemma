@@ -221,8 +221,10 @@ async function handleUpload(files: FileList | null) {
     try {
       const result = await library.upload(file, projectStore.activeProjectId ?? undefined)
       uploaded++
-      if (result.deduplicated) {
-        uploadSuccess.value = `${file.name} — уже в библиотеке (дедупликация)`
+      if (result.already_owned) {
+        uploadSuccess.value = `${file.name} — уже в библиотеке`
+      } else if (result.deduplicated) {
+        uploadSuccess.value = `${file.name} — загружен (обработка не требуется)`
       } else if (result.job_id) {
         processingJobs.value[result.citekey] = result.job_id
         pollJob(result.citekey, result.job_id)

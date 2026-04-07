@@ -19,7 +19,7 @@ async function handleLogin() {
     try {
       const projectsData = await userProjects.list()
       const first = projectsData.projects[0]
-      router.push(first ? `/${first.project_id}/write` : '/library')
+      router.push(first ? `/${first.project_id}/library` : '/library')
     } catch {
       router.push('/library')
     }

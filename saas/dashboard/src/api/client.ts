@@ -157,6 +157,7 @@ export const library = {
       pdf_hash: string
       status: string
       deduplicated: boolean
+      already_owned: boolean
       job_id: string | null
     }>
   },

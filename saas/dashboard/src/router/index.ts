@@ -66,9 +66,7 @@ const router = createRouter({
     },
     {
       path: '/:projectId/library/:citekey',
-      name: 'source',
-      component: () => import('../views/SourceView.vue'),
-      meta: { requiresAuth: true },
+      redirect: (to) => `/${to.params.projectId}/library/${to.params.citekey}/review`,
     },
     {
       path: '/:projectId/library/:citekey/review',
@@ -90,10 +88,18 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const token = localStorage.getItem('access_token')
   if (to.meta.requiresAuth && !token) return { name: 'login' }
-  if ((to.name === 'login' || to.name === 'register') && token) return { path: '/library' }
+  if ((to.name === 'login' || to.name === 'register') && token) {
+    try {
+      const { userProjects } = await import('../api/client')
+      const data = await userProjects.list()
+      const first = data.projects[0]
+      if (first) return { path: `/${first.project_id}/library` }
+    } catch { /* fall through */ }
+    return { path: '/library' }
+  }
 })
 
 router.afterEach((to) => {

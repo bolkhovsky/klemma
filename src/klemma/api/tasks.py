@@ -135,16 +135,16 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         from klemma.literature.metadata import resolve_metadata
 
         meta = resolve_metadata(pdf_path)
-        # Only fill empty fields — don't overwrite existing good metadata on reprocess
-        current = paper_store.get_paper_by_id(paper_id)
+        # Always overwrite with resolved metadata — upload sets filename as
+        # placeholder title, resolve_metadata() gets real data from S2/CrossRef
         if any(meta.get(k) for k in ("title", "authors", "year", "doi", "abstract")):
             paper_store.update_paper_metadata(
                 paper_id,
-                title=meta.get("title", "") if not (current and current.title) else "",
-                authors=meta.get("authors", "") if not (current and current.authors) else "",
-                year=meta.get("year") if not (current and current.year) else None,
-                doi=meta.get("doi", "") if not (current and current.doi) else "",
-                abstract=meta.get("abstract", "") if not (current and current.abstract) else "",
+                title=meta.get("title", ""),
+                authors=meta.get("authors", ""),
+                year=meta.get("year"),
+                doi=meta.get("doi", ""),
+                abstract=meta.get("abstract", ""),
             )
             logger.info(
                 "Metadata enriched for %s: title=%s, authors=%s, year=%s",
@@ -216,10 +216,10 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
 
         system = (
             "You are a research assistant extracting citation-worthy fragments from scientific papers. "
-            "Output only valid JSON with fragments array."
+            "Output only valid JSON with fragments array and key_references array."
         )
 
-        result = ai.call_with_meta(system, user_prompt, max_tokens=4096)
+        result = ai.call_with_meta(system, user_prompt, max_tokens=8192)
         if not result or not result.text:
             user_library.update_status(citekey, "failed")
             return {"status": "error", "detail": "AI extraction returned no data"}
@@ -292,6 +292,49 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
 
         # Save citation links from bibliography (for reference gap analysis)
         key_refs = data.get("key_references", [])
+        if not key_refs:
+            # Main extraction often omits key_references — extract in a focused call
+            # Re-extract the FULL PDF text (main extraction truncates at 50K which often
+            # cuts off the bibliography section at the end)
+            try:
+                import re as _re
+                full_extractor = PDFExtractor(max_chars=200000)
+                full_text = full_extractor.extract(pdf_path) or ""
+                # Find the references/bibliography section by heading
+                bib_match = _re.search(
+                    r'\n(References|REFERENCES|Bibliography|BIBLIOGRAPHY|Список литературы|Литература)\s*\n',
+                    full_text,
+                )
+                if bib_match:
+                    bib_start = bib_match.start()
+                    bib_text = full_text[bib_start:bib_start + 10000]
+                else:
+                    bib_text = full_text[-8000:]
+                bib_result = ai.call_with_meta(
+                    "Extract references from this bibliography section. Return ONLY valid JSON.",
+                    (
+                        "Extract 10-20 most important references from the bibliography below.\n"
+                        "Return JSON: {\"key_references\": [{\"title\": \"...\", \"authors\": \"First Author et al.\", \"year\": 2020}]}\n\n"
+                        f"Bibliography:\n{bib_text}"
+                    ),
+                    max_tokens=4096,
+                )
+                if bib_result and bib_result.text:
+                    bib_data = extract_json(bib_result.text)
+                    if bib_data:
+                        key_refs = bib_data.get("key_references", [])
+                        # Record token usage for the second call
+                        if user_store and user_id:
+                            user_store.record_usage(
+                                user_id=user_id,
+                                operation="extract_bibliography",
+                                model=ai_config.model,
+                                input_tokens=bib_result.input_tokens or 0,
+                                output_tokens=bib_result.output_tokens or 0,
+                                citekey=citekey,
+                            )
+            except Exception as exc:
+                logger.warning("Bibliography extraction failed for %s (non-fatal): %s", citekey, exc)
         if key_refs:
             links_saved = paper_store.save_citation_links(paper_id, key_refs)
             logger.info("Saved %d citation links for %s", links_saved, citekey)

@@ -24,7 +24,7 @@ router = APIRouter()
 
 INTENT_TO_SECTION_TYPES: dict[str, list[SectionType]] = {
     "background": [SectionType.INTRODUCTION, SectionType.BACKGROUND, SectionType.LITERATURE_REVIEW],
-    "method": [SectionType.METHODOLOGY],
+    "method": [SectionType.METHODOLOGY, SectionType.THEORETICAL_FRAMEWORK, SectionType.IMPLEMENTATION],
     "result_comparison": [SectionType.RESULTS, SectionType.DISCUSSION, SectionType.EXPERIMENTS],
     "extends": [SectionType.LITERATURE_REVIEW, SectionType.DISCUSSION],
     "contrasts": [SectionType.LITERATURE_REVIEW, SectionType.DISCUSSION],
@@ -78,6 +78,7 @@ class PendingFragment(BaseModel):
     fragment_type: str = ""
     page: int | None = None
     citekey: str = ""
+    suggested_section: str | None = None
 
 
 class PendingFragmentsResponse(BaseModel):
@@ -157,10 +158,10 @@ def _build_fragment_text_map(
         fragments = paper_store.get_fragments(src.paper_id)
         for f in fragments:
             result[f.fragment_id] = {
-                "text": f.text,
+                "text": f.fragment_text,
                 "citation_intent": f.citation_intent or "",
                 "fragment_type": f.fragment_type or "",
-                "page": f.page,
+                "page": f.page_number,
                 "citekey": citekey,
             }
     return result
@@ -178,10 +179,11 @@ async def get_pending_fragments(
     user: UserRecord = Depends(get_current_user),
 ) -> PendingFragmentsResponse:
     """Get uncurated fragments for a source in a project."""
-    _get_project_or_404(project_id, user)
+    project = _get_project_or_404(project_id, user)
     paper_store = get_paper_store()
     library = get_user_library()
     user_store = get_user_store()
+    outline = project.get("outline")
 
     src = library.get_source_by_citekey(citekey, user_id=user.user_id)
     if not src:
@@ -195,11 +197,12 @@ async def get_pending_fragments(
         if f.fragment_id not in curated_ids:
             pending.append(PendingFragment(
                 fragment_id=f.fragment_id,
-                text=f.text,
+                text=f.fragment_text,
                 citation_intent=f.citation_intent or "",
                 fragment_type=f.fragment_type or "",
-                page=f.page,
+                page=f.page_number,
                 citekey=citekey,
+                suggested_section=_auto_assign_section(f.citation_intent, outline),
             ))
 
     return PendingFragmentsResponse(
