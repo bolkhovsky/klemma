@@ -105,6 +105,71 @@ def test_update_curation(store):
     assert curated[0]["assigned_section"] == "ch2"
 
 
+def test_suggested_verdict_accepted(store):
+    """verdict='suggested' is valid and queryable."""
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck1", "verdict": "suggested", "assigned_section": "1.1"},
+    ])
+    suggested = store.get_curated(pid, verdict="suggested")
+    assert len(suggested) == 1
+    assert suggested[0]["assigned_section"] == "1.1"
+
+
+def test_suggested_excluded_from_decided_ids(store):
+    """get_curated_fragment_ids returns only accepted/rejected, not suggested."""
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck1", "verdict": "accepted"},
+        {"fragment_id": "f2", "citekey": "ck1", "verdict": "suggested"},
+        {"fragment_id": "f3", "citekey": "ck1", "verdict": "rejected"},
+    ])
+    ids = store.get_curated_fragment_ids(pid)
+    assert ids == {"f1", "f3"}
+
+
+def test_curation_stats_includes_suggested(store):
+    """get_curation_stats counts suggested separately."""
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck1", "verdict": "accepted"},
+        {"fragment_id": "f2", "citekey": "ck1", "verdict": "suggested"},
+        {"fragment_id": "f3", "citekey": "ck1", "verdict": "suggested"},
+    ])
+    stats = store.get_curation_stats(pid, "ck1")
+    assert stats["accepted"] == 1
+    assert stats["suggested"] == 2
+    assert stats["curated"] == 3
+
+
+def test_upsert_preserves_note_when_omitted(store):
+    """Promoting suggested→accepted without a note keeps the existing note."""
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck1", "verdict": "suggested", "note": "important"},
+    ])
+    # Promote to accepted without sending note
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck1", "verdict": "accepted"},
+    ])
+    curated = store.get_curated(pid, verdict="accepted")
+    assert len(curated) == 1
+    assert curated[0]["note"] == "important"
+
+
+def test_upsert_overwrites_note_when_provided(store):
+    """Explicit note in upsert replaces the old one."""
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck1", "verdict": "suggested", "note": "old"},
+    ])
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck1", "verdict": "accepted", "note": "new"},
+    ])
+    curated = store.get_curated(pid, verdict="accepted")
+    assert curated[0]["note"] == "new"
+
+
 # ---------------------------------------------------------------------------
 # create_user
 # ---------------------------------------------------------------------------

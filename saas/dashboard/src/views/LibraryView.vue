@@ -245,7 +245,10 @@ async function loadAll() {
 }
 
 onMounted(loadAll)
-watch(() => projectStore.activeProjectId, loadAll)
+watch(() => projectStore.activeProjectId, () => {
+  briefingDismissed.value = false
+  loadAll()
+})
 watch(sources, () => { loadFragmentCounts() })
 </script>
 

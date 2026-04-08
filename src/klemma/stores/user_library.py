@@ -416,6 +416,23 @@ class LocalUserLibrary:
                     (status, citekey),
                 )
 
+    def get_project_citekeys(
+        self, project_id: str, user_id: Optional[str] = None
+    ) -> set[str]:
+        """Return citekeys strictly attached to a project (excludes unassigned)."""
+        with self._conn() as conn:
+            if user_id is not None:
+                rows = conn.execute(
+                    "SELECT citekey FROM user_sources WHERE project_id = ? AND user_id = ?",
+                    (project_id, user_id),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT citekey FROM user_sources WHERE project_id = ?",
+                    (project_id,),
+                ).fetchall()
+        return {r["citekey"] for r in rows}
+
     def get_all_sources(
         self,
         project_id: Optional[str] = None,

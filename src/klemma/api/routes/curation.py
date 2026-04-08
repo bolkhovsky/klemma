@@ -422,8 +422,12 @@ async def auto_suggest_fragments(
     }
     skip_ids = decided_ids | suggested_ids
 
-    # Collect uncurated fragments from project-scoped sources only
-    all_sources = library.get_all_sources(project_id=project_id, user_id=user.user_id)
+    # Collect uncurated fragments from project-attached sources only
+    project_citekeys = library.get_project_citekeys(project_id, user_id=user.user_id)
+    all_sources = [
+        s for s in library.get_all_sources(user_id=user.user_id)
+        if s.citekey in project_citekeys
+    ]
     suggestions = []
     for src in all_sources:
         fragments = paper_store.get_fragments(src.paper_id)

@@ -147,6 +147,7 @@ SQLite backends implementing the three-tier library protocols.
 - `resolve_paper_id(citekey) -> str | None`
 - `get_existing_citekeys() -> set[str]`
 - `remove_source(citekey) -> bool` — delete from user library (keeps global corpus)
+- `get_project_citekeys(project_id, user_id?) -> set[str]` — strictly project-attached citekeys (excludes unassigned)
 - `update_status(citekey, status)`, `get_all_sources()`, `count()`
 - Tables: `user_sources`, `user_source_chapters`, `user_source_sections`
 - Called from `_process_single()` in `cli.py` to register citekey after successful extraction
