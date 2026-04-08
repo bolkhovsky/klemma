@@ -120,8 +120,8 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                         } for f in uncurated]
                         user_store.curate_fragments(project_id, suggestions)
                         logger.info("Backfilled %d suggestions for %s", len(suggestions), citekey)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Backfill suggestion failed for %s (non-fatal): %s", citekey, exc)
         user_library.update_status(citekey, "completed", user_id=user_id or None)
         return {
             "status": "already_processed",

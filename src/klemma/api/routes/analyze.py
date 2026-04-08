@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from klemma.models import UserRecord
@@ -355,7 +355,6 @@ async def get_briefing(
     # Ownership check
     project = user_st.get_project_by_id(project_id)
     if not project or project["user_id"] != user.user_id:
-        from fastapi import HTTPException, status
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
     outline = project.get("outline") or []
