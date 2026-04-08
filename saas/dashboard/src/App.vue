@@ -33,12 +33,12 @@ function switchProject(id: string) {
   projectStore.setActive(id)
   const currentParam = route.params.projectId as string | undefined
   if (currentParam) {
-    const modules = ['feed', 'library', 'health', 'outline', 'coverage', 'research', 'write']
+    const modules = ['feed', 'library', 'health', 'outline', 'coverage', 'research', 'map', 'write']
     const suffix = route.path.slice(currentParam.length + 2)
-    const module = modules.find(m => suffix === m || suffix.startsWith(m + '/')) ?? 'write'
+    const module = modules.find(m => suffix === m || suffix.startsWith(m + '/')) ?? 'library'
     router.push(`/${id}/${module}`)
   } else {
-    router.push(`/${id}/write`)
+    router.push(`/${id}/library`)
   }
 }
 
@@ -52,7 +52,8 @@ const tokenPercent = computed(() => {
 })
 const tokenBarLow = computed(() => tokenPercent.value >= 80)
 
-onMounted(async () => {
+async function loadProfile() {
+  profileLoaded.value = false
   try {
     const [me, bal] = await Promise.all([auth.me(), usage.me()])
     userName.value = me.name ?? me.email.split('@')[0]
@@ -66,11 +67,19 @@ onMounted(async () => {
   const pid = route.params.projectId as string | undefined
   if (pid) projectStore.setActive(pid)
   await projectStore.loadProjects()
+}
+
+onMounted(loadProfile)
+
+// Re-fetch profile + projects after login (route leaves login/register → app)
+watch(isPublicRoute, (isPublic, wasPublic) => {
+  if (wasPublic && !isPublic) loadProfile()
 })
 
 function logout() {
   localStorage.removeItem('access_token')
   localStorage.removeItem('refresh_token')
+  projectStore.$reset()
   router.push('/login')
 }
 
