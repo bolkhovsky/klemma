@@ -45,36 +45,7 @@ const gapsDetail = ref('')
 
 // Curation stats per citekey: { accepted, total }
 const curationStats = ref<Record<string, { accepted: number; total: number }>>({})
-const totalAccepted = ref(0)
 
-// Coverage filter
-const activeSectionFilter = ref<string | null>(null)
-
-const outline = computed(() => projectStore.activeOutline ?? [])
-
-// Coverage cells: count accepted fragments per section
-const coverageCells = computed(() => {
-  return outline.value.map(s => {
-    const count = curatedBySection.value[s.id] || 0
-    return { id: s.id, name: s.name, count }
-  })
-})
-
-// Curated fragments grouped by section
-const curatedBySection = ref<Record<string, number>>({})
-
-const coveragePct = computed(() => {
-  if (outline.value.length === 0) return 0
-  const covered = outline.value.filter(s => (curatedBySection.value[s.id] || 0) > 0).length
-  return Math.round((covered / outline.value.length) * 100)
-})
-
-const filteredSources = computed(() => {
-  if (!activeSectionFilter.value) return sources.value
-  return sources.value.filter(s =>
-    s.sections && s.sections.includes(activeSectionFilter.value!)
-  )
-})
 
 function shortAuthors(a: string | null): string {
   if (!a) return '—'
@@ -112,26 +83,17 @@ async function loadCurationStats() {
     // Get all curated (accepted + rejected) to compute per-source stats
     const data = await curation.curated(pid)
     const stats: Record<string, { accepted: number; total: number }> = {}
-    const bySection: Record<string, number> = {}
-    let accepted = 0
 
     for (const f of data.fragments) {
       if (!stats[f.citekey]) stats[f.citekey] = { accepted: 0, total: 0 }
       stats[f.citekey]!.total++
       if (f.verdict === 'accepted') {
         stats[f.citekey]!.accepted++
-        accepted++
-        const sec = f.assigned_section || ''
-        if (sec) bySection[sec] = (bySection[sec] || 0) + 1
       }
     }
     curationStats.value = stats
-    curatedBySection.value = bySection
-    totalAccepted.value = accepted
   } catch {
     curationStats.value = {}
-    curatedBySection.value = {}
-    totalAccepted.value = 0
   }
 }
 
@@ -259,9 +221,6 @@ function onFileInput(e: Event) {
   input.value = ''
 }
 
-function filterBySection(sectionId: string) {
-  activeSectionFilter.value = activeSectionFilter.value === sectionId ? null : sectionId
-}
 
 async function loadAll() {
   await loadSources()
@@ -305,27 +264,6 @@ watch(sources, () => { loadFragmentCounts() })
       </div>
     </div>
 
-    <!-- Coverage bar -->
-    <div v-if="outline.length > 0 && sources.length > 0" class="mt-5 animate-in animate-in-delay-1">
-      <div class="coverage-filter">
-        <div class="flex items-center gap-3 flex-wrap">
-          <span class="text-[14px] font-semibold text-[var(--color-ink)]">Покрытие по разделам</span>
-          <select
-            class="coverage-select"
-            :value="activeSectionFilter || ''"
-            @change="activeSectionFilter = ($event.target as HTMLSelectElement).value || null"
-          >
-            <option value="">Все разделы</option>
-            <option v-for="cell in coverageCells" :key="cell.id" :value="cell.id">
-              {{ cell.name || cell.id }} ({{ cell.count }})
-            </option>
-          </select>
-          <span class="text-sm text-[var(--color-ink-muted)]">
-            {{ totalAccepted }} цитат принято &middot; {{ coveragePct }}% покрыто
-          </span>
-        </div>
-      </div>
-    </div>
 
     <!-- Sources table -->
     <div class="mt-5 animate-in animate-in-delay-2">
@@ -376,7 +314,7 @@ watch(sources, () => { loadFragmentCounts() })
         </div>
 
         <div class="text-base font-semibold text-[var(--color-ink)] mb-2.5 flex items-center gap-2">
-          Мои источники <span class="text-sm font-semibold text-[var(--color-ink-muted)] bg-[var(--color-rule-light)] px-2 py-0.5 rounded-full">{{ filteredSources.length }}</span>
+          Мои источники <span class="text-sm font-semibold text-[var(--color-ink-muted)] bg-[var(--color-rule-light)] px-2 py-0.5 rounded-full">{{ sources.length }}</span>
         </div>
         <table class="source-table">
           <thead>
@@ -389,7 +327,7 @@ watch(sources, () => { loadFragmentCounts() })
             </tr>
           </thead>
           <tbody>
-            <tr v-for="src in filteredSources" :key="src.citekey">
+            <tr v-for="src in sources" :key="src.citekey">
               <td>
                 <RouterLink
                   :to="`/${route.params.projectId}/library/${src.citekey}`"
@@ -495,30 +433,6 @@ watch(sources, () => { loadFragmentCounts() })
 .upload-label { font-size: 16px; font-weight: 500; color: var(--color-ink-2); }
 .upload-hint { font-size: 14px; color: var(--color-ink-muted); margin-top: 4px; }
 
-/* Coverage */
-.coverage-filter {
-  background: white;
-  border: 1px solid var(--color-rule);
-  border-radius: 10px;
-  padding: 10px 16px;
-}
-.coverage-select {
-  font-size: 14px;
-  color: var(--color-accent-deep);
-  background: var(--color-accent-pale);
-  border: 1px solid var(--color-accent);
-  border-radius: 6px;
-  padding: 5px 28px 5px 10px;
-  cursor: pointer;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%230d7377'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
-  max-width: 320px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 
 /* Sources table */
 .source-table { width: 100%; border-collapse: collapse; }

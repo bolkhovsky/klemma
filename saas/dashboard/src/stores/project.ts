@@ -61,5 +61,12 @@ export const useProjectStore = defineStore('project', () => {
     if (idx !== -1) projects.value[idx] = updated
   }
 
-  return { projects, activeProjectId, activeProject, activeOutline, loading, loadProjects, createProject, renameProject, setActive, updateOutline }
+  function $reset() {
+    projects.value = []
+    activeProjectId.value = null
+    localStorage.removeItem(ACTIVE_KEY)
+    loading.value = false
+  }
+
+  return { projects, activeProjectId, activeProject, activeOutline, loading, loadProjects, createProject, renameProject, setActive, updateOutline, $reset }
 })
