@@ -186,7 +186,7 @@ async function loadData() {
     }
 
     // Fetch source metadata
-    const citekeys = [...new Set(data.fragments.map(f => f.citekey))]
+    const citekeys = [...new Set(fragments.value.map(f => f.citekey))]
     for (const ck of citekeys) {
       if (!sourceCache.value[ck]) {
         try {
