@@ -19,6 +19,7 @@ interface CuratedFrag {
   verdict: string
   curated_at: string
   source_display?: string
+  _layer?: 'accepted' | 'suggested'
 }
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -75,6 +76,41 @@ const sectionCounts = computed(() => {
 const emptySectionCount = computed(() =>
   outline.value.filter(s => !sectionCounts.value[s.id]).length
 )
+
+// Unique citekeys per section (for readiness calculation)
+const sectionCitekeys = computed(() => {
+  const map: Record<string, Set<string>> = {}
+  for (const f of fragments.value) {
+    const sec = f.assigned_section || ''
+    if (!map[sec]) map[sec] = new Set()
+    map[sec]!.add(f.citekey)
+  }
+  return map
+})
+
+function sectionReadiness(id: string): 'ready' | 'partial' | 'empty' {
+  const count = sectionCounts.value[id] || 0
+  const sources = sectionCitekeys.value[id]?.size || 0
+  if (count === 0) return 'empty'
+  if (count >= 5 && sources >= 3) return 'ready'
+  return 'partial'
+}
+
+const readinessPct = computed(() => {
+  if (outline.value.length === 0) return 0
+  const ready = outline.value.filter(s => sectionReadiness(s.id) === 'ready').length
+  return Math.round((ready / outline.value.length) * 100)
+})
+
+async function acceptSuggestion(f: CuratedFrag) {
+  await curation.curate(projectId.value, [{
+    fragment_id: f.fragment_id,
+    citekey: f.citekey,
+    verdict: 'accepted',
+    assigned_section: f.assigned_section || selectedSectionId.value,
+  }])
+  await loadData()
+}
 
 // Sections for the left panel: outline + unassigned
 const sectionList = computed(() => {
@@ -134,9 +170,15 @@ async function loadData() {
   if (!projectId.value) return
   loading.value = true
   try {
-    const data = await curation.curated(projectId.value, { verdict: 'accepted' })
-    fragments.value = data.fragments
-    totalAccepted.value = data.total
+    const [accepted, suggested] = await Promise.all([
+      curation.curated(projectId.value, { verdict: 'accepted' }),
+      curation.curated(projectId.value, { verdict: 'suggested' }),
+    ])
+    fragments.value = [
+      ...accepted.fragments.map(f => ({ ...f, _layer: 'accepted' as const })),
+      ...suggested.fragments.map(f => ({ ...f, _layer: 'suggested' as const })),
+    ]
+    totalAccepted.value = accepted.total
 
     // Auto-select first section if none selected
     if (!selectedSectionId.value && outline.value.length > 0) {
@@ -144,7 +186,7 @@ async function loadData() {
     }
 
     // Fetch source metadata
-    const citekeys = [...new Set(data.fragments.map(f => f.citekey))]
+    const citekeys = [...new Set(fragments.value.map(f => f.citekey))]
     for (const ck of citekeys) {
       if (!sourceCache.value[ck]) {
         try {
@@ -267,7 +309,13 @@ watch(projectId, loadData)
     <div class="w-[272px] flex-shrink-0 bg-white overflow-y-auto" style="border-right: 1px solid #e8e5df">
       <div class="px-4 pt-4 pb-3" style="border-bottom: 1px solid #e8e5df">
         <h2 class="text-[15px] font-semibold text-[#1a1a2e] mb-0.5">Разделы</h2>
-        <div class="text-xs text-[#6b6b8a]">{{ totalAccepted }} {{ pluralCitation(totalAccepted) }} &middot; {{ emptySectionCount }} без цитат</div>
+        <div class="text-xs text-[#6b6b8a] mb-1.5">{{ totalAccepted }} {{ pluralCitation(totalAccepted) }} &middot; {{ emptySectionCount }} без цитат</div>
+        <div v-if="outline.length > 0" class="flex items-center gap-2">
+          <div class="flex-1 h-1.5 bg-[#e8e5df] rounded-full overflow-hidden">
+            <div class="h-full bg-[#0d7377] rounded-full transition-all" :style="{ width: readinessPct + '%' }"></div>
+          </div>
+          <span class="text-[11px] font-semibold text-[#0d7377]">{{ readinessPct }}%</span>
+        </div>
       </div>
 
       <div
@@ -286,6 +334,8 @@ watch(projectId, loadData)
           :style="s.id === selectedSectionId ? 'background: white' : 'background: #e6f3f3'"
         >{{ s.id || '?' }}</span>
         <span class="text-[13px] text-[#3d3d5c] flex-1 leading-snug">{{ s.name }}</span>
+        <span v-if="s.id && sectionReadiness(s.id) === 'ready'" class="text-[10px] text-[#2e7d32] flex-shrink-0">&#9679;</span>
+        <span v-else-if="s.id && sectionReadiness(s.id) === 'partial'" class="text-[10px] text-[#f9a825] flex-shrink-0">&#9679;</span>
         <span v-if="s.count > 0" class="text-xs font-semibold text-[#6b6b8a] bg-[#f0ede8] px-[7px] py-0.5 rounded-full flex-shrink-0">{{ s.count }}</span>
         <span v-else class="text-xs font-medium text-[#b45309] flex-shrink-0">0</span>
       </div>
@@ -336,10 +386,20 @@ watch(projectId, loadData)
           <div
             v-for="f in visibleFragments"
             :key="f.fragment_id"
-            class="frag-card relative bg-white border border-[#e8e5df] rounded-[10px] px-4 py-3.5 mb-2.5 transition-colors hover:border-[#d4d0ca]"
+            class="frag-card relative rounded-[10px] px-4 py-3.5 mb-2.5 transition-colors"
+            :class="f._layer === 'suggested'
+              ? 'bg-[#fafff9] border border-dashed border-[#b2dfdb] hover:border-[#80cbc4]'
+              : 'bg-white border border-[#e8e5df] hover:border-[#d4d0ca]'"
           >
-            <!-- Menu trigger -->
+            <!-- Accept button for suggested -->
             <button
+              v-if="f._layer === 'suggested'"
+              class="absolute top-2.5 right-2.5 text-xs font-medium text-[#0d7377] bg-[#e6f3f3] px-3 py-1.5 rounded-lg border-none cursor-pointer hover:bg-[#b2dfdb]"
+              @click.stop="acceptSuggestion(f)"
+            >&#10003; Принять</button>
+            <!-- Menu trigger for accepted -->
+            <button
+              v-else
               class="frag-menu-btn absolute top-2.5 right-2.5 w-7 h-7 rounded-md border-none bg-transparent cursor-pointer text-[16px] text-[#6b6b8a] flex items-center justify-center hover:bg-[#f0ede8] hover:text-[#1a1a2e]"
               @click.stop="toggleMenu(f.fragment_id)"
             >&#8943;</button>

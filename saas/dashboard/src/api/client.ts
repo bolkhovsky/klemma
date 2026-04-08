@@ -219,6 +219,29 @@ export const analyze = {
       coverage: { section: string; source_count: number }[]
       total_fragments: number
     }>('/analyze/status'),
+  briefing: (projectId: string) =>
+    request<{
+      total_sources: number
+      total_fragments: number
+      suggested_count: number
+      accepted_count: number
+      by_section: {
+        section_id: string
+        section_name: string
+        fragment_count: number
+        accepted_count: number
+        source_count: number
+        readiness: 'ready' | 'partial' | 'empty'
+      }[]
+      empty_sections: string[]
+      coach_findings: {
+        category: string
+        section: string | null
+        message: string
+        severity: string
+      }[]
+      readiness_pct: number
+    }>(`/analyze/briefing/${projectId}`),
 }
 
 // Projects

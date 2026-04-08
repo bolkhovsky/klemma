@@ -69,16 +69,18 @@ Files stored at `KLEMMA_DATA_DIR/drafts/{project_id}/draft/` (ADR-016).
 - `POST /projects/{id}/drafts/migrate` → `MigrateResponse` — split monolithic `dissertation.md` into ADR-016 chapter files (`intro.md`, `chapter_N.md`, `conclusion.md`); idempotent (skips existing files); deletes source when ≥1 chapter written; accepts optional `?source_filename=` query param
 - Schemas: `FileInfo`, `FileListResponse`, `FileContentResponse`, `FileSaveRequest`, `InitDraftRequest`, `ScaffoldResponse`, `SectionUpsertRequest`, `SectionUpsertResponse`, `MigrateChapterResult`, `MigrateResponse`
 
-### process.py (~120 lines)
+### process.py (~130 lines)
 Process endpoints — mounted with `prefix="/process"`. All require Bearer auth.
-- `POST /process/sources/{citekey}` → `JobSubmitResponse` (202) — enqueue async extraction job
+- `POST /process/sources/{citekey}` → `JobSubmitResponse` (202) — enqueue async extraction job; validates `project_id` ownership before enqueueing (project_id is a write path for auto-suggestion)
 - `GET /process/jobs/{job_id}` → `JobStatusResponse` — poll job status (queued/started/finished/failed)
 - Requires Redis + rq; returns 503 if unavailable
 - Worker entry point: `python -m klemma.api.worker`
 
-### analyze.py (~90 lines)
+### analyze.py (~190 lines)
 Analyze endpoints — mounted with `prefix="/analyze"`. All require Bearer auth.
 - `GET /analyze/status` → `StatusResponse` — source counts (total/completed/pending/failed), coverage by section, total fragment count. SaaS equivalent of `klemma status`.
+- `GET /analyze/briefing/{project_id}` → `BriefingResponse` — per-section readiness assessment + coach findings. Zero AI cost. Readiness counts accepted+suggested (excludes rejected). Coach findings from `klemma.skills.coach.analyze_section()`.
+- Schemas: `SectionBriefing`, `CoachFindingResponse`, `BriefingResponse`
 
 ### write.py (~110 lines)
 Write endpoints — mounted with `prefix="/write"`. All require Bearer auth.
@@ -109,7 +111,8 @@ Library-first pivot: users accept/reject fragments, assign them to outline secti
 - `GET /projects/{id}/fragments/curated?verdict=&section=&citekey=` → `CuratedBankResponse` — curated fragments with full text, grouped stats by section
 - `PATCH /projects/{id}/fragments/curate/{fragment_id}` → partial update (verdict, section, note)
 - `GET /projects/{id}/fragments/suggest?section=X` → `SuggestFragmentsResponse` — smart suggestions: intent match + gap alerts for missing intents
-- Uses `INTENT_TO_SECTION_TYPES` mapping (citation_intent → SectionType list) for auto-assignment
+- `POST /projects/{id}/fragments/auto-suggest` → `{suggested: N}` — backfill `verdict='suggested'` entries for all uncurated fragments in a project; idempotent; uses `auto_assign_section()` from `klemma.section_types`
+- Uses `INTENT_TO_SECTION_TYPES` and `auto_assign_section()` from `klemma.section_types` for auto-assignment
 - Depends on: `user_store`, `paper_store`, `user_library` from `deps.py`
 - Schemas: `PendingFragmentsResponse`, `CurateRequest`, `CuratedBankResponse`, `CuratedFragmentResponse`, `SuggestFragmentsResponse`
 

@@ -18,7 +18,7 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 11
+_SCHEMA_VERSION = 12
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -197,6 +197,32 @@ class LocalUserStore:
                     curated_at       TEXT DEFAULT (datetime('now')),
                     UNIQUE(project_id, fragment_id)
                 );
+                CREATE INDEX IF NOT EXISTS idx_fc_project ON fragment_curation(project_id);
+                CREATE INDEX IF NOT EXISTS idx_fc_citekey ON fragment_curation(project_id, citekey);
+                CREATE INDEX IF NOT EXISTS idx_fc_verdict ON fragment_curation(project_id, verdict);
+            """)
+        if version < 12:
+            # Add 'suggested' verdict — auto-assigned fragments that populate
+            # the map but don't count as user decisions until promoted.
+            # SQLite CHECK constraints require table recreation.
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS fragment_curation_new (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id       TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+                    fragment_id      TEXT NOT NULL,
+                    citekey          TEXT NOT NULL,
+                    verdict          TEXT NOT NULL CHECK(verdict IN ('accepted', 'rejected', 'suggested')),
+                    assigned_section TEXT,
+                    note             TEXT,
+                    curated_at       TEXT DEFAULT (datetime('now')),
+                    UNIQUE(project_id, fragment_id)
+                );
+                INSERT OR IGNORE INTO fragment_curation_new
+                    (id, project_id, fragment_id, citekey, verdict, assigned_section, note, curated_at)
+                    SELECT id, project_id, fragment_id, citekey, verdict, assigned_section, note, curated_at
+                    FROM fragment_curation;
+                DROP TABLE IF EXISTS fragment_curation;
+                ALTER TABLE fragment_curation_new RENAME TO fragment_curation;
                 CREATE INDEX IF NOT EXISTS idx_fc_project ON fragment_curation(project_id);
                 CREATE INDEX IF NOT EXISTS idx_fc_citekey ON fragment_curation(project_id, citekey);
                 CREATE INDEX IF NOT EXISTS idx_fc_verdict ON fragment_curation(project_id, verdict);
@@ -579,7 +605,7 @@ class LocalUserStore:
                        ON CONFLICT(project_id, fragment_id) DO UPDATE SET
                          verdict = excluded.verdict,
                          assigned_section = excluded.assigned_section,
-                         note = excluded.note,
+                         note = COALESCE(excluded.note, fragment_curation.note),
                          curated_at = datetime('now')""",
                     (
                         project_id,
@@ -624,7 +650,8 @@ class LocalUserStore:
                 """SELECT
                      COUNT(*) as curated,
                      SUM(CASE WHEN verdict = 'accepted' THEN 1 ELSE 0 END) as accepted,
-                     SUM(CASE WHEN verdict = 'rejected' THEN 1 ELSE 0 END) as rejected
+                     SUM(CASE WHEN verdict = 'rejected' THEN 1 ELSE 0 END) as rejected,
+                     SUM(CASE WHEN verdict = 'suggested' THEN 1 ELSE 0 END) as suggested
                    FROM fragment_curation
                    WHERE project_id = ? AND citekey = ?""",
                 (project_id, citekey),
@@ -633,13 +660,19 @@ class LocalUserStore:
             "curated": row["curated"] or 0,
             "accepted": row["accepted"] or 0,
             "rejected": row["rejected"] or 0,
+            "suggested": row["suggested"] or 0,
         }
 
     def get_curated_fragment_ids(self, project_id: str) -> set[str]:
-        """Get set of already-curated fragment IDs for a project."""
+        """Get set of user-decided fragment IDs (accepted/rejected only).
+
+        Suggested fragments are excluded — they represent Klemma's
+        auto-assignments, not user decisions.
+        """
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT fragment_id FROM fragment_curation WHERE project_id = ?",
+                "SELECT fragment_id FROM fragment_curation "
+                "WHERE project_id = ? AND verdict IN ('accepted', 'rejected')",
                 (project_id,),
             ).fetchall()
         return {r["fragment_id"] for r in rows}

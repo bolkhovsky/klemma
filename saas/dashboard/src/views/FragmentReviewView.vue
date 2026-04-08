@@ -37,6 +37,7 @@ const deleting = ref(false)
 
 // Verdicts & notes (local state, synced to API)
 const verdicts = ref<Record<string, 'accepted' | 'rejected'>>({})
+const suggestedIds = ref<Set<string>>(new Set())
 const assignedSections = ref<Record<string, string>>({})
 const notes = ref<Record<string, string>>({})
 const editingNote = ref<Record<string, boolean>>({})
@@ -131,7 +132,15 @@ async function loadData() {
       // Load already-curated for this source to show them too
       const curated = await curation.curated(projectId.value, { citekey: citekey.value })
       for (const c of curated.fragments) {
-        verdicts.value[c.fragment_id] = c.verdict as 'accepted' | 'rejected'
+        if (c.verdict === 'suggested') {
+          // Suggested stays "pending" in review — pre-fill section from suggestion
+          if (c.assigned_section && !assignedSections.value[c.fragment_id]) {
+            assignedSections.value[c.fragment_id] = c.assigned_section
+          }
+          suggestedIds.value.add(c.fragment_id)
+        } else {
+          verdicts.value[c.fragment_id] = c.verdict as 'accepted' | 'rejected'
+        }
         if (c.assigned_section) assignedSections.value[c.fragment_id] = c.assigned_section
         if (c.note) {
           notes.value[c.fragment_id] = c.note
@@ -227,7 +236,7 @@ async function undo(fragmentId: string) {
 
 function setSection(fragmentId: string, section: string) {
   assignedSections.value[fragmentId] = section
-  if (verdicts.value[fragmentId]) {
+  if (verdicts.value[fragmentId] || suggestedIds.value.has(fragmentId)) {
     curation.update(projectId.value, fragmentId, { assigned_section: section })
   }
 }
@@ -244,7 +253,7 @@ async function saveNote(fragmentId: string, text: string) {
   if (!text.trim()) return
   notes.value[fragmentId] = text.trim()
   editingNote.value[fragmentId] = false
-  if (verdicts.value[fragmentId]) {
+  if (verdicts.value[fragmentId] || suggestedIds.value.has(fragmentId)) {
     await curation.update(projectId.value, fragmentId, { note: text.trim() })
   }
 }

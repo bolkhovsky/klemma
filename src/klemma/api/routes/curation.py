@@ -9,7 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from klemma.models import UserRecord
-from klemma.section_types import SectionType, infer_section_type
+from klemma.section_types import (
+    INTENT_TO_SECTION_TYPES,
+    auto_assign_section,
+    infer_section_type,
+)
 
 from ..auth.deps import get_current_user, get_user_store
 from ..deps import get_paper_store, get_user_library
@@ -17,36 +21,6 @@ from ..deps import get_paper_store, get_user_library
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# ---------------------------------------------------------------------------
-# Intent → section type mapping
-# ---------------------------------------------------------------------------
-
-INTENT_TO_SECTION_TYPES: dict[str, list[SectionType]] = {
-    "background": [SectionType.INTRODUCTION, SectionType.BACKGROUND, SectionType.LITERATURE_REVIEW],
-    "method": [SectionType.METHODOLOGY, SectionType.THEORETICAL_FRAMEWORK, SectionType.IMPLEMENTATION],
-    "result_comparison": [SectionType.RESULTS, SectionType.DISCUSSION, SectionType.EXPERIMENTS],
-    "extends": [SectionType.LITERATURE_REVIEW, SectionType.DISCUSSION],
-    "contrasts": [SectionType.LITERATURE_REVIEW, SectionType.DISCUSSION],
-    "uses_data": [SectionType.DATA_DESCRIPTION, SectionType.METHODOLOGY, SectionType.EXPERIMENTS],
-}
-
-
-def _auto_assign_section(
-    intent: str | None, outline: list[dict] | None
-) -> str | None:
-    """Suggest a section from the outline based on citation intent."""
-    if not intent or not outline:
-        return None
-    target_types = INTENT_TO_SECTION_TYPES.get(intent)
-    if not target_types:
-        return None
-    for section in outline:
-        section_type = infer_section_type(section.get("name", ""))
-        if section_type and section_type in target_types:
-            return section["id"]
-    return None
-
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -202,7 +176,7 @@ async def get_pending_fragments(
                 fragment_type=f.fragment_type or "",
                 page=f.page_number,
                 citekey=citekey,
-                suggested_section=_auto_assign_section(f.citation_intent, outline),
+                suggested_section=auto_assign_section(f.citation_intent, outline),
             ))
 
     return PendingFragmentsResponse(
@@ -239,7 +213,7 @@ async def curate_fragments(
                     if f.fragment_id == d.fragment_id:
                         intent = f.citation_intent
                         break
-            section = _auto_assign_section(intent, outline)
+            section = auto_assign_section(intent, outline)
 
         decisions.append({
             "fragment_id": d.fragment_id,
@@ -348,8 +322,8 @@ async def suggest_fragments(
         c["fragment_id"]
         for c in user_store.get_curated(project_id, verdict="accepted", section=section)
     }
-    # Get all curated IDs (to mark already-decided)
-    all_curated_ids = user_store.get_curated_fragment_ids(project_id)
+    # Get user-decided IDs (accepted/rejected only — suggested stay available)
+    decided_ids = user_store.get_curated_fragment_ids(project_id)
 
     # Gather all fragments from user's library sources
     all_sources = library.get_all_sources(user_id=user.user_id)
@@ -364,7 +338,7 @@ async def suggest_fragments(
         if frag_id in accepted_in_section:
             continue
         # Skip already curated (accepted elsewhere or rejected)
-        if frag_id in all_curated_ids:
+        if frag_id in decided_ids:
             continue
 
         intent = frag_data.get("citation_intent", "")
@@ -421,3 +395,56 @@ async def suggest_fragments(
             )
 
     return SuggestFragmentsResponse(gap_alert=gap_alert, suggestions=suggestions)
+
+
+@router.post("/{project_id}/fragments/auto-suggest")
+async def auto_suggest_fragments(
+    project_id: str,
+    user: UserRecord = Depends(get_current_user),
+) -> dict:
+    """Backfill suggested verdicts for all uncurated fragments in a project.
+
+    Creates verdict='suggested' entries with auto-assigned sections for any
+    fragment that has no user decision (accepted/rejected) and no existing
+    suggestion. Safe to call multiple times (idempotent).
+    """
+    project = _get_project_or_404(project_id, user)
+    user_store = get_user_store()
+    library = get_user_library()
+    paper_store = get_paper_store()
+    outline = project.get("outline") or []
+
+    # Gather all fragment IDs with existing decisions or suggestions
+    decided_ids = user_store.get_curated_fragment_ids(project_id)
+    suggested_ids = {
+        c["fragment_id"]
+        for c in user_store.get_curated(project_id, verdict="suggested")
+    }
+    skip_ids = decided_ids | suggested_ids
+
+    # Collect uncurated fragments from project-attached sources only
+    project_citekeys = library.get_project_citekeys(project_id, user_id=user.user_id)
+    all_sources = [
+        s for s in library.get_all_sources(user_id=user.user_id)
+        if s.citekey in project_citekeys
+    ]
+    suggestions = []
+    for src in all_sources:
+        fragments = paper_store.get_fragments(src.paper_id)
+        for f in fragments:
+            if f.fragment_id in skip_ids:
+                continue
+            assigned = auto_assign_section(f.citation_intent, outline)
+            suggestions.append({
+                "fragment_id": f.fragment_id,
+                "citekey": src.citekey,
+                "verdict": "suggested",
+                "assigned_section": assigned,
+            })
+
+    count = 0
+    if suggestions:
+        count = user_store.curate_fragments(project_id, suggestions)
+        logger.info("Auto-suggested %d fragments for project %s", count, project_id)
+
+    return {"suggested": count}
