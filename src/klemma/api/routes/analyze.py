@@ -435,8 +435,8 @@ async def get_briefing(
                 severity=finding.severity,
             ))
 
-    # Total sources
-    all_sources = library.get_all_sources(user_id=user.user_id)
+    # Total sources — scoped to this project
+    all_sources = library.get_all_sources(project_id=project_id, user_id=user.user_id)
 
     return BriefingResponse(
         total_sources=len(all_sources),
