@@ -605,7 +605,7 @@ class LocalUserStore:
                        ON CONFLICT(project_id, fragment_id) DO UPDATE SET
                          verdict = excluded.verdict,
                          assigned_section = excluded.assigned_section,
-                         note = excluded.note,
+                         note = COALESCE(excluded.note, fragment_curation.note),
                          curated_at = datetime('now')""",
                     (
                         project_id,
