@@ -163,6 +163,7 @@ async function pollJob(citekey: string, jobId: string) {
         clearInterval(interval)
         delete processingJobs.value[citekey]
         await loadSources()
+        briefingDismissed.value = false
         loadBriefing()
       }
     } catch {
