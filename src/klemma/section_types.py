@@ -248,3 +248,48 @@ def get_writing_order(
 
     items.sort(key=lambda x: (x.priority, x.section_id))
     return items
+
+
+# ── Citation intent → section type mapping ─────────────────────────────
+
+INTENT_TO_SECTION_TYPES: dict[str, list[SectionType]] = {
+    "background": [SectionType.INTRODUCTION, SectionType.BACKGROUND, SectionType.LITERATURE_REVIEW],
+    "method": [SectionType.METHODOLOGY, SectionType.THEORETICAL_FRAMEWORK, SectionType.IMPLEMENTATION],
+    "result_comparison": [SectionType.RESULTS, SectionType.DISCUSSION, SectionType.EXPERIMENTS],
+    "extends": [SectionType.LITERATURE_REVIEW, SectionType.DISCUSSION],
+    "contrasts": [SectionType.LITERATURE_REVIEW, SectionType.DISCUSSION],
+    "uses_data": [SectionType.DATA_DESCRIPTION, SectionType.METHODOLOGY, SectionType.EXPERIMENTS],
+}
+
+
+def auto_assign_section(
+    intent: str | None,
+    outline: list[dict] | None,
+    ai_predicted_section: str | None = None,
+) -> str | None:
+    """Suggest a section from the outline based on AI prediction or citation intent.
+
+    Strategy (AI-prediction-first):
+    1. If ai_predicted_section matches an outline section ID → use it (most specific)
+    2. Fall back to intent → SectionType mapping (first match in outline)
+    """
+    if not outline:
+        return None
+
+    outline_ids = {s["id"] for s in outline}
+
+    # 1. AI prediction — most specific, avoids first-match lossy assignment
+    if ai_predicted_section and ai_predicted_section in outline_ids:
+        return ai_predicted_section
+
+    # 2. Intent-based fallback
+    if not intent:
+        return None
+    target_types = INTENT_TO_SECTION_TYPES.get(intent)
+    if not target_types:
+        return None
+    for section in outline:
+        section_type = infer_section_type(section.get("name", ""))
+        if section_type and section_type in target_types:
+            return section["id"]
+    return None

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from klemma.models import UserRecord
 
-from ..auth.deps import get_current_user
+from ..auth.deps import get_current_user, get_user_store
 from ..deps import get_user_library
 
 try:
@@ -95,6 +95,15 @@ async def submit_process_job(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source '{citekey}' not found in library",
         )
+
+    # Validate project ownership — project_id is a write path (auto-suggestion)
+    if project_id:
+        store = get_user_store()
+        proj = store.get_project_by_id(project_id)
+        if not proj or proj["user_id"] != user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
 
     from ..tasks import process_source
 

@@ -27,7 +27,7 @@ def test_schema_version(tmp_path):
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 11
+    assert version == 12
 
 
 def test_creates_db_file(tmp_path):

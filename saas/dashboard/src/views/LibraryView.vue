@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { library, process, curation, ApiError } from '@/api/client'
+import { library, process, curation, analyze, ApiError } from '@/api/client'
 import AppLayout from '@/components/AppLayout.vue'
 import { useProjectStore } from '@/stores/project'
 
@@ -42,6 +42,10 @@ interface Gap {
 }
 const gaps = ref<Gap[]>([])
 const gapsDetail = ref('')
+
+// Briefing
+const briefing = ref<Awaited<ReturnType<typeof analyze.briefing>> | null>(null)
+const briefingDismissed = ref(false)
 
 // Curation stats per citekey: { accepted, total }
 const curationStats = ref<Record<string, { accepted: number; total: number }>>({})
@@ -159,6 +163,7 @@ async function pollJob(citekey: string, jobId: string) {
         clearInterval(interval)
         delete processingJobs.value[citekey]
         await loadSources()
+        loadBriefing()
       }
     } catch {
       clearInterval(interval)
@@ -222,10 +227,21 @@ function onFileInput(e: Event) {
 }
 
 
+async function loadBriefing() {
+  const pid = projectStore.activeProjectId
+  if (!pid) return
+  try {
+    briefing.value = await analyze.briefing(pid)
+  } catch {
+    briefing.value = null
+  }
+}
+
 async function loadAll() {
   await loadSources()
   loadGaps()
   loadCurationStats()
+  loadBriefing()
 }
 
 onMounted(loadAll)
@@ -264,6 +280,48 @@ watch(sources, () => { loadFragmentCounts() })
       </div>
     </div>
 
+    <!-- Briefing card -->
+    <div v-if="briefing && briefing.total_fragments > 0 && !briefingDismissed" class="mt-5 animate-in animate-in-delay-1">
+      <div class="rounded-xl border border-[#b2dfdb] bg-[#e0f2f1] p-5">
+        <div class="flex items-start justify-between mb-3">
+          <h3 class="font-[var(--font-display)] text-base font-semibold text-[#00695c]">
+            Клемма проанализировала {{ briefing.total_sources }} источников
+          </h3>
+          <button @click="briefingDismissed = true" class="text-[#80cbc4] hover:text-[#00695c] text-lg leading-none">&times;</button>
+        </div>
+        <div class="text-sm text-[#004d40] mb-3">
+          {{ briefing.total_fragments }} фрагментов &middot;
+          {{ briefing.suggested_count }} предложено &middot;
+          {{ briefing.accepted_count }} принято
+        </div>
+
+        <!-- Per-section readiness -->
+        <div v-if="briefing.by_section.length > 0" class="space-y-1.5 mb-3">
+          <div v-for="sec in briefing.by_section" :key="sec.section_id"
+               class="flex items-center gap-2 text-sm">
+            <span v-if="sec.readiness === 'ready'" class="text-[#2e7d32]">&#9679;</span>
+            <span v-else-if="sec.readiness === 'partial'" class="text-[#f9a825]">&#9679;</span>
+            <span v-else class="text-[#bdbdbd]">&#9675;</span>
+            <span class="text-[#004d40] truncate" style="max-width: 200px">{{ sec.section_name }}</span>
+            <span class="text-[#80cbc4] text-xs">{{ sec.fragment_count }} фр. / {{ sec.source_count }} ист.</span>
+          </div>
+        </div>
+
+        <!-- Coach findings -->
+        <div v-if="briefing.coach_findings.length > 0" class="space-y-1 mb-3">
+          <div v-for="(f, i) in briefing.coach_findings.slice(0, 3)" :key="i"
+               class="text-xs text-[#004d40] bg-[#b2dfdb] rounded px-2 py-1">
+            {{ f.message }}
+          </div>
+        </div>
+
+        <RouterLink v-if="projectStore.activeProjectId"
+                    :to="`/${projectStore.activeProjectId}/map`"
+                    class="inline-block text-sm font-medium text-[#00695c] hover:text-[#004d40]">
+          Открыть карту &rarr;
+        </RouterLink>
+      </div>
+    </div>
 
     <!-- Sources table -->
     <div class="mt-5 animate-in animate-in-delay-2">

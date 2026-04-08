@@ -68,7 +68,7 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `
 - `init_klemma_home()` — legacy alias for `init_system()`
 - Interactive mode: auto-discovers Obsidian vaults, Zotero exports via `discovery.py`
 
-### section_types.py (~240 lines)
+### section_types.py (~290 lines)
 Semantic section vocabulary — cross-project labels for dissertation/paper sections.
 - `SectionType(str, Enum)` — 12 values: introduction, background, literature_review, theoretical_framework, methodology, data_description, experiments, results, discussion, conclusion, appendix, custom
 - `SECTION_TYPE_KEYWORDS` — ru/en keyword lists per type for heuristic matching
@@ -77,6 +77,8 @@ Semantic section vocabulary — cross-project labels for dissertation/paper sect
 - `WRITING_ORDER_PRIORITY` — dict mapping SectionType → priority (1=write first, 6=write last), based on Kallestinova 2011 results-first order
 - `WritingOrderItem` — dataclass: section_id, title, section_type, priority, has_draft
 - `get_writing_order(sections, type_map, drafts_dir?)` — compute results-first writing order, detect existing drafts
+- `INTENT_TO_SECTION_TYPES` — dict mapping citation_intent → list[SectionType] for auto-assignment (shared between curation.py and tasks.py)
+- `auto_assign_section(intent, outline, ai_predicted_section?)` — AI-prediction-first section assignment: uses AI's per-fragment section prediction first, falls back to intent→SectionType mapping
 
 ### state.py (~965 lines)
 SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v14), auto-migrates via `_migrate_schema()`. All 70+ public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
@@ -172,9 +174,9 @@ SQLite backends implementing the three-tier library protocols.
 - `clear_prune_verdict(source_id, user_id=None) -> None` — remove single verdict; user-scoped
 - Tables: `project_sources` (PK: user_id, citekey), `project_source_sections` (PK: user_id, citekey, section), `project_fragments`, `prune_verdicts` (PK: user_id, source_id) (v5)
 
-#### stores/user_store.py (~350 lines)
+#### stores/user_store.py (~370 lines)
 `LocalUserStore` — SQLite-backed `UserStore` at `~/.klemma/users.db` (separate from library.db). User accounts, projects, and fragment curation for the SaaS auth layer (ADR-009).
-- `__init__(db_path)` — creates dirs, runs `_migrate_schema()` (schema version 11)
+- `__init__(db_path)` — creates dirs, runs `_migrate_schema()` (schema version 12)
 - `create_user(email, password_hash, name?) -> UserRecord` — normalizes email to lowercase; raises `ValueError` on duplicate
 - `get_user_by_email(email) -> UserRecord | None` — normalizes email to lowercase before lookup
 - `get_user_by_id(user_id) -> UserRecord | None`
@@ -185,10 +187,10 @@ SQLite backends implementing the three-tier library protocols.
 - `delete_all_refresh_tokens(user_id) -> None` — logout-all
 - `curate_fragments(project_id, decisions) -> int` — batch INSERT OR REPLACE curation decisions
 - `get_curated(project_id, *, verdict?, section?, citekey?) -> list[dict]` — filtered curation query
-- `get_curation_stats(project_id, citekey) -> dict` — {curated, accepted, rejected}
-- `get_curated_fragment_ids(project_id) -> set[str]` — IDs for filtering pending
+- `get_curation_stats(project_id, citekey) -> dict` — {curated, accepted, rejected, suggested}
+- `get_curated_fragment_ids(project_id) -> set[str]` — user-decided IDs only (accepted/rejected); excludes suggested
 - `update_curation(project_id, fragment_id, *, verdict?, assigned_section?, note?) -> bool` — partial update
-- Tables: `users`, `refresh_tokens`, `projects`, `fragment_curation` (project_id FK, fragment_id, citekey, verdict, assigned_section, note)
+- Tables: `users`, `refresh_tokens`, `projects`, `fragment_curation` (project_id FK, fragment_id, citekey, verdict CHECK('accepted','rejected','suggested'), assigned_section, note)
 
 ### errors.py (32 lines)
 Klemma error taxonomy for AI backends.

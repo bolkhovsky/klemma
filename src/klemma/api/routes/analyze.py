@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from klemma.models import UserRecord
 
-from ..auth.deps import get_current_user
+from ..auth.deps import get_current_user, get_user_store
 from ..deps import get_paper_store, get_project_store, get_user_library
 
 router = APIRouter()
@@ -85,6 +85,39 @@ class HealthResponse(BaseModel):
     chapters: list[ChapterHealth]
     recommendations: list[Recommendation]
     stats: HealthStats
+
+
+class SectionBriefing(BaseModel):
+    """Per-section readiness assessment."""
+
+    section_id: str
+    section_name: str
+    fragment_count: int  # accepted + suggested
+    accepted_count: int  # user-confirmed only
+    source_count: int  # unique citekeys
+    readiness: str  # "ready" | "partial" | "empty"
+
+
+class CoachFindingResponse(BaseModel):
+    """Single coach finding for API response."""
+
+    category: str
+    section: str | None
+    message: str
+    severity: str
+
+
+class BriefingResponse(BaseModel):
+    """Project briefing with readiness assessment and coach findings."""
+
+    total_sources: int
+    total_fragments: int
+    suggested_count: int
+    accepted_count: int
+    by_section: list[SectionBriefing]
+    empty_sections: list[str]
+    coach_findings: list[CoachFindingResponse]
+    readiness_pct: int
 
 
 # ---------------------------------------------------------------------------
@@ -301,4 +334,118 @@ async def get_health(
             pruned_drop=drop_count,
             pruned_maybe=maybe_count,
         ),
+    )
+
+
+@router.get("/briefing/{project_id}", response_model=BriefingResponse)
+async def get_briefing(
+    project_id: str,
+    user: UserRecord = Depends(get_current_user),
+) -> BriefingResponse:
+    """Project briefing with per-section readiness and coach findings.
+
+    Zero AI cost — composes curated data + coach heuristics.
+    Readiness counts accepted + suggested fragments (excludes rejected).
+    """
+    from klemma.skills.coach import analyze_section
+
+    user_st = get_user_store()
+    library = get_user_library()
+
+    # Ownership check
+    project = user_st.get_project_by_id(project_id)
+    if not project or project["user_id"] != user.user_id:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    outline = project.get("outline") or []
+    outline_map = {s["id"]: s.get("name", "") for s in outline}
+
+    # Load all curated fragments
+    all_curated = user_st.get_curated(project_id)
+
+    # Group by section — only accepted + suggested count for readiness
+    section_fragments: dict[str, list[dict]] = {}
+    total_accepted = 0
+    total_suggested = 0
+    for c in all_curated:
+        sec = c.get("assigned_section") or ""
+        if c["verdict"] == "rejected":
+            continue
+        if c["verdict"] == "accepted":
+            total_accepted += 1
+        elif c["verdict"] == "suggested":
+            total_suggested += 1
+        section_fragments.setdefault(sec, []).append(c)
+
+    # Build per-section stats
+    by_section: list[SectionBriefing] = []
+    ready_count = 0
+    empty_sections: list[str] = []
+
+    for sec_id in outline_map:
+        frags = section_fragments.get(sec_id, [])
+        frag_count = len(frags)
+        accepted_count = sum(1 for f in frags if f["verdict"] == "accepted")
+        citekeys = {f["citekey"] for f in frags}
+        source_count = len(citekeys)
+
+        if frag_count == 0:
+            readiness = "empty"
+            empty_sections.append(sec_id)
+        elif frag_count >= 5 and source_count >= 3:
+            readiness = "ready"
+            ready_count += 1
+        else:
+            readiness = "partial"
+
+        by_section.append(SectionBriefing(
+            section_id=sec_id,
+            section_name=outline_map[sec_id],
+            fragment_count=frag_count,
+            accepted_count=accepted_count,
+            source_count=source_count,
+            readiness=readiness,
+        ))
+
+    readiness_pct = round((ready_count / len(outline_map)) * 100) if outline_map else 0
+
+    # Coach findings
+    coach_findings: list[CoachFindingResponse] = []
+    for sec_id in outline_map:
+        frags = section_fragments.get(sec_id, [])
+        level = "subsection" if "." in sec_id else "chapter"
+        intent_counts: dict[str, int] = {}
+        citekeys = set()
+        for f in frags:
+            citekeys.add(f["citekey"])
+            # Need to look up intent from paper_store
+        findings = analyze_section(
+            section=sec_id,
+            source_count=len(citekeys),
+            level=level,
+            intent_counts=intent_counts,
+            fragment_count=len(frags),
+            has_draft=False,
+        )
+        for finding in findings[:2]:  # Cap at 2 per section
+            coach_findings.append(CoachFindingResponse(
+                category=finding.category,
+                section=finding.section,
+                message=finding.message,
+                severity=finding.severity,
+            ))
+
+    # Total sources
+    all_sources = library.get_all_sources(user_id=user.user_id)
+
+    return BriefingResponse(
+        total_sources=len(all_sources),
+        total_fragments=len(all_curated),
+        suggested_count=total_suggested,
+        accepted_count=total_accepted,
+        by_section=by_section,
+        empty_sections=empty_sections,
+        coach_findings=coach_findings[:10],  # Cap total findings
+        readiness_pct=readiness_pct,
     )

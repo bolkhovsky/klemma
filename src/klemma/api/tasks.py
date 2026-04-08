@@ -92,6 +92,36 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
     # Check if already processed (has fragments)
     existing = paper_store.get_fragments(paper_id)
     if existing and not force:
+        # Backfill suggestions for papers processed before auto-suggest feature
+        if project_id and user_store and user_id:
+            try:
+                _proj = user_store.get_project_by_id(project_id)
+                if not _proj or _proj.get("user_id") != user_id:
+                    logger.warning("Backfill skipped: project %s not found or not owned by %s", project_id, user_id)
+                else:
+                    decided_ids = user_store.get_curated_fragment_ids(project_id)
+                    existing_suggested = {
+                        c["fragment_id"]
+                        for c in user_store.get_curated(project_id, verdict="suggested")
+                    }
+                    uncurated = [
+                        f for f in existing
+                        if f.fragment_id not in decided_ids
+                        and f.fragment_id not in existing_suggested
+                    ]
+                    if uncurated:
+                        from klemma.section_types import auto_assign_section as _auto_assign
+                        _outline = _proj.get("outline")
+                        suggestions = [{
+                            "fragment_id": f.fragment_id,
+                            "citekey": citekey,
+                            "verdict": "suggested",
+                            "assigned_section": _auto_assign(f.citation_intent, _outline),
+                        } for f in uncurated]
+                        user_store.curate_fragments(project_id, suggestions)
+                        logger.info("Backfilled %d suggestions for %s", len(suggestions), citekey)
+            except Exception:
+                pass
         user_library.update_status(citekey, "completed", user_id=user_id or None)
         return {
             "status": "already_processed",
@@ -257,6 +287,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
 
         # Parse and save fragments; collect AI-predicted section assignments
         fragments = []
+        fragment_ai_sections: dict[str, str | None] = {}  # fragment_id → AI predicted section
         predicted_sections: set[str] = set()
         predicted_chapters: set[int] = set()
         for f_data in data.get("fragments", []):
@@ -273,7 +304,9 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 citation_intent=f_data.get("citation_intent"),
                 content_hash=fragment_id,
             ))
+            # Capture per-fragment AI section prediction (safe — keyed by ID, not index)
             sec = str(f_data.get("section", "")).strip()
+            fragment_ai_sections[fragment_id] = sec or None
             if sec:
                 predicted_sections.add(sec)
             chap = f_data.get("chapter")
@@ -352,6 +385,31 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         if key_refs:
             links_saved = paper_store.save_citation_links(paper_id, key_refs)
             logger.info("Saved %d citation links for %s", links_saved, citekey)
+
+        # ── Auto-suggest fragment assignments ──────────────────────────
+        if project_id and user_store and user_id:
+            try:
+                from klemma.section_types import auto_assign_section as _auto_assign
+                _proj = user_store.get_project_by_id(project_id)
+                if not _proj or _proj.get("user_id") != user_id:
+                    logger.warning("Auto-suggest skipped: project %s not found or not owned by %s", project_id, user_id)
+                else:
+                    _outline = _proj.get("outline")
+                    suggestions = []
+                    for frag in fragments:
+                        ai_sec = fragment_ai_sections.get(frag.fragment_id)
+                        assigned = _auto_assign(frag.citation_intent, _outline, ai_sec)
+                        suggestions.append({
+                            "fragment_id": frag.fragment_id,
+                            "citekey": citekey,
+                            "verdict": "suggested",
+                            "assigned_section": assigned,
+                        })
+                    if suggestions:
+                        count = user_store.curate_fragments(project_id, suggestions)
+                        logger.info("Auto-suggested %d fragments for %s", count, citekey)
+            except Exception as exc:
+                logger.warning("Auto-suggestion failed for %s (non-fatal): %s", citekey, exc)
 
         user_library.update_status(citekey, "completed", user_id=user_id or None)
         logger.info("Extracted %d fragments for %s (%s)", saved, citekey, paper_id)
