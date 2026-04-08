@@ -351,6 +351,7 @@ async def get_briefing(
 
     user_st = get_user_store()
     library = get_user_library()
+    paper_store = get_paper_store()
 
     # Ownership check
     project = user_st.get_project_by_id(project_id)
@@ -362,6 +363,17 @@ async def get_briefing(
 
     # Load all curated fragments
     all_curated = user_st.get_curated(project_id)
+
+    # Build fragment_id → citation_intent from paper_store
+    curated_citekeys = {c["citekey"] for c in all_curated}
+    intent_map: dict[str, str] = {}  # fragment_id → citation_intent
+    for ck in curated_citekeys:
+        src = library.get_source_by_citekey(ck, user_id=user.user_id)
+        if not src:
+            continue
+        for f in paper_store.get_fragments(src.paper_id):
+            if f.citation_intent:
+                intent_map[f.fragment_id] = f.citation_intent
 
     # Group by section — only accepted + suggested count for readiness
     section_fragments: dict[str, list[dict]] = {}
@@ -418,7 +430,9 @@ async def get_briefing(
         citekeys = set()
         for f in frags:
             citekeys.add(f["citekey"])
-            # Need to look up intent from paper_store
+            intent = intent_map.get(f["fragment_id"], "")
+            if intent:
+                intent_counts[intent] = intent_counts.get(intent, 0) + 1
         findings = analyze_section(
             section=sec_id,
             source_count=len(citekeys),
