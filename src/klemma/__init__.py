@@ -1,6 +1,6 @@
 """Klemma — AI academic assistant."""
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 _BANNER_LINES = [
     ("#e0f2fe", "██  ██  ██      ██████  ██    ██  ██    ██   ████ "),
