@@ -18,7 +18,7 @@ FROM deps AS app
 # Copy full source and reinstall klemma (deps already cached, --no-deps = fast)
 COPY src/ ./src/
 COPY prompts/ ./prompts/
-RUN pip install --no-cache-dir --no-deps .
+RUN pip install --no-cache-dir --no-deps --force-reinstall .
 
 # Create data directory
 RUN mkdir -p /data/klemma
