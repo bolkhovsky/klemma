@@ -11,26 +11,54 @@ on:
         options:
           - production
           - staging
+  push:
+    branches: [master]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '.claude/**'
+
+env:
+  DEPLOY_ENV: ${{ github.event.inputs.environment || 'production' }}
 
 # Only one deploy at a time
 concurrency:
-  group: deploy-${{ github.event.inputs.environment }}
+  group: deploy-${{ github.event.inputs.environment || 'production' }}
   cancel-in-progress: false
 
 jobs:
+  ci:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/ci.yml
+
   build-and-deploy:
+    needs: [ci]
+    if: always() && (needs.ci.result == 'success' || needs.ci.result == 'skipped')
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment }}
+    environment: ${{ github.event.inputs.environment || 'production' }}
     steps:
       - uses: actions/checkout@v6
 
+      # Build frontend
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: saas/dashboard/package-lock.json
+      - name: Build frontend
+        run: cd saas/dashboard && npm ci && npm run build
+
+      # Build Docker image (with layer caching)
+      - uses: docker/setup-buildx-action@v3
       - name: Build Docker image
-        run: |
-          docker build \
-            -t klemma-api:${{ github.sha }} \
-            -t klemma-api:latest \
-            -f saas/deploy/Dockerfile \
-            .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: saas/deploy/Dockerfile
+          tags: klemma-api:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Save Docker image
         run: docker save klemma-api:latest | gzip > klemma-api.tar.gz
@@ -57,27 +85,96 @@ jobs:
           # Transfer compose files
           scp $SCP_OPTS -r saas/deploy/ "${VPS_USER}@${VPS_HOST}:/opt/klemma/"
 
-          # Deploy on VPS
+          # Backup current dashboard BEFORE uploading new one (so rollback has the old version)
+          ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "\
+            [ -d /opt/klemma/dashboard ] && \
+              rm -rf /opt/klemma/dashboard.previous && \
+              cp -r /opt/klemma/dashboard /opt/klemma/dashboard.previous || true"
+
+          # Transfer built dashboard (contents of dist/, not the dir itself)
+          ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "mkdir -p /opt/klemma/dashboard"
+          scp $SCP_OPTS -r saas/dashboard/dist/* "${VPS_USER}@${VPS_HOST}:/opt/klemma/dashboard/"
+
+          # Deploy on VPS with rollback support
           ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" << 'DEPLOY_SCRIPT'
             set -e
             cd /opt/klemma/deploy
+
+            # Backup Docker image for rollback
+            docker image inspect klemma-api:latest >/dev/null 2>&1 && \
+              docker tag klemma-api:latest klemma-api:previous || true
+
+            # Backup databases from named volume via temporary container
+            # Resolve actual volume name (compose prefixes with project name)
+            DATA_VOLUME=$(docker volume ls -q --filter "name=klemma-data" | head -1)
+            rm -rf /opt/klemma/db-backup
+            if [ -n "$DATA_VOLUME" ]; then
+              docker run --rm \
+                -v "$DATA_VOLUME":/data:ro \
+                -v /opt/klemma/db-backup:/backup \
+                alpine sh -c "cp -r /data/* /backup/" 2>/dev/null || true
+            fi
 
             # Load new image
             sudo docker load < /tmp/klemma-api.tar.gz
             rm /tmp/klemma-api.tar.gz
 
-            # Pull latest Redis/Caddy images
+            # Restart services
             sudo docker compose pull redis caddy
-
-            # Restart with new image
             sudo docker compose up -d --force-recreate api worker
             sudo docker compose up -d
 
-            # Verify health
+            # Health check with retries (5 attempts, 3s apart)
+            for i in 1 2 3 4 5; do
+              sleep 3
+              if curl -sf http://localhost/health; then
+                echo ""
+                echo "Deploy successful (attempt $i)"
+                # Clean up previous backups
+                docker image rm klemma-api:previous 2>/dev/null || true
+                rm -rf /opt/klemma/dashboard.previous
+                rm -rf /opt/klemma/db-backup
+                exit 0
+              fi
+              echo "Health check attempt $i failed..."
+            done
+
+            # ROLLBACK
+            echo "ROLLING BACK"
+            docker tag klemma-api:previous klemma-api:latest 2>/dev/null || true
+            [ -d /opt/klemma/dashboard.previous ] && \
+              rm -rf /opt/klemma/dashboard && \
+              mv /opt/klemma/dashboard.previous /opt/klemma/dashboard
+            # Restore databases into named volume
+            DATA_VOLUME=$(docker volume ls -q --filter "name=klemma-data" | head -1)
+            if [ -d /opt/klemma/db-backup ] && [ -n "$DATA_VOLUME" ]; then
+              docker run --rm \
+                -v "$DATA_VOLUME":/data \
+                -v /opt/klemma/db-backup:/backup:ro \
+                alpine sh -c "rm -rf /data/* && cp -r /backup/* /data/"
+            fi
+            sudo docker compose up -d --force-recreate api worker
             sleep 5
-            curl -sf http://localhost/health || exit 1
-            echo "Deploy successful"
+            curl -sf http://localhost/health || echo "WARNING: rollback also failed"
+            exit 1
           DEPLOY_SCRIPT
+
+      - name: Notify deploy result
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          [ -z "$TELEGRAM_BOT_TOKEN" ] && exit 0
+          STATUS="${{ job.status }}"
+          SHA="${{ github.sha }}"
+          if [ "$STATUS" = "success" ]; then
+            MSG="Klemma deployed to ${DEPLOY_ENV} (${SHA:0:7})"
+          else
+            MSG="Deploy FAILED (${DEPLOY_ENV}) — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="$TELEGRAM_CHAT_ID" -d text="$MSG"
 
       - name: Cleanup SSH key
         if: always()

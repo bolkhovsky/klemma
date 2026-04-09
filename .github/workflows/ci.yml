@@ -5,6 +5,7 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_call:  # Allow deploy.yml to call this workflow
 
 jobs:
   lint:
@@ -31,3 +32,19 @@ jobs:
           cache: "pip"
       - run: pip install -e ".[dev,api]"
       - run: pytest -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: saas/dashboard
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: saas/dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run type-check
+      - run: npm run build-only

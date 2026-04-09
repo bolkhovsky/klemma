@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS deps
 
 WORKDIR /app
 
@@ -8,13 +8,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy source first (required by hatchling build)
+# Install Python deps (cached unless pyproject.toml changes)
 COPY pyproject.toml README.md ./
+COPY src/klemma/__init__.py ./src/klemma/
+RUN pip install --no-cache-dir ".[api,recommended]"
+
+FROM deps AS app
+
+# Copy full source and reinstall klemma (deps already cached, --no-deps = fast)
 COPY src/ ./src/
 COPY prompts/ ./prompts/
-
-# Install Python deps (non-editable for production)
-RUN pip install --no-cache-dir ".[api,recommended]"
+RUN pip install --no-cache-dir --no-deps .
 
 # Create data directory
 RUN mkdir -p /data/klemma

@@ -23,5 +23,5 @@ jobs:
         id: pragent
         uses: qodo-ai/pr-agent@v0.32
         env:
-          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+          OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
