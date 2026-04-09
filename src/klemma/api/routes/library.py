@@ -357,9 +357,16 @@ async def upload_pdf(
         )
 
     pdf_hash = hashlib.sha256(data).hexdigest()
-    paper_store = get_paper_store()
-    file_store = get_file_store()
-    library = get_user_library()
+    try:
+        paper_store = get_paper_store()
+        file_store = get_file_store()
+        library = get_user_library()
+    except Exception as exc:
+        logger.exception("Failed to get stores for upload")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Upload failed: store init error: {type(exc).__name__}: {exc}",
+        )
 
     # Dedup: check if this PDF already exists in the global corpus
     existing = paper_store.find_paper(pdf_hash=pdf_hash)
@@ -421,36 +428,45 @@ async def upload_pdf(
         )
 
     # New paper: register + store file
-    citekey = _citekey_from_filename(file.filename)
-    if library.get_source_by_citekey(citekey, user_id=user.user_id):
-        citekey = f"{citekey}_{pdf_hash[:6]}"
-
-    paper_id = paper_store.register_paper(
-        title=file.filename.rsplit(".", 1)[0],
-        pdf_hash=pdf_hash,
-    )
-    safe_filename = re.sub(r"[^\w.\-]", "_", file.filename)
     try:
-        file_store.save(paper_id, data, safe_filename)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        citekey = _citekey_from_filename(file.filename)
+        if library.get_source_by_citekey(citekey, user_id=user.user_id):
+            citekey = f"{citekey}_{pdf_hash[:6]}"
 
-    library.add_source(
-        paper_id, citekey,
-        status="pending",
-        project_id=project_id,
-        user_id=user.user_id,
-    )
+        paper_id = paper_store.register_paper(
+            title=file.filename.rsplit(".", 1)[0],
+            pdf_hash=pdf_hash,
+        )
+        safe_filename = re.sub(r"[^\w.\-]", "_", file.filename)
+        try:
+            file_store.save(paper_id, data, safe_filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    job_id = _enqueue_processing(paper_id, citekey, user.user_id, project_id)
+        library.add_source(
+            paper_id, citekey,
+            status="pending",
+            project_id=project_id,
+            user_id=user.user_id,
+        )
 
-    return UploadResponse(
-        citekey=citekey,
-        paper_id=paper_id,
-        pdf_hash=pdf_hash,
-        status="queued" if job_id else "pending",
-        job_id=job_id,
-    )
+        job_id = _enqueue_processing(paper_id, citekey, user.user_id, project_id)
+
+        return UploadResponse(
+            citekey=citekey,
+            paper_id=paper_id,
+            pdf_hash=pdf_hash,
+            status="queued" if job_id else "pending",
+            job_id=job_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Upload failed for %r (user=%s)", file.filename, user.user_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Upload failed: {type(exc).__name__}: {exc}",
+        )
 
 
 @router.get("/gaps")
