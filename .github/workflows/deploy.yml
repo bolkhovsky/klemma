@@ -105,11 +105,15 @@ jobs:
               docker tag klemma-api:latest klemma-api:previous || true
 
             # Backup databases from named volume via temporary container
+            # Resolve actual volume name (compose prefixes with project name)
+            DATA_VOLUME=$(docker volume ls -q --filter "name=klemma-data" | head -1)
             rm -rf /opt/klemma/db-backup
-            docker run --rm \
-              -v klemma-data:/data:ro \
-              -v /opt/klemma/db-backup:/backup \
-              alpine sh -c "cp -r /data/* /backup/" 2>/dev/null || true
+            if [ -n "$DATA_VOLUME" ]; then
+              docker run --rm \
+                -v "$DATA_VOLUME":/data:ro \
+                -v /opt/klemma/db-backup:/backup \
+                alpine sh -c "cp -r /data/* /backup/" 2>/dev/null || true
+            fi
 
             # Load new image
             sudo docker load < /tmp/klemma-api.tar.gz
@@ -142,9 +146,10 @@ jobs:
               rm -rf /opt/klemma/dashboard && \
               mv /opt/klemma/dashboard.previous /opt/klemma/dashboard
             # Restore databases into named volume
-            if [ -d /opt/klemma/db-backup ]; then
+            DATA_VOLUME=$(docker volume ls -q --filter "name=klemma-data" | head -1)
+            if [ -d /opt/klemma/db-backup ] && [ -n "$DATA_VOLUME" ]; then
               docker run --rm \
-                -v klemma-data:/data \
+                -v "$DATA_VOLUME":/data \
                 -v /opt/klemma/db-backup:/backup:ro \
                 alpine sh -c "rm -rf /data/* && cp -r /backup/* /data/"
             fi
