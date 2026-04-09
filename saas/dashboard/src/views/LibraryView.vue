@@ -181,9 +181,11 @@ async function handleUpload(files: FileList | null) {
 
   let uploaded = 0
   let errors = 0
+  const rejected: string[] = []
   for (const file of Array.from(files)) {
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
+    if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
       errors++
+      rejected.push(`${file.name} (${file.type || 'unknown type'})`)
       continue
     }
     try {
@@ -209,7 +211,7 @@ async function handleUpload(files: FileList | null) {
     await loadSources()
   }
   if (errors > 0 && !uploadError.value) {
-    uploadError.value = `Пропущено: ${errors} (не PDF)`
+    uploadError.value = rejected.length ? `Пропущено: ${rejected.join(', ')}` : `Ошибка загрузки: ${errors}`
   }
   uploading.value = false
   dragOver.value = false

@@ -334,10 +334,14 @@ async def upload_pdf(
     corpus, reuses the existing paper_id (no re-extraction needed).
     Generates a citekey from the filename.
     """
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
+    is_pdf = (
+        (file.filename and file.filename.lower().endswith(".pdf"))
+        or (file.content_type and file.content_type == "application/pdf")
+    )
+    if not file.filename or not is_pdf:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are accepted",
+            detail=f"Only PDF files are accepted (got: {file.filename!r}, type: {file.content_type!r})",
         )
 
     data = await file.read()
