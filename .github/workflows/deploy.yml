@@ -104,15 +104,16 @@ jobs:
             docker image inspect klemma-api:latest >/dev/null 2>&1 && \
               docker tag klemma-api:latest klemma-api:previous || true
 
-            # Backup databases from named volume via temporary container
+            # Backup SQLite databases from named volume via temporary container
             # Resolve actual volume name (compose prefixes with project name)
             DATA_VOLUME=$(docker volume ls -q --filter "name=klemma-data" | head -1)
-            rm -rf /opt/klemma/db-backup
+            sudo rm -rf /opt/klemma/db-backup
+            mkdir -p /opt/klemma/db-backup
             if [ -n "$DATA_VOLUME" ]; then
               docker run --rm \
                 -v "$DATA_VOLUME":/data:ro \
                 -v /opt/klemma/db-backup:/backup \
-                alpine sh -c "cp -r /data/* /backup/" 2>/dev/null || true
+                alpine sh -c "find /data -name '*.db' -exec cp {} /backup/ \;" 2>/dev/null || true
             fi
 
             # Load new image
@@ -133,7 +134,7 @@ jobs:
                 # Clean up previous backups
                 docker image rm klemma-api:previous 2>/dev/null || true
                 rm -rf /opt/klemma/dashboard.previous
-                rm -rf /opt/klemma/db-backup
+                sudo rm -rf /opt/klemma/db-backup
                 exit 0
               fi
               echo "Health check attempt $i failed..."
@@ -145,13 +146,13 @@ jobs:
             [ -d /opt/klemma/dashboard.previous ] && \
               rm -rf /opt/klemma/dashboard && \
               mv /opt/klemma/dashboard.previous /opt/klemma/dashboard
-            # Restore databases into named volume
+            # Restore SQLite databases into named volume
             DATA_VOLUME=$(docker volume ls -q --filter "name=klemma-data" | head -1)
             if [ -d /opt/klemma/db-backup ] && [ -n "$DATA_VOLUME" ]; then
               docker run --rm \
                 -v "$DATA_VOLUME":/data \
                 -v /opt/klemma/db-backup:/backup:ro \
-                alpine sh -c "rm -rf /data/* && cp -r /backup/* /data/"
+                alpine sh -c "for db in /backup/*.db; do [ -f \"\$db\" ] && cp \"\$db\" /data/; done"
             fi
             sudo docker compose up -d --force-recreate api worker
             sleep 5
