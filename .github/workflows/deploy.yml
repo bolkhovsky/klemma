@@ -85,6 +85,12 @@ jobs:
           # Transfer compose files
           scp $SCP_OPTS -r saas/deploy/ "${VPS_USER}@${VPS_HOST}:/opt/klemma/"
 
+          # Backup current dashboard BEFORE uploading new one (so rollback has the old version)
+          ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "\
+            [ -d /opt/klemma/dashboard ] && \
+              rm -rf /opt/klemma/dashboard.previous && \
+              cp -r /opt/klemma/dashboard /opt/klemma/dashboard.previous || true"
+
           # Transfer built dashboard (contents of dist/, not the dir itself)
           ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "mkdir -p /opt/klemma/dashboard"
           scp $SCP_OPTS -r saas/dashboard/dist/* "${VPS_USER}@${VPS_HOST}:/opt/klemma/dashboard/"
@@ -94,14 +100,16 @@ jobs:
             set -e
             cd /opt/klemma/deploy
 
-            # Backup current state for rollback
+            # Backup Docker image for rollback
             docker image inspect klemma-api:latest >/dev/null 2>&1 && \
               docker tag klemma-api:latest klemma-api:previous || true
-            [ -d /opt/klemma/dashboard ] && \
-              cp -r /opt/klemma/dashboard /opt/klemma/dashboard.previous || true
-            for db in /data/klemma/*.db; do
-              [ -f "$db" ] && cp "$db" "${db}.pre-deploy"
-            done
+
+            # Backup databases from named volume via temporary container
+            rm -rf /opt/klemma/db-backup
+            docker run --rm \
+              -v klemma-data:/data:ro \
+              -v /opt/klemma/db-backup:/backup \
+              alpine sh -c "cp -r /data/* /backup/" 2>/dev/null || true
 
             # Load new image
             sudo docker load < /tmp/klemma-api.tar.gz
@@ -121,7 +129,7 @@ jobs:
                 # Clean up previous backups
                 docker image rm klemma-api:previous 2>/dev/null || true
                 rm -rf /opt/klemma/dashboard.previous
-                rm -f /data/klemma/*.db.pre-deploy
+                rm -rf /opt/klemma/db-backup
                 exit 0
               fi
               echo "Health check attempt $i failed..."
@@ -133,9 +141,13 @@ jobs:
             [ -d /opt/klemma/dashboard.previous ] && \
               rm -rf /opt/klemma/dashboard && \
               mv /opt/klemma/dashboard.previous /opt/klemma/dashboard
-            for db in /data/klemma/*.db.pre-deploy; do
-              [ -f "$db" ] && mv "$db" "${db%.pre-deploy}"
-            done
+            # Restore databases into named volume
+            if [ -d /opt/klemma/db-backup ]; then
+              docker run --rm \
+                -v klemma-data:/data \
+                -v /opt/klemma/db-backup:/backup:ro \
+                alpine sh -c "rm -rf /data/* && cp -r /backup/* /data/"
+            fi
             sudo docker compose up -d --force-recreate api worker
             sleep 5
             curl -sf http://localhost/health || echo "WARNING: rollback also failed"
