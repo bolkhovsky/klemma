@@ -133,7 +133,7 @@ jobs:
                 echo "Deploy successful (attempt $i)"
                 # Clean up previous backups
                 docker image rm klemma-api:previous 2>/dev/null || true
-                rm -rf /opt/klemma/dashboard.previous
+                sudo rm -rf /opt/klemma/dashboard.previous
                 sudo rm -rf /opt/klemma/db-backup
                 exit 0
               fi
