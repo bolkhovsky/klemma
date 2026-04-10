@@ -97,8 +97,12 @@ jobs:
 
           # Deploy on VPS with rollback support. Capture ssh exit code —
           # the remote script prints DEPLOY_OK on success, which we then grep.
+          # Wrap ssh with `timeout` as a safety net: sudo/docker child processes
+          # on the remote can keep the ssh channel open even after `exit 0`,
+          # which would otherwise hang the job indefinitely. 10 min is plenty
+          # for image load + compose restart + health check on a 2-vCPU VPS.
           set +e
-          ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" > /tmp/deploy.out 2>&1 << 'DEPLOY_SCRIPT'
+          timeout --signal=KILL 600 ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" > /tmp/deploy.out 2>&1 << 'DEPLOY_SCRIPT'
             set -e
             cd /opt/klemma/deploy
 
@@ -122,10 +126,12 @@ jobs:
             sudo docker load < /tmp/klemma-api.tar.gz
             rm /tmp/klemma-api.tar.gz
 
-            # Restart services
-            sudo docker compose pull redis caddy
-            sudo docker compose up -d --force-recreate api worker
-            sudo docker compose up -d
+            # Restart services. Redirect stdin/stdout/stderr on the docker
+            # compose calls so sudo child processes don't inherit the ssh
+            # session's channel and hold it open after we `exit 0`.
+            sudo docker compose pull --quiet redis caddy </dev/null
+            sudo docker compose up -d --force-recreate api worker </dev/null
+            sudo docker compose up -d </dev/null
 
             # Health check with retries (5 attempts, 3s apart)
             for i in 1 2 3 4 5; do
@@ -171,10 +177,11 @@ jobs:
           cat /tmp/deploy.out
 
           # Success is determined by DEPLOY_OK marker, not ssh exit code —
-          # ssh sometimes returns non-zero even after remote `exit 0` on
-          # certain VPS configurations (broken pipe on session close).
+          # ssh sometimes returns non-zero (or hangs, which timeout kills as
+          # exit 137) even after remote `exit 0`, due to sudo/docker child
+          # processes holding the channel open. Marker in stdout is truth.
           if grep -q "^DEPLOY_OK$" /tmp/deploy.out; then
-            echo "Deploy marker found — success"
+            echo "Deploy marker found — success (ssh exit was $SSH_EXIT)"
             exit 0
           fi
           echo "Deploy marker missing — ssh exit code was $SSH_EXIT"
