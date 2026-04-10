@@ -131,12 +131,13 @@ jobs:
               if curl -sf http://localhost/health; then
                 echo ""
                 echo "Deploy successful (attempt $i)"
-                # Clean up previous backups (non-critical — disable set -e)
-                set +e
-                sudo docker image rm klemma-api:previous >/dev/null 2>&1
-                sudo rm -rf /opt/klemma/dashboard.previous
-                sudo rm -rf /opt/klemma/db-backup
-                set -e
+                # Clean up previous backups — all failures silenced, no bubble-up
+                {
+                  sudo docker image rm klemma-api:previous
+                  sudo rm -rf /opt/klemma/dashboard.previous
+                  sudo rm -rf /opt/klemma/db-backup
+                } >/dev/null 2>&1 || true
+                echo "Cleanup done"
                 exit 0
               fi
               echo "Health check attempt $i failed..."
