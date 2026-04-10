@@ -56,6 +56,24 @@ function shortAuthors(a: string | null): string {
   return a.includes(',') ? a.split(',')[0]!.trim() + ' et al.' : a
 }
 
+/**
+ * Russian plural form selector: 1 → `one`, 2-4 → `few`, 0/5+ → `many`.
+ * Handles the teen exception (11-14 all take `many`).
+ */
+function plural(n: number, one: string, few: string, many: string): string {
+  const n10 = n % 10
+  const n100 = n % 100
+  if (n10 === 1 && n100 !== 11) return one
+  if (n10 >= 2 && n10 <= 4 && !(n100 >= 12 && n100 <= 14)) return few
+  return many
+}
+
+// Briefing coverage counters — derived from by_section readiness flags.
+const readySectionCount = computed(() =>
+  briefing.value?.by_section.filter(s => s.readiness === 'ready').length ?? 0
+)
+const totalSectionCount = computed(() => briefing.value?.by_section.length ?? 0)
+
 async function loadGaps() {
   gaps.value = []
   gapsDetail.value = ''
@@ -286,46 +304,36 @@ watch(sources, () => { loadFragmentCounts() })
       </div>
     </div>
 
-    <!-- Briefing card -->
-    <div v-if="briefing && briefing.total_fragments > 0 && !briefingDismissed" class="mt-5 animate-in animate-in-delay-1">
-      <div class="rounded-xl border border-[#b2dfdb] bg-[#e0f2f1] p-5">
-        <div class="flex items-start justify-between mb-3">
-          <h3 class="font-[var(--font-display)] text-base font-semibold text-[#00695c]">
-            Клемма проанализировала {{ briefing.total_sources }} источников
-          </h3>
-          <button @click="briefingDismissed = true" class="text-[#80cbc4] hover:text-[#00695c] text-lg leading-none">&times;</button>
+    <!-- Briefing bar: compact one-line summary. Full section breakdown and
+         coach findings live on /map — this is just a teaser. -->
+    <div
+      v-if="briefing && briefing.total_sources > 0 && !briefingDismissed"
+      class="mt-5 animate-in animate-in-delay-1"
+    >
+      <div
+        class="flex items-center justify-between gap-4 rounded-xl border border-[#b2dfdb] bg-[#e0f2f1] px-5 py-3"
+      >
+        <div class="text-sm text-[#004d40]">
+          <span class="font-semibold">{{ briefing.total_sources }}&nbsp;{{ plural(briefing.total_sources, 'источник', 'источника', 'источников') }}</span>
+          <span class="mx-2 text-[#80cbc4]">·</span>
+          <span>{{ briefing.total_fragments }}&nbsp;{{ plural(briefing.total_fragments, 'фрагмент', 'фрагмента', 'фрагментов') }}</span>
+          <span class="mx-2 text-[#80cbc4]">·</span>
+          <span>покрытие {{ readySectionCount }}/{{ totalSectionCount }}</span>
         </div>
-        <div class="text-sm text-[#004d40] mb-3">
-          {{ briefing.total_fragments }} фрагментов &middot;
-          {{ briefing.suggested_count }} предложено &middot;
-          {{ briefing.accepted_count }} принято
+        <div class="flex items-center gap-4 flex-shrink-0">
+          <RouterLink
+            v-if="projectStore.activeProjectId"
+            :to="`/${projectStore.activeProjectId}/map`"
+            class="text-sm font-medium text-[#00695c] hover:text-[#004d40] no-underline"
+          >
+            подробнее &rarr; Карта
+          </RouterLink>
+          <button
+            @click="briefingDismissed = true"
+            class="text-[#80cbc4] hover:text-[#00695c] text-lg leading-none"
+            aria-label="Скрыть"
+          >&times;</button>
         </div>
-
-        <!-- Per-section readiness -->
-        <div v-if="briefing.by_section.length > 0" class="space-y-1.5 mb-3">
-          <div v-for="sec in briefing.by_section" :key="sec.section_id"
-               class="flex items-center gap-2 text-sm">
-            <span v-if="sec.readiness === 'ready'" class="text-[#2e7d32]">&#9679;</span>
-            <span v-else-if="sec.readiness === 'partial'" class="text-[#f9a825]">&#9679;</span>
-            <span v-else class="text-[#bdbdbd]">&#9675;</span>
-            <span class="text-[#004d40] truncate" style="max-width: 200px">{{ sec.section_name }}</span>
-            <span class="text-[#80cbc4] text-xs">{{ sec.fragment_count }} фр. / {{ sec.source_count }} ист.</span>
-          </div>
-        </div>
-
-        <!-- Coach findings -->
-        <div v-if="briefing.coach_findings.length > 0" class="space-y-1 mb-3">
-          <div v-for="(f, i) in briefing.coach_findings.slice(0, 3)" :key="i"
-               class="text-xs text-[#004d40] bg-[#b2dfdb] rounded px-2 py-1">
-            {{ f.message }}
-          </div>
-        </div>
-
-        <RouterLink v-if="projectStore.activeProjectId"
-                    :to="`/${projectStore.activeProjectId}/map`"
-                    class="inline-block text-sm font-medium text-[#00695c] hover:text-[#004d40]">
-          Открыть карту &rarr;
-        </RouterLink>
       </div>
     </div>
 

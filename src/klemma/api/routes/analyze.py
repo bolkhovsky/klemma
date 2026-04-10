@@ -16,6 +16,74 @@ _MIN_SOURCES_COVERED = 3
 
 
 # ---------------------------------------------------------------------------
+# Localization helpers
+# ---------------------------------------------------------------------------
+
+
+def _ru_plural(n: int, one: str, few: str, many: str) -> str:
+    """Russian plural form selector: 1 source / 2 source-a / 5 source-ov.
+
+    Handles the teen exception (11, 12, 13, 14 all take `many`).
+    """
+    n10 = n % 10
+    n100 = n % 100
+    if n10 == 1 and n100 != 11:
+        return one
+    if 2 <= n10 <= 4 and not (12 <= n100 <= 14):
+        return few
+    return many
+
+
+def _ru_coach_message(
+    category: str,
+    *,
+    section_label: str,
+    source_count: int,
+    level: str,
+    intent_counts: dict[str, int],
+    fragment_count: int,
+) -> str:
+    """Build a Russian-localized coach message for the SaaS API.
+
+    Mirrors the English heuristics in ``klemma.skills.coach.analyze_section``
+    but rebuilds the user-facing text in Russian so the Vue dashboard never
+    surfaces the English originals. The CLI (``klemma coach``) keeps using
+    the English messages from the skill directly — tests pin the English
+    wording so the skill is left untouched.
+    """
+    min_src, max_src = (
+        (15, 30) if level == "chapter" else (5, 10)
+    )
+    label = section_label or "раздел"
+    src_word = _ru_plural(source_count, "источник", "источника", "источников")
+    frag_word = _ru_plural(fragment_count, "фрагмент", "фрагмента", "фрагментов")
+    if category == "adequacy":
+        return (
+            f"«{label}»: {source_count} {src_word} "
+            f"(рекомендуется: {min_src}–{max_src})"
+        )
+    if category == "saturation":
+        return (
+            f"«{label}»: {source_count} {src_word} — пора писать, не искать"
+        )
+    if category == "intent_balance":
+        total = sum(intent_counts.values())
+        pct = int(intent_counts.get("background", 0) / total * 100) if total else 0
+        return (
+            f"«{label}»: {pct}% фоновых ссылок — "
+            f"нужно больше методов и сравнений результатов"
+        )
+    if category == "writing_readiness":
+        return (
+            f"«{label}» готов к черновику: "
+            f"{source_count} {src_word}, {fragment_count} {frag_word}"
+        )
+    # Unknown category — fall back to a neutral placeholder so we never
+    # leak English internals to the dashboard.
+    return f"«{label}»: рекомендация от методолога"
+
+
+# ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
 
@@ -445,7 +513,14 @@ async def get_briefing(
             coach_findings.append(CoachFindingResponse(
                 category=finding.category,
                 section=finding.section,
-                message=finding.message,
+                message=_ru_coach_message(
+                    finding.category,
+                    section_label=outline_map.get(sec_id, sec_id),
+                    source_count=len(citekeys),
+                    level=level,
+                    intent_counts=intent_counts,
+                    fragment_count=len(frags),
+                ),
                 severity=finding.severity,
             ))
 
