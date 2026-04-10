@@ -95,8 +95,10 @@ jobs:
           ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "mkdir -p /opt/klemma/dashboard"
           scp $SCP_OPTS -r saas/dashboard/dist/* "${VPS_USER}@${VPS_HOST}:/opt/klemma/dashboard/"
 
-          # Deploy on VPS with rollback support
-          ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" << 'DEPLOY_SCRIPT'
+          # Deploy on VPS with rollback support. Capture ssh exit code —
+          # the remote script prints DEPLOY_OK on success, which we then grep.
+          set +e
+          ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" > /tmp/deploy.out 2>&1 << 'DEPLOY_SCRIPT'
             set -e
             cd /opt/klemma/deploy
 
@@ -131,13 +133,13 @@ jobs:
               if curl -sf http://localhost/health; then
                 echo ""
                 echo "Deploy successful (attempt $i)"
-                # Clean up previous backups — all failures silenced, no bubble-up
+                # Clean up previous backups — all failures silenced
                 {
                   sudo docker image rm klemma-api:previous
                   sudo rm -rf /opt/klemma/dashboard.previous
                   sudo rm -rf /opt/klemma/db-backup
                 } >/dev/null 2>&1 || true
-                echo "Cleanup done"
+                echo "DEPLOY_OK"
                 exit 0
               fi
               echo "Health check attempt $i failed..."
@@ -162,6 +164,21 @@ jobs:
             curl -sf http://localhost/health || echo "WARNING: rollback also failed"
             exit 1
           DEPLOY_SCRIPT
+          SSH_EXIT=$?
+          set -e
+
+          # Show remote output
+          cat /tmp/deploy.out
+
+          # Success is determined by DEPLOY_OK marker, not ssh exit code —
+          # ssh sometimes returns non-zero even after remote `exit 0` on
+          # certain VPS configurations (broken pipe on session close).
+          if grep -q "^DEPLOY_OK$" /tmp/deploy.out; then
+            echo "Deploy marker found — success"
+            exit 0
+          fi
+          echo "Deploy marker missing — ssh exit code was $SSH_EXIT"
+          exit 1
 
       - name: Notify deploy result
         if: always()
