@@ -15,16 +15,18 @@ RUN pip install --no-cache-dir ".[api,recommended]"
 
 FROM deps AS app
 
-# Copy full source and reinstall klemma (deps already cached, --no-deps = fast)
+# Copy full source. We skip `pip install .` here because pyproject.toml
+# excludes src/klemma/api from the wheel (CLI-only package for researchers).
+# Instead we run from source via PYTHONPATH so the API module is visible.
 COPY src/ ./src/
 COPY prompts/ ./prompts/
-RUN pip install --no-cache-dir --no-deps --force-reinstall .
 
 # Create data directory
 RUN mkdir -p /data/klemma
 
 ENV KLEMMA_DATA_DIR=/data/klemma
 ENV KLEMMA_ENV=production
+ENV PYTHONPATH=/app/src
 
 EXPOSE 8000
 
