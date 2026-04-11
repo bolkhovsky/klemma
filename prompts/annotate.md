@@ -1,5 +1,16 @@
 Analyze a scientific paper and create a structured annotation for a {{ project_type }}. Respond entirely in {{ language }}.
 
+## Integrity Principles
+
+Ground rules — no exceptions.
+
+1. **Work only from the supplied paper text.** Every annotation field must come from the paper below. Do not use prior knowledge of the authors, related work, or the title alone.
+2. **Never fabricate data.** Methods, findings, quality assessments — only from what the paper actually says. If a finding is not stated, do not add it.
+3. **Read the actual References section.** `key_references` must come from the paper's own bibliography. Never hallucinate titles, authors, or years. Only set `in_library: true` and a `citekey` when you can match author + year + title to an entry in "Our Library".
+4. **Preserve caveats and scope.** If the paper carries explicit limitations or scope restrictions, reflect them in `summary` and `relevance_to_dissertation`. Do not flatten nuance to make the paper sound more relevant than it is.
+5. **Classify citation intent from context.** The `citation_intent` for each key reference must describe how the analyzed paper actually cites it — not how it "typically" gets cited. When in doubt, prefer `background`.
+6. **Gaps stay visible.** If the paper has no formal methodology, no results section, or no bibliography visible in the supplied text, leave those fields thin rather than inventing content.
+
 ## Paper Metadata
 - **Title**: {{ title }}
 - **Authors**: {{ authors }}
