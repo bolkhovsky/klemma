@@ -1,4 +1,12 @@
-"""Obsidian vault adapter — CLI with file I/O fallback."""
+"""Notes directory adapter — file I/O primary, Obsidian CLI for reads only.
+
+Since ADR-016 the adapter is re-rooted at the *resolved notes directory*
+(see ``resolve_notes_root``), not the Obsidian vault root. ``create_note``
+writes exclusively via file I/O so re-rooted adapters cannot produce a
+duplicate copy at the Obsidian vault root via the ``obsidian`` CLI —
+Obsidian auto-detects file changes on disk anyway. Read/search helpers
+still try the CLI first and fall back to file I/O.
+"""
 
 import json
 import shutil
@@ -121,19 +129,15 @@ class VaultAdapter:
     def create_note(
         self, name: str, content: str, folder: Optional[str] = None
     ) -> Path:
-        """Create or overwrite a note."""
-        if self.use_cli and not folder:
-            try:
-                subprocess.run(
-                    ["obsidian", "create", f"name={name}", f"content={content}", "silent"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-            except Exception:
-                pass
+        """Create or overwrite a note.
 
-        # File I/O (always write to ensure file exists)
+        Writes authoritatively via file I/O inside the adapter root. The
+        ``obsidian create`` CLI path was removed in ADR-016: since the
+        adapter is re-rooted at the resolved notes directory, a CLI call
+        (which always targets the Obsidian vault root) would write a
+        second copy at the wrong location. Obsidian auto-detects file
+        changes on disk, so skipping the subprocess costs nothing.
+        """
         target_dir = self._resolve_folder(folder)
         target_dir.mkdir(parents=True, exist_ok=True)
         path = self._ensure_within_vault(target_dir / f"{name}.md")

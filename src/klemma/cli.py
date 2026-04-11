@@ -1450,6 +1450,7 @@ def _process_single(
     # Online source: fetch URL text instead of PDF
     source_type = source.get("source_type", "") if source else ""
     pdf_path = None
+    pdf_pages: list[str] = []
     if source_type == "online":
         source_url = source.get("url", "") if source else ""
         if not source_url:
@@ -1560,8 +1561,10 @@ def _process_single(
             except Exception as _e:
                 logger.debug("Library dedup check failed for %s: %s", citekey, _e)
 
-        # Extract text
-        pdf_text = pdf_extractor.extract(pdf_path)
+        # Extract text — single fitz.open call; `pdf_pages` is reused
+        # below for the raw-sidecar write so we don't re-parse the PDF.
+        pdf_pages = pdf_extractor.extract_pages(pdf_path)
+        pdf_text = pdf_extractor.format_for_ai(pdf_pages) if pdf_pages else None
         if not pdf_text or len(pdf_text) < cfg.processing.min_pdf_length:
             if not quiet:
                 console.print("  [red]PDF extraction failed or text too short[/red]")
@@ -1617,26 +1620,27 @@ def _process_single(
 
     # Raw PDF sidecar — written once fragments have been saved, so the
     # dump is a stable artifact aligned with the latest extraction run.
-    # Online sources have no PDF — skip. See literature/sidecar.py for the
-    # format contract relied on by the semantic citation check pipeline.
-    if source_type != "online" and pdf_path and klemma_home:
+    # `pdf_pages` was extracted above as part of the AI-bound text flow,
+    # so no second fitz.open is required. Online sources have no PDF —
+    # their `pdf_pages` stays empty and this block is a no-op.
+    # See literature/sidecar.py for the format contract relied on by the
+    # semantic citation check pipeline.
+    if pdf_pages and pdf_path and klemma_home:
         try:
             from .literature.sidecar import write_pdf_sidecar
 
-            pages = pdf_extractor.extract_pages(pdf_path)
-            if pages:
-                write_pdf_sidecar(
-                    klemma_home.parent,
-                    citekey,
-                    pages,
-                    {
-                        "title": entry.title or "",
-                        "authors": entry.authors_str or "",
-                        "year": entry.year,
-                        "doi": getattr(entry, "doi", None) or "",
-                        "source": str(pdf_path),
-                    },
-                )
+            write_pdf_sidecar(
+                klemma_home.parent,
+                citekey,
+                pdf_pages,
+                {
+                    "title": entry.title or "",
+                    "authors": entry.authors_str or "",
+                    "year": entry.year,
+                    "doi": entry.DOI or "",
+                    "source": str(pdf_path),
+                },
+            )
         except (OSError, ValueError) as _e:
             logger.warning("PDF sidecar write failed for %s: %s", citekey, _e)
             console.print(
@@ -1661,7 +1665,7 @@ def _process_single(
                     title=entry.title or citekey,
                     authors=entry.authors_str or "",
                     year=entry.year,
-                    doi=getattr(entry, "doi", None) or None,
+                    doi=entry.DOI or None,
                     abstract=entry.abstract or "",
                     pdf_hash=_pdf_hash,
                 )
