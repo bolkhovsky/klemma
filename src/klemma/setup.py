@@ -523,6 +523,11 @@ def init_project(
     klemma_dir = project_dir / ".klemma"
     klemma_dir.mkdir(parents=True, exist_ok=True)
     (klemma_dir / "data").mkdir(exist_ok=True)
+    # Default-local note + PDF sidecar locations. Always created so that
+    # `klemma process` can write annotated notes and raw sidecars without
+    # any vault configuration.
+    (klemma_dir / "notes").mkdir(exist_ok=True)
+    (klemma_dir / "pdfs").mkdir(exist_ok=True)
 
     # Project config
     config_target = klemma_dir / "config.yaml"

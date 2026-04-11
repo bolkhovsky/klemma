@@ -114,6 +114,22 @@ class PDFExtractor:
             print(f"PDF extraction error for {pdf_path}: {e}")
             return None
 
+    def extract_pages(self, pdf_path: Path) -> list[str]:
+        """Extract full text as one cleaned string per page.
+
+        Unlike `extract()`, this method does not truncate to `max_chars`
+        and does not insert inline `[Page N]` markers. The caller receives
+        structured per-page content, suitable for sidecar generation and
+        downstream citation-drift verification.
+        """
+        if not pdf_path.exists():
+            return []
+        doc = fitz.open(pdf_path)
+        try:
+            return [self._clean_text(page.get_text("text")) for page in doc]
+        finally:
+            doc.close()
+
     def _clean_text(self, text: str) -> str:
         text = text.replace("\x00", "")
         text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)

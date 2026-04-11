@@ -22,7 +22,7 @@ from .context import KlemmaContext
 from .embeddings import create_embeddings
 from .library_provider import create_library
 from .state import StateManager
-from .vault import VaultAdapter
+from .vault import VaultAdapter, resolve_notes_root
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -194,13 +194,9 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
 
     state = StateManager(db_path)
 
-    vault = VaultAdapter(cfg.obsidian.vault_path, use_cli=cfg.obsidian.use_cli)
-    if cfg.obsidian.vault_path and cfg.obsidian.notes_folder:
-        if not vault.check_folder(cfg.obsidian.notes_folder):
-            console.print(
-                f"[yellow]Warning: notes_folder '{cfg.obsidian.notes_folder}' "
-                f"not found in vault. Sync and note creation will not work.[/yellow]"
-            )
+    notes_root = resolve_notes_root(cfg, project_root)
+    notes_root.mkdir(parents=True, exist_ok=True)
+    vault = VaultAdapter(str(notes_root), use_cli=cfg.obsidian.use_cli)
     library = create_library(cfg)
 
     # Embeddings: create provider if configured
@@ -403,8 +399,7 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
     cfg, state, vault = ctx.config, ctx.state, ctx.vault
     from .literature.note_factory import auto_classify
 
-    notes_folder = cfg.obsidian.notes_folder
-    note_names = vault.list_notes(notes_folder)
+    note_names = vault.list_notes(None)
 
     # 1. Parse vault frontmatter for all @citekey notes
     vault_data = []
@@ -460,7 +455,7 @@ def _sync_sections(ctx: KlemmaContext, quiet=False) -> dict:
                 "priority": props.get("priority", "medium"),
                 "nr1": props.get("relevance_nr1", 0) or 0,
                 "nr2": props.get("relevance_nr2", 0) or 0,
-                "note_path": f"{notes_folder}/{note_name}.md",
+                "note_path": f"{vault.vault_path}/{note_name}.md",
             }
         )
 
@@ -1033,7 +1028,6 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
     """
     from .discovery import (
         discover_bbt_json,
-        discover_obsidian_vault,
         discover_zotero_storage,
     )
     from .setup import InitValues
@@ -1221,44 +1215,10 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
         plan_data=plan_data,
     )
 
-    # Obsidian vault
-    prefill_vault = pf.get("vault_path", "")
-    vault = discover_obsidian_vault()
-    discovered_vault = str(vault) if vault else ""
-    # Use prefill if available, otherwise use discovery
-    effective_vault = prefill_vault or discovered_vault
-
-    if effective_vault:
-        click.echo(f"  + Obsidian vault: {effective_vault}")
-        if not click.confirm("    Use this path?", default=True):
-            vault_str = click.prompt("    Obsidian vault path", default="")
-            values.vault_path = vault_str
-        else:
-            values.vault_path = effective_vault
-    else:
-        vault_str = click.prompt(
-            "  ? Obsidian vault not found. Path (empty to skip)",
-            default="",
-            show_default=False,
-        )
-        values.vault_path = vault_str
-
-    if values.vault_path:
-        from .discovery import discover_vault_folders
-        auto_notes, auto_tags = discover_vault_folders(Path(values.vault_path))
-        if auto_notes and not values.notes_folder:
-            values.notes_folder = auto_notes
-        if auto_tags and not values.tags_folder:
-            values.tags_folder = auto_tags
-        if values.notes_folder:
-            notes_dir = Path(values.vault_path) / values.notes_folder
-            if not notes_dir.is_dir():
-                console.print(
-                    f"[yellow]  Warning: '{values.notes_folder}' not found in vault.[/yellow]"
-                )
-                console.print(
-                    "[dim]  Fix notes_folder in .klemma/config.yaml after init.[/dim]"
-                )
+    # Notes land in .klemma/notes/ by default. Obsidian integration is
+    # an opt-in power-user feature — users can set obsidian.vault_path in
+    # config.yaml after init to redirect notes into a vault. The wizard
+    # no longer prompts for vault paths to keep onboarding friction-free.
 
     # Zotero storage
     prefill_storage = pf.get("zotero_storage", "")
@@ -1489,6 +1449,7 @@ def _process_single(
 
     # Online source: fetch URL text instead of PDF
     source_type = source.get("source_type", "") if source else ""
+    pdf_path = None
     if source_type == "online":
         source_url = source.get("url", "") if source else ""
         if not source_url:
@@ -1653,6 +1614,31 @@ def _process_single(
             console.print(f" → @{citekey}")
         else:
             console.print(" [dim](DB only)[/dim]")
+
+    # Raw PDF sidecar — written once fragments have been saved, so the
+    # dump is a stable artifact aligned with the latest extraction run.
+    # Online sources have no PDF — skip. See literature/sidecar.py for the
+    # format contract relied on by the semantic citation check pipeline.
+    if source_type != "online" and pdf_path and klemma_home:
+        try:
+            from .literature.sidecar import write_pdf_sidecar
+
+            pages = pdf_extractor.extract_pages(pdf_path)
+            if pages:
+                write_pdf_sidecar(
+                    klemma_home.parent,
+                    citekey,
+                    pages,
+                    {
+                        "title": entry.title or "",
+                        "authors": entry.authors_str or "",
+                        "year": entry.year,
+                        "doi": getattr(entry, "doi", None) or "",
+                        "source": str(pdf_path),
+                    },
+                )
+        except Exception as _e:
+            logger.debug("PDF sidecar write failed for %s: %s", citekey, _e)
 
     # Phase 1B dual-write: also persist to library.db (ADR-014)
     # online sources have no PDF hash — skip dual-write
@@ -2303,8 +2289,7 @@ def add(ctx, input_value, section, title, authors, year, no_process, no_embed, m
         # Update vault note frontmatter if note exists
         if kctx.vault:
             note_name = f"@{citekey}"
-            notes_folder = kctx.config.obsidian.notes_folder or None
-            kctx.vault.update_frontmatter_sections(note_name, sections, folder=notes_folder)
+            kctx.vault.update_frontmatter_sections(note_name, sections, folder=None)
         console.print(f"  [dim]sections: {', '.join(sections)}[/dim]")
 
     # --- Process (if not suppressed and we have a citekey) ---

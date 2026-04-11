@@ -5,7 +5,33 @@ import shutil
 import subprocess
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from .config import KlemmaConfig
+
+
+def resolve_notes_root(config: "KlemmaConfig", project_root: Path) -> Path:
+    """Resolve the directory that holds `@citekey.md` annotated notes.
+
+    Precedence (ADR for default-local notes):
+
+    1. When ``config.obsidian.vault_path`` is set, return
+       ``vault_path/notes_folder``. ``notes_folder`` may be empty, in
+       which case the resolved path is the vault root itself — this
+       preserves flat Obsidian layouts.
+    2. Otherwise, return ``project_root/.klemma/notes`` — the default
+       local location for fresh projects.
+
+    The returned path is not required to exist; callers that need
+    filesystem presence must ``mkdir`` themselves.
+    """
+    vault_path = (config.obsidian.vault_path or "").strip()
+    if vault_path:
+        notes_folder = (config.obsidian.notes_folder or "").strip()
+        base = Path(vault_path).expanduser()
+        return base / notes_folder if notes_folder else base
+    return Path(project_root) / ".klemma" / "notes"
 
 
 class VaultAdapter:
@@ -206,8 +232,8 @@ class VaultAdapter:
             return {}
         return self._parse_frontmatter(text)
 
-    def list_notes(self, folder: str) -> list[str]:
-        """List note names in a folder."""
+    def list_notes(self, folder: Optional[str] = None) -> list[str]:
+        """List note names in a folder (defaults to the adapter root)."""
         target_dir = self._resolve_folder(folder)
         if not target_dir.exists():
             return []

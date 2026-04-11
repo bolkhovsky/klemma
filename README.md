@@ -27,8 +27,8 @@ pip install -e .
   - `pip install klemma[recommended]` — LiteLLM: 100+ провайдеров (рекомендуется)
   - `pip install klemma[openai]` — OpenAI API / Ollama / vLLM / LM Studio
   - Claude Code CLI (`claude` в PATH) — без дополнительных пакетов
-- Obsidian vault с заметками источников
-- Zotero с BetterBibTeX plugin (JSON auto-export)
+- Zotero с BetterBibTeX plugin (JSON auto-export) — опционально, для автоматического поиска PDF
+- Obsidian vault — *опционально*. По умолчанию klemma хранит аннотированные заметки и raw-дампы PDF внутри проекта в `.klemma/notes/` и `.klemma/pdfs/`. Obsidian-интеграция включается одной строкой в `config.yaml` — см. [User Guide § 2.8](docs/USER_GUIDE.md#28-куда-klemma-сохраняет-данные).
 
 ### Опциональные зависимости
 
