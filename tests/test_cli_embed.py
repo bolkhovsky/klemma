@@ -331,3 +331,111 @@ def test_embed_sources_dedup_from_library(tmp_path):
 
     all_emb = sm.get_all_embeddings()
     assert "paper1" in all_emb
+
+
+def test_embed_sources_remodel_includes_stale(tmp_path):
+    """--remodel adds sources with different embedding_model to the candidate list."""
+    db = tmp_path / ".klemma" / "state.db"
+    db.parent.mkdir(parents=True)
+    sm = StateManager(db)
+    sm.register_sources(["stale1", "fresh1"])
+    sm.mark_completed("stale1", "")
+    sm.mark_completed("fresh1", "")
+    # Stale row: stored under old model name; fresh row: already under new name.
+    sm.save_embedding("stale1", [0.1, 0.2], "text-embedding-3-small")
+    sm.save_embedding("fresh1", [0.3, 0.4], "bge-m3-ollama")
+
+    mock_emb = MagicMock()
+    mock_emb.model_name = "bge-m3-ollama"
+    mock_emb.embed.return_value = [0.9, 0.8]
+
+    mock_ctx = MagicMock()
+    mock_ctx.state = sm
+    mock_ctx.embeddings = mock_emb
+    mock_ctx.paper_store = None
+    mock_ctx.user_library = None
+    mock_ctx.config = MagicMock()
+    mock_ctx.library = MagicMock()
+    mock_ctx.library.entries = {}
+
+    runner = CliRunner()
+    with patch("klemma.cli.discover_project_root", return_value=tmp_path), \
+         patch("klemma.cli._init_components", return_value=mock_ctx), \
+         patch("klemma.cli._get_context", return_value=mock_ctx):
+        result = runner.invoke(klemma_cli, ["embed", "sources", "--remodel"])
+
+    assert result.exit_code == 0, result.output
+    assert "stale embedding_model" in result.output
+    # stale1 is re-embedded; fresh1 already has current model and is skipped
+    assert mock_emb.embed.call_count == 1
+    _, model = sm.get_embedding("stale1")
+    assert model == "bge-m3-ollama"
+
+
+def test_embed_sources_no_remodel_leaves_stale(tmp_path):
+    """Without --remodel, sources with stale embedding_model are NOT re-embedded."""
+    db = tmp_path / ".klemma" / "state.db"
+    db.parent.mkdir(parents=True)
+    sm = StateManager(db)
+    sm.register_sources(["stale1"])
+    sm.mark_completed("stale1", "")
+    sm.save_embedding("stale1", [0.1, 0.2], "text-embedding-3-small")
+
+    mock_emb = MagicMock()
+    mock_emb.model_name = "bge-m3-ollama"
+
+    mock_ctx = MagicMock()
+    mock_ctx.state = sm
+    mock_ctx.embeddings = mock_emb
+    mock_ctx.paper_store = None
+    mock_ctx.user_library = None
+    mock_ctx.config = MagicMock()
+    mock_ctx.library = MagicMock()
+    mock_ctx.library.entries = {}
+
+    runner = CliRunner()
+    with patch("klemma.cli.discover_project_root", return_value=tmp_path), \
+         patch("klemma.cli._init_components", return_value=mock_ctx), \
+         patch("klemma.cli._get_context", return_value=mock_ctx):
+        result = runner.invoke(klemma_cli, ["embed", "sources"])
+
+    assert result.exit_code == 0, result.output
+    assert mock_emb.embed.call_count == 0
+    _, model = sm.get_embedding("stale1")
+    assert model == "text-embedding-3-small"
+
+
+def test_embed_fragments_remodel_includes_stale(tmp_path):
+    """--remodel adds fragments whose embedding_model differs from current backend."""
+    db = tmp_path / ".klemma" / "state.db"
+    db.parent.mkdir(parents=True)
+    sm = StateManager(db)
+    sm.register_sources(["paper1"])
+    sm.mark_completed("paper1", "")
+    sm.save_fragments("paper1", [{"text": "Stale fragment", "type": "result"}])
+
+    # Seed a stale embedding on the only fragment
+    frag = sm.get_unembedded_fragments()[0]
+    sm.save_fragment_embedding(frag["id"], [0.1, 0.2], "text-embedding-3-small")
+
+    mock_emb = MagicMock()
+    mock_emb.model_name = "bge-m3-ollama"
+    mock_emb.embed.return_value = [0.9, 0.8]
+
+    mock_ctx = MagicMock()
+    mock_ctx.state = sm
+    mock_ctx.embeddings = mock_emb
+    mock_ctx.paper_store = None
+    mock_ctx.user_library = None
+    mock_ctx.config = MagicMock()
+    mock_ctx.library = None
+
+    runner = CliRunner()
+    with patch("klemma.cli.discover_project_root", return_value=tmp_path), \
+         patch("klemma.cli._init_components", return_value=mock_ctx), \
+         patch("klemma.cli._get_context", return_value=mock_ctx):
+        result = runner.invoke(klemma_cli, ["embed", "fragments", "--remodel"])
+
+    assert result.exit_code == 0, result.output
+    assert "stale embedding_model" in result.output
+    assert mock_emb.embed.call_count == 1

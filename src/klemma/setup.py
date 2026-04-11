@@ -34,7 +34,7 @@ class InitValues:
     backend: str = ""          # "claude" | "litellm" | "" (use klemmarc default)
     ai_model: str = ""         # model name for project config (e.g. "sonnet", "openai/gpt-4.1")
     openai_api_key: str = ""   # OpenAI key to save in ~/.klemmarc.yaml
-    embeddings_backend: str = ""  # "openai" | "s2" | "" (derive from openai_api_key)
+    embeddings_backend: str = ""  # "openai" | "s2" | "local" | "litellm" | "" (derive)
     plan_data: Any = None         # PlanData from plan_parser (transient, not serialized)
 
     def __post_init__(self):
@@ -102,7 +102,13 @@ def _build_project_config(values: InitValues, *, has_parent: bool = False) -> di
     emb_backend = values.embeddings_backend
     if not emb_backend and values.openai_api_key:
         emb_backend = "openai"
-    if emb_backend == "openai":
+    if emb_backend == "litellm":
+        cfg["embeddings"] = {
+            "backend": "litellm",
+            "model": "ollama/bge-m3",
+            "base_url": "http://localhost:11434",
+        }
+    elif emb_backend == "openai":
         cfg["embeddings"] = {"backend": "openai", "model": "text-embedding-3-small"}
     elif emb_backend == "s2":
         cfg["embeddings"] = {"backend": "s2"}

@@ -551,6 +551,9 @@ class StateManager:
     def get_sources_without_embeddings(self) -> list[str]:
         return self.sources.get_sources_without_embeddings()
 
+    def get_sources_with_stale_model(self, current_model: str) -> list[str]:
+        return self.sources.get_sources_with_stale_model(current_model)
+
     def get_stats(self) -> dict[str, int]:
         return self.sources.get_stats()
 
@@ -621,6 +624,11 @@ class StateManager:
 
     def get_unembedded_fragments(self, limit: int = 100000) -> list[dict]:
         return self.fragments.get_unembedded_fragments(limit)
+
+    def get_fragments_with_stale_model(
+        self, current_model: str, limit: int = 100000,
+    ) -> list[dict]:
+        return self.fragments.get_fragments_with_stale_model(current_model, limit)
 
     def save_reassign_skip(self, source_id: str, from_section: str, to_section: str):
         return self.fragments.save_reassign_skip(source_id, from_section, to_section)

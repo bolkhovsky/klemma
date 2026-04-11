@@ -343,11 +343,13 @@ class AIConfig(BaseModel):
 
 
 class EmbeddingsConfig(BaseModel):
-    backend: str = ""  # "s2" | "local" | "openai" | "" (disabled)
-    model: str = ""  # model id (backend-specific)
+    backend: str = ""  # "s2" | "local" | "openai" | "litellm" | "" (disabled)
+    model: str = ""  # model id (backend-specific; litellm: "provider/model")
     api_key_env: str = ""  # env var for API key
-    base_url: Optional[str] = None  # custom endpoint (OpenAI only)
+    base_url: Optional[str] = None  # custom endpoint (OpenAI or LiteLLM/Ollama)
     throttle: float = 3.1  # seconds between S2 API requests
+    timeout: int = 60  # request timeout (litellm backend)
+    dim: Optional[int] = None  # explicit dim override (litellm; auto-detected otherwise)
 
 
 class SearchConfig(BaseModel):

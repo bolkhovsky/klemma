@@ -246,6 +246,26 @@ class FragmentRepository(BaseRepository):
             )
             return [dict(row) for row in cur.fetchall()]
 
+    def get_fragments_with_stale_model(
+        self, current_model: str, limit: int = 100000,
+    ) -> list[dict]:
+        """Get fragments whose embedding came from a different model.
+
+        Used by ``klemma embed fragments --remodel``. Row shape matches
+        ``get_unembedded_fragments`` so the embedding loop is unchanged.
+        """
+        with self._conn() as conn:
+            cur = conn.execute(
+                """SELECT f.id, f.source_id, f.fragment_text, f.page_number, s.id as citekey
+                   FROM fragments f
+                   JOIN sources s ON f.source_id = s.id
+                   WHERE f.embedding IS NOT NULL
+                     AND (f.embedding_model IS NULL OR f.embedding_model != ?)
+                   LIMIT ?""",
+                (current_model, limit),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
     # ── Reassign skips ─────────────────────────────────────────────────
 
     def save_reassign_skip(

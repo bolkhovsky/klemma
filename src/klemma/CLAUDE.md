@@ -239,14 +239,18 @@ Provider-agnostic paper search — resolve reference gaps to acquisition targets
 - `ChainSearchProvider` — try providers in sequence, first hit wins. Default chain: CrossRef → S2
 - `create_search(config)` — factory: `"s2"`, `"crossref"`, `"auto"` (chain), `""` (disabled)
 
-### embeddings.py (268 lines)
-`EmbeddingProvider` runtime-checkable protocol + 3 backends + utilities.
+### embeddings.py (393 lines)
+`EmbeddingProvider` runtime-checkable protocol + 4 backends + utilities.
 - `EmbeddingProvider` protocol — `dim`, `model_name`, `embed(title, abstract) → list[float] | None`
 - `SemanticScholarEmbeddings` — free S2 API (768-dim SPECTER), rate-limited (throttle param)
 - `LocalSPECTEREmbeddings` — offline sentence-transformers SPECTER2 model
 - `OpenAIEmbeddings` — text-embedding-3-small (1536-dim)
-- `create_embeddings(config)` — factory, returns provider or None if disabled
+- `LiteLLMEmbeddings` — any `provider/model` supported by LiteLLM (Ollama/BGE-M3 recommended default, also Voyage, Cohere, Mistral, OpenAI). Auto-detects `dim` on first call; `model_name` stored as `"model-provider"` for uniqueness across providers. `api_base` passed through to `litellm.embedding()` for Ollama endpoints
+- `create_embeddings(config)` — factory, returns provider or None if disabled; supports `backend: "litellm"` with `model`, `base_url`, `api_key_env`, `timeout`, `dim`
+- `_derive_embedding_provider(model)` — local helper mirroring `config._derive_provider` to avoid circular import
 - `cosine_similarity(a, b)` — dot-product cosine similarity for float vectors
+
+The `embed sources|fragments|all` commands accept `--remodel` to re-embed rows whose `embedding_model` no longer matches the active provider (migration path for changing backends).
 
 ### discovery.py (260 lines)
 Auto-discovery for `klemma init` interactive wizard.

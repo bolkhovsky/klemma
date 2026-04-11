@@ -79,6 +79,25 @@ ai:
   # model: "ollama/llama3"
   # base_url: "http://localhost:11434"
 
+embeddings:
+  # --- LiteLLM + Ollama (recommended, single-billing) ------------------------
+  # Free, offline, strong on Russian. Keeps Anthropic as the only paid vendor.
+  # Setup (one-time): `ollama pull bge-m3`  (~1.2 GB, 1024-dim, 8k context)
+  backend: "litellm"
+  model: "ollama/bge-m3"
+  base_url: "http://localhost:11434"
+  # dim: 1024                          # optional; auto-detected on first call
+
+  # --- Alternatives (uncomment one) ------------------------------------------
+  # backend: "openai"
+  # model: "text-embedding-3-small"
+  # api_key_env: "OPENAI_API_KEY"
+  #
+  # backend: "s2"                      # Semantic Scholar free API (768d, English-centric)
+  #
+  # backend: "local"                   # sentence-transformers, no Ollama needed
+  # model: "allenai/specter2"
+
 state:
   db_path: "./data/klemma.db"          # relative to ~/.klemma/ or absolute
 
