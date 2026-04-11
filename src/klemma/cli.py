@@ -1637,8 +1637,11 @@ def _process_single(
                         "source": str(pdf_path),
                     },
                 )
-        except Exception as _e:
-            logger.debug("PDF sidecar write failed for %s: %s", citekey, _e)
+        except (OSError, ValueError) as _e:
+            logger.warning("PDF sidecar write failed for %s: %s", citekey, _e)
+            console.print(
+                f"[dim yellow]  raw sidecar skipped for {citekey}: {_e}[/dim yellow]"
+            )
 
     # Phase 1B dual-write: also persist to library.db (ADR-014)
     # online sources have no PDF hash — skip dual-write
