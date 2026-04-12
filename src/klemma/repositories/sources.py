@@ -252,6 +252,23 @@ class SourceRepository(BaseRepository):
             )
             return [row["id"] for row in cur]
 
+    def get_sources_with_stale_model(self, current_model: str) -> list[str]:
+        """Return citekeys whose embedding came from a different model.
+
+        Used by ``klemma embed sources --remodel`` when switching embedding
+        providers (e.g. OpenAI → BGE-M3): existing rows must be re-embedded
+        so every vector lives in the same space.
+        """
+        with self._conn() as conn:
+            cur = conn.execute(
+                """SELECT id FROM sources
+                   WHERE status='completed'
+                     AND embedding IS NOT NULL
+                     AND (embedding_model IS NULL OR embedding_model != ?)""",
+                (current_model,),
+            )
+            return [row["id"] for row in cur]
+
     def get_stats(self) -> dict[str, int]:
         with self._conn() as conn:
             stats = {}

@@ -215,18 +215,25 @@ main.add_command(embed)
 )
 @click.option(
     "--backend",
-    type=click.Choice(["s2", "local", "openai"]),
+    type=click.Choice(["s2", "local", "openai", "litellm"]),
     help="Override embedding backend",
 )
 @click.option(
     "--backfill", is_flag=True, help="Fetch missing abstracts from S2 before embedding"
 )
+@click.option(
+    "--remodel",
+    is_flag=True,
+    help="Also re-embed rows whose embedding_model differs from the current backend",
+)
 @click.pass_context
-def embed_sources(ctx, citekeys, dry_run, backend, backfill):
+def embed_sources(ctx, citekeys, dry_run, backend, backfill, remodel):
     """Embed source title+abstract vectors.
 
     Without CITEKEYS: embed all sources missing embeddings.
     With CITEKEYS: embed specific sources by citekey.
+    With --remodel: also re-embed sources whose stored embedding came
+    from a different model (used when switching providers).
     """
     kctx = _get_context(ctx)
     state = kctx.state
@@ -253,6 +260,15 @@ def embed_sources(ctx, citekeys, dry_run, backend, backfill):
             return
     else:
         candidates = state.get_sources_without_embeddings()
+        if remodel:
+            stale = state.get_sources_with_stale_model(emb.model_name)
+            if stale:
+                console.print(
+                    f"[dim]--remodel: {len(stale)} source(s) with stale "
+                    f"embedding_model will be re-embedded[/dim]"
+                )
+                seen = set(candidates)
+                candidates = list(candidates) + [ck for ck in stale if ck not in seen]
 
     if not candidates:
         console.print("[green]All sources already have embeddings.[/green]")
@@ -368,12 +384,21 @@ def embed_sources(ctx, citekeys, dry_run, backend, backfill):
 @click.option("--dry-run", is_flag=True, help="Preview without API calls")
 @click.option(
     "--backend",
-    type=click.Choice(["s2", "local", "openai"]),
+    type=click.Choice(["s2", "local", "openai", "litellm"]),
     help="Override embedding backend",
 )
+@click.option(
+    "--remodel",
+    is_flag=True,
+    help="Also re-embed fragments whose embedding_model differs from the current backend",
+)
 @click.pass_context
-def embed_fragments(ctx, dry_run, backend):
-    """Embed extracted fragment text vectors."""
+def embed_fragments(ctx, dry_run, backend, remodel):
+    """Embed extracted fragment text vectors.
+
+    With --remodel: also re-embed fragments whose stored embedding came
+    from a different model (used when switching providers).
+    """
     kctx = _get_context(ctx)
     state = kctx.state
     paper_store = kctx.paper_store
@@ -383,6 +408,15 @@ def embed_fragments(ctx, dry_run, backend):
         return
 
     candidates = state.get_unembedded_fragments()
+    if remodel:
+        stale = state.get_fragments_with_stale_model(emb.model_name)
+        if stale:
+            console.print(
+                f"[dim]--remodel: {len(stale)} fragment(s) with stale "
+                f"embedding_model will be re-embedded[/dim]"
+            )
+            seen_ids = {f["id"] for f in candidates}
+            candidates = list(candidates) + [f for f in stale if f["id"] not in seen_ids]
     if not candidates:
         console.print("[green]All fragments already have embeddings.[/green]")
         return
@@ -475,12 +509,17 @@ def embed_fragments(ctx, dry_run, backend):
 @click.option("--dry-run", is_flag=True, help="Preview without writing to DB")
 @click.option(
     "--backend",
-    type=click.Choice(["s2", "local", "openai"]),
+    type=click.Choice(["s2", "local", "openai", "litellm"]),
     help="Override embedding backend",
 )
 @click.pass_context
 def embed_sections(ctx, dry_run, backend):
-    """Compute section centroid embeddings from source vectors."""
+    """Compute section centroid embeddings from source vectors.
+
+    Centroids are re-computed from the source vectors already stored, so
+    ``--remodel`` at this layer would be a no-op — re-run ``embed sources
+    --remodel`` first and then invoke ``embed sections``.
+    """
     kctx = _get_context(ctx)
     state = kctx.state
     emb = _resolve_emb(kctx, backend, dry_run)
@@ -533,16 +572,21 @@ def embed_sections(ctx, dry_run, backend):
 @click.option("--dry-run", is_flag=True, help="Preview without API calls")
 @click.option(
     "--backend",
-    type=click.Choice(["s2", "local", "openai"]),
+    type=click.Choice(["s2", "local", "openai", "litellm"]),
     help="Override embedding backend",
 )
+@click.option(
+    "--remodel",
+    is_flag=True,
+    help="Forward --remodel to the sources and fragments sub-steps",
+)
 @click.pass_context
-def embed_all(ctx, dry_run, backend):
+def embed_all(ctx, dry_run, backend, remodel):
     """Run sources \u2192 fragments \u2192 sections in sequence."""
     console.print("[dim]Step 1/3: sources[/dim]")
-    ctx.invoke(embed_sources, dry_run=dry_run, backend=backend)
+    ctx.invoke(embed_sources, dry_run=dry_run, backend=backend, remodel=remodel)
     console.print("\n[dim]Step 2/3: fragments[/dim]")
-    ctx.invoke(embed_fragments, dry_run=dry_run, backend=backend)
+    ctx.invoke(embed_fragments, dry_run=dry_run, backend=backend, remodel=remodel)
     console.print("\n[dim]Step 3/3: sections[/dim]")
     ctx.invoke(embed_sections, dry_run=dry_run, backend=backend)
 

@@ -97,20 +97,43 @@ my-thesis/
 
 ### 2.6 Настройка embeddings (рекомендуется)
 
-Добавьте в `.klemma/config.yaml`:
+**Рекомендуемый вариант — LiteLLM + Ollama (бесплатно, офлайн, один биллинг):**
+
+```bash
+# Однократная установка
+brew install ollama   # или https://ollama.com/download
+ollama pull bge-m3    # ~1.2 GB, 1024-dim, 8k контекста, мультиязычный
+```
 
 ```yaml
+# .klemma/config.yaml
 embeddings:
-  backend: "s2"       # бесплатный Semantic Scholar API
+  backend: "litellm"
+  model: "ollama/bge-m3"
+  base_url: "http://localhost:11434"
 ```
+
+BGE-M3 силён на русском и других неанглийских языках, работает офлайн, и оставляет Anthropic единственным платным вендором — удобно для биллинга. LiteLLM-бэкенд поддерживает любую `provider/model` пару (Voyage, Cohere, Mistral, Ollama), так что перейти на другую модель — это правка конфига без кода.
 
 Это включает семантический поиск (`similar`), гибридное обнаружение источников и semantic gap scoring. Бэкенды:
 
 | Бэкенд | Стоимость | Требования | Качество |
 |--------|-----------|------------|----------|
-| `s2` | Бесплатно | Интернет | Хорошее (SPECTER 768-dim) |
+| `litellm` + `ollama/bge-m3` | Бесплатно | Ollama | Отличное (1024-dim, мультиязычный) |
+| `litellm` + `voyage/voyage-3` | Платно | API key | Отличное (1024-dim) |
+| `s2` | Бесплатно | Интернет | Хорошее (SPECTER 768-dim, English-centric) |
 | `local` | Бесплатно | GPU, `[local-embeddings]` | Хорошее (SPECTER2) |
 | `openai` | Платно | API key, `[openai]` | Отличное (1536-dim) |
+
+**Миграция с OpenAI/S2 на BGE-M3.** Если у вас уже есть источники с embeddings от другого бэкенда, переключите `embeddings:` и запустите `--remodel` — Klemma пересчитает векторы для всех строк, где `embedding_model` не совпадает с текущей моделью:
+
+```bash
+klemma embed sources --remodel
+klemma embed fragments --remodel
+klemma embed sections           # секционные центроиды пересчитываются автоматически
+```
+
+Старые векторы перезаписываются атомарно; источников без embedding миграция не касается.
 
 ### 2.7 Дополнительные AI-настройки
 

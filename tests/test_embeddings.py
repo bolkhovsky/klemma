@@ -1,12 +1,16 @@
 """Tests for embedding providers and utilities."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from klemma.embeddings import (
     EmbeddingProvider,
+    LiteLLMEmbeddings,
     LocalSPECTEREmbeddings,
     OpenAIEmbeddings,
     SemanticScholarEmbeddings,
+    _derive_embedding_provider,
     cosine_similarity,
     create_embeddings,
 )
@@ -80,6 +84,136 @@ class TestCreateEmbeddings:
             "model": "text-embedding-ada-002",
         })
         assert provider.model_name == "text-embedding-ada-002"
+
+    def test_litellm_backend(self):
+        provider = create_embeddings({
+            "backend": "litellm",
+            "model": "ollama/bge-m3",
+            "base_url": "http://localhost:11434",
+        })
+        assert provider is not None
+        assert isinstance(provider, LiteLLMEmbeddings)
+        assert provider.model == "ollama/bge-m3"
+        assert provider.api_base == "http://localhost:11434"
+        assert provider.model_name == "bge-m3-ollama"
+
+    def test_litellm_backend_default_model(self):
+        provider = create_embeddings({"backend": "litellm"})
+        assert isinstance(provider, LiteLLMEmbeddings)
+        assert provider.model == "ollama/bge-m3"
+
+    def test_litellm_backend_api_key_from_dict(self):
+        provider = create_embeddings(
+            {"backend": "litellm", "model": "voyage/voyage-3-large"},
+            api_keys={"voyage": "pa-test-key"},
+        )
+        assert isinstance(provider, LiteLLMEmbeddings)
+        assert provider.api_key == "pa-test-key"
+
+    def test_litellm_backend_custom_timeout(self):
+        provider = create_embeddings({
+            "backend": "litellm",
+            "model": "ollama/bge-m3",
+            "timeout": 120,
+        })
+        assert provider.timeout == 120
+
+    def test_litellm_backend_explicit_dim(self):
+        provider = create_embeddings({
+            "backend": "litellm",
+            "model": "ollama/bge-m3",
+            "dim": 1024,
+        })
+        assert provider.dim == 1024
+
+
+class TestDeriveEmbeddingProvider:
+    """Tests for _derive_embedding_provider."""
+
+    def test_ollama(self):
+        assert _derive_embedding_provider("ollama/bge-m3") == "ollama"
+
+    def test_voyage(self):
+        assert _derive_embedding_provider("voyage/voyage-3-large") == "voyage"
+
+    def test_cohere(self):
+        assert _derive_embedding_provider("cohere/embed-multilingual-v3.0") == "cohere"
+
+    def test_openai_slash(self):
+        assert _derive_embedding_provider("openai/text-embedding-3-small") == "openai"
+
+    def test_openai_bare(self):
+        assert _derive_embedding_provider("text-embedding-3-small") == "openai"
+
+
+class TestLiteLLMEmbeddings:
+    """Tests for LiteLLMEmbeddings class (mocked litellm.embedding)."""
+
+    def _make_response(self, vec):
+        response = MagicMock()
+        response.data = [{"embedding": vec}]
+        return response
+
+    def test_model_name_ollama(self):
+        p = LiteLLMEmbeddings("ollama/bge-m3")
+        assert p.model_name == "bge-m3-ollama"
+
+    def test_model_name_voyage(self):
+        p = LiteLLMEmbeddings("voyage/voyage-3-large")
+        assert p.model_name == "voyage-3-large-voyage"
+
+    def test_model_name_bare(self):
+        p = LiteLLMEmbeddings("text-embedding-3-small")
+        assert p.model_name == "text-embedding-3-small"
+
+    def test_embed_success(self):
+        p = LiteLLMEmbeddings("ollama/bge-m3", api_base="http://localhost:11434")
+        p._litellm = MagicMock()
+        p._litellm.embedding.return_value = self._make_response([0.1, 0.2, 0.3])
+        vec = p.embed("Test title", "Test abstract")
+        assert vec == [0.1, 0.2, 0.3]
+        assert p.dim == 3
+        call_kwargs = p._litellm.embedding.call_args.kwargs
+        assert call_kwargs["model"] == "ollama/bge-m3"
+        assert call_kwargs["api_base"] == "http://localhost:11434"
+        assert call_kwargs["input"] == ["Test title\nTest abstract"]
+
+    def test_embed_title_only(self):
+        p = LiteLLMEmbeddings("ollama/bge-m3")
+        p._litellm = MagicMock()
+        p._litellm.embedding.return_value = self._make_response([0.5, 0.5])
+        p.embed("Only title")
+        call_kwargs = p._litellm.embedding.call_args.kwargs
+        assert call_kwargs["input"] == ["Only title"]
+
+    def test_embed_empty_input_returns_none(self):
+        p = LiteLLMEmbeddings("ollama/bge-m3")
+        p._litellm = MagicMock()
+        assert p.embed("", "") is None
+        p._litellm.embedding.assert_not_called()
+
+    def test_embed_error_returns_none(self):
+        p = LiteLLMEmbeddings("ollama/bge-m3")
+        p._litellm = MagicMock()
+        p._litellm.embedding.side_effect = ConnectionError("ollama down")
+        assert p.embed("title") is None
+
+    def test_embed_empty_vector_returns_none(self):
+        p = LiteLLMEmbeddings("ollama/bge-m3")
+        p._litellm = MagicMock()
+        p._litellm.embedding.return_value = self._make_response([])
+        assert p.embed("title") is None
+
+    def test_dim_updates_on_success(self):
+        p = LiteLLMEmbeddings("ollama/bge-m3", dim=999)
+        p._litellm = MagicMock()
+        p._litellm.embedding.return_value = self._make_response([0.0] * 1024)
+        p.embed("title")
+        assert p.dim == 1024
+
+    def test_is_embedding_provider(self):
+        p = LiteLLMEmbeddings("ollama/bge-m3")
+        assert isinstance(p, EmbeddingProvider)
 
 
 class TestProtocolCompliance:

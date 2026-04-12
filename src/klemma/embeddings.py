@@ -4,6 +4,7 @@ Protocol-based abstraction supporting multiple backends:
 - SemanticScholar: Free S2 API (768-dim SPECTER)
 - Local SPECTER: sentence-transformers allenai/specter2
 - OpenAI: text-embedding-3-small (1536-dim)
+- LiteLLM: any LiteLLM-compatible model (Ollama/BGE-M3, Voyage, Cohere, …)
 
 Install optional deps: pip install klemma[embeddings]
 """
@@ -223,6 +224,103 @@ class OpenAIEmbeddings:
 
 
 # ---------------------------------------------------------------------------
+# LiteLLM Embeddings (any provider/model via litellm.embedding())
+# ---------------------------------------------------------------------------
+
+
+def _derive_embedding_provider(model: str) -> str:
+    """Extract provider name from a LiteLLM embedding model string.
+
+    Mirrors `config._derive_provider` but lives here to avoid a circular
+    import (`embeddings.py` is loaded before `config.py` fully initialises).
+
+    Examples:
+        "ollama/bge-m3" → "ollama"
+        "voyage/voyage-3-large" → "voyage"
+        "cohere/embed-multilingual-v3.0" → "cohere"
+        "openai/text-embedding-3-small" → "openai"
+        "text-embedding-3-small" (bare) → "openai"
+    """
+    if "/" in model:
+        return model.split("/", 1)[0]
+    return "openai"
+
+
+class LiteLLMEmbeddings:
+    """Embedding provider that delegates to ``litellm.embedding()``.
+
+    Single adapter for every LiteLLM-compatible embedding endpoint:
+    Ollama (local), Voyage, Cohere, OpenAI, … Model format is
+    ``provider/model`` (e.g. ``ollama/bge-m3``); bare strings are treated
+    as OpenAI models by ``_derive_embedding_provider``.
+
+    Dimension is auto-detected on the first successful call (or taken from
+    the optional ``dim`` kwarg before then).
+    """
+
+    dim: int = 0  # populated on first successful embed() or from kwarg
+    model_name: str = ""
+
+    def __init__(
+        self,
+        model: str,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: int = 60,
+        dim: Optional[int] = None,
+    ):
+        try:
+            import litellm as _litellm
+        except ImportError:
+            raise ImportError(
+                "LiteLLM embedding backend requires the 'litellm' package. "
+                "Install with: pip install klemma[litellm]"
+            )
+        self._litellm = _litellm
+        self.model = model
+        self.api_base = api_base
+        self.api_key = api_key
+        self.timeout = timeout
+        if dim is not None:
+            self.dim = dim
+        # model_name: "provider/model" → "model-provider" for uniqueness
+        # across providers offering the same model id.
+        if "/" in model:
+            provider, name = model.split("/", 1)
+            self.model_name = f"{name}-{provider}"
+        else:
+            self.model_name = model
+
+    def embed(self, title: str, abstract: str = "") -> Optional[list[float]]:
+        """Embed a paper via ``litellm.embedding()``.
+
+        Text format is ``f"{title}\\n{abstract}".strip()`` — no ``[SEP]``
+        token, since BGE-M3 and most modern embedding models work on
+        natural-language strings directly.
+        """
+        text = f"{title}\n{abstract}".strip()
+        if not text:
+            return None
+        try:
+            response = self._litellm.embedding(
+                model=self.model,
+                input=[text],
+                api_base=self.api_base,
+                api_key=self.api_key,
+                timeout=self.timeout,
+            )
+            vec = response.data[0]["embedding"]
+            if not vec:
+                logger.warning("LiteLLM embed returned empty vector for '%s'", title[:60])
+                return None
+            self.dim = len(vec)
+            return list(vec)
+        except Exception as e:
+            logger.warning("LiteLLM embed error for '%s': %s", title[:60], e)
+            return None
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -234,11 +332,13 @@ def create_embeddings(
     """Create an EmbeddingProvider from config dict.
 
     Config keys:
-        backend: "s2" | "local" | "openai" (default: "s2")
-        model: model name/id (optional, backend-specific)
+        backend: "s2" | "local" | "openai" | "litellm" (default: "s2")
+        model: model name/id (backend-specific; litellm: "provider/model")
         api_key_env: env var for API key (optional)
-        base_url: custom endpoint (OpenAI only)
+        base_url: custom endpoint (OpenAI or LiteLLM/Ollama)
         throttle: seconds between S2 requests (default: 3.1)
+        timeout: request timeout in seconds (litellm only, default: 60)
+        dim: explicit dimension override (litellm only; otherwise auto-detected)
 
     api_keys: optional dict from klemmarc (e.g. {"openai": "sk-..."}).
     Direct keys take priority over env vars.
@@ -270,6 +370,23 @@ def create_embeddings(
             api_key_env=config.get("api_key_env", "OPENAI_API_KEY"),
             base_url=config.get("base_url"),
             api_key=api_keys.get("openai"),
+        )
+
+    if backend == "litellm":
+        model = config.get("model", "ollama/bge-m3")
+        provider = _derive_embedding_provider(model)
+        api_key = api_keys.get(provider)
+        if not api_key:
+            env_var = config.get("api_key_env")
+            if env_var:
+                api_key = os.environ.get(env_var)
+        # Pure-local providers (ollama) accept api_key=None; LiteLLM handles it.
+        return LiteLLMEmbeddings(
+            model=model,
+            api_base=config.get("base_url"),
+            api_key=api_key,
+            timeout=int(config.get("timeout", 60)),
+            dim=config.get("dim"),
         )
 
     logger.warning("Unknown embedding backend: %s", backend)

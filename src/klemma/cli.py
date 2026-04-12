@@ -1177,6 +1177,9 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
     # Step 2: LLM backend
     backend = ""
     ai_model = ""
+    # Default: LiteLLM + Ollama/BGE-M3 (free, local, single Anthropic billing).
+    # Users can downgrade to OpenAI embeddings only when they explicitly say so.
+    embeddings_backend = "litellm"
     if has_openai:
         click.echo("\n  LLM backend")
         click.echo("    1. Claude Code Max (free — uses claude CLI)")
@@ -1193,17 +1196,32 @@ def _interactive_init(project_type: str, prefill: dict | None = None):
         if llm_choice == "1":
             backend = "claude"
             ai_model = "sonnet"
-            click.echo("    LLM: Claude Code Max  |  Embeddings: OpenAI")
         else:
             backend = "litellm"
             ai_model = "openai/gpt-4.1"
-            click.echo("    LLM: OpenAI gpt-4.1  |  Embeddings: OpenAI")
+
+        click.echo("\n  Embeddings backend")
+        click.echo("    1. LiteLLM + Ollama (bge-m3) — free, offline, strong on Russian")
+        click.echo("    2. OpenAI text-embedding-3-small (uses the key above)")
+        emb_choice = click.prompt(
+            "  Choose",
+            type=click.Choice(["1", "2"]),
+            default="1",
+        )
+        if emb_choice == "1":
+            embeddings_backend = "litellm"
+            click.echo(f"    LLM: {ai_model}  |  Embeddings: LiteLLM + Ollama (bge-m3)")
+            click.echo("    (one-time setup: ollama pull bge-m3)")
+        else:
+            embeddings_backend = "openai"
+            click.echo(f"    LLM: {ai_model}  |  Embeddings: OpenAI text-embedding-3-small")
     else:
         backend = "claude"
         ai_model = "sonnet"
-        click.echo("    LLM: Claude Code Max  |  Embeddings: not configured (add later)")
-
-    embeddings_backend = "openai" if has_openai else ""
+        click.echo(
+            "    LLM: Claude Code Max  |  Embeddings: LiteLLM + Ollama (bge-m3)"
+        )
+        click.echo("    (one-time setup: ollama pull bge-m3)")
 
     # --- Auto-discovery (prefill overrides discovery) ---
     click.echo("\n  Detecting paths...")
@@ -1783,7 +1801,7 @@ def _resolve_emb(kctx, backend, dry_run):
     if not emb and not dry_run:
         console.print(
             "[red]No embedding backend configured.[/red]\n"
-            "Set embeddings.backend in config.yaml (s2, local, openai) "
+            "Set embeddings.backend in config.yaml (s2, local, openai, litellm) "
             "or use --backend flag."
         )
         return None
