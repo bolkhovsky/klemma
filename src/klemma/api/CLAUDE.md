@@ -21,9 +21,14 @@ Shared FastAPI dependencies for data store access.
 - `set/get_file_store()` — `FileStore` singleton
 - All set in `app.py` lifespan, used by route handlers via `Depends()`
 
-### tasks.py (~60 lines)
+### tasks.py (~790 lines)
 Async task definitions for rq worker. Tasks receive primitive args (worker runs in separate process).
-- `process_source(paper_id, citekey, data_dir)` — extraction task stub (initializes own stores)
+- `_create_ai_provider()` — AI provider from env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, KLEMMA_AI_MODEL)
+- `_create_embeddings_provider()` — embedding provider from env vars (KLEMMA_EMBEDDINGS_BACKEND/MODEL/BASE_URL); returns None when disabled
+- `process_source(paper_id, citekey, data_dir)` — full pipeline: PDF extract → AI fragments → auto-embed → section assign → citation links → auto-suggest
+- `generate_outline_saas(project_id, context_text, ...)` — outline generation from plan-prospekt
+- `generate_research(section, project_id, ...)` — research briefing via researcher.py in headless mode
+- `generate_draft(section, data_dir, ...)` — section draft via drafter.py in headless mode
 
 ### worker.py (~25 lines)
 RQ worker entry point: `python -m klemma.api.worker`
@@ -41,9 +46,9 @@ Route modules. See [routes/CLAUDE.md](routes/CLAUDE.md).
 
 Docker Compose stack in `saas/deploy/`:
 - `Dockerfile` — Python 3.12, installs `[api,recommended]`, uvicorn 2 workers
-- `docker-compose.yml` — 5 services: api, worker, redis, nginx, certbot
-- `nginx/default.conf` — reverse proxy, security headers, XFF override
-- `.env.example` — required secrets (JWT secret)
+- `docker-compose.yml` — 6 services: api, worker, redis, ollama, caddy, (certbot removed)
+- `Caddyfile` — reverse proxy with auto-TLS
+- `.env.example` — required secrets (JWT secret) + optional embeddings config
 
 ```bash
 cp saas/deploy/.env.example saas/deploy/.env  # edit with real secret

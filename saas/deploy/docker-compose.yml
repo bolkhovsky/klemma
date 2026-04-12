@@ -38,10 +38,16 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - KLEMMA_AI_MODEL=${KLEMMA_AI_MODEL:-anthropic/claude-sonnet-4-20250514}
+      # Embeddings (Ollama/BGE-M3 via LiteLLM — runs inside Docker network)
+      - KLEMMA_EMBEDDINGS_BACKEND=${KLEMMA_EMBEDDINGS_BACKEND:-litellm}
+      - KLEMMA_EMBEDDINGS_MODEL=${KLEMMA_EMBEDDINGS_MODEL:-ollama/bge-m3}
+      - KLEMMA_EMBEDDINGS_BASE_URL=${KLEMMA_EMBEDDINGS_BASE_URL:-http://ollama:11434}
     volumes:
       - klemma-data:/data/klemma
     depends_on:
       redis:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
@@ -61,6 +67,22 @@ services:
       timeout: 3s
       retries: 3
 
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
   caddy:
     image: caddy:2-alpine
     ports:
@@ -79,5 +101,6 @@ services:
 volumes:
   klemma-data:
   redis-data:
+  ollama-data:
   caddy-data:
   caddy-config:
