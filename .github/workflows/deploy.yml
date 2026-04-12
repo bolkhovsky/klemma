@@ -133,6 +133,9 @@ jobs:
             sudo docker compose up -d --force-recreate api worker </dev/null
             sudo docker compose up -d </dev/null
 
+            # Pull BGE-M3 model into Ollama (idempotent, skips if already present)
+            sudo docker compose exec -T ollama ollama pull bge-m3 </dev/null 2>&1 | tail -1 || true
+
             # Health check with retries (5 attempts, 3s apart)
             for i in 1 2 3 4 5; do
               sleep 3

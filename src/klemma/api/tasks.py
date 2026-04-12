@@ -35,6 +35,29 @@ def _create_ai_provider():
     return create_ai(config), config
 
 
+def _create_embeddings_provider():
+    """Create an embedding provider from environment variables.
+
+    Mirrors ``_create_ai_provider()`` pattern.  Returns ``None`` when
+    ``KLEMMA_EMBEDDINGS_BACKEND`` is unset (embedding disabled).
+    """
+    backend = os.getenv("KLEMMA_EMBEDDINGS_BACKEND", "")
+    if not backend:
+        return None
+    from klemma.embeddings import create_embeddings
+
+    config = {
+        "backend": backend,
+        "model": os.getenv("KLEMMA_EMBEDDINGS_MODEL", "ollama/bge-m3"),
+        "base_url": os.getenv("KLEMMA_EMBEDDINGS_BASE_URL"),
+        "timeout": int(os.getenv("KLEMMA_EMBEDDINGS_TIMEOUT", "60")),
+    }
+    dim = os.getenv("KLEMMA_EMBEDDINGS_DIM")
+    if dim:
+        config["dim"] = int(dim)
+    return create_embeddings(config)
+
+
 def _mirror_research_report(data_path: Path, project_id: str, section: str, text: str, model: str) -> None:
     """Write research report to MD file for klemma-cli sync pull.
 
@@ -321,6 +344,23 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         prompt_hash = ""
         model_name = ai_config.model
         saved = paper_store.save_fragments(paper_id, fragments, prompt_hash, model_name)
+
+        # Auto-embed paper and fragments (non-fatal — fragments are saved regardless)
+        emb = _create_embeddings_provider()
+        if emb:
+            try:
+                paper_vec = emb.embed(paper.title or citekey, paper.abstract or "")
+                if paper_vec:
+                    paper_store.save_paper_embedding(paper_id, paper_vec, emb.model_name)
+                frag_count = 0
+                for frag in fragments:
+                    frag_vec = emb.embed(frag.fragment_text)
+                    if frag_vec:
+                        paper_store.save_fragment_embedding(frag.fragment_id, frag_vec, emb.model_name)
+                        frag_count += 1
+                logger.info("Embedded paper + %d fragments for %s", frag_count, citekey)
+            except Exception as exc:
+                logger.warning("Embedding failed for %s (non-fatal): %s", citekey, exc)
 
         # Auto-assign sections based on AI predictions (SaaS only — when project context given)
         if project_id and predicted_sections:
