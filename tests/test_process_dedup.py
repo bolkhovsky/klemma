@@ -7,7 +7,7 @@ project), _process_single() reuses library fragments WITHOUT reading the PDF.
 from unittest.mock import MagicMock
 
 from klemma.cli import _process_single
-from klemma.models import FragmentRecord
+from klemma.models import FragmentRecord, PaperRecord
 from klemma.state import StateManager
 
 
@@ -75,6 +75,7 @@ class TestCitekeyFastPathDedup:
         user_library.resolve_paper_id.return_value = "paper_id_A"
         paper_store = MagicMock()
         paper_store.get_fragments.return_value = [frag]
+        paper_store.get_paper_by_id.return_value = None
 
         (n, status), pdf_extractor = _make_call(
             "alice2021", state, user_library=user_library, paper_store=paper_store
@@ -96,6 +97,7 @@ class TestCitekeyFastPathDedup:
         user_library.resolve_paper_id.return_value = "pid1"
         paper_store = MagicMock()
         paper_store.get_fragments.return_value = [frag]
+        paper_store.get_paper_by_id.return_value = None
 
         _make_call("alice2021", state, user_library=user_library, paper_store=paper_store)
 
@@ -182,6 +184,7 @@ class TestCitekeyFastPathDedup:
         user_library.resolve_paper_id.return_value = "pid1"
         paper_store = MagicMock()
         paper_store.get_fragments.return_value = frags
+        paper_store.get_paper_by_id.return_value = None
 
         (n, status), pdf_extractor = _make_call(
             "jones2020", state, user_library=user_library, paper_store=paper_store
@@ -192,6 +195,34 @@ class TestCitekeyFastPathDedup:
         pdf_extractor.find_pdf.assert_not_called()
         saved = state.get_fragments(source_id="jones2020")
         assert len(saved) == 3
+
+    def test_fast_path_copies_metadata_from_library(self, tmp_path):
+        """Fast-path must copy title/authors/year/abstract from library paper."""
+        state = StateManager(tmp_path / "test.db")
+        state.register_sources(["alice2021"])
+
+        frag = _make_frag()
+        user_library = MagicMock()
+        user_library.resolve_paper_id.return_value = "paper_id_A"
+        paper_store = MagicMock()
+        paper_store.get_fragments.return_value = [frag]
+        paper_store.get_paper_by_id.return_value = PaperRecord(
+            paper_id="paper_id_A",
+            title="Deep Learning for Sea Ice",
+            authors="Alice Author, Bob Coauthor",
+            year=2021,
+            abstract="We propose a method...",
+            doi="10.1234/test",
+        )
+
+        _make_call("alice2021", state, user_library=user_library, paper_store=paper_store)
+
+        src = state.sources.get_source("alice2021")
+        assert src["title"] == "Deep Learning for Sea Ice"
+        assert src["authors"] == "Alice Author, Bob Coauthor"
+        assert src["year"] == 2021
+        assert src["abstract"] == "We propose a method..."
+        assert src["doi"] == "10.1234/test"
 
     def test_fast_path_preserves_existing_note_path(self, tmp_path):
         """Fast-path mark_completed must not clear an existing note_path."""
@@ -205,6 +236,7 @@ class TestCitekeyFastPathDedup:
         user_library.resolve_paper_id.return_value = "paper_id_A"
         paper_store = MagicMock()
         paper_store.get_fragments.return_value = [frag]
+        paper_store.get_paper_by_id.return_value = None
 
         _make_call("alice2021", state, user_library=user_library, paper_store=paper_store)
 
