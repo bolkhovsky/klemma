@@ -1525,6 +1525,17 @@ def _process_single(
                             for f in _fast_frags
                         ]
                         n = state.fragments.save_fragments(citekey, frag_dicts)
+                        # Copy metadata from library paper to project source
+                        _lib_paper = paper_store.get_paper_by_id(_fast_paper_id)
+                        if _lib_paper:
+                            state.update_source_info(
+                                citekey,
+                                title=_lib_paper.title or "",
+                                authors=_lib_paper.authors or "",
+                                year=_lib_paper.year,
+                                abstract=_lib_paper.abstract or "",
+                                doi=_lib_paper.doi or "",
+                            )
                         _existing_src = state.sources.get_source(citekey)
                         _note_path = (_existing_src or {}).get("note_path") or ""
                         state.sources.mark_completed(citekey, note_path=_note_path)
@@ -1582,6 +1593,16 @@ def _process_single(
                             for f in lib_frags
                         ]
                         n = state.fragments.save_fragments(citekey, frag_dicts)
+                        # Copy metadata from library paper to project source
+                        if paper_rec:
+                            state.update_source_info(
+                                citekey,
+                                title=paper_rec.title or "",
+                                authors=paper_rec.authors or "",
+                                year=paper_rec.year,
+                                abstract=paper_rec.abstract or "",
+                                doi=paper_rec.doi or "",
+                            )
                         _existing_src = state.sources.get_source(citekey)
                         _note_path = (_existing_src or {}).get("note_path") or ""
                         state.sources.mark_completed(citekey, note_path=_note_path)
