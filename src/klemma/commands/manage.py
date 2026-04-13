@@ -425,8 +425,10 @@ def info(ctx):
         info_parts.append(f"Focus: {project.current_focus}")
     info_parts.append(f"Chapters: {len(project.chapters)}")
     info_parts.append(f"DB: {kctx.config.state.db_path}")
+    notes_root = kctx.vault.vault_path if kctx.vault else (project_root / ".klemma" / "notes")
+    info_parts.append(f"Notes: {notes_root}")
     if kctx.config.obsidian.vault_path:
-        info_parts.append(f"Vault: {kctx.config.obsidian.vault_path}")
+        info_parts.append(f"Obsidian vault: {kctx.config.obsidian.vault_path}")
 
     console.print(
         Panel(
@@ -480,15 +482,11 @@ def info(ctx):
         f"[bold]Research notes[/bold]: {project_root}/notes/research/",
         f"[bold]Library reports[/bold]: {project_root}/notes/library/",
     ]
+    conv_parts.append(f"[bold]Reference notes[/bold]: {notes_root}/")
     if kctx.config.obsidian.vault_path:
-        nf = kctx.config.obsidian.notes_folder
-        tf = kctx.config.obsidian.tags_folder
-        nf_ok = kctx.vault.check_folder(nf)
-        tf_ok = kctx.vault.check_folder(tf)
-        nf_s = "[green]\u2713[/green]" if nf_ok else "[red]\u2717 not found[/red]"
-        tf_s = "[green]\u2713[/green]" if tf_ok else "[red]\u2717 not found[/red]"
-        conv_parts.append(f"[bold]Reference notes[/bold]: vault {nf}/ {nf_s}")
-        conv_parts.append(f"[bold]Tags[/bold]: vault {tf}/ {tf_s}")
+        conv_parts.append(
+            f"[bold]Obsidian vault[/bold]: {kctx.config.obsidian.vault_path} (override)"
+        )
     console.print(
         Panel(
             "\n".join(conv_parts),
@@ -797,7 +795,6 @@ def reassign(ctx, citekey, target_section, threshold, min_delta, cross_type_pena
     # --- Direct apply: citekey + target_section bypasses interactive review ---
     if citekey and target_section:
         vault = kctx.vault
-        notes_folder = kctx.config.obsidian.notes_folder
 
         # Only move fragments that embeddings suggest belong to target_section
         frag_ids_to_move: list[int] = []
@@ -845,7 +842,7 @@ def reassign(ctx, citekey, target_section, threshold, min_delta, cross_type_pena
             if target_section not in current:
                 merged = current | {target_section}
                 ok = vault.update_frontmatter_sections(
-                    note_name, list(merged), folder=notes_folder,
+                    note_name, list(merged), folder=None,
                 )
                 if ok:
                     vault_updated = True
@@ -1234,14 +1231,8 @@ def migrate_frontmatter(ctx, dry_run):
 
     kctx = _get_context(ctx)
     vault = kctx.vault
-    config = kctx.config
 
-    if vault is None:
-        console.print("[red]No Obsidian vault configured. Set obsidian.vault_path.[/red]")
-        raise SystemExit(1)
-
-    notes_folder = config.obsidian.notes_folder or ""
-    note_names = vault.list_notes(folder=notes_folder)
+    note_names = vault.list_notes(None)
     citekey_notes = [n for n in note_names if n.startswith("@")]
 
     updated = 0
@@ -1280,12 +1271,11 @@ def migrate_frontmatter(ctx, dry_run):
             updated += 1
             continue
 
-        # Rewrite the note's frontmatter via vault adapter
-        if notes_folder:
-            target = vault._resolve_folder(notes_folder) / f"{note_name}.md"
-        else:
-            found = list(vault.vault_path.rglob(f"{note_name}.md"))
-            target = found[0] if found else None
+        # Rewrite the note's frontmatter via vault adapter. The adapter's
+        # root is the resolved notes directory, so rglob finds the file
+        # regardless of whether the user uses local mode or an Obsidian vault.
+        found = list(vault.vault_path.rglob(f"{note_name}.md"))
+        target = found[0] if found else None
 
         if not target or not target.exists():
             skipped += 1
@@ -1364,8 +1354,7 @@ def import_vault(ctx, with_queue):
 
     # Reading queue from high-priority sources
     if with_queue:
-        notes_folder = cfg.obsidian.notes_folder
-        note_names = vault.list_notes(notes_folder)
+        note_names = vault.list_notes(None)
         queue_added = 0
         for note_name in note_names:
             if not note_name.startswith("@"):

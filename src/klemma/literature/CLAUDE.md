@@ -31,11 +31,41 @@ All Pydantic models for the data layer:
 
 ### pdf.py (202 lines)
 `PDFExtractor` — PyMuPDF-based text extraction with BBT JSON integration.
-- `extract()` — text with `[Page N]` markers, truncated to `max_chars`
+- `extract()` — text with `[Page N]` markers, truncated to `max_chars` (fed to the AI extraction prompt)
+- `extract_pages(pdf_path: Path) -> list[str]` — **public API, stable signature**. One cleaned string per page, no truncation, no inline `[Page N]` markers. Used by `write_pdf_sidecar()` and (planned) the semantic citation drift checker. Returns `[]` for missing files, `[""]` for an empty page.
 - `find_pdf()` — 3-tier PDF finding (see data flows below)
 - `load_pdf_lookup()` — citekey → pdf_path from BBT JSON
 - `load_entry_lookup()` — citekey → `ZoteroEntry` from BBT JSON
 - CamelCase splitting: `wagnerSeaiceInformation2020` → `[wagner, seaice, information, 2020]`
+
+### sidecar.py (~90 lines)
+Raw PDF text sidecar writer — feynman-style format at `<project_root>/.klemma/pdfs/<citekey>.md`. Introduced in ADR-016 as the on-disk trace of processed PDFs and the primary-source passage store for downstream tooling.
+- `write_pdf_sidecar(project_root, citekey, pages, metadata) -> Path` — atomic write via `tempfile.mkstemp` + `os.fdopen` + `os.replace`; rejects `..`, `/`, `\\`, empty citekeys (pattern mirrors `LocalFileStore._file_path()`); idempotent (reprocessing overwrites cleanly); creates missing `.klemma/pdfs/` directory
+
+**Format contracts** (must not drift without a version bump — the planned semantic citation drift checker is the second consumer):
+1. **Path**: always `<project_root>/.klemma/pdfs/<citekey>.md`. No config override. Downstream consumers can hardcode.
+2. **Page delimiter**: exactly `\n<!-- Page N -->\n` between pages, where `N = 2, 3, ...`. Page 1 has no marker — it starts right after the frontmatter `---`. Regex `\n<!-- Page (\d+) -->\n` is a stable split point.
+3. **Frontmatter fields**: stable set is `Citekey`, `Authors`, `Year`, `DOI`, `Pages`, `Source`. Additions allowed (append-only). Renames/removals require a version bump note in the sidecar header.
+
+Layout:
+```markdown
+# <title>
+
+> Citekey: <citekey>
+> Authors: <authors>
+> Year: <year>
+> DOI: <doi>
+> Pages: <N>
+> Source: <pdf_path>
+
+---
+
+<page 1 prose>
+
+<!-- Page 2 -->
+
+<page 2 prose>
+```
 
 ### note_factory.py (470 lines)
 Vault note creation pipeline — largest module in the package:
