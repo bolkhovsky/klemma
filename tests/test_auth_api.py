@@ -71,6 +71,58 @@ def test_register_password_too_short(client):
     assert resp.status_code == 422
 
 
+def test_register_grants_initial_token_balance(client, user_store, monkeypatch):
+    """New users get the default 1M token allowance so first action works."""
+    monkeypatch.delenv("KLEMMA_INITIAL_TOKEN_GRANT", raising=False)
+    resp = client.post(
+        "/auth/register",
+        json={"email": "fresh@example.com", "password": "secret123"},
+    )
+    assert resp.status_code == 201
+    user_id = resp.json()["user_id"]
+    bal = user_store.get_token_balance(user_id)
+    assert bal["total_granted"] == 1_000_000
+    assert bal["remaining"] == 1_000_000
+    assert user_store.check_token_limit(user_id) is True
+
+
+def test_register_initial_grant_configurable(client, user_store, monkeypatch):
+    """KLEMMA_INITIAL_TOKEN_GRANT overrides the default amount."""
+    monkeypatch.setenv("KLEMMA_INITIAL_TOKEN_GRANT", "50000")
+    resp = client.post(
+        "/auth/register",
+        json={"email": "small@example.com", "password": "secret123"},
+    )
+    assert resp.status_code == 201
+    bal = user_store.get_token_balance(resp.json()["user_id"])
+    assert bal["total_granted"] == 50_000
+
+
+def test_register_initial_grant_disabled(client, user_store, monkeypatch):
+    """Setting KLEMMA_INITIAL_TOKEN_GRANT=0 skips the grant entirely."""
+    monkeypatch.setenv("KLEMMA_INITIAL_TOKEN_GRANT", "0")
+    resp = client.post(
+        "/auth/register",
+        json={"email": "paid@example.com", "password": "secret123"},
+    )
+    assert resp.status_code == 201
+    bal = user_store.get_token_balance(resp.json()["user_id"])
+    assert bal["total_granted"] == 0
+    assert user_store.check_token_limit(resp.json()["user_id"]) is False
+
+
+def test_register_initial_grant_invalid_falls_back_to_default(client, user_store, monkeypatch):
+    """Invalid or negative env values warn and use the default."""
+    monkeypatch.setenv("KLEMMA_INITIAL_TOKEN_GRANT", "not-a-number")
+    resp = client.post(
+        "/auth/register",
+        json={"email": "bad@example.com", "password": "secret123"},
+    )
+    assert resp.status_code == 201
+    bal = user_store.get_token_balance(resp.json()["user_id"])
+    assert bal["total_granted"] == 1_000_000
+
+
 def test_register_email_case_insensitive(client):
     client.post(
         "/auth/register",

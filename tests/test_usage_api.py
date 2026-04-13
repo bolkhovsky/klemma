@@ -28,7 +28,10 @@ def stores(tmp_path):
 
 
 @pytest.fixture
-def client(stores) -> TestClient:
+def client(stores, monkeypatch) -> TestClient:
+    # Disable the initial token grant so usage API tests start from a clean
+    # 0/0/0 balance. The grant behavior itself is covered in test_auth_api.py.
+    monkeypatch.setenv("KLEMMA_INITIAL_TOKEN_GRANT", "0")
     user_store, paper_store, user_library, project_store, file_store = stores
     app = create_app()
     set_user_store(user_store)
