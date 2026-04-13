@@ -4,11 +4,12 @@ PDF text extraction, Pydantic data models, vault note generation, and metadata a
 
 ## Modules
 
-### metadata.py (~150 lines)
-Auto-extract paper metadata from PDF properties + Semantic Scholar API lookup.
+### metadata.py (~220 lines)
+Auto-extract paper metadata from PDF properties + CrossRef lookup.
 - `extract_pdf_metadata(pdf_path)` — PyMuPDF `doc.metadata` for title/author; first-page heuristic fallback for generic titles
-- `lookup_s2(title)` — S2 `paper/search` API with rate limiting, fuzzy title match, returns title/authors/year/abstract/doi
-- `resolve_metadata(pdf_path, cli_title?, cli_authors?, cli_year?, cli_doi?)` — orchestrator: CLI flags → PDF metadata → S2 enrichment → empty fallback
+- `lookup_crossref(title, mailto?)` — CrossRef `/works` API with polite-pool `mailto` (env `KLEMMA_CROSSREF_MAILTO` or default); fuzzy title match; returns title/authors/year/abstract/doi. JATS tags stripped from abstract.
+- `lookup_s2(title)` — S2 `paper/search` API (kept for CLI acquirer; **not** called from `resolve_metadata` — S2 is rate-limited and unreliable under load)
+- `resolve_metadata(pdf_path, cli_title?, cli_authors?, cli_year?, cli_doi?)` — orchestrator: CLI flags → PDF metadata → CrossRef enrichment → empty fallback. Only one network lookup (CrossRef).
 - `_titles_match(query, candidate)` — fuzzy word-overlap comparison (>0.6 threshold)
 
 ### zotero_api.py (~80 lines)

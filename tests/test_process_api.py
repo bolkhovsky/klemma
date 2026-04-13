@@ -124,6 +124,56 @@ def test_job_status_finished(client, monkeypatch):
     assert data["result"]["fragment_count"] == 5
 
 
+def test_job_status_business_error_promoted_to_failed(client, monkeypatch):
+    """Tasks that return {status: error, ...} surface as outer status='failed'.
+
+    Without this promotion, callers see status='finished' for token-limit
+    exhaustion and other recoverable errors, then must defensively unwrap
+    result.status. Regression guard for the golden E2E find.
+    """
+    token = _auth_token(client)
+
+    mock_job = MagicMock()
+    mock_job.get_status.return_value = "finished"
+    mock_job.is_finished = True
+    mock_job.result = {"status": "error", "detail": "Token limit exhausted"}
+
+    import klemma.api.routes.process as proc_mod
+
+    monkeypatch.setattr(proc_mod, "_RQ_AVAILABLE", True)
+    monkeypatch.setattr(proc_mod, "Redis", MagicMock())
+    mock_job_cls = MagicMock()
+    mock_job_cls.fetch.return_value = mock_job
+    monkeypatch.setattr(proc_mod, "Job", mock_job_cls)
+
+    resp = client.get("/process/jobs/test-456", headers=_headers(token))
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "failed"
+    assert data["result"]["detail"] == "Token limit exhausted"
+
+
+def test_job_status_local_business_error_promoted_to_failed(client):
+    """Same promotion applies to the in-memory local job store."""
+    import klemma.api.routes.process as proc_mod
+
+    proc_mod._local_jobs["local-err-1"] = {
+        "status": "finished",
+        "result": {"status": "error", "detail": "PDF text too short"},
+    }
+    token = _auth_token(client)
+    try:
+        resp = client.get("/process/jobs/local-err-1", headers=_headers(token))
+    finally:
+        proc_mod._local_jobs.pop("local-err-1", None)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "failed"
+    assert data["result"]["detail"] == "PDF text too short"
+
+
 def test_job_status_not_found(client, monkeypatch):
     token = _auth_token(client)
 
