@@ -11,6 +11,12 @@ services:
       - KLEMMA_JWT_SECRET=${KLEMMA_JWT_SECRET}
       - KLEMMA_CORS_ORIGINS=${KLEMMA_CORS_ORIGINS:-}
       - REDIS_URL=redis://redis:6379
+      # Host-side tinyproxy on 172.17.0.1:8888 routes egress via OpenVPN tun0 so
+      # Anthropic/OpenAI calls originate from an allowed region. Intra-compose
+      # hostnames are exempt so Redis/Ollama/self traffic stays on the bridge.
+      - HTTP_PROXY=${KLEMMA_EGRESS_PROXY:-http://172.17.0.1:8888}
+      - HTTPS_PROXY=${KLEMMA_EGRESS_PROXY:-http://172.17.0.1:8888}
+      - NO_PROXY=localhost,127.0.0.1,redis,ollama,api,worker
     volumes:
       - klemma-data:/data/klemma
     expose:
@@ -42,6 +48,11 @@ services:
       - KLEMMA_EMBEDDINGS_BACKEND=${KLEMMA_EMBEDDINGS_BACKEND:-litellm}
       - KLEMMA_EMBEDDINGS_MODEL=${KLEMMA_EMBEDDINGS_MODEL:-ollama/bge-m3}
       - KLEMMA_EMBEDDINGS_BASE_URL=${KLEMMA_EMBEDDINGS_BASE_URL:-http://ollama:11434}
+      # Same egress proxy as the api service — AI calls from the worker must
+      # also exit through the VPN tunnel.
+      - HTTP_PROXY=${KLEMMA_EGRESS_PROXY:-http://172.17.0.1:8888}
+      - HTTPS_PROXY=${KLEMMA_EGRESS_PROXY:-http://172.17.0.1:8888}
+      - NO_PROXY=localhost,127.0.0.1,redis,ollama,api,worker
     volumes:
       - klemma-data:/data/klemma
     depends_on:
