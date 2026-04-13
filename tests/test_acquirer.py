@@ -33,10 +33,11 @@ def test_acquire_doi_dedup_returns_ok_library_doi():
     mock_user_library = MagicMock()
 
     meta = PaperMetadata(url="https://doi.org/10.1234/test")
-    result = acquire_paper_local(
-        meta, storage_path="", state=None,
-        paper_store=mock_paper_store, user_library=mock_user_library,
-    )
+    with patch("klemma.skills.acquirer._try_zotero", return_value=None):
+        result = acquire_paper_local(
+            meta, storage_path="", state=None,
+            paper_store=mock_paper_store, user_library=mock_user_library,
+        )
 
     assert result.status == "ok_library_doi"
     assert result.pdf_hash == "abc123hash"
@@ -50,7 +51,8 @@ def test_acquire_doi_dedup_skips_download():
     mock_paper_store.find_paper.return_value = record
 
     meta = PaperMetadata(url="https://doi.org/10.1234/test")
-    with patch("klemma.skills.acquirer.download_pdf") as mock_dl:
+    with patch("klemma.skills.acquirer.download_pdf") as mock_dl, \
+         patch("klemma.skills.acquirer._try_zotero", return_value=None):
         acquire_paper_local(meta, storage_path="", paper_store=mock_paper_store)
         mock_dl.assert_not_called()
 
@@ -65,9 +67,10 @@ def test_acquire_doi_dedup_registers_in_state(tmp_path):
     mock_paper_store.find_paper.return_value = record
 
     meta = PaperMetadata(url="https://doi.org/10.1234/test")
-    result = acquire_paper_local(
-        meta, storage_path="", state=sm, paper_store=mock_paper_store,
-    )
+    with patch("klemma.skills.acquirer._try_zotero", return_value=None):
+        result = acquire_paper_local(
+            meta, storage_path="", state=sm, paper_store=mock_paper_store,
+        )
 
     assert result.status == "ok_library_doi"
     # get_all_sources() filters by status=completed; use get_source() instead
@@ -83,10 +86,11 @@ def test_acquire_doi_dedup_registers_in_user_library():
     mock_user_library = MagicMock()
 
     meta = PaperMetadata(url="https://doi.org/10.1234/test")
-    result = acquire_paper_local(
-        meta, storage_path="", state=None,
-        paper_store=mock_paper_store, user_library=mock_user_library,
-    )
+    with patch("klemma.skills.acquirer._try_zotero", return_value=None):
+        result = acquire_paper_local(
+            meta, storage_path="", state=None,
+            paper_store=mock_paper_store, user_library=mock_user_library,
+        )
 
     assert result.status == "ok_library_doi"
     mock_user_library.add_source.assert_called_once()
@@ -102,7 +106,8 @@ def test_acquire_doi_dedup_fills_meta_from_library():
 
     # meta has no title/authors — should be filled from library
     meta = PaperMetadata(url="https://doi.org/10.1234/test")
-    result = acquire_paper_local(meta, storage_path="", paper_store=mock_paper_store)
+    with patch("klemma.skills.acquirer._try_zotero", return_value=None):
+        result = acquire_paper_local(meta, storage_path="", paper_store=mock_paper_store)
 
     assert result.status == "ok_library_doi"
     # citekey should include author name and year (Jones2021_...)
