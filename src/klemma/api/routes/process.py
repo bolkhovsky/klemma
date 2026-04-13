@@ -67,6 +67,18 @@ class JobStatusResponse(BaseModel):
     result: dict | None = None
 
 
+def _resolve_status(raw_status: str, result: Any) -> str:
+    """Promote business-logic errors in the result payload to top-level 'failed'.
+
+    Tasks return ``{"status": "error", "detail": ...}`` for recoverable failures
+    (token exhaustion, missing PDF, AI timeout). Without this, callers see the
+    outer status as 'finished' and must defensively unwrap result.status.
+    """
+    if raw_status == "finished" and isinstance(result, dict) and result.get("status") == "error":
+        return "failed"
+    return raw_status
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -146,7 +158,11 @@ async def get_job_status(
     # Check local job store first (populated when Redis is unavailable)
     if job_id in _local_jobs:
         j = _local_jobs[job_id]
-        return JobStatusResponse(job_id=job_id, status=j["status"], result=j["result"])
+        return JobStatusResponse(
+            job_id=job_id,
+            status=_resolve_status(j["status"], j["result"]),
+            result=j["result"],
+        )
 
     # Check Redis
     if not _RQ_AVAILABLE:
@@ -162,10 +178,11 @@ async def get_job_status(
         redis_conn = Redis.from_url(redis_url)
         job = Job.fetch(job_id, connection=redis_conn)
 
+        result = job.result if job.is_finished else None
         return JobStatusResponse(
             job_id=job_id,
-            status=job.get_status(),
-            result=job.result if job.is_finished else None,
+            status=_resolve_status(job.get_status(), result),
+            result=result,
         )
     except RedisConnectionError:
         raise HTTPException(
