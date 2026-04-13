@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
-      - run: pip install -e ".[dev,api]"
+      - run: pip install -e ".[dev,api,litellm]"
       - run: pytest -v
 
   frontend:
