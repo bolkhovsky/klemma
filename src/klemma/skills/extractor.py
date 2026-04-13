@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _FUZZY_RESCUE_THRESHOLD = 0.95
 
 
-def _validate_verbatim_fragments(
+def validate_verbatim_fragments(
     fragments: list[Fragment],
     pdf_text: str,
     source_id: str,
@@ -183,7 +183,7 @@ def extract_fragments(
     # paper text and downgrade the ones that don't hold up. Mutates fragments
     # in place; stats surface via ExtractionResult → CLI warning and SaaS
     # job metadata.
-    downgrade_stats = _validate_verbatim_fragments(fragments, pdf_text, entry.id)
+    downgrade_stats = validate_verbatim_fragments(fragments, pdf_text, entry.id)
 
     # Compute content hashes for future content-addressable storage (ADR-014)
     from ..hashing import compute_content_hash

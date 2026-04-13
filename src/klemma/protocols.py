@@ -69,6 +69,24 @@ class PaperStore(Protocol):
         self, fragment_id: str, vector: list[float], model: str
     ) -> None: ...
 
+    # Verbatim integrity (PR #308): cache of the PDF text the AI saw,
+    # plus per-fragment flag flips for the backfill command.
+    def update_paper_raw_text(self, paper_id: str, raw_text: str) -> bool:
+        """Persist the PDF's extracted text on the paper record."""
+        ...
+
+    def get_raw_text(self, paper_id: str) -> str | None:
+        """Return the cached raw PDF text, or None if not yet populated."""
+        ...
+
+    def get_paper_ids_with_raw_text(self) -> list[str]:
+        """Return paper_ids whose raw_text cache is populated."""
+        ...
+
+    def update_fragment_verbatim(self, fragment_id: str, verbatim: bool) -> bool:
+        """Flip a fragment's verbatim flag; True if a row was updated."""
+        ...
+
 
 @runtime_checkable
 class UserLibrary(Protocol):

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from klemma.literature.models import DowngradeStats, Fragment
-from klemma.skills.extractor import _validate_verbatim_fragments
+from klemma.skills.extractor import validate_verbatim_fragments
 
 
 class TestScopeGate:
@@ -11,12 +11,12 @@ class TestScopeGate:
 
     def test_paraphrase_never_validated(self) -> None:
         frags = [Fragment(text="completely fabricated paraphrase", verbatim=False)]
-        stats = _validate_verbatim_fragments(frags, "totally unrelated text", "s1")
+        stats = validate_verbatim_fragments(frags, "totally unrelated text", "s1")
         assert frags[0].verbatim is False  # stays false
         assert stats == DowngradeStats()  # zero counts — scope-gated out
 
     def test_empty_fragment_list(self) -> None:
-        stats = _validate_verbatim_fragments([], "some pdf text", "s1")
+        stats = validate_verbatim_fragments([], "some pdf text", "s1")
         assert stats == DowngradeStats()
 
 
@@ -24,7 +24,7 @@ class TestExactSubstringMatch:
     def test_plain_substring_confirmed(self) -> None:
         pdf = "The model achieves 92% accuracy on the benchmark."
         frags = [Fragment(text="92% accuracy on the benchmark", verbatim=True)]
-        stats = _validate_verbatim_fragments(frags, pdf, "s1")
+        stats = validate_verbatim_fragments(frags, pdf, "s1")
         assert frags[0].verbatim is True
         assert stats.verbatim_confirmed == 1
         assert stats.downgraded == 0
@@ -33,7 +33,7 @@ class TestExactSubstringMatch:
         # PDF has fi-ligature; fragment has plain 'fi'. NFKC should reconcile.
         pdf = "the \ufb01nal e\ufb00ective forecast was accurate"
         frags = [Fragment(text="final effective forecast", verbatim=True)]
-        stats = _validate_verbatim_fragments(frags, pdf, "s1")
+        stats = validate_verbatim_fragments(frags, pdf, "s1")
         assert frags[0].verbatim is True
         assert stats.verbatim_confirmed == 1
 
@@ -41,7 +41,7 @@ class TestExactSubstringMatch:
         # PDF has "fore-\ncast" (typical PDF extraction artifact).
         pdf = "the fore-\ncast skill is poor"
         frags = [Fragment(text="forecast skill is poor", verbatim=True)]
-        stats = _validate_verbatim_fragments(frags, pdf, "s1")
+        stats = validate_verbatim_fragments(frags, pdf, "s1")
         assert frags[0].verbatim is True
         assert stats.verbatim_confirmed == 1
 
@@ -54,7 +54,7 @@ class TestFuzzyRescue:
             text="decompositioa separates overestimation from underestimation",
             verbatim=True,
         )]
-        stats = _validate_verbatim_fragments(frags, pdf, "s1")
+        stats = validate_verbatim_fragments(frags, pdf, "s1")
         assert frags[0].verbatim is True
         assert stats.fuzzy_rescued == 1
         assert stats.downgraded == 0
@@ -65,7 +65,7 @@ class TestFuzzyRescue:
             text="Transformers achieve state-of-the-art on ImageNet benchmarks",
             verbatim=True,
         )]
-        stats = _validate_verbatim_fragments(frags, pdf, "s1")
+        stats = validate_verbatim_fragments(frags, pdf, "s1")
         assert frags[0].verbatim is False
         assert stats.downgraded == 1
         assert stats.fuzzy_rescued == 0
@@ -77,7 +77,7 @@ class TestFuzzyRescue:
             text="The system achieves 50% F1 on custom evaluation",
             verbatim=True,
         )]
-        stats = _validate_verbatim_fragments(frags, pdf, "s1")
+        stats = validate_verbatim_fragments(frags, pdf, "s1")
         assert frags[0].verbatim is False
         assert stats.downgraded == 1
 
@@ -95,7 +95,7 @@ class TestMixedBatch:
             Fragment(text="GPT-4 scored 99% on LaTeX", verbatim=True),  # fabrication
             Fragment(text="the authors present a novel method", verbatim=False),  # paraphrase, skipped
         ]
-        stats = _validate_verbatim_fragments(frags, pdf, "s1")
+        stats = validate_verbatim_fragments(frags, pdf, "s1")
         assert stats.verbatim_claimed == 3
         assert stats.verbatim_confirmed == 1
         assert stats.fuzzy_rescued == 1
@@ -106,13 +106,13 @@ class TestMixedBatch:
 class TestEdgeCases:
     def test_empty_pdf_text_leaves_flags(self) -> None:
         frags = [Fragment(text="some claim", verbatim=True)]
-        stats = _validate_verbatim_fragments(frags, "", "s1")
+        stats = validate_verbatim_fragments(frags, "", "s1")
         # Can't validate, must not silently downgrade.
         assert frags[0].verbatim is True
         assert stats == DowngradeStats()
 
     def test_empty_fragment_text_downgraded(self) -> None:
         frags = [Fragment(text="   \n  ", verbatim=True)]
-        stats = _validate_verbatim_fragments(frags, "real content here", "s1")
+        stats = validate_verbatim_fragments(frags, "real content here", "s1")
         assert frags[0].verbatim is False
         assert stats.downgraded == 1

@@ -326,7 +326,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         # validator — the SaaS worker stores FragmentRecord (dataclass), so we
         # copy the validated flag back after the validator may downgrade it.
         from klemma.literature.models import Fragment
-        from klemma.skills.extractor import _validate_verbatim_fragments
+        from klemma.skills.extractor import validate_verbatim_fragments
 
         pydantic_frags: list[Fragment] = []
         for f_data in data.get("fragments", []):
@@ -363,7 +363,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         # same pdf_text the AI saw (50K cap matches prompt input). The
         # validator mutates the Pydantic list; mirror the final flag onto each
         # FragmentRecord so what gets saved matches what was validated.
-        downgrade_stats = _validate_verbatim_fragments(
+        downgrade_stats = validate_verbatim_fragments(
             pydantic_frags, pdf_text[:50000], citekey,
         )
         for record, pyd in zip(fragments, pydantic_frags):

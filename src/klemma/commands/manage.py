@@ -1391,7 +1391,7 @@ def backfill_verbatim(ctx):
     Hidden — discover via ``klemma --help`` or this docstring.
     """
     from ..literature.models import Fragment
-    from ..skills.extractor import _validate_verbatim_fragments
+    from ..skills.extractor import validate_verbatim_fragments
 
     kc = _get_context(ctx)
     paper_store = kc.paper_store
@@ -1426,7 +1426,7 @@ def backfill_verbatim(ctx):
         if not candidates:
             continue
         pydantic_frags = [Fragment(text=r.fragment_text, verbatim=True) for r in candidates]
-        _validate_verbatim_fragments(pydantic_frags, raw_text, paper_id)
+        validate_verbatim_fragments(pydantic_frags, raw_text, paper_id)
         paper_flipped = 0
         for record, pyd in zip(candidates, pydantic_frags):
             total_checked += 1
