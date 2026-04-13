@@ -35,6 +35,16 @@ class EmbeddingProvider(Protocol):
         ...
 
 
+def _default_embed_batch(provider, texts: list[str]) -> list[Optional[list[float]]]:
+    """Fallback batch embed: call ``embed()`` sequentially.
+
+    Backends that cannot send multiple inputs in one request (S2, local
+    SentenceTransformer, OpenAI without explicit batch wiring) fall back to
+    this. LiteLLM backends override with a true batched HTTP call.
+    """
+    return [provider.embed(t) if t else None for t in texts]
+
+
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
@@ -318,6 +328,47 @@ class LiteLLMEmbeddings:
         except Exception as e:
             logger.warning("LiteLLM embed error for '%s': %s", title[:60], e)
             return None
+
+    def embed_batch(
+        self, texts: list[str]
+    ) -> list[Optional[list[float]]]:
+        """Batched embed via a single ``litellm.embedding()`` call.
+
+        Empty strings are preserved as ``None`` in the output without being
+        sent to the backend. On API failure returns all-None (same semantics
+        as ``embed()`` on error — non-fatal).
+        """
+        if not texts:
+            return []
+
+        # Filter to non-empty inputs; keep index mapping so we can reassemble
+        indexed = [(i, t) for i, t in enumerate(texts) if t and t.strip()]
+        if not indexed:
+            return [None] * len(texts)
+
+        payload = [t for _, t in indexed]
+        try:
+            response = self._litellm.embedding(
+                model=self.model,
+                input=payload,
+                api_base=self.api_base,
+                api_key=self.api_key,
+                timeout=self.timeout,
+            )
+        except Exception as e:
+            logger.warning(
+                "LiteLLM batch embed error (%d items): %s", len(payload), e
+            )
+            return [None] * len(texts)
+
+        out: list[Optional[list[float]]] = [None] * len(texts)
+        for (orig_idx, _text), entry in zip(indexed, response.data):
+            vec = entry.get("embedding") if isinstance(entry, dict) else getattr(entry, "embedding", None)
+            if not vec:
+                continue
+            self.dim = len(vec)
+            out[orig_idx] = list(vec)
+        return out
 
 
 # ---------------------------------------------------------------------------

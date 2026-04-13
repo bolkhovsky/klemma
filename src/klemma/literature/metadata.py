@@ -1,4 +1,4 @@
-"""Auto-extract paper metadata from PDF properties + Semantic Scholar API."""
+"""Auto-extract paper metadata from PDF properties + CrossRef/S2 lookup."""
 
 import logging
 import os
@@ -6,6 +6,7 @@ import re
 import time
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote_plus
 
 import fitz  # PyMuPDF
 import requests
@@ -19,6 +20,10 @@ _GENERIC_TITLES = {
 
 _s2_last_request = 0.0
 _S2_THROTTLE = 3.1  # seconds between S2 API calls
+
+# CrossRef recommends including a mailto address to enter the polite pool
+# (higher, predictable rate limits). Read from env, fall back to a neutral one.
+_DEFAULT_CROSSREF_MAILTO = "klemma@litresearch.ru"
 
 
 def extract_pdf_metadata(pdf_path: Path) -> dict:
@@ -134,6 +139,80 @@ def lookup_s2(title: str) -> Optional[dict]:
     return None
 
 
+def _crossref_mailto() -> str:
+    return os.environ.get("KLEMMA_CROSSREF_MAILTO", _DEFAULT_CROSSREF_MAILTO)
+
+
+def lookup_crossref(title: str, mailto: Optional[str] = None) -> Optional[dict]:
+    """Look up paper metadata on CrossRef by title.
+
+    Returns ``{"title", "authors", "year", "abstract", "doi"}`` or ``None``.
+
+    CrossRef's polite pool (https://api.crossref.org) gives higher, more
+    predictable rate limits when the request carries a ``mailto=`` parameter
+    and a ``User-Agent`` header with the same address. We set both.
+
+    Abstract field is usually empty on CrossRef — it's returned as JATS XML
+    in ``message.abstract`` only for publishers that deposit it. We strip
+    the tags when present; otherwise an empty string.
+    """
+    if not title:
+        return None
+
+    mailto = mailto or _crossref_mailto()
+    url = (
+        "https://api.crossref.org/works"
+        f"?query.bibliographic={quote_plus(title)}&rows=3&mailto={quote_plus(mailto)}"
+    )
+    try:
+        resp = requests.get(
+            url,
+            timeout=10,
+            headers={"User-Agent": f"klemma/1.0 (mailto:{mailto})"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        logger.warning("CrossRef lookup failed for '%s': %s", title[:60], e)
+        return None
+
+    for item in data.get("message", {}).get("items", []):
+        item_title = " ".join(item.get("title", []) or [])
+        if not _titles_match(title, item_title):
+            continue
+
+        # Authors: CrossRef returns structured {family, given} pairs
+        authors = ", ".join(
+            f"{a.get('family', '')} {a.get('given', '')}".strip()
+            for a in item.get("author", [])
+            if a.get("family") or a.get("given")
+        )
+
+        # Year: prefer published-print, then issued, then published-online
+        year: Optional[int] = None
+        for date_field in ("published-print", "issued", "published-online"):
+            parts = (item.get(date_field) or {}).get("date-parts") or [[]]
+            if parts and parts[0] and parts[0][0]:
+                try:
+                    year = int(parts[0][0])
+                    break
+                except (TypeError, ValueError):
+                    pass
+
+        raw_abstract = item.get("abstract") or ""
+        abstract = re.sub(r"<[^>]+>", "", raw_abstract).strip()
+
+        return {
+            "title": item_title,
+            "authors": authors,
+            "year": year,
+            "abstract": abstract,
+            "doi": item.get("DOI", ""),
+        }
+
+    return None
+
+
 def _titles_match(query: str, candidate: str) -> bool:
     """Fuzzy title comparison: normalize and check word overlap (>0.6)."""
     def normalize(s: str) -> set[str]:
@@ -178,37 +257,20 @@ def resolve_metadata(
     if cli_doi:
         result["doi"] = cli_doi
 
-    # Layer 3: S2 enrichment (if we have a title to search with)
+    # Layer 3: CrossRef enrichment — primary (and only) network lookup.
+    # S2 is intentionally disabled on this path: it's rate-limited, flaky
+    # under load, and CrossRef covers both CS and non-CS literature with
+    # generous rate limits when using the polite pool (mailto param).
     if result["title"]:
-        s2 = lookup_s2(result["title"])
-        if s2:
-            # S2 fills in blanks but doesn't override existing values
+        cr = lookup_crossref(result["title"])
+        if cr:
             if not result["authors"]:
-                result["authors"] = s2.get("authors", "")
+                result["authors"] = cr.get("authors", "")
             if result["year"] is None:
-                result["year"] = s2.get("year")
+                result["year"] = cr.get("year")
             if not result["abstract"]:
-                result["abstract"] = s2.get("abstract", "")
+                result["abstract"] = cr.get("abstract", "")
             if not result["doi"]:
-                result["doi"] = s2.get("doi", "")
-
-    # Layer 4: CrossRef fallback (if S2 didn't fill year or DOI)
-    if result["title"] and (result["year"] is None or not result["doi"]):
-        try:
-            from klemma.search import CrossRefSearchProvider
-
-            cr = CrossRefSearchProvider()
-            hit = cr.resolve(result["title"])
-            if hit:
-                if result["year"] is None and hit.year:
-                    result["year"] = hit.year
-                if not result["doi"] and hit.doi:
-                    result["doi"] = hit.doi
-                if not result["authors"] and hit.authors:
-                    result["authors"] = hit.authors
-                if not result["abstract"] and hit.abstract:
-                    result["abstract"] = hit.abstract
-        except Exception:
-            pass  # non-fatal
+                result["doi"] = cr.get("doi", "")
 
     return result
