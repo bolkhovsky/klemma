@@ -15,7 +15,7 @@ Klemma — AI-ассистент для академического письм�
 - AI-powered research briefings, библиотечный аудит, ежедневное планирование
 - Вложенные проекты (диссертация + отдельные статьи)
 
-**Как работает**: Zotero (библиотека) → BetterBibTeX (JSON-экспорт) → klemma (AI-анализ PDF) → SQLite (фрагменты, статистика) + Obsidian vault (заметки).
+**Как работает**: Zotero (библиотека) → BetterBibTeX (JSON-экспорт) → klemma (AI-анализ PDF) → SQLite (фрагменты, статистика) + локальные заметки `.klemma/notes/` (опционально — Obsidian vault для power-users).
 
 ---
 
@@ -25,8 +25,8 @@ Klemma — AI-ассистент для академического письм�
 
 - **Python 3.11+**
 - **Zotero** с плагином [BetterBibTeX](https://retorque.re/zotero-better-bibtex/) — для автоматического JSON-экспорта библиотеки
-- **Obsidian** vault — хранение заметок по источникам и отчётов
 - **AI-бэкенд** — Claude Code CLI (по умолчанию), или OpenAI/Ollama/LiteLLM
+- **Obsidian** vault — *опционально*. По умолчанию заметки и raw-дампы PDF сохраняются локально в `.klemma/notes/` и `.klemma/pdfs/`. Obsidian-интеграция включается через `obsidian.vault_path` в `config.yaml`.
 
 ### 2.2 Установка
 
@@ -55,9 +55,11 @@ klemma init --outline        # сгенерировать outline после ini
 
 Мастер задаст вопросы:
 - Тип проекта (dissertation / paper / thesis)
-- Путь к Obsidian vault (обнаруживается автоматически)
-- Путь к BetterBibTeX JSON
+- Название и описание
+- Путь к BetterBibTeX JSON (если есть)
 - AI-бэкенд
+
+Вопросов про Obsidian мастер не задаёт — заметки по умолчанию сохраняются локально внутри проекта. Если нужна интеграция с Obsidian, пропишите `obsidian.vault_path` в `.klemma/config.yaml` вручную.
 
 Создаётся:
 ```
@@ -66,6 +68,8 @@ my-thesis/
 └── .klemma/
     ├── config.yaml    # конфигурация
     ├── tags.yaml      # таксономия тегов
+    ├── notes/         # аннотированные заметки @<citekey>.md
+    ├── pdfs/          # raw-дампы PDF (frontmatter + текст по страницам)
     └── data/
         └── klemma.db  # SQLite база
 ```
@@ -148,12 +152,30 @@ ai:
 
 `language` влияет на язык всех AI-генерированных отчётов (план, брифинг, аудит). `json_mode` полезен при интеграции с OpenAI-совместимыми бэкендами, поддерживающими structured output.
 
-### 2.8 Куда сохраняются отчёты
+### 2.8 Куда klemma сохраняет данные
 
-- AI-отчёты (`outline`, `research`, `library`, `ask`) → корень проекта (`project_root/`)
-- Vault-заметки `@citekey.md` → папка `obsidian.notes_folder` в vault
+По умолчанию всё живёт внутри проекта. Никакой внешней настройки не требуется.
 
-Это значит, что research briefing для раздела 2.3 окажется в `~/research/my-thesis/`, а заметка по источнику — в `~/vault/2 - Refs/@smithML2020.md`.
+| Что | Куда (default) | Куда (Obsidian override) |
+|-----|----------------|--------------------------|
+| AI-отчёты (`outline`, `research`, `library`, `ask`) | `<project_root>/notes/research/` | то же самое |
+| Аннотированные заметки `@<citekey>.md` | `<project_root>/.klemma/notes/` | `<vault_path>/<notes_folder>/` |
+| Raw-дампы PDF (frontmatter + текст по страницам) | `<project_root>/.klemma/pdfs/` | то же самое *(всегда локально)* |
+| SQLite база, tags, кэш | `<project_root>/.klemma/data/` | то же самое |
+
+**Raw-дамп PDF** — это feynman-style sidecar: YAML-like frontmatter (citekey, авторы, год, DOI, источник), `---`, затем чистый текст с разделителями `<!-- Page N -->` между страницами. Формат стабильный и удобный для `grep`.
+
+**Obsidian override.** Если вы читаете заметки в Obsidian, добавьте в `.klemma/config.yaml`:
+
+```yaml
+obsidian:
+  vault_path: "/Users/you/Documents/Obsidian Vault"
+  notes_folder: "References"   # опционально; пусто = корень vault
+```
+
+После этого `@<citekey>.md` будет писаться в vault, а raw-дампы PDF останутся локальными (это отладочный артефакт уровня проекта, не контент для чтения в Obsidian).
+
+> **Замечание для существующих Obsidian-пользователей.** После этого изменения `vault.get_tags()` / `search()` / `_find_daily_dir()` сканируют только папку с заметками (`notes_folder`), а не весь vault. Это соответствует реальному использованию в klemma, но если вы держали связанные файлы вне `notes_folder`, они больше не попадут в результаты поиска.
 
 ---
 
@@ -222,12 +244,13 @@ klemma process --serial
 
 **Что происходит при `process`**:
 1. Находит PDF (BBT lookup → Zotero storage → fuzzy search)
-2. Извлекает текст (PyMuPDF, до 50K символов)
-3. AI-анализ: scaffold prompting → фрагменты с citation intent → vault note
+2. Извлекает текст (PyMuPDF, до 50K символов для AI)
+3. AI-анализ: scaffold prompting → фрагменты с citation intent → аннотированная заметка
 4. Сохраняет фрагменты в SQLite
-5. Создаёт `@citekey.md` в Obsidian (summary, methodology, key references)
-6. Записывает reference gaps + citation links
-7. Генерирует embedding (если настроен бэкенд)
+5. Создаёт `@citekey.md` в `.klemma/notes/` (summary, methodology, key references) — или в Obsidian vault, если он настроен
+6. Пишет raw-дамп PDF в `.klemma/pdfs/<citekey>.md` (frontmatter + текст по страницам) — всегда локально
+7. Записывает reference gaps + citation links
+8. Генерирует embedding (если настроен бэкенд)
 
 **Совет**: обрабатывайте пакетами (накопите 5-10 источников, затем `klemma process`).
 

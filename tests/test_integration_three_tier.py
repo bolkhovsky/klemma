@@ -52,6 +52,11 @@ def _make_cfg(tmp_path: Path) -> MagicMock:
 def _make_pdf_extractor(pdf_path: Path) -> MagicMock:
     mock = MagicMock()
     mock.find_pdf.return_value = pdf_path
+    # `_process_single` calls `extract_pages()` then `format_for_ai()` —
+    # mock both so the AI-bound text path works under the fitz-reuse
+    # refactor (ADR-016).
+    mock.extract_pages.return_value = ["A" * 500]
+    mock.format_for_ai.return_value = "A" * 500
     mock.extract.return_value = "A" * 500
     return mock
 
@@ -391,3 +396,68 @@ class TestCrossProjectSharing:
         frags_b = state_b.get_fragments(source_id="smith2020")
         assert len(frags_b) == 1
         assert frags_b[0]["fragment_text"] == "Key finding"
+
+
+# ---------------------------------------------------------------------------
+# Sidecar integration — regression for DOI case-mismatch bug (ADR-016)
+# ---------------------------------------------------------------------------
+
+
+class TestSidecarIntegration:
+    """`write_pdf_sidecar` is driven by `_process_single` with a real
+    `ZoteroEntry`; verifies the full roundtrip including the DOI field
+    (the Pydantic model stores it as `DOI`, uppercase).
+    """
+
+    def test_sidecar_contains_doi_from_zotero_entry(self, tmp_path):
+        from klemma.literature.models import Author, ZoteroEntry
+
+        pdf = _make_pdf(tmp_path)
+        ps, ul = _make_library_pair(tmp_path / "library.db")
+        state = _make_state(tmp_path / "state.db")
+        cfg = _make_cfg(tmp_path)
+
+        entry = ZoteroEntry(
+            id="smith2020",
+            title="Smith on sea ice",
+            author=[Author(family="Smith", given="A.")],
+            issued={"date-parts": [[2020]]},
+            DOI="10.1000/smith.sea-ice",
+        )
+        library = MagicMock()
+        library.entries = {"smith2020": entry}
+        library.pdf_paths = {}
+
+        fake_frag = MagicMock()
+        fake_frag.text = "Key finding"
+        fake_frag.type = "evidence"
+        fake_frag.page = 1
+        fake_frag.citation_intent = None
+        fake_result = MagicMock()
+        fake_result.fragments = [fake_frag]
+
+        project_root = tmp_path / "project"
+        klemma_home = project_root / ".klemma"
+        klemma_home.mkdir(parents=True)
+
+        with patch("klemma.skills.extractor.extract_fragments", return_value=fake_result):
+            with patch("klemma.skills.extractor.save_fragments_to_vault", return_value=None):
+                with patch("klemma.literature.metadata.lookup_s2", return_value=None):
+                    _process_single(
+                        citekey="smith2020",
+                        cfg=cfg,
+                        state=state,
+                        vault=MagicMock(),
+                        ai=MagicMock(),
+                        pdf_extractor=_make_pdf_extractor(pdf),
+                        library=library,
+                        quiet=True,
+                        paper_store=ps,
+                        user_library=ul,
+                        klemma_home=klemma_home,
+                    )
+
+        sidecar = project_root / ".klemma" / "pdfs" / "smith2020.md"
+        assert sidecar.exists()
+        text = sidecar.read_text(encoding="utf-8")
+        assert "> DOI: 10.1000/smith.sea-ice" in text
