@@ -120,6 +120,29 @@ class Fragment(BaseModel):
             "extends", "contrasts", "uses_data",
         ]
     ] = None
+    verbatim: bool = False
+
+
+class DowngradeStats(BaseModel):
+    """Counts from the verbatim validator — surfaced to CLI + SaaS job result.
+
+    Fragments the AI claimed as verbatim but whose text isn't a substring of
+    the paper are downgraded to ``verbatim=false`` (not rejected — paraphrases
+    are still useful; we just refuse to let the AI lie about quotation).
+    """
+
+    verbatim_claimed: int = 0
+    verbatim_confirmed: int = 0  # exact substring match after normalization
+    fuzzy_rescued: int = 0  # kept as verbatim via difflib ratio ≥ threshold
+    downgraded: int = 0  # flipped to verbatim=false
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "verbatim_claimed": self.verbatim_claimed,
+            "verbatim_confirmed": self.verbatim_confirmed,
+            "fuzzy_rescued": self.fuzzy_rescued,
+            "downgraded": self.downgraded,
+        }
 
 
 class ExtractionResult(BaseModel):
@@ -129,6 +152,7 @@ class ExtractionResult(BaseModel):
     fragments: list[Fragment] = Field(default_factory=list)
     summary: str = ""
     extracted_at: datetime = Field(default_factory=datetime.now)
+    downgrade_stats: DowngradeStats = Field(default_factory=DowngradeStats)
 
 
 class DailyPlan(BaseModel):

@@ -28,6 +28,7 @@ interface Fragment {
   citation_intent: string
   page: number | null
   citekey: string
+  verbatim: boolean
 }
 
 const allFragments = ref<Fragment[]>([])
@@ -154,6 +155,7 @@ async function loadData() {
             citation_intent: c.citation_intent,
             page: null,
             citekey: c.citekey,
+            verbatim: false,
           })
         }
       }
@@ -426,6 +428,16 @@ onUnmounted(stopPolling)
                   class="text-[12px] font-medium px-2 py-0.5 rounded"
                   :class="intentColor[f.citation_intent] || 'bg-gray-100 text-gray-600'"
                 >{{ intentLabel[f.citation_intent] || f.citation_intent }}</span>
+                <span
+                  v-if="f.verbatim"
+                  class="text-[12px] font-medium px-2 py-0.5 rounded bg-[#dcfce7] text-[#15803d]"
+                  title="Дословная цитата из источника"
+                >📜 цитата</span>
+                <span
+                  v-else
+                  class="text-[12px] font-medium px-2 py-0.5 rounded bg-gray-100 text-[#6b6b8a] border border-[#fbbf24]"
+                  title="Парафраз — проверьте перед цитированием"
+                >✏️ парафраз</span>
                 <span v-if="f.page" class="font-mono text-[12px] text-[#6b6b8a]">стр. {{ f.page }}</span>
                 <select
                   class="text-[13px] text-[#065a5e] bg-[#e6f3f3] border border-[#0d7377] rounded py-1 pl-2 pr-6 cursor-pointer appearance-none max-w-[220px] truncate"

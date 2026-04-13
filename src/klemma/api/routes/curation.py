@@ -53,6 +53,7 @@ class PendingFragment(BaseModel):
     page: int | None = None
     citekey: str = ""
     suggested_section: str | None = None
+    verbatim: bool = False
 
 
 class PendingFragmentsResponse(BaseModel):
@@ -177,6 +178,7 @@ async def get_pending_fragments(
                 page=f.page_number,
                 citekey=citekey,
                 suggested_section=auto_assign_section(f.citation_intent, outline),
+                verbatim=f.verbatim,
             ))
 
     return PendingFragmentsResponse(

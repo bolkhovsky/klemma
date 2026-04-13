@@ -21,6 +21,14 @@ from typing import TYPE_CHECKING, Generator, Optional
 if TYPE_CHECKING:
     from ..models import FragmentRecord, PaperRecord
 
+# NOTE: library.db's user_version is co-owned with LocalUserLibrary (same file).
+# LocalUserLibrary's migration chain gates `CREATE TABLE` on `version < 2` and
+# subsequent ALTERs on `version < 3/4/5`, so THIS module must NOT bump
+# user_version past 1 on a fresh DB — doing so would skip user_library's table
+# creation and break its column migrations. All paper_store column additions
+# are gated on idempotent `PRAGMA table_info()` prechecks instead. This DB
+# chain is independent of the per-project state.py chain; they must not
+# be merged.
 _SCHEMA_VERSION = 1
 
 _CREATE_SCHEMA = """
@@ -33,6 +41,7 @@ CREATE TABLE IF NOT EXISTS papers (
     authors   TEXT,
     year      INTEGER,
     abstract  TEXT,
+    raw_text  TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_papers_doi  ON papers(doi);
@@ -57,6 +66,7 @@ CREATE TABLE IF NOT EXISTS fragments (
     fragment_type  TEXT,
     page_number    INTEGER,
     citation_intent TEXT,
+    verbatim       INTEGER NOT NULL DEFAULT 0,
     created_at     TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_fragments_paper ON fragments(paper_id);
@@ -132,6 +142,23 @@ class LocalPaperStore:
             conn.executescript(_CREATE_SCHEMA)
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
+        # raw_text cache (papers) + verbatim flag (fragments). These are
+        # gated on PRAGMA table_info — not user_version — because library.db's
+        # version counter is co-owned with LocalUserLibrary (see note above).
+        papers_cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(papers)").fetchall()
+        }
+        if papers_cols and "raw_text" not in papers_cols:
+            conn.execute("ALTER TABLE papers ADD COLUMN raw_text TEXT")
+
+        frag_cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(fragments)").fetchall()
+        }
+        if frag_cols and "verbatim" not in frag_cols:
+            conn.execute(
+                "ALTER TABLE fragments ADD COLUMN verbatim INTEGER NOT NULL DEFAULT 0"
+            )
+
     # ------------------------------------------------------------------ #
     # Paper registry                                                       #
     # ------------------------------------------------------------------ #
@@ -148,13 +175,13 @@ class LocalPaperStore:
         with self._conn() as conn:
             if pdf_hash:
                 row = conn.execute(
-                    "SELECT * FROM papers WHERE pdf_hash = ?", (pdf_hash,)
+                    "SELECT paper_id, pdf_hash, doi, title, authors, year, abstract FROM papers WHERE pdf_hash = ?", (pdf_hash,)
                 ).fetchone()
                 if row:
                     return _row_to_paper(row, PaperRecord)
             if doi:
                 row = conn.execute(
-                    "SELECT * FROM papers WHERE doi = ?", (doi,)
+                    "SELECT paper_id, pdf_hash, doi, title, authors, year, abstract FROM papers WHERE doi = ?", (doi,)
                 ).fetchone()
                 if row:
                     return _row_to_paper(row, PaperRecord)
@@ -166,7 +193,7 @@ class LocalPaperStore:
 
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM papers WHERE paper_id = ?", (paper_id,)
+                "SELECT paper_id, pdf_hash, doi, title, authors, year, abstract FROM papers WHERE paper_id = ?", (paper_id,)
             ).fetchone()
         if not row:
             return None
@@ -206,6 +233,27 @@ class LocalPaperStore:
                 (paper_id, pdf_hash or None, doi or None, title, authors, year, abstract),
             )
         return paper_id
+
+    def update_paper_raw_text(self, paper_id: str, raw_text: str) -> bool:
+        """Persist the PDF's extracted text for the verbatim validator + future
+        raw-text search. Idempotent: overwrites on repeated calls.
+        """
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE papers SET raw_text = ? WHERE paper_id = ?",
+                (raw_text, paper_id),
+            )
+        return cursor.rowcount > 0
+
+    def get_raw_text(self, paper_id: str) -> Optional[str]:
+        """Return the cached raw PDF text, or None if not yet populated."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT raw_text FROM papers WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+        if not row or row["raw_text"] is None:
+            return None
+        return row["raw_text"]
 
     def update_paper_metadata(
         self,
@@ -249,6 +297,27 @@ class LocalPaperStore:
     # Fragments                                                            #
     # ------------------------------------------------------------------ #
 
+    def get_paper_ids_with_raw_text(self) -> list[str]:
+        """Return paper_ids whose raw_text cache is populated.
+
+        Used by the ``backfill-verbatim`` subcommand to find papers whose
+        fragments can be revalidated without re-extracting the PDF.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT paper_id FROM papers WHERE raw_text IS NOT NULL AND raw_text != ''",
+            ).fetchall()
+        return [row["paper_id"] for row in rows]
+
+    def update_fragment_verbatim(self, fragment_id: str, verbatim: bool) -> bool:
+        """Flip a fragment's verbatim flag; returns True when a row was updated."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE fragments SET verbatim = ? WHERE fragment_id = ?",
+                (1 if verbatim else 0, fragment_id),
+            )
+            return cur.rowcount > 0
+
     def delete_fragments(self, paper_id: str) -> int:
         """Delete all fragments and extractions for paper_id. Returns count deleted."""
         with self._conn() as conn:
@@ -276,6 +345,7 @@ class LocalPaperStore:
                 fragment_type=row["fragment_type"] or "key_idea",
                 page_number=row["page_number"],
                 citation_intent=row["citation_intent"],
+                verbatim=bool(row["verbatim"]) if "verbatim" in row.keys() else False,
                 content_hash=row["fragment_id"],
             )
             for row in rows
@@ -316,8 +386,9 @@ class LocalPaperStore:
                 cur = conn.execute(
                     """INSERT OR IGNORE INTO fragments
                        (fragment_id, paper_id, extraction_id,
-                        fragment_text, fragment_type, page_number, citation_intent)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        fragment_text, fragment_type, page_number,
+                        citation_intent, verbatim)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         f.fragment_id,
                         paper_id,
@@ -326,6 +397,7 @@ class LocalPaperStore:
                         f.fragment_type,
                         f.page_number,
                         f.citation_intent,
+                        1 if f.verbatim else 0,
                     ),
                 )
                 inserted += cur.rowcount
@@ -549,6 +621,10 @@ class LocalPaperStore:
         library.db).  Filters by ``user_id`` and ``fragment_text LIKE %query%``.
         Returns up to *limit* rows ordered by fragment length ascending
         (shorter fragments tend to be more focused / higher quality).
+
+        TODO(#212-followup): add a second-query branch over ``papers.raw_text``
+        so verbatim phrases present in the source but absent from summary
+        fragments are still recallable. Deferred to follow-up PR.
         """
         like = f"%{query}%"
         with self._conn() as conn:

@@ -1635,6 +1635,14 @@ def _process_single(
 
     if not quiet:
         console.print(f"  [green]{len(result.fragments)} fragments[/green]", end="")
+        ds = result.downgrade_stats
+        if ds.downgraded:
+            console.print(
+                f"\n  [yellow]\u26a0 {ds.downgraded}/{ds.verbatim_claimed} fragments "
+                f"marked verbatim by the AI were not found in the source and have been "
+                f"downgraded to paraphrase ({ds.fuzzy_rescued} rescued via fuzzy match).[/yellow]",
+                end="",
+            )
 
     # Save to vault
     saved_path = save_fragments_to_vault(

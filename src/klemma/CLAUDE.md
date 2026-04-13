@@ -133,6 +133,8 @@ SQLite backends implementing the three-tier library protocols.
 - `__init__(db_path)` — creates parent dirs, runs `_migrate_schema()` (schema version 1)
 - `find_paper(*, pdf_hash?, doi?) -> PaperRecord | None` — look up by hash or DOI
 - `get_paper_by_id(paper_id) -> PaperRecord | None` — look up by paper_id
+- `update_paper_raw_text(paper_id, raw_text) -> bool` / `get_raw_text(paper_id) -> str | None` — cache of the 50K-truncated PDF text the AI saw; used by the verbatim validator and (future) find-in-page UX
+- `get_paper_ids_with_raw_text() -> list[str]`, `update_fragment_verbatim(fragment_id, verbatim)` — used by the hidden `klemma backfill-verbatim` subcommand to revalidate stored fragments against cached raw_text without re-extracting PDFs
 - `register_paper(*, title, pdf_hash, ...) -> str` — idempotent: same pdf_hash → same paper_id (UUID)
 - `get_fragments(paper_id) -> list[FragmentRecord]` — all stored fragments for a paper
 - `save_fragments(paper_id, fragments, prompt_hash, ai_model) -> int` — insert with `INSERT OR IGNORE`, creates `extractions` record

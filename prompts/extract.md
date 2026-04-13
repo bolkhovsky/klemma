@@ -56,13 +56,14 @@ These statements are the highest-priority candidates for fragment extraction.
 ## Step 3: Extract Fragments
 
 Now extract key citation fragments from this paper. For each fragment, identify:
-1. The exact text (verbatim or close paraphrase)
-2. Fragment type: quote, methodology, result, conclusion, definition, key_idea
-3. Which chapter/section it fits
-4. Relevance score (1-5) for the project
-5. Usage hint: how to cite this in the text
-6. Page number (if visible from [Page N] markers)
-7. Citation intent — how this fragment would be cited in the project (based on Teufel et al. 2006 citation function taxonomy):
+1. The fragment text — see the verbatim/paraphrase rules below
+2. `verbatim` flag (true/false) — whether the text is an exact substring of the paper
+3. Fragment type: quote, methodology, result, conclusion, definition, key_idea
+4. Which chapter/section it fits
+5. Relevance score (1-5) for the project
+6. Usage hint: how to cite this in the text
+7. Page number (if visible from [Page N] markers)
+8. Citation intent — how this fragment would be cited in the project (based on Teufel et al. 2006 citation function taxonomy):
    - `background` — context, general knowledge, literature review (e.g. "X showed that...")
    - `method` — a method, algorithm, or approach you adapt or build upon (e.g. "Following the approach of X...")
    - `result_comparison` — results or metrics for comparison (e.g. "X achieved 95% accuracy, while our method...")
@@ -70,13 +71,37 @@ Now extract key citation fragments from this paper. For each fragment, identify:
    - `contrasts` — this work disagrees with or shows limitations of the cited work (e.g. "Unlike X, our approach...")
    - `uses_data` — uses datasets, benchmarks, or empirical data from the cited work (e.g. "Using the dataset from X...")
 
+### Verbatim vs paraphrase
+
+Each fragment must carry a `verbatim` flag. Scientific integrity depends on it:
+a downstream validator will check the claim against the paper text, and anything
+cited as a quotation in the user's draft is expected to be a true substring of
+the source.
+
+- `verbatim: true` — the `text` field is a **character-identical substring** of
+  the paper (whitespace, ligatures, and line-break hyphenation may differ — the
+  validator normalises for PDF extraction noise). Prefer this for short,
+  claim-bearing sentences you would place inside quotation marks in a
+  bibliography-backed draft (a definition, a numerical result, a thesis
+  sentence).
+- `verbatim: false` — the `text` is a paraphrase, condensation, or summary of a
+  longer passage. This is the right choice when the claim spans several
+  sentences, when you compress multiple bullet points, or when the original
+  phrasing is awkward out of context. A paraphrase is still a valid fragment;
+  it just cannot be presented as a quotation.
+
+If unsure, set `verbatim: false` — the validator is strict; a false positive
+(claiming verbatim when paraphrased) is worse than a correctly-labelled
+paraphrase.
+
 Return a JSON object:
 
 ```json
 {
   "fragments": [
     {
-      "text": "Exact or close-paraphrase fragment from the paper",
+      "text": "Fragment text (verbatim substring if verbatim=true, paraphrase if false)",
+      "verbatim": true,
       "type": "key_idea",
       "chapter": 2,
       "section": "2.3.1",
@@ -99,7 +124,7 @@ Return a JSON object:
 
 Guidelines:
 1. Extract 3-10 fragments per paper, prioritizing high-relevance ones
-2. Include at least one verbatim quote suitable for direct citation
+2. Include at least one `verbatim: true` fragment suitable for direct quotation; summaries of longer passages should be `verbatim: false`
 3. Identify methodology descriptions that could be referenced
 4. Look for results/metrics that support or contrast with the project's approach
 5. Flag definitions of key terms

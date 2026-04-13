@@ -41,6 +41,7 @@ class FragmentRecord:
     fragment_type: str = "key_idea"
     page_number: int | None = None
     citation_intent: str | None = None
+    verbatim: bool = False
     content_hash: str = ""  # same as fragment_id, explicit for clarity
 
 

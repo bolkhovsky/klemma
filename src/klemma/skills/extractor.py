@@ -1,17 +1,114 @@
 """Fragment extraction skill — extracts citation fragments from PDFs."""
 
+import difflib
 import logging
 from pathlib import Path
 from typing import Optional
 
 from ..ai import AIProvider
 from ..config import KlemmaConfig, resolve_prompt
-from ..literature.models import ExtractionResult, Fragment, ZoteroEntry
+from ..literature.models import DowngradeStats, ExtractionResult, Fragment, ZoteroEntry
 from ..literature.pdf import PDFExtractor
 from ..state import StateManager
+from ..text_normalize import normalize
 from ..vault import VaultAdapter
 
 logger = logging.getLogger(__name__)
+
+# Fuzzy-match rescue threshold. Fragments whose AI-claimed verbatim text fails
+# an exact substring check but matches a window of the paper at this ratio or
+# above keep `verbatim=true` with a logged warning — this covers PDF extraction
+# noise (OCR char swaps, dropped diacritics) without giving cover to
+# fabrication. Below this ratio, the fragment is downgraded to
+# `verbatim=false`. Revisit after dogfooding the rescue count distribution.
+_FUZZY_RESCUE_THRESHOLD = 0.95
+
+
+def validate_verbatim_fragments(
+    fragments: list[Fragment],
+    pdf_text: str,
+    source_id: str,
+) -> DowngradeStats:
+    """Enforce the `verbatim=true` claim against the paper text.
+
+    Two-stage match: (1) exact substring after NFKC + PDF-noise normalization;
+    (2) difflib ratio fallback for OCR/extractor artifacts. Below the fuzzy
+    threshold, flip the flag to `false` instead of dropping the fragment —
+    a paraphrase is still useful, we just don't let it masquerade as a quote.
+
+    NOTE: searches `pdf_text` directly because the current pipeline passes the
+    whole (50K-truncated) extraction into the AI prompt. If chunking is
+    introduced upstream, this validator must move to the full cached
+    ``papers.raw_text`` rather than a per-chunk slice.
+    """
+    stats = DowngradeStats()
+    if not fragments:
+        return stats
+
+    norm_pdf = normalize(pdf_text)
+    if not norm_pdf:
+        # Nothing to validate against — leave flags as-is and warn once.
+        logger.warning(
+            "verbatim validator: empty normalized pdf_text for %s; skipping",
+            source_id,
+        )
+        return stats
+
+    for frag in fragments:
+        if not frag.verbatim:
+            continue  # paraphrases are unverifiable by substring — out of scope
+        stats.verbatim_claimed += 1
+
+        norm_frag = normalize(frag.text)
+        if not norm_frag:
+            frag.verbatim = False
+            stats.downgraded += 1
+            logger.warning(
+                "verbatim downgrade (%s): empty normalized fragment", source_id,
+            )
+            continue
+
+        if norm_frag in norm_pdf:
+            stats.verbatim_confirmed += 1
+            continue
+
+        # Stage 2: fuzzy rescue against a sliding window sized to the fragment.
+        # SequenceMatcher.find_longest_match on the full text is O(n) and fast
+        # enough at 50K chars × a handful of fragments; cheaper than chopping
+        # windows manually and avoids boundary-miss edge cases.
+        matcher = difflib.SequenceMatcher(None, norm_frag, norm_pdf, autojunk=False)
+        match = matcher.find_longest_match(0, len(norm_frag), 0, len(norm_pdf))
+        if match.size == 0:
+            frag.verbatim = False
+            stats.downgraded += 1
+            logger.warning(
+                "verbatim downgrade (%s, substring_match_failed): %s…",
+                source_id, norm_frag[:80],
+            )
+            continue
+
+        # Align the window so the fragment-start (position 0) lines up with
+        # the best-match anchor in the PDF. Without this, noise near the
+        # fragment's start pushes the anchor forward and the window
+        # mis-aligns, under-reporting the true similarity.
+        window_start = max(0, match.b - match.a)
+        window = norm_pdf[window_start : window_start + len(norm_frag)]
+        ratio = difflib.SequenceMatcher(None, norm_frag, window, autojunk=False).ratio()
+        if ratio >= _FUZZY_RESCUE_THRESHOLD:
+            stats.fuzzy_rescued += 1
+            logger.info(
+                "verbatim fuzzy-rescue (%s, ratio=%.3f): %s… ↔ %s…",
+                source_id, ratio, norm_frag[:60], window[:60],
+            )
+        else:
+            frag.verbatim = False
+            stats.downgraded += 1
+            logger.warning(
+                "verbatim downgrade (%s, fuzzy_match_below_threshold:%.3f): %s…",
+                source_id, ratio, norm_frag[:80],
+            )
+
+    return stats
 
 
 def extract_fragments(
@@ -71,6 +168,7 @@ def extract_fragments(
                 usage_hint=f_data.get("usage_hint", ""),
                 page=f_data.get("page"),
                 citation_intent=f_data.get("citation_intent"),
+                verbatim=bool(f_data.get("verbatim", False)),
             )
             if fragment.text:
                 fragments.append(fragment)
@@ -80,6 +178,12 @@ def extract_fragments(
     if not fragments:
         logger.warning("No valid fragments extracted for %s", entry.id)
         return None
+
+    # Post-AI integrity check: confirm every `verbatim=true` claim against the
+    # paper text and downgrade the ones that don't hold up. Mutates fragments
+    # in place; stats surface via ExtractionResult → CLI warning and SaaS
+    # job metadata.
+    downgrade_stats = validate_verbatim_fragments(fragments, pdf_text, entry.id)
 
     # Compute content hashes for future content-addressable storage (ADR-014)
     from ..hashing import compute_content_hash
@@ -95,6 +199,7 @@ def extract_fragments(
             "usage_hint": f.usage_hint,
             "page": f.page,
             "citation_intent": f.citation_intent,
+            "verbatim": f.verbatim,
             "content_hash": compute_content_hash(entry.id, f.text, f.page),
         }
         for f in fragments
@@ -106,6 +211,7 @@ def extract_fragments(
         source_id=entry.id,
         fragments=fragments,
         summary=data.get("summary", ""),
+        downgrade_stats=downgrade_stats,
     )
 
 
