@@ -245,6 +245,7 @@ Provider-agnostic paper search — resolve reference gaps to acquisition targets
 ### embeddings.py (393 lines)
 `EmbeddingProvider` runtime-checkable protocol + 4 backends + utilities.
 - `EmbeddingProvider` protocol — `dim`, `model_name`, `embed(title, abstract) → list[float] | None`
+- `embed_batch(texts) → list[list[float] | None]` — optional method on backends (LiteLLM implements it as a single batched HTTP call); fallback helper `_default_embed_batch(provider, texts)` loops `embed()` for backends without native batching
 - `SemanticScholarEmbeddings` — free S2 API (768-dim SPECTER), rate-limited (throttle param)
 - `LocalSPECTEREmbeddings` — offline sentence-transformers SPECTER2 model
 - `OpenAIEmbeddings` — text-embedding-3-small (1536-dim)

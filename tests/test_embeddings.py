@@ -215,6 +215,84 @@ class TestLiteLLMEmbeddings:
         p = LiteLLMEmbeddings("ollama/bge-m3")
         assert isinstance(p, EmbeddingProvider)
 
+    def test_embed_batch_single_call(self):
+        """embed_batch sends all non-empty texts in a single HTTP call."""
+        p = LiteLLMEmbeddings("ollama/bge-m3")
+        p._litellm = MagicMock()
+        response = MagicMock()
+        response.data = [
+            {"embedding": [0.1, 0.2]},
+            {"embedding": [0.3, 0.4]},
+            {"embedding": [0.5, 0.6]},
+        ]
+        p._litellm.embedding.return_value = response
+
+        vectors = p.embed_batch(["one", "two", "three"])
+
+        assert p._litellm.embedding.call_count == 1
+        assert vectors == [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+        assert p._litellm.embedding.call_args.kwargs["input"] == ["one", "two", "three"]
+
+    def test_embed_batch_preserves_none_for_empty(self):
+        """Empty strings become None without being sent to the backend."""
+        p = LiteLLMEmbeddings("ollama/bge-m3")
+        p._litellm = MagicMock()
+        response = MagicMock()
+        response.data = [
+            {"embedding": [0.1]},
+            {"embedding": [0.2]},
+        ]
+        p._litellm.embedding.return_value = response
+
+        vectors = p.embed_batch(["one", "", "two", "   "])
+
+        assert vectors == [[0.1], None, [0.2], None]
+        assert p._litellm.embedding.call_args.kwargs["input"] == ["one", "two"]
+
+    def test_embed_batch_all_empty_skips_call(self):
+        p = LiteLLMEmbeddings("ollama/bge-m3")
+        p._litellm = MagicMock()
+        assert p.embed_batch(["", "  "]) == [None, None]
+        p._litellm.embedding.assert_not_called()
+
+    def test_embed_batch_empty_list(self):
+        p = LiteLLMEmbeddings("ollama/bge-m3")
+        p._litellm = MagicMock()
+        assert p.embed_batch([]) == []
+        p._litellm.embedding.assert_not_called()
+
+    def test_embed_batch_error_returns_all_none(self):
+        p = LiteLLMEmbeddings("ollama/bge-m3")
+        p._litellm = MagicMock()
+        p._litellm.embedding.side_effect = ConnectionError("ollama down")
+        assert p.embed_batch(["one", "two"]) == [None, None]
+
+
+class TestDefaultEmbedBatchFallback:
+    """The _default_embed_batch helper used by backends without batch support."""
+
+    def test_falls_back_to_sequential_embed(self):
+        from klemma.embeddings import _default_embed_batch
+
+        provider = MagicMock()
+        provider.embed.side_effect = [[1.0], [2.0], None]
+
+        result = _default_embed_batch(provider, ["a", "b", "c"])
+
+        assert result == [[1.0], [2.0], None]
+        assert provider.embed.call_count == 3
+
+    def test_skips_empty_without_calling(self):
+        from klemma.embeddings import _default_embed_batch
+
+        provider = MagicMock()
+        provider.embed.return_value = [0.5]
+
+        result = _default_embed_batch(provider, ["text", ""])
+
+        assert result == [[0.5], None]
+        assert provider.embed.call_count == 1
+
 
 class TestProtocolCompliance:
     """Verify all providers satisfy EmbeddingProvider protocol."""
