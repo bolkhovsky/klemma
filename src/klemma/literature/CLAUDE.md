@@ -22,7 +22,8 @@ Zotero local API integration via Connector + Better BibTeX JSON-RPC.
 All Pydantic models for the data layer:
 - `ZoteroEntry`, `Author` — Zotero item representation (`year`, `authors_str`, `citation` properties)
 - `DissertationRelevance` — chapter/section relevance scoring (NR1/NR2, 0-5)
-- `Fragment`, `ExtractionResult` — extraction output (text, type, chapter, section, relevance, page)
+- `Fragment`, `ExtractionResult` — extraction output (text, type, chapter, section, relevance, page, `verbatim: bool`)
+- `DowngradeStats` — verbatim validator counts (`verbatim_claimed`, `verbatim_confirmed`, `fuzzy_rescued`, `downgraded`); attached to `ExtractionResult.downgrade_stats` + SaaS job result
 - `DailyPlan` — daily briefing output
 - `CitationEntry`, `ArgumentBlock`, `ResearchResult` — research briefing output; `ResearchResult.required_missing: list[str]` — citekeys passed via `--require` that had no fragments in the target section
 - `LibraryReport` — library analysis output

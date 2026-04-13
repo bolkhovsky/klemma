@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS fragments (
     usage_hint TEXT,
     page_number INTEGER,
     extracted_at TEXT DEFAULT (datetime('now')),
-    used_in_draft BOOLEAN DEFAULT 0
+    used_in_draft BOOLEAN DEFAULT 0,
+    verbatim INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS daily_plans (
@@ -184,8 +185,11 @@ class StateManager:
         Each version bump adds new columns/tables without breaking existing data.
         Runs on every DB open — fast (single PRAGMA check) and safe.
         """
+        # NOTE: This chain is specific to the project-local klemma.db.
+        # library.db (stores/paper_store.py) has its own independent
+        # PRAGMA user_version chain — do not merge the two sequences.
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 14  # bump this when adding new migrations
+        target = 15  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -467,6 +471,15 @@ class StateManager:
                 conn.execute("ALTER TABLE decisions ADD COLUMN note TEXT")
             if "feedback" not in existing_dec:
                 conn.execute("ALTER TABLE decisions ADD COLUMN feedback TEXT")
+
+        if version < 15:
+            existing_frag = {
+                row[1] for row in conn.execute("PRAGMA table_info(fragments)")
+            }
+            if "verbatim" not in existing_frag:
+                conn.execute(
+                    "ALTER TABLE fragments ADD COLUMN verbatim INTEGER NOT NULL DEFAULT 0"
+                )
 
         conn.execute(f"PRAGMA user_version = {target}")
 

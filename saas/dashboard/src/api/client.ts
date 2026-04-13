@@ -376,7 +376,7 @@ export const drafts = {
 export const curation = {
   pending: (projectId: string, citekey: string) =>
     request<{
-      fragments: { fragment_id: string; text: string; citation_intent: string; fragment_type: string; page: number | null; citekey: string }[]
+      fragments: { fragment_id: string; text: string; citation_intent: string; fragment_type: string; page: number | null; citekey: string; verbatim: boolean }[]
       total: number
       curated_count: number
     }>(`/projects/${projectId}/fragments/pending?citekey=${encodeURIComponent(citekey)}`),

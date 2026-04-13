@@ -34,9 +34,10 @@ Morning briefing generation. Gathers: deadline, streak, yesterday's plan, chapte
 - `_read_chapter_plan()` — load session plan from vault
 - Intervention types: `NONE`, `REPLAN`, `BOOST`, `SKIP`
 
-### extractor.py (215 lines)
+### extractor.py (335 lines)
 Fragment extraction from PDFs with citation intent classification.
-- `extract_fragments(entry, pdf_text, config, state, ai, dissertation_context, available_tags, klemma_home)` — renders `prompts/extract.md` → Claude → `ExtractionResult` (fragments + citation_intent + citation_links)
+- `extract_fragments(entry, pdf_text, config, state, ai, dissertation_context, available_tags, klemma_home)` — renders `prompts/extract.md` → Claude → `ExtractionResult` (fragments + citation_intent + citation_links + `downgrade_stats: DowngradeStats`)
+- `_validate_verbatim_fragments(fragments, pdf_text, source_id)` — post-AI integrity check: two-stage match (NFKC-normalized exact substring → difflib fuzzy rescue ≥0.95) against the same `pdf_text` the AI saw. Scope-gated on `frag.verbatim=True`; flips failing claims to `False` (paraphrase) instead of dropping them. Returns counts via `DowngradeStats`
 - `extract_from_citekey()` — full pipeline (find PDF → extract text → analyze → save citation_links to graph)
 - `save_fragments_to_vault(citekey, fragments, vault, ..., dissertation_context, available_tags, klemma_home)` — appends to `@citekey.md`; auto-creates note if missing
 

@@ -16,8 +16,9 @@ class FragmentRepository(BaseRepository):
                 cur = conn.execute(
                     """INSERT OR IGNORE INTO fragments
                        (source_id, fragment_text, fragment_type, chapter, section,
-                        relevance_score, usage_hint, page_number, citation_intent)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        relevance_score, usage_hint, page_number, citation_intent,
+                        verbatim)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         source_id,
                         f.get("text", ""),
@@ -28,6 +29,7 @@ class FragmentRepository(BaseRepository):
                         f.get("usage_hint", ""),
                         f.get("page"),
                         f.get("citation_intent"),
+                        1 if f.get("verbatim") else 0,
                     ),
                 )
                 inserted += cur.rowcount

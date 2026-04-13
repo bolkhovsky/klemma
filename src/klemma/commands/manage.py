@@ -1381,6 +1381,73 @@ def import_vault(ctx, with_queue):
             )
 
 
+@main.command(name="backfill-verbatim", hidden=True)
+@click.pass_context
+def backfill_verbatim(ctx):
+    """Re-validate the verbatim flag on stored fragments against cached raw_text.
+
+    Flips ``verbatim`` to ``true`` for fragments whose text is confirmed (or
+    fuzzy-rescued) against the paper's cached ``raw_text``. Never downgrades.
+    Hidden — discover via ``klemma --help`` or this docstring.
+    """
+    from ..literature.models import Fragment
+    from ..skills.extractor import _validate_verbatim_fragments
+
+    kc = _get_context(ctx)
+    paper_store = kc.paper_store
+    if paper_store is None:
+        console.print("[red]library.db unavailable — cannot backfill[/red]")
+        raise click.Abort()
+
+    paper_ids = paper_store.get_paper_ids_with_raw_text()
+    if not paper_ids:
+        console.print(
+            "[yellow]No papers with cached raw_text yet — "
+            "re-ingest at least one paper to populate the cache.[/yellow]"
+        )
+        return
+
+    console.print(
+        f"Backfilling verbatim flags across [cyan]{len(paper_ids)}[/cyan] papers…"
+    )
+    total_checked = 0
+    total_flipped = 0
+    skipped_no_raw = 0
+
+    for paper_id in paper_ids:
+        raw_text = paper_store.get_raw_text(paper_id)
+        if not raw_text:
+            skipped_no_raw += 1
+            continue
+        records = paper_store.get_fragments(paper_id)
+        # Only candidates for promotion are fragments currently marked
+        # verbatim=False — promoting already-True ones is a no-op.
+        candidates = [r for r in records if not r.verbatim]
+        if not candidates:
+            continue
+        pydantic_frags = [Fragment(text=r.fragment_text, verbatim=True) for r in candidates]
+        _validate_verbatim_fragments(pydantic_frags, raw_text, paper_id)
+        paper_flipped = 0
+        for record, pyd in zip(candidates, pydantic_frags):
+            total_checked += 1
+            if pyd.verbatim:
+                if paper_store.update_fragment_verbatim(record.fragment_id, True):
+                    total_flipped += 1
+                    paper_flipped += 1
+        if paper_flipped:
+            console.print(
+                f"  [green]{paper_id}[/green]: flipped "
+                f"{paper_flipped}/{len(candidates)} fragments"
+            )
+
+    console.print(
+        f"\n[bold]Done.[/bold] Checked {total_checked} fragments, "
+        f"flipped [green]{total_flipped}[/green] to verbatim."
+    )
+    if skipped_no_raw:
+        console.print(f"[dim]Skipped {skipped_no_raw} papers without raw_text.[/dim]")
+
+
 # --- Backward-compatible aliases ---
 
 

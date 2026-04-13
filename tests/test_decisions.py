@@ -25,10 +25,10 @@ class TestDecisionsMigration:
             }
             assert "decisions" in tables
 
-    def test_db_version_is_14(self, state):
+    def test_db_version_is_current(self, state):
         with state._conn() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            assert version == 14
+            assert version == 15
 
     def test_decisions_columns(self, state):
         with state._conn() as conn:

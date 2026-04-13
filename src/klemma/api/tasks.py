@@ -191,6 +191,15 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             return {"status": "error", "detail": "PDF text too short or extraction failed"}
 
         logger.info("Extracted %d chars from PDF for %s", len(pdf_text), citekey)
+
+        # Cache the full PDF text on the paper record so the verbatim validator
+        # and future find-in-page UX can search the same string the AI saw.
+        try:
+            paper_store.update_paper_raw_text(paper_id, pdf_text)
+        except Exception as cache_exc:
+            logger.warning(
+                "raw_text cache write failed for %s (non-fatal): %s", citekey, cache_exc,
+            )
     except Exception as exc:
         logger.error("PDF extraction failed for %s: %s", citekey, exc)
         user_library.update_status(citekey, "failed", user_id=user_id or None)
@@ -313,11 +322,20 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         fragment_ai_sections: dict[str, str | None] = {}  # fragment_id → AI predicted section
         predicted_sections: set[str] = set()
         predicted_chapters: set[int] = set()
+        # Build parallel Fragment (Pydantic) list purely to drive the verbatim
+        # validator — the SaaS worker stores FragmentRecord (dataclass), so we
+        # copy the validated flag back after the validator may downgrade it.
+        from klemma.literature.models import Fragment
+        from klemma.skills.extractor import _validate_verbatim_fragments
+
+        pydantic_frags: list[Fragment] = []
         for f_data in data.get("fragments", []):
             text = f_data.get("text", "").strip()
             if not text:
                 continue
             fragment_id = compute_content_hash(paper_id, text, f_data.get("page"))
+            claimed_verbatim = bool(f_data.get("verbatim", False))
+            pydantic_frags.append(Fragment(text=text, verbatim=claimed_verbatim))
             fragments.append(FragmentRecord(
                 fragment_id=fragment_id,
                 paper_id=paper_id,
@@ -325,6 +343,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 fragment_type=f_data.get("type", "key_idea"),
                 page_number=f_data.get("page"),
                 citation_intent=f_data.get("citation_intent"),
+                verbatim=claimed_verbatim,
                 content_hash=fragment_id,
             ))
             # Capture per-fragment AI section prediction (safe — keyed by ID, not index)
@@ -339,6 +358,26 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         if not fragments:
             user_library.update_status(citekey, "failed", user_id=user_id or None)
             return {"status": "error", "detail": "No fragments extracted from PDF"}
+
+        # Verbatim integrity check: match the AI's verbatim claims against the
+        # same pdf_text the AI saw (50K cap matches prompt input). The
+        # validator mutates the Pydantic list; mirror the final flag onto each
+        # FragmentRecord so what gets saved matches what was validated.
+        downgrade_stats = _validate_verbatim_fragments(
+            pydantic_frags, pdf_text[:50000], citekey,
+        )
+        for record, pyd in zip(fragments, pydantic_frags):
+            record.verbatim = pyd.verbatim
+        if downgrade_stats.downgraded:
+            logger.warning(
+                "verbatim validator (%s): %d/%d claimed fragments downgraded "
+                "(%d fuzzy-rescued, %d confirmed)",
+                citekey,
+                downgrade_stats.downgraded,
+                downgrade_stats.verbatim_claimed,
+                downgrade_stats.fuzzy_rescued,
+                downgrade_stats.verbatim_confirmed,
+            )
 
         # Save to paper store
         prompt_hash = ""
@@ -458,6 +497,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             "status": "completed",
             "citekey": citekey,
             "fragment_count": saved,
+            "downgrade_stats": downgrade_stats.as_dict(),
         }
 
     except Exception as exc:

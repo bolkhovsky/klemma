@@ -121,12 +121,12 @@ class TestMigration:
         runs = s2.get_benchmark_runs()
         assert len(runs) == 1
 
-    def test_schema_version_is_4(self, state):
+    def test_schema_version_is_current(self, state):
         import sqlite3
         conn = sqlite3.connect(state.db_path)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.close()
-        assert version == 14
+        assert version == 15
 
 
 class TestBuildResultsSummary:
