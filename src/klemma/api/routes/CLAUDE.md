@@ -11,7 +11,7 @@ System health check endpoint — no auth required.
 
 ### auth.py
 Auth endpoints — mounted with `prefix="/auth"`. `TokenResponse` includes `user_id` in all endpoints.
-- `POST /auth/register` → `TokenResponse` (201)
+- `POST /auth/register` → `TokenResponse` (201). Auto-grants initial token balance via `LocalUserStore.grant_tokens()` — amount controlled by `KLEMMA_INITIAL_TOKEN_GRANT` env var (default `1_000_000`; set to `0` to disable). Grant failures log + don't break registration.
 - `POST /auth/login` → `TokenResponse` (200)
 - `POST /auth/refresh` → `TokenResponse` (200) — rotates refresh token
 - `GET /auth/me` → `UserResponse` (requires Bearer token)

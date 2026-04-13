@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from klemma.models import UserRecord
@@ -25,6 +28,36 @@ from ..auth.tokens import (
 from ..rate_limit import rate_limit
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+_DEFAULT_INITIAL_TOKEN_GRANT = 1_000_000
+
+
+def _initial_token_grant() -> int:
+    """Read the initial token allowance for new users from env, default 1M.
+
+    Configurable via ``KLEMMA_INITIAL_TOKEN_GRANT``. Set to 0 to disable
+    auto-grant (e.g. for paid-only deployments). Negative or invalid values
+    fall back to the default with a warning.
+    """
+    raw = os.getenv("KLEMMA_INITIAL_TOKEN_GRANT")
+    if raw is None:
+        return _DEFAULT_INITIAL_TOKEN_GRANT
+    try:
+        amount = int(raw)
+    except ValueError:
+        logger.warning(
+            "KLEMMA_INITIAL_TOKEN_GRANT=%r is not an integer; using default %d",
+            raw, _DEFAULT_INITIAL_TOKEN_GRANT,
+        )
+        return _DEFAULT_INITIAL_TOKEN_GRANT
+    if amount < 0:
+        logger.warning(
+            "KLEMMA_INITIAL_TOKEN_GRANT=%d is negative; using default %d",
+            amount, _DEFAULT_INITIAL_TOKEN_GRANT,
+        )
+        return _DEFAULT_INITIAL_TOKEN_GRANT
+    return amount
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -42,6 +75,16 @@ async def register(
             status_code=status.HTTP_409_CONFLICT,
             detail="Email already registered",
         )
+
+    initial_grant = _initial_token_grant()
+    if initial_grant > 0:
+        try:
+            store.grant_tokens(user.user_id, initial_grant)
+        except Exception:
+            logger.exception(
+                "Failed to grant initial %d tokens to new user %s; account created without balance",
+                initial_grant, user.user_id,
+            )
 
     access = create_access_token(user.user_id, user.email)
     refresh = create_refresh_token(user.user_id)
