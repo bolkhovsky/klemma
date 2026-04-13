@@ -178,9 +178,9 @@ SQLite backends implementing the three-tier library protocols.
 - `clear_prune_verdict(source_id, user_id=None) -> None` — remove single verdict; user-scoped
 - Tables: `project_sources` (PK: user_id, citekey), `project_source_sections` (PK: user_id, citekey, section), `project_fragments`, `prune_verdicts` (PK: user_id, source_id) (v5)
 
-#### stores/user_store.py (~370 lines)
+#### stores/user_store.py (~390 lines)
 `LocalUserStore` — SQLite-backed `UserStore` at `~/.klemma/users.db` (separate from library.db). User accounts, projects, and fragment curation for the SaaS auth layer (ADR-009).
-- `__init__(db_path)` — creates dirs, runs `_migrate_schema()` (schema version 12)
+- `__init__(db_path)` — creates dirs, runs `_migrate_schema()` (schema version 13)
 - `create_user(email, password_hash, name?) -> UserRecord` — normalizes email to lowercase; raises `ValueError` on duplicate
 - `get_user_by_email(email) -> UserRecord | None` — normalizes email to lowercase before lookup
 - `get_user_by_id(user_id) -> UserRecord | None`
@@ -189,12 +189,13 @@ SQLite backends implementing the three-tier library protocols.
 - `get_refresh_token(token_hash) -> dict | None` — returns `{user_id, expires_at}` or None
 - `delete_refresh_token(token_hash) -> None` — token rotation on use
 - `delete_all_refresh_tokens(user_id) -> None` — logout-all
-- `curate_fragments(project_id, decisions) -> int` — batch INSERT OR REPLACE curation decisions
-- `get_curated(project_id, *, verdict?, section?, citekey?) -> list[dict]` — filtered curation query
+- `curate_fragments(project_id, decisions) -> int` — batch INSERT OR REPLACE curation decisions; accepts optional `suggested_text` + `sentence_model` per decision (ADR-017)
+- `get_curated(project_id, *, verdict?, section?, citekey?) -> list[dict]` — filtered curation query; returns `suggested_text` / `sentence_model` (possibly None)
 - `get_curation_stats(project_id, citekey) -> dict` — {curated, accepted, rejected, suggested}
 - `get_curated_fragment_ids(project_id) -> set[str]` — user-decided IDs only (accepted/rejected); excludes suggested
-- `update_curation(project_id, fragment_id, *, verdict?, assigned_section?, note?) -> bool` — partial update
-- Tables: `users`, `refresh_tokens`, `projects`, `fragment_curation` (project_id FK, fragment_id, citekey, verdict CHECK('accepted','rejected','suggested'), assigned_section, note)
+- `update_curation(project_id, fragment_id, *, verdict?, assigned_section?, note?, suggested_text?, sentence_model?) -> bool` — partial update; user-edited `suggested_text` overwrites generator value
+- Tables: `users`, `refresh_tokens`, `projects`, `fragment_curation` (project_id FK, fragment_id, citekey, verdict CHECK('accepted','rejected','suggested'), assigned_section, note, `suggested_text` TEXT, `sentence_model` TEXT — v13, ADR-017)
+- v13 migration is idempotent and robust to legacy DBs missing the `fragment_curation` table: checks `sqlite_master` first and CREATEs fresh in v13 shape rather than failing on `ALTER TABLE ADD COLUMN`
 
 ### errors.py (32 lines)
 Klemma error taxonomy for AI backends.

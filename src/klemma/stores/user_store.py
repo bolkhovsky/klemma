@@ -18,7 +18,7 @@ from typing import Generator, Optional
 
 from ..models import UserRecord
 
-_SCHEMA_VERSION = 12
+_SCHEMA_VERSION = 13
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -227,6 +227,46 @@ class LocalUserStore:
                 CREATE INDEX IF NOT EXISTS idx_fc_citekey ON fragment_curation(project_id, citekey);
                 CREATE INDEX IF NOT EXISTS idx_fc_verdict ON fragment_curation(project_id, verdict);
             """)
+        if version < 13:
+            # ADR-017: per-fragment suggested sentence (academic formulation in
+            # target language). Stored here — project-scoped and language-dependent.
+            # Some legacy DBs may lack fragment_curation entirely (upgraded past
+            # v11 without running the curation creation) — create it fresh.
+            has_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='fragment_curation'"
+            ).fetchone()
+            if not has_table:
+                conn.executescript("""
+                    CREATE TABLE fragment_curation (
+                        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                        project_id       TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+                        fragment_id      TEXT NOT NULL,
+                        citekey          TEXT NOT NULL,
+                        verdict          TEXT NOT NULL CHECK(verdict IN ('accepted', 'rejected', 'suggested')),
+                        assigned_section TEXT,
+                        note             TEXT,
+                        suggested_text   TEXT,
+                        sentence_model   TEXT,
+                        curated_at       TEXT DEFAULT (datetime('now')),
+                        UNIQUE(project_id, fragment_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_fc_project ON fragment_curation(project_id);
+                    CREATE INDEX IF NOT EXISTS idx_fc_citekey ON fragment_curation(project_id, citekey);
+                    CREATE INDEX IF NOT EXISTS idx_fc_verdict ON fragment_curation(project_id, verdict);
+                """)
+            else:
+                existing = {
+                    row[1]
+                    for row in conn.execute("PRAGMA table_info(fragment_curation)").fetchall()
+                }
+                if "suggested_text" not in existing:
+                    conn.execute(
+                        "ALTER TABLE fragment_curation ADD COLUMN suggested_text TEXT"
+                    )
+                if "sentence_model" not in existing:
+                    conn.execute(
+                        "ALTER TABLE fragment_curation ADD COLUMN sentence_model TEXT"
+                    )
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -591,7 +631,11 @@ class LocalUserStore:
     def curate_fragments(self, project_id: str, decisions: list[dict]) -> int:
         """Batch insert or replace curation decisions.
 
-        Each decision: {fragment_id, citekey, verdict, assigned_section?, note?}
+        Each decision: {fragment_id, citekey, verdict, assigned_section?, note?,
+        suggested_text?, sentence_model?}.
+        On upsert, `note`, `suggested_text`, and `sentence_model` are preserved
+        when the new decision omits them (COALESCE). Pass explicit values to
+        overwrite.
         Returns count of rows upserted.
         """
         if not decisions:
@@ -600,12 +644,15 @@ class LocalUserStore:
             for d in decisions:
                 conn.execute(
                     """INSERT INTO fragment_curation
-                       (project_id, fragment_id, citekey, verdict, assigned_section, note, curated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                       (project_id, fragment_id, citekey, verdict, assigned_section,
+                        note, suggested_text, sentence_model, curated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                        ON CONFLICT(project_id, fragment_id) DO UPDATE SET
                          verdict = excluded.verdict,
                          assigned_section = excluded.assigned_section,
                          note = COALESCE(excluded.note, fragment_curation.note),
+                         suggested_text = COALESCE(excluded.suggested_text, fragment_curation.suggested_text),
+                         sentence_model = COALESCE(excluded.sentence_model, fragment_curation.sentence_model),
                          curated_at = datetime('now')""",
                     (
                         project_id,
@@ -614,6 +661,8 @@ class LocalUserStore:
                         d["verdict"],
                         d.get("assigned_section"),
                         d.get("note"),
+                        d.get("suggested_text"),
+                        d.get("sentence_model"),
                     ),
                 )
         return len(decisions)
@@ -685,8 +734,15 @@ class LocalUserStore:
         verdict: Optional[str] = None,
         assigned_section: Optional[str] = None,
         note: Optional[str] = None,
+        suggested_text: Optional[str] = None,
+        sentence_model: Optional[str] = None,
     ) -> bool:
-        """Partial update of a curation decision. Returns True if row existed."""
+        """Partial update of a curation decision. Returns True if row existed.
+
+        `suggested_text` and `sentence_model` are overwritten verbatim when
+        supplied (e.g. to store the user's edited textarea value on accept).
+        Omit the kwarg to leave the existing value untouched.
+        """
         updates: list[str] = []
         params: list[object] = []
         if verdict is not None:
@@ -698,6 +754,12 @@ class LocalUserStore:
         if note is not None:
             updates.append("note = ?")
             params.append(note)
+        if suggested_text is not None:
+            updates.append("suggested_text = ?")
+            params.append(suggested_text)
+        if sentence_model is not None:
+            updates.append("sentence_model = ?")
+            params.append(sentence_model)
         if not updates:
             return False
         updates.append("curated_at = datetime('now')")

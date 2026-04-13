@@ -812,6 +812,25 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
         except Exception as exc:
             logger.warning("Failed to load research report: %s", exc)
 
+    # ADR-017: pull user-accepted suggested sentences for this section.
+    # Accepted fragments with a stored suggested_text become candidate
+    # sentences the drafter may integrate verbatim.
+    candidate_sentences: list[dict] = []
+    if project_id:
+        try:
+            accepted_rows = user_store.get_curated(
+                project_id, verdict="accepted", section=section
+            )
+            for row in accepted_rows:
+                sentence = (row.get("suggested_text") or "").strip()
+                if sentence:
+                    candidate_sentences.append({
+                        "citekey": row["citekey"],
+                        "sentence": sentence,
+                    })
+        except Exception as exc:
+            logger.warning("Failed to load candidate sentences: %s", exc)
+
     try:
         ai, ai_config = _create_ai_provider()
         config = KlemmaConfig()
@@ -835,6 +854,7 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
             section_title=section_title,
             outline_context=outline_context,
             custom_prompt=instruction,
+            candidate_sentences=candidate_sentences,
         )
 
         if not result.text:
@@ -868,3 +888,164 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
     except Exception as exc:
         logger.error("Draft generation failed for %s: %s", section, exc, exc_info=True)
         return {"status": "error", "detail": f"Draft failed: {type(exc).__name__}: {exc}"}
+
+
+def generate_sentences_task(
+    project_id: str,
+    citekey: str,
+    data_dir: str,
+    user_id: str = "",
+    mode: str = "missing",
+) -> dict:
+    """Generate suggested sentences for uncurated fragments of a source (ADR-017).
+
+    mode="missing" — skip fragments that already have suggested_text.
+    mode="force"   — regenerate for all fragments of the source.
+
+    Persists each success as a 'suggested' curation row with suggested_text +
+    sentence_model populated (existing verdict preserved if already set).
+    """
+    from klemma.stores.paper_store import LocalPaperStore
+    from klemma.stores.user_library import LocalUserLibrary
+    from klemma.stores.user_store import LocalUserStore
+
+    data_path = Path(data_dir)
+    library_db = data_path / "library.db"
+    paper_store = LocalPaperStore(library_db)
+    user_library = LocalUserLibrary(library_db)
+    user_store = LocalUserStore(data_path / "users.db")
+
+    if user_id and not user_store.check_token_limit(user_id):
+        return {"status": "error", "detail": "Token limit exhausted"}
+
+    if not os.getenv("ANTHROPIC_API_KEY") and not os.getenv("OPENAI_API_KEY"):
+        return {"status": "error", "detail": "No AI API key configured"}
+
+    project = user_store.get_project_by_id(project_id)
+    if not project:
+        return {"status": "error", "detail": "Project not found"}
+
+    src = user_library.get_source_by_citekey(citekey, user_id=user_id or None)
+    if not src:
+        return {"status": "error", "detail": f"Source '{citekey}' not found in library"}
+
+    paper = paper_store.get_paper_by_id(src.paper_id)
+    all_fragments = paper_store.get_fragments(src.paper_id)
+    if not all_fragments:
+        return {"status": "completed", "generated": 0, "failed": 0, "sentences": {}}
+
+    # Existing curation rows for this source — need them to filter by mode and
+    # to preserve verdict when writing back.
+    existing = {
+        row["fragment_id"]: row
+        for row in user_store.get_curated(project_id, citekey=citekey)
+    }
+
+    # Filter by mode. "missing" skips fragments that already have suggested_text.
+    if mode == "force":
+        candidates = list(all_fragments)
+    else:
+        candidates = [
+            f for f in all_fragments
+            if not (existing.get(f.fragment_id) or {}).get("suggested_text")
+        ]
+
+    if not candidates:
+        return {"status": "completed", "generated": 0, "failed": 0, "sentences": {}}
+
+    fragments_payload = [
+        {
+            "fragment_id": f.fragment_id,
+            "text": f.fragment_text,
+            "citation_intent": f.citation_intent or "",
+            "assigned_section": (existing.get(f.fragment_id) or {}).get("assigned_section") or "",
+        }
+        for f in candidates
+    ]
+
+    outline = project.get("outline") or []
+    outline_payload = [
+        {
+            "section_id": s.get("id", ""),
+            "title": s.get("name", ""),
+            "description": s.get("description", "") or "",
+        }
+        for s in outline
+    ]
+
+    language = os.getenv("KLEMMA_SENTENCE_LANGUAGE", "Russian")
+
+    try:
+        ai, ai_config = _create_ai_provider()
+        from klemma.config import _SHIPPED_PROMPTS_DIR
+        from klemma.skills.sentence_generator import generate_sentences
+
+        klemma_home = _SHIPPED_PROMPTS_DIR.parent
+
+        result = generate_sentences(
+            fragments_payload,
+            citekey=citekey,
+            authors=(paper.authors if paper else "") or "",
+            year=(paper.year if paper else None),
+            outline=outline_payload,
+            language=language,
+            ai=ai,
+            klemma_home=klemma_home,
+        )
+    except Exception as exc:
+        logger.error("Sentence generation failed for %s: %s", citekey, exc, exc_info=True)
+        return {"status": "error", "detail": f"Sentence generation failed: {type(exc).__name__}: {exc}"}
+
+    # Persist successes. For fragments without any existing row, create one
+    # as verdict='suggested' via curate_fragments(). For existing rows,
+    # update_curation() preserves the current verdict.
+    decisions_new: list[dict] = []
+    updates_existing: list[tuple[str, str]] = []  # (fragment_id, suggested_text)
+    for frag_id, sentence in result.sentences.items():
+        if frag_id in existing:
+            updates_existing.append((frag_id, sentence))
+        else:
+            decisions_new.append({
+                "fragment_id": frag_id,
+                "citekey": citekey,
+                "verdict": "suggested",
+                "assigned_section": None,
+                "suggested_text": sentence,
+                "sentence_model": result.model,
+            })
+
+    if decisions_new:
+        user_store.curate_fragments(project_id, decisions_new)
+    for frag_id, sentence in updates_existing:
+        user_store.update_curation(
+            project_id,
+            frag_id,
+            suggested_text=sentence,
+            sentence_model=result.model,
+        )
+
+    if user_id:
+        try:
+            user_store.record_usage(
+                user_id=user_id,
+                operation="generate_sentences",
+                model=ai_config.model,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                section="",
+            )
+        except Exception as exc:
+            logger.warning("record_usage failed for generate_sentences: %s", exc)
+
+    logger.info(
+        "Suggested sentences: citekey=%s generated=%d failed=%d mode=%s",
+        citekey, len(result.sentences), len(result.failed), mode,
+    )
+    return {
+        "status": "completed",
+        "generated": len(result.sentences),
+        "failed": len(result.failed),
+        "failed_ids": result.failed,
+        "sentences": result.sentences,
+        "model": result.model,
+    }

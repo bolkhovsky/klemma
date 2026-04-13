@@ -72,6 +72,7 @@ def generate_draft(
     custom_prompt: str = "",
     prev_ending: str = "",
     outline_context: Optional[dict] = None,
+    candidate_sentences: Optional[list[dict]] = None,
 ) -> DraftResult:
     """Generate a section draft using AI.
 
@@ -118,6 +119,7 @@ def generate_draft(
         language=config.ai.language,
         prev_ending=prev_ending,
         outline_context=outline_context or {},
+        candidate_sentences=candidate_sentences or [],
     )
 
     system = (

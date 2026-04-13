@@ -27,7 +27,7 @@ def test_schema_version(tmp_path):
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 12
+    assert version == 13
 
 
 def test_creates_db_file(tmp_path):
@@ -168,6 +168,104 @@ def test_upsert_overwrites_note_when_provided(store):
     ])
     curated = store.get_curated(pid, verdict="accepted")
     assert curated[0]["note"] == "new"
+
+
+# ---------------------------------------------------------------------------
+# Suggested sentences (ADR-017, schema v13)
+# ---------------------------------------------------------------------------
+
+
+def test_v13_columns_exist(tmp_path):
+    db_path = tmp_path / "users.db"
+    LocalUserStore(db_path)
+    conn = sqlite3.connect(str(db_path))
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(fragment_curation)").fetchall()}
+    conn.close()
+    assert "suggested_text" in cols
+    assert "sentence_model" in cols
+
+
+def test_v13_migration_idempotent(tmp_path):
+    db_path = tmp_path / "users.db"
+    LocalUserStore(db_path)
+    LocalUserStore(db_path)  # second run — must not error
+    conn = sqlite3.connect(str(db_path))
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    conn.close()
+    assert version == 13
+
+
+def test_suggested_text_roundtrip(store):
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {
+            "fragment_id": "f1",
+            "citekey": "kvanum2024",
+            "verdict": "suggested",
+            "assigned_section": "3.2",
+            "suggested_text": "Кванум и др. показали, что методы глубокого обучения превосходят динамические модели [@kvanum2024].",
+            "sentence_model": "anthropic/claude-sonnet-4-20250514",
+        },
+    ])
+    curated = store.get_curated(pid)
+    assert curated[0]["suggested_text"].startswith("Кванум")
+    assert curated[0]["sentence_model"] == "anthropic/claude-sonnet-4-20250514"
+
+
+def test_suggested_text_null_for_legacy_rows(store):
+    """Rows written without the new fields expose None gracefully."""
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck1", "verdict": "accepted"},
+    ])
+    curated = store.get_curated(pid)
+    assert curated[0]["suggested_text"] is None
+    assert curated[0]["sentence_model"] is None
+
+
+def test_update_curation_overwrites_suggested_text(store):
+    """User edits the textarea; update_curation stores the final value verbatim."""
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {
+            "fragment_id": "f1",
+            "citekey": "ck1",
+            "verdict": "suggested",
+            "suggested_text": "Original AI sentence.",
+            "sentence_model": "anthropic/claude-sonnet-4-20250514",
+        },
+    ])
+    ok = store.update_curation(
+        pid,
+        "f1",
+        verdict="accepted",
+        suggested_text="User edited sentence.",
+    )
+    assert ok is True
+    curated = store.get_curated(pid, verdict="accepted")
+    assert curated[0]["suggested_text"] == "User edited sentence."
+    # sentence_model untouched
+    assert curated[0]["sentence_model"] == "anthropic/claude-sonnet-4-20250514"
+
+
+def test_upsert_preserves_suggested_text_when_omitted(store):
+    """Re-upserting without sentence fields keeps the stored value."""
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {
+            "fragment_id": "f1",
+            "citekey": "ck1",
+            "verdict": "suggested",
+            "suggested_text": "Keep me.",
+            "sentence_model": "anthropic/claude-sonnet-4-20250514",
+        },
+    ])
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck1", "verdict": "accepted"},
+    ])
+    curated = store.get_curated(pid, verdict="accepted")
+    assert curated[0]["suggested_text"] == "Keep me."
+    assert curated[0]["sentence_model"] == "anthropic/claude-sonnet-4-20250514"
 
 
 # ---------------------------------------------------------------------------

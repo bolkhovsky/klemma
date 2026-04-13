@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import uuid
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,6 +21,14 @@ from klemma.section_types import (
 
 from ..auth.deps import get_current_user, get_user_store
 from ..deps import get_paper_store, get_user_library
+
+try:
+    from redis import Redis
+    from rq import Queue
+
+    _RQ_AVAILABLE = True
+except ImportError:
+    _RQ_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +45,8 @@ class CurateDecision(BaseModel):
     verdict: str  # "accepted" | "rejected"
     assigned_section: Optional[str] = None
     note: Optional[str] = None
+    suggested_text: Optional[str] = None  # ADR-017: user's final edited sentence
+    sentence_model: Optional[str] = None
 
 
 class CurateRequest(BaseModel):
@@ -54,6 +68,8 @@ class PendingFragment(BaseModel):
     citekey: str = ""
     suggested_section: str | None = None
     verbatim: bool = False
+    suggested_text: str | None = None  # ADR-017: ready-to-use academic sentence
+    sentence_model: str | None = None
 
 
 class PendingFragmentsResponse(BaseModel):
@@ -71,6 +87,8 @@ class CuratedFragment(BaseModel):
     note: str | None = None
     verdict: str = ""
     curated_at: str = ""
+    suggested_text: str | None = None  # ADR-017
+    sentence_model: str | None = None
 
 
 class CuratedBankResponse(BaseModel):
@@ -83,6 +101,19 @@ class CurationPatch(BaseModel):
     verdict: Optional[str] = None
     assigned_section: Optional[str] = None
     note: Optional[str] = None
+    suggested_text: Optional[str] = None  # ADR-017
+    sentence_model: Optional[str] = None
+
+
+class GenerateSentencesRequest(BaseModel):
+    citekey: str
+    mode: str = "missing"  # "missing" | "force"
+
+
+class GenerateSentencesResponse(BaseModel):
+    job_id: str
+    status: str
+    citekey: str
 
 
 class SuggestFragment(BaseModel):
@@ -167,9 +198,16 @@ async def get_pending_fragments(
     all_fragments = paper_store.get_fragments(src.paper_id)
     curated_ids = user_store.get_curated_fragment_ids(project_id)
 
+    # Existing curation rows for this source (needed for suggested_text lookup).
+    curated_rows = {
+        c["fragment_id"]: c
+        for c in user_store.get_curated(project_id, citekey=citekey)
+    }
+
     pending = []
     for f in all_fragments:
         if f.fragment_id not in curated_ids:
+            row = curated_rows.get(f.fragment_id, {})
             pending.append(PendingFragment(
                 fragment_id=f.fragment_id,
                 text=f.fragment_text,
@@ -179,6 +217,8 @@ async def get_pending_fragments(
                 citekey=citekey,
                 suggested_section=auto_assign_section(f.citation_intent, outline),
                 verbatim=f.verbatim,
+                suggested_text=row.get("suggested_text"),
+                sentence_model=row.get("sentence_model"),
             ))
 
     return PendingFragmentsResponse(
@@ -223,6 +263,8 @@ async def curate_fragments(
             "verdict": d.verdict,
             "assigned_section": section,
             "note": d.note,
+            "suggested_text": d.suggested_text,
+            "sentence_model": d.sentence_model,
         })
         if d.verdict == "accepted":
             accepted += 1
@@ -268,6 +310,8 @@ async def get_curated_fragments(
             note=c["note"],
             verdict=c["verdict"],
             curated_at=c["curated_at"] or "",
+            suggested_text=c.get("suggested_text"),
+            sentence_model=c.get("sentence_model"),
         ))
 
     return CuratedBankResponse(
@@ -294,6 +338,8 @@ async def update_curation(
         verdict=body.verdict,
         assigned_section=body.assigned_section,
         note=body.note,
+        suggested_text=body.suggested_text,
+        sentence_model=body.sentence_model,
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Curation decision not found")
@@ -450,3 +496,78 @@ async def auto_suggest_fragments(
         logger.info("Auto-suggested %d fragments for project %s", count, project_id)
 
     return {"suggested": count}
+
+
+# ---------------------------------------------------------------------------
+# Suggested sentences (ADR-017)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{project_id}/fragments/generate-sentences",
+    response_model=GenerateSentencesResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def generate_sentences_endpoint(
+    project_id: str,
+    body: GenerateSentencesRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> GenerateSentencesResponse:
+    """Enqueue a job that generates suggested academic sentences for the
+    given source's fragments (ADR-017). Poll via GET /process/jobs/{job_id}.
+    """
+    _get_project_or_404(project_id, user)
+
+    mode = body.mode if body.mode in ("missing", "force") else "missing"
+
+    library = get_user_library()
+    if not library.get_source_by_citekey(body.citekey, user_id=user.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Source '{body.citekey}' not found in library",
+        )
+
+    from ..tasks import generate_sentences_task
+
+    data_dir = os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma"))
+
+    if _RQ_AVAILABLE:
+        try:
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+            redis_conn = Redis.from_url(redis_url)
+            q = Queue(connection=redis_conn)
+            job = q.enqueue(
+                generate_sentences_task,
+                project_id,
+                body.citekey,
+                data_dir,
+                user.user_id,
+                mode,
+                job_timeout=300,
+            )
+            return GenerateSentencesResponse(
+                job_id=job.id, status="queued", citekey=body.citekey
+            )
+        except Exception:
+            pass  # Fall through to local execution
+
+    # Share process.py's in-memory registry so /process/jobs/{job_id}
+    # can poll results in the Redis-free fallback path.
+    from .process import _local_jobs, _run_local_job
+
+    job_id = str(uuid.uuid4())
+    _local_jobs[job_id] = {"status": "queued", "result": None}
+    asyncio.create_task(
+        _run_local_job(
+            job_id,
+            generate_sentences_task,
+            project_id,
+            body.citekey,
+            data_dir,
+            user.user_id,
+            mode,
+        )
+    )
+    return GenerateSentencesResponse(
+        job_id=job_id, status="queued", citekey=body.citekey
+    )
