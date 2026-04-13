@@ -452,9 +452,7 @@ def create_vault_note(
     body = render_note_body(entry, annotation=annotation)
     content = frontmatter + "\n\n" + body
 
-    path = vault.create_note(
-        f"@{citekey}", content, folder=config.obsidian.notes_folder
-    )
+    path = vault.create_note(f"@{citekey}", content)
 
     # 5. Register in DB
     if state is not None:

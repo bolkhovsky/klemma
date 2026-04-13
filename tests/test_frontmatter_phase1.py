@@ -183,13 +183,34 @@ class TestMigrateFrontmatter:
         assert result.exit_code == 0
         assert "skipped 1" in result.output
 
-    def test_no_vault_exits_nonzero(self, mock_ctx):
-        mock_ctx.vault = None
+    def test_migrates_in_local_notes_dir(self, tmp_path, mock_ctx):
+        """migrate-frontmatter works in local mode (.klemma/notes/) with no obsidian: config."""
+        from klemma.vault import VaultAdapter
+
+        notes_root = tmp_path / ".klemma" / "notes"
+        notes_root.mkdir(parents=True)
+        _make_vault_note(notes_root, "@local2024", {
+            "section": "3.1",
+            "chapter": 3,
+            "title": "Local-mode paper",
+        })
+
+        mock_ctx.vault = VaultAdapter(str(notes_root))
+        mock_ctx.config.obsidian.vault_path = ""
+        mock_ctx.config.obsidian.notes_folder = ""
+
         runner = CliRunner()
         with (
             patch("klemma.cli._get_context", return_value=mock_ctx),
             patch("klemma.cli._init_components", return_value=mock_ctx),
         ):
             result = runner.invoke(klemma_cli, ["migrate-frontmatter"])
-        assert result.exit_code != 0
-        assert "No Obsidian vault" in result.output
+
+        assert result.exit_code == 0
+
+        import yaml
+        text = (notes_root / "@local2024.md").read_text()
+        fm = yaml.safe_load(text.split("---")[1])
+        assert fm.get("sections") == ["3.1"]
+        assert fm.get("chapters") == [3]
+

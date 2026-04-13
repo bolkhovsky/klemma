@@ -1,11 +1,45 @@
-"""Obsidian vault adapter — CLI with file I/O fallback."""
+"""Notes directory adapter — file I/O primary, Obsidian CLI for reads only.
+
+Since ADR-016 the adapter is re-rooted at the *resolved notes directory*
+(see ``resolve_notes_root``), not the Obsidian vault root. ``create_note``
+writes exclusively via file I/O so re-rooted adapters cannot produce a
+duplicate copy at the Obsidian vault root via the ``obsidian`` CLI —
+Obsidian auto-detects file changes on disk anyway. Read/search helpers
+still try the CLI first and fall back to file I/O.
+"""
 
 import json
 import shutil
 import subprocess
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from .config import KlemmaConfig
+
+
+def resolve_notes_root(config: "KlemmaConfig", project_root: Path) -> Path:
+    """Resolve the directory that holds `@citekey.md` annotated notes.
+
+    Precedence (ADR for default-local notes):
+
+    1. When ``config.obsidian.vault_path`` is set, return
+       ``vault_path/notes_folder``. ``notes_folder`` may be empty, in
+       which case the resolved path is the vault root itself — this
+       preserves flat Obsidian layouts.
+    2. Otherwise, return ``project_root/.klemma/notes`` — the default
+       local location for fresh projects.
+
+    The returned path is not required to exist; callers that need
+    filesystem presence must ``mkdir`` themselves.
+    """
+    vault_path = (config.obsidian.vault_path or "").strip()
+    if vault_path:
+        notes_folder = (config.obsidian.notes_folder or "").strip()
+        base = Path(vault_path).expanduser()
+        return base / notes_folder if notes_folder else base
+    return Path(project_root) / ".klemma" / "notes"
 
 
 class VaultAdapter:
@@ -95,19 +129,15 @@ class VaultAdapter:
     def create_note(
         self, name: str, content: str, folder: Optional[str] = None
     ) -> Path:
-        """Create or overwrite a note."""
-        if self.use_cli and not folder:
-            try:
-                subprocess.run(
-                    ["obsidian", "create", f"name={name}", f"content={content}", "silent"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-            except Exception:
-                pass
+        """Create or overwrite a note.
 
-        # File I/O (always write to ensure file exists)
+        Writes authoritatively via file I/O inside the adapter root. The
+        ``obsidian create`` CLI path was removed in ADR-016: since the
+        adapter is re-rooted at the resolved notes directory, a CLI call
+        (which always targets the Obsidian vault root) would write a
+        second copy at the wrong location. Obsidian auto-detects file
+        changes on disk, so skipping the subprocess costs nothing.
+        """
         target_dir = self._resolve_folder(folder)
         target_dir.mkdir(parents=True, exist_ok=True)
         path = self._ensure_within_vault(target_dir / f"{name}.md")
@@ -206,8 +236,8 @@ class VaultAdapter:
             return {}
         return self._parse_frontmatter(text)
 
-    def list_notes(self, folder: str) -> list[str]:
-        """List note names in a folder."""
+    def list_notes(self, folder: Optional[str] = None) -> list[str]:
+        """List note names in a folder (defaults to the adapter root)."""
         target_dir = self._resolve_folder(folder)
         if not target_dir.exists():
             return []
