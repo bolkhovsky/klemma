@@ -294,7 +294,14 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             "Output only valid JSON with fragments array and key_references array."
         )
 
-        result = ai.call_with_meta(system, user_prompt, max_tokens=8192)
+        # Adaptive max_tokens: short PDFs produce few fragments, so a high
+        # cap is wasted latency + cost. ~4 chars per token, fragments are
+        # typically 200-400 tokens each; we scale with pdf size but floor
+        # at 1024 (to cover at least the dissertation_context + few frags)
+        # and cap at 8192 (the previous hardcoded ceiling).
+        pdf_chars = len(pdf_text)
+        adaptive_max_tokens = max(1024, min(8192, pdf_chars // 4))
+        result = ai.call_with_meta(system, user_prompt, max_tokens=adaptive_max_tokens)
         if not result or not result.text:
             user_library.update_status(citekey, "failed", user_id=user_id or None)
             return {"status": "error", "detail": "AI extraction returned no data"}
@@ -384,18 +391,30 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         model_name = ai_config.model
         saved = paper_store.save_fragments(paper_id, fragments, prompt_hash, model_name)
 
-        # Auto-embed paper and fragments (non-fatal — fragments are saved regardless)
+        # Auto-embed paper and fragments (non-fatal — fragments are saved regardless).
+        # Fragments go through a single batched call when the backend supports
+        # it (LiteLLM/Ollama does); others fall back to per-item embed().
         emb = _create_embeddings_provider()
         if emb:
             try:
                 paper_vec = emb.embed(paper.title or citekey, paper.abstract or "")
                 if paper_vec:
                     paper_store.save_paper_embedding(paper_id, paper_vec, emb.model_name)
+
+                texts = [frag.fragment_text for frag in fragments]
+                batch_fn = getattr(emb, "embed_batch", None)
+                if callable(batch_fn):
+                    vectors = batch_fn(texts)
+                else:
+                    from klemma.embeddings import _default_embed_batch
+                    vectors = _default_embed_batch(emb, texts)
+
                 frag_count = 0
-                for frag in fragments:
-                    frag_vec = emb.embed(frag.fragment_text)
-                    if frag_vec:
-                        paper_store.save_fragment_embedding(frag.fragment_id, frag_vec, emb.model_name)
+                for frag, vec in zip(fragments, vectors):
+                    if vec:
+                        paper_store.save_fragment_embedding(
+                            frag.fragment_id, vec, emb.model_name
+                        )
                         frag_count += 1
                 logger.info("Embedded paper + %d fragments for %s", frag_count, citekey)
             except Exception as exc:

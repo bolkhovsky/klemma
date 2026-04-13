@@ -176,14 +176,14 @@ class TestLookupS2:
 
 class TestResolveMetadata:
     def test_cli_wins(self):
-        """CLI title/authors override PDF+S2."""
+        """CLI title/authors override PDF+CrossRef."""
         from klemma.literature.metadata import resolve_metadata
 
         with patch("klemma.literature.metadata.extract_pdf_metadata") as mock_pdf, \
-             patch("klemma.literature.metadata.lookup_s2") as mock_s2:
+             patch("klemma.literature.metadata.lookup_crossref") as mock_cr:
             mock_pdf.return_value = {"title": "PDF Title", "authors": "PDF Author"}
-            mock_s2.return_value = {
-                "title": "S2 Title", "authors": "S2 Author",
+            mock_cr.return_value = {
+                "title": "CR Title", "authors": "CR Author",
                 "year": 2024, "abstract": "Abstract", "doi": "10.1/x",
             }
 
@@ -197,17 +197,17 @@ class TestResolveMetadata:
         assert result["title"] == "My Title"
         assert result["authors"] == "My Authors"
         assert result["year"] == 2023
-        # S2 enriches abstract and doi even when CLI provides title
+        # CrossRef enriches abstract and doi even when CLI provides title
         assert result["doi"] == "10.1/x"
 
-    def test_pdf_then_s2(self):
-        """PDF title → S2 enriches year+doi."""
+    def test_pdf_then_crossref(self):
+        """PDF title → CrossRef enriches authors/year/doi."""
         from klemma.literature.metadata import resolve_metadata
 
         with patch("klemma.literature.metadata.extract_pdf_metadata") as mock_pdf, \
-             patch("klemma.literature.metadata.lookup_s2") as mock_s2:
+             patch("klemma.literature.metadata.lookup_crossref") as mock_cr:
             mock_pdf.return_value = {"title": "Deep Learning", "authors": ""}
-            mock_s2.return_value = {
+            mock_cr.return_value = {
                 "title": "Deep Learning", "authors": "Smith J., Jones K.",
                 "year": 2024, "abstract": "We study...", "doi": "10.5555/dl",
             }
@@ -220,13 +220,13 @@ class TestResolveMetadata:
         assert result["doi"] == "10.5555/dl"
 
     def test_no_sources(self):
-        """No PDF metadata, S2 fails → empty fallback."""
+        """No PDF metadata, CrossRef fails → empty fallback."""
         from klemma.literature.metadata import resolve_metadata
 
         with patch("klemma.literature.metadata.extract_pdf_metadata") as mock_pdf, \
-             patch("klemma.literature.metadata.lookup_s2") as mock_s2:
+             patch("klemma.literature.metadata.lookup_crossref") as mock_cr:
             mock_pdf.return_value = {"title": "", "authors": ""}
-            mock_s2.return_value = None
+            mock_cr.return_value = None
 
             result = resolve_metadata(Path("/tmp/paper.pdf"))
 
@@ -234,6 +234,118 @@ class TestResolveMetadata:
         assert result["authors"] == ""
         assert result["year"] is None
         assert result["doi"] == ""
+
+    def test_s2_not_called(self):
+        """S2 must not be called from resolve_metadata — CrossRef is the only lookup."""
+        from klemma.literature.metadata import resolve_metadata
+
+        with patch("klemma.literature.metadata.extract_pdf_metadata") as mock_pdf, \
+             patch("klemma.literature.metadata.lookup_crossref") as mock_cr, \
+             patch("klemma.literature.metadata.lookup_s2") as mock_s2:
+            mock_pdf.return_value = {"title": "Some Title", "authors": ""}
+            mock_cr.return_value = None
+
+            resolve_metadata(Path("/tmp/paper.pdf"))
+
+        assert mock_s2.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# lookup_crossref
+# ---------------------------------------------------------------------------
+
+
+class TestLookupCrossRef:
+    def test_success_with_mailto(self):
+        """CrossRef returns matching paper + polite pool mailto is used."""
+        from klemma.literature.metadata import lookup_crossref
+
+        cr_response = {
+            "message": {
+                "items": [
+                    {
+                        "title": ["Deep Learning for NLP"],
+                        "author": [
+                            {"family": "Smith", "given": "John"},
+                            {"family": "Jones", "given": "Kate"},
+                        ],
+                        "issued": {"date-parts": [[2024]]},
+                        "DOI": "10.1234/test",
+                        "abstract": "<jats:p>We survey NLP...</jats:p>",
+                    }
+                ]
+            }
+        }
+
+        with patch("klemma.literature.metadata.requests") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = cr_response
+            mock_resp.raise_for_status = MagicMock()
+            mock_req.get.return_value = mock_resp
+            result = lookup_crossref("Deep Learning for NLP", mailto="me@test")
+
+        assert result is not None
+        assert result["year"] == 2024
+        assert "Smith" in result["authors"]
+        assert result["doi"] == "10.1234/test"
+        # JATS tags stripped
+        assert "<" not in result["abstract"]
+        assert "We survey" in result["abstract"]
+        # mailto appears in URL
+        call_url = mock_req.get.call_args.args[0]
+        assert "mailto=me%40test" in call_url
+
+    def test_mailto_from_env(self, monkeypatch):
+        """mailto falls back to KLEMMA_CROSSREF_MAILTO env var."""
+        from klemma.literature.metadata import lookup_crossref
+
+        monkeypatch.setenv("KLEMMA_CROSSREF_MAILTO", "env@example.org")
+        with patch("klemma.literature.metadata.requests") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"message": {"items": []}}
+            mock_resp.raise_for_status = MagicMock()
+            mock_req.get.return_value = mock_resp
+            lookup_crossref("anything")
+
+        call_url = mock_req.get.call_args.args[0]
+        assert "mailto=env%40example.org" in call_url
+        ua = mock_req.get.call_args.kwargs["headers"]["User-Agent"]
+        assert "env@example.org" in ua
+
+    def test_no_match(self):
+        from klemma.literature.metadata import lookup_crossref
+
+        cr_response = {
+            "message": {
+                "items": [
+                    {
+                        "title": ["Completely Unrelated Paper on Chemistry"],
+                        "author": [{"family": "Alice", "given": "A"}],
+                        "issued": {"date-parts": [[2020]]},
+                        "DOI": "10.0/x",
+                    }
+                ]
+            }
+        }
+        with patch("klemma.literature.metadata.requests") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = cr_response
+            mock_resp.raise_for_status = MagicMock()
+            mock_req.get.return_value = mock_resp
+            result = lookup_crossref("Deep Learning for NLP")
+
+        assert result is None
+
+    def test_api_error(self):
+        from klemma.literature.metadata import lookup_crossref
+
+        with patch("klemma.literature.metadata.requests") as mock_req:
+            mock_req.get.side_effect = Exception("timeout")
+            assert lookup_crossref("Deep Learning for NLP") is None
+
+    def test_empty_title(self):
+        from klemma.literature.metadata import lookup_crossref
+        assert lookup_crossref("") is None
 
 
 # ---------------------------------------------------------------------------

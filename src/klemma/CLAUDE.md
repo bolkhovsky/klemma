@@ -62,11 +62,12 @@ Key models: `KlemmaConfig`, `ZoteroConfig`, `ObsidianConfig`, `AIConfig` (with `
 
 ### setup.py (338 lines)
 `klemma init` logic — creates per-directory `.klemma/` projects, `~/.klemma/` system config, and `~/.klemmarc.yaml` global config. Interactive wizard with auto-discovery; non-interactive mode via CLI flags.
-- `init_project(project_dir, project_type, values?)` — creates `.klemma/`, `KLEMMA.md` (with YAML frontmatter for content fields), updates `.gitignore`; `config.yaml` has infrastructure only (no `project:` section)
+- `init_project(project_dir, project_type, values?)` — creates `.klemma/`, including pre-created `.klemma/notes/` and `.klemma/pdfs/` directories (ADR-016 default-local layout), `KLEMMA.md` (with YAML frontmatter for content fields), updates `.gitignore`; `config.yaml` has infrastructure only (no `project:` section)
 - `migrate_content_to_klemma_md(project_root)` — reads content fields from `config.yaml project:`/`dissertation:`, writes to KLEMMA.md frontmatter, strips content from `config.yaml`; returns `{"migrated_fields": [...], "warnings": [...]}`
 - `init_system(system_home)` — creates `~/.klemmarc.yaml` (0600, with api_keys template) + `~/.klemma/config.yaml` (legacy fallback)
 - `init_klemma_home()` — legacy alias for `init_system()`
-- Interactive mode: auto-discovers Obsidian vaults, Zotero exports via `discovery.py`
+- Interactive mode: auto-discovers Zotero exports via `discovery.py`. The wizard **no longer prompts for Obsidian** — it's an opt-in override added to `config.yaml` by hand (ADR-016). `discover_obsidian_vault()` still ships for programmatic callers.
+- `_build_project_config()` skips the `obsidian:` section unless `values.vault_path` is explicitly set — fresh local-mode projects have a clean `config.yaml`
 
 ### section_types.py (~290 lines)
 Semantic section vocabulary — cross-project labels for dissertation/paper sections.
@@ -221,11 +222,13 @@ Klemma error taxonomy for AI backends.
 - `base_url` passthrough for custom endpoints (Ollama, vLLM, etc.)
 
 ### vault.py (263 lines)
-`VaultAdapter` — Obsidian vault file I/O.
+`VaultAdapter` — file I/O for annotated `@<citekey>.md` notes. Since ADR-016 the adapter is re-rooted at the *resolved notes directory*, not the Obsidian vault root — `resolve_notes_root()` is the single source of truth for where notes land.
+- `resolve_notes_root(config, project_root) -> Path` — module-level helper: returns `Path(vault_path).expanduser() / notes_folder` when `config.obsidian.vault_path` is set (non-whitespace), else `project_root / ".klemma" / "notes"`. `notes_folder=""` joins to the vault root (flat-vault edge case).
 - `read_note()` / `write_note()` — file read/write
 - `update_section()` — replace content between markdown heading markers
 - `get_properties()` — parse YAML frontmatter
-- `list_notes()` — enumerate vault notes
+- `list_notes()` — enumerate notes in the adapter root
+- **Scope narrowing for existing Obsidian users**: `get_tags()`, `search()`, `_find_daily_dir()` used to scan the whole vault. They now scan only the notes directory (the adapter root). Matches how klemma actually uses these helpers (citekey-note operations + tag inventory of `@*.md`), but downstream scripts relying on whole-vault scans must move files into the notes folder or use a separate tool.
 
 ### library_provider.py (86 lines)
 `LibraryProvider` protocol with LocalLibrary backend:
@@ -244,6 +247,7 @@ Provider-agnostic paper search — resolve reference gaps to acquisition targets
 ### embeddings.py (393 lines)
 `EmbeddingProvider` runtime-checkable protocol + 4 backends + utilities.
 - `EmbeddingProvider` protocol — `dim`, `model_name`, `embed(title, abstract) → list[float] | None`
+- `embed_batch(texts) → list[list[float] | None]` — optional method on backends (LiteLLM implements it as a single batched HTTP call); fallback helper `_default_embed_batch(provider, texts)` loops `embed()` for backends without native batching
 - `SemanticScholarEmbeddings` — free S2 API (768-dim SPECTER), rate-limited (throttle param)
 - `LocalSPECTEREmbeddings` — offline sentence-transformers SPECTER2 model
 - `OpenAIEmbeddings` — text-embedding-3-small (1536-dim)

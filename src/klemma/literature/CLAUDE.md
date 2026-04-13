@@ -4,11 +4,12 @@ PDF text extraction, Pydantic data models, vault note generation, and metadata a
 
 ## Modules
 
-### metadata.py (~150 lines)
-Auto-extract paper metadata from PDF properties + Semantic Scholar API lookup.
+### metadata.py (~220 lines)
+Auto-extract paper metadata from PDF properties + CrossRef lookup.
 - `extract_pdf_metadata(pdf_path)` — PyMuPDF `doc.metadata` for title/author; first-page heuristic fallback for generic titles
-- `lookup_s2(title)` — S2 `paper/search` API with rate limiting, fuzzy title match, returns title/authors/year/abstract/doi
-- `resolve_metadata(pdf_path, cli_title?, cli_authors?, cli_year?, cli_doi?)` — orchestrator: CLI flags → PDF metadata → S2 enrichment → empty fallback
+- `lookup_crossref(title, mailto?)` — CrossRef `/works` API with polite-pool `mailto` (env `KLEMMA_CROSSREF_MAILTO` or default); fuzzy title match; returns title/authors/year/abstract/doi. JATS tags stripped from abstract.
+- `lookup_s2(title)` — S2 `paper/search` API (kept for CLI acquirer; **not** called from `resolve_metadata` — S2 is rate-limited and unreliable under load)
+- `resolve_metadata(pdf_path, cli_title?, cli_authors?, cli_year?, cli_doi?)` — orchestrator: CLI flags → PDF metadata → CrossRef enrichment → empty fallback. Only one network lookup (CrossRef).
 - `_titles_match(query, candidate)` — fuzzy word-overlap comparison (>0.6 threshold)
 
 ### zotero_api.py (~80 lines)
@@ -31,11 +32,41 @@ All Pydantic models for the data layer:
 
 ### pdf.py (202 lines)
 `PDFExtractor` — PyMuPDF-based text extraction with BBT JSON integration.
-- `extract()` — text with `[Page N]` markers, truncated to `max_chars`
+- `extract()` — text with `[Page N]` markers, truncated to `max_chars` (fed to the AI extraction prompt)
+- `extract_pages(pdf_path: Path) -> list[str]` — **public API, stable signature**. One cleaned string per page, no truncation, no inline `[Page N]` markers. Used by `write_pdf_sidecar()` and (planned) the semantic citation drift checker. Returns `[]` for missing files, `[""]` for an empty page.
 - `find_pdf()` — 3-tier PDF finding (see data flows below)
 - `load_pdf_lookup()` — citekey → pdf_path from BBT JSON
 - `load_entry_lookup()` — citekey → `ZoteroEntry` from BBT JSON
 - CamelCase splitting: `wagnerSeaiceInformation2020` → `[wagner, seaice, information, 2020]`
+
+### sidecar.py (~90 lines)
+Raw PDF text sidecar writer — feynman-style format at `<project_root>/.klemma/pdfs/<citekey>.md`. Introduced in ADR-016 as the on-disk trace of processed PDFs and the primary-source passage store for downstream tooling.
+- `write_pdf_sidecar(project_root, citekey, pages, metadata) -> Path` — atomic write via `tempfile.mkstemp` + `os.fdopen` + `os.replace`; rejects `..`, `/`, `\\`, empty citekeys (pattern mirrors `LocalFileStore._file_path()`); idempotent (reprocessing overwrites cleanly); creates missing `.klemma/pdfs/` directory
+
+**Format contracts** (must not drift without a version bump — the planned semantic citation drift checker is the second consumer):
+1. **Path**: always `<project_root>/.klemma/pdfs/<citekey>.md`. No config override. Downstream consumers can hardcode.
+2. **Page delimiter**: exactly `\n<!-- Page N -->\n` between pages, where `N = 2, 3, ...`. Page 1 has no marker — it starts right after the frontmatter `---`. Regex `\n<!-- Page (\d+) -->\n` is a stable split point.
+3. **Frontmatter fields**: stable set is `Citekey`, `Authors`, `Year`, `DOI`, `Pages`, `Source`. Additions allowed (append-only). Renames/removals require a version bump note in the sidecar header.
+
+Layout:
+```markdown
+# <title>
+
+> Citekey: <citekey>
+> Authors: <authors>
+> Year: <year>
+> DOI: <doi>
+> Pages: <N>
+> Source: <pdf_path>
+
+---
+
+<page 1 prose>
+
+<!-- Page 2 -->
+
+<page 2 prose>
+```
 
 ### note_factory.py (470 lines)
 Vault note creation pipeline — largest module in the package:

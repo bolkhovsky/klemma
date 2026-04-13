@@ -8,14 +8,19 @@
 
 # --- Shared resources (inherited from parent if nested) ---
 
-zotero:
-  library_json: "/path/to/your/bibtex-export.json"  # BetterBibTeX JSON export
-  storage_path: "/path/to/Zotero/storage"            # Zotero attachment storage
+# Zotero (optional — enables auto-discovery of BBT citekeys).
+# zotero:
+#   library_json: "/path/to/your/bibtex-export.json"  # BetterBibTeX JSON export
+#   storage_path: "/path/to/Zotero/storage"            # Zotero attachment storage
 
-obsidian:
-  vault_path: "/path/to/your/obsidian/vault"
-  notes_folder: "References"           # folder with @citekey.md notes
-  tags_folder: "Tags"                  # optional folder for tag notes
+# Obsidian override (optional — only for power users who read annotated
+# @citekey.md notes inside an Obsidian vault). When unset, klemma writes
+# annotated notes and raw PDF sidecars to `.klemma/notes/` and
+# `.klemma/pdfs/` inside the project directory.
+# obsidian:
+#   vault_path: "/path/to/your/obsidian/vault"
+#   notes_folder: "References"           # folder with @citekey.md notes
+#   tags_folder: "Tags"                  # optional folder for tag notes
 
 ai:
   language: "ru"                       # AI response language

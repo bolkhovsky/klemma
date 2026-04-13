@@ -304,8 +304,8 @@ class ZoteroConfig(BaseModel):
 
 class ObsidianConfig(BaseModel):
     vault_path: str = ""
-    notes_folder: str = "2 - Refs"
-    tags_folder: str = "3 - Tags"
+    notes_folder: str = ""
+    tags_folder: str = ""
     use_cli: Optional[bool] = None
 
 
