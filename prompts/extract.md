@@ -71,28 +71,26 @@ Now extract key citation fragments from this paper. For each fragment, identify:
    - `contrasts` — this work disagrees with or shows limitations of the cited work (e.g. "Unlike X, our approach...")
    - `uses_data` — uses datasets, benchmarks, or empirical data from the cited work (e.g. "Using the dataset from X...")
 
-### Verbatim vs paraphrase
+### Verbatim only — no paraphrasing
 
-Each fragment must carry a `verbatim` flag. Scientific integrity depends on it:
-a downstream validator will check the claim against the paper text, and anything
-cited as a quotation in the user's draft is expected to be a true substring of
-the source.
+**Every fragment's `text` field MUST be a character-identical substring of the
+paper.** Whitespace, ligatures, and line-break hyphenation may differ — the
+downstream validator normalises for PDF extraction noise. Anything else is a
+scientific integrity failure: the user cites fragments as quotations in their
+draft, and a paraphrase presented as a quotation is a fabrication.
 
-- `verbatim: true` — the `text` field is a **character-identical substring** of
-  the paper (whitespace, ligatures, and line-break hyphenation may differ — the
-  validator normalises for PDF extraction noise). Prefer this for short,
-  claim-bearing sentences you would place inside quotation marks in a
-  bibliography-backed draft (a definition, a numerical result, a thesis
-  sentence).
-- `verbatim: false` — the `text` is a paraphrase, condensation, or summary of a
-  longer passage. This is the right choice when the claim spans several
-  sentences, when you compress multiple bullet points, or when the original
-  phrasing is awkward out of context. A paraphrase is still a valid fragment;
-  it just cannot be presented as a quotation.
+- `verbatim: true` — required for every fragment you emit. Copy the sentence
+  (or a contiguous clause) exactly from the paper. Short, claim-bearing
+  sentences are ideal: a definition, a numerical result, a thesis sentence.
+- `verbatim: false` — **do not use.** If a useful claim spans multiple
+  sentences or cannot be expressed as a contiguous substring, either pick the
+  single most quotable sentence from that passage (and set `verbatim: true`)
+  or **omit the fragment entirely**. Fewer correct fragments beats more
+  fragments that cannot be quoted.
 
-If unsure, set `verbatim: false` — the validator is strict; a false positive
-(claiming verbatim when paraphrased) is worse than a correctly-labelled
-paraphrase.
+If you cannot find a verbatim substring that captures the claim, drop the
+fragment. The validator is strict; the system prefers silence over
+fabrication.
 
 Return a JSON object:
 
@@ -100,7 +98,7 @@ Return a JSON object:
 {
   "fragments": [
     {
-      "text": "Fragment text (verbatim substring if verbatim=true, paraphrase if false)",
+      "text": "Verbatim substring from the paper (character-identical)",
       "verbatim": true,
       "type": "key_idea",
       "chapter": 2,
@@ -124,7 +122,7 @@ Return a JSON object:
 
 Guidelines:
 1. Extract 3-10 fragments per paper, prioritizing high-relevance ones
-2. Include at least one `verbatim: true` fragment suitable for direct quotation; summaries of longer passages should be `verbatim: false`
+2. Every fragment must be `verbatim: true` with a character-identical substring of the paper; drop any claim you cannot express as a direct quotation
 3. Identify methodology descriptions that could be referenced
 4. Look for results/metrics that support or contrast with the project's approach
 5. Flag definitions of key terms
