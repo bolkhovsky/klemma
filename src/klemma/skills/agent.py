@@ -284,6 +284,13 @@ def build_agent_context(
         else Path(__file__).parent.parent.parent.parent / "prompts" / "agent.md"
     )
     raw = prompt_path.read_text(encoding="utf-8")
+    from ..vault import resolve_notes_root as _resolve_notes_root
+
+    notes_root = (
+        _resolve_notes_root(config, project_root)
+        if project_root
+        else Path(config.obsidian.vault_path or "")
+    )
     context = SandboxedEnvironment().from_string(raw).render(
         parent_context=parent_context,
         project_context=project_context,
@@ -304,7 +311,8 @@ def build_agent_context(
         fragment_stats=fragment_stats,
         today_plan=today_plan,
         next_reading=next_reading,
-        vault_path=config.obsidian.vault_path,
+        notes_root=str(notes_root),
+        vault_path=str(notes_root),
         today=date.today().isoformat(),
         language=config.ai.language,
         project_type=project_type,

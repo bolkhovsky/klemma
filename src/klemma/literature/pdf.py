@@ -94,25 +94,51 @@ class PDFExtractor:
         return lookup
 
     def extract(self, pdf_path: Path) -> Optional[str]:
-        """Extract text from PDF with page markers."""
-        if not pdf_path.exists():
+        """Extract text from PDF with page markers, truncated to `max_chars`.
+
+        Thin formatter over `extract_pages()` — the single `fitz.open` call
+        lives there so callers that need both a page list and an AI-bound
+        string can reuse the result.
+        """
+        pages = self.extract_pages(pdf_path)
+        if not pages:
             return None
+        return self.format_for_ai(pages)
+
+    def extract_pages(self, pdf_path: Path) -> list[str]:
+        """Extract full text as one cleaned string per page.
+
+        Unlike `extract()`, this method does not truncate to `max_chars`
+        and does not insert inline `[Page N]` markers. The caller receives
+        structured per-page content, suitable for sidecar generation and
+        downstream citation-drift verification.
+
+        Returns `[]` for missing files or unreadable PDFs. Fitz errors are
+        caught and logged so the caller can fall through gracefully.
+        """
+        if not pdf_path.exists():
+            return []
         try:
             doc = fitz.open(pdf_path)
-            pages_text = []
-            for page_num, page in enumerate(doc):
-                text = page.get_text("text")
-                text = self._clean_text(text)
-                pages_text.append(f"[Page {page_num + 1}]\n{text}")
-            doc.close()
-
-            combined = "\n\n".join(pages_text)
-            if len(combined) > self.max_chars:
-                combined = combined[: self.max_chars] + "\n\n[...content truncated...]"
-            return combined
         except Exception as e:
             print(f"PDF extraction error for {pdf_path}: {e}")
-            return None
+            return []
+        try:
+            return [self._clean_text(page.get_text("text")) for page in doc]
+        finally:
+            doc.close()
+
+    def format_for_ai(self, pages: list[str]) -> str:
+        """Format extracted pages into `[Page N]`-marked, truncated text
+        suitable for the extraction prompt. Callers that already have a
+        `pages` list from `extract_pages()` use this to avoid re-opening
+        the PDF.
+        """
+        blocks = [f"[Page {i + 1}]\n{text}" for i, text in enumerate(pages)]
+        combined = "\n\n".join(blocks)
+        if len(combined) > self.max_chars:
+            combined = combined[: self.max_chars] + "\n\n[...content truncated...]"
+        return combined
 
     def _clean_text(self, text: str) -> str:
         text = text.replace("\x00", "")

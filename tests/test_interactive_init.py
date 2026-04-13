@@ -164,6 +164,24 @@ class TestInitProjectWithValues:
         assert "zotero" not in cfg
         assert "obsidian" not in cfg
 
+    def test_creates_local_notes_and_pdfs_dirs(self, tmp_path):
+        """Default-local layout: .klemma/notes/ and .klemma/pdfs/ exist after init."""
+        from klemma.setup import InitValues, init_project
+
+        init_project(tmp_path, values=InitValues(title="Local-default"))
+
+        assert (tmp_path / ".klemma" / "notes").is_dir()
+        assert (tmp_path / ".klemma" / "pdfs").is_dir()
+
+    def test_local_default_has_no_obsidian_section(self, tmp_path):
+        """When values carry no vault_path, config.yaml must skip the obsidian block."""
+        from klemma.setup import InitValues, init_project
+
+        init_project(tmp_path, values=InitValues(title="No vault"))
+
+        cfg = yaml.safe_load((tmp_path / ".klemma" / "config.yaml").read_text()) or {}
+        assert "obsidian" not in cfg
+
     def test_no_values_uses_template(self, tmp_path):
         from klemma.setup import init_project
 
