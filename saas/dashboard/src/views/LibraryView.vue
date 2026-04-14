@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { library, process, curation, analyze, ApiError } from '@/api/client'
 import AppLayout from '@/components/AppLayout.vue'
 import { useProjectStore } from '@/stores/project'
 
 const route = useRoute()
+const router = useRouter()
 const projectStore = useProjectStore()
 
 interface Source {
@@ -200,7 +201,9 @@ async function handleUpload(files: FileList | null) {
   let uploaded = 0
   let errors = 0
   const rejected: string[] = []
-  for (const file of Array.from(files)) {
+  const fileArray = Array.from(files)
+  let lastUploadedCitekey: string | null = null
+  for (const file of fileArray) {
     if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
       errors++
       rejected.push(`${file.name} (${file.type || 'unknown type'})`)
@@ -209,6 +212,7 @@ async function handleUpload(files: FileList | null) {
     try {
       const result = await library.upload(file, projectStore.activeProjectId ?? undefined)
       uploaded++
+      lastUploadedCitekey = result.citekey
       if (result.already_owned) {
         uploadSuccess.value = `${file.name} — уже в библиотеке`
       } else if (result.deduplicated) {
@@ -227,6 +231,9 @@ async function handleUpload(files: FileList | null) {
   if (uploaded > 0) {
     uploadSuccess.value = uploadSuccess.value || `Загружено: ${uploaded} файл(ов)`
     await loadSources()
+    if (fileArray.length === 1 && lastUploadedCitekey && route.params.projectId) {
+      router.push(`/${route.params.projectId}/library/${lastUploadedCitekey}/review`)
+    }
   }
   if (errors > 0 && !uploadError.value) {
     uploadError.value = rejected.length ? `Пропущено: ${rejected.join(', ')}` : `Ошибка загрузки: ${errors}`
