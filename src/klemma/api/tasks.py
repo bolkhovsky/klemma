@@ -35,15 +35,72 @@ def _create_ai_provider():
     return create_ai(config), config
 
 
+def _validate_embeddings_config() -> None:
+    """Assert that embeddings are configured for local-only (Ollama) use.
+
+    Called at startup (app.py lifespan) and at worker module import time so
+    the process fails fast before accepting any jobs.
+
+    Set ``KLEMMA_EMBEDDINGS_ALLOW_REMOTE=1`` in CI/test environments to bypass.
+    """
+    if os.getenv("KLEMMA_EMBEDDINGS_ALLOW_REMOTE", "").strip() == "1":
+        return
+
+    from klemma.api.constants import (
+        EMBEDDINGS_REQUIRED_BACKEND,
+        EMBEDDINGS_REQUIRED_MODEL_PREFIX,
+    )
+
+    backend = os.getenv("KLEMMA_EMBEDDINGS_BACKEND", "").strip()
+    model = os.getenv("KLEMMA_EMBEDDINGS_MODEL", "").strip()
+    base_url = os.getenv("KLEMMA_EMBEDDINGS_BASE_URL", "").strip()
+
+    errors = []
+    if not backend:
+        errors.append("KLEMMA_EMBEDDINGS_BACKEND is not set")
+    elif backend != EMBEDDINGS_REQUIRED_BACKEND:
+        errors.append(f"KLEMMA_EMBEDDINGS_BACKEND must be '{EMBEDDINGS_REQUIRED_BACKEND}', got '{backend}'")
+
+    if not model:
+        errors.append("KLEMMA_EMBEDDINGS_MODEL is not set")
+    elif not model.startswith(EMBEDDINGS_REQUIRED_MODEL_PREFIX):
+        errors.append(f"KLEMMA_EMBEDDINGS_MODEL must start with '{EMBEDDINGS_REQUIRED_MODEL_PREFIX}', got '{model}'")
+
+    if not base_url:
+        errors.append("KLEMMA_EMBEDDINGS_BASE_URL is not set")
+
+    if errors:
+        raise RuntimeError(
+            "SaaS embeddings must be local (litellm + ollama/*). "
+            f"Errors: {'; '.join(errors)}. "
+            "Set KLEMMA_EMBEDDINGS_ALLOW_REMOTE=1 to bypass in CI/test environments."
+        )
+
+
 def _create_embeddings_provider():
     """Create an embedding provider from environment variables.
 
-    Mirrors ``_create_ai_provider()`` pattern.  Returns ``None`` when
-    ``KLEMMA_EMBEDDINGS_BACKEND`` is unset (embedding disabled).
+    Enforces local-only (Ollama) embeddings in SaaS — see _validate_embeddings_config().
+    Returns None only when validation was bypassed via KLEMMA_EMBEDDINGS_ALLOW_REMOTE=1
+    and KLEMMA_EMBEDDINGS_BACKEND is empty (i.e. embeddings explicitly disabled in tests).
     """
-    backend = os.getenv("KLEMMA_EMBEDDINGS_BACKEND", "")
+    backend = os.getenv("KLEMMA_EMBEDDINGS_BACKEND", "").strip()
+    allow_remote = os.getenv("KLEMMA_EMBEDDINGS_ALLOW_REMOTE", "").strip() == "1"
+
     if not backend:
-        return None
+        if allow_remote:
+            # CI/test with embeddings explicitly disabled — allow
+            return None
+        # Should have been caught at startup; raise here as backstop
+        raise RuntimeError(
+            "KLEMMA_EMBEDDINGS_BACKEND is not set. "
+            "SaaS requires local Ollama embeddings. "
+            "Set KLEMMA_EMBEDDINGS_ALLOW_REMOTE=1 in tests to disable."
+        )
+
+    # Re-run validation as backstop (startup may have been bypassed in tests)
+    _validate_embeddings_config()
+
     from klemma.embeddings import create_embeddings
 
     config = {
@@ -205,28 +262,18 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         user_library.update_status(citekey, "failed", user_id=user_id or None)
         return {"status": "error", "detail": f"PDF extraction failed: {exc}"}
 
-    # Extract and enrich metadata (title, authors, year, DOI, abstract)
+    # Extract abstract directly from PDF text (no network call).
+    # CrossRef enrichment (authors/year/doi) is now an explicit user action
+    # on the SourceView page — it's no longer in the critical upload path.
     try:
-        from klemma.literature.metadata import resolve_metadata
+        from klemma.literature.metadata import _extract_abstract_from_text
 
-        meta = resolve_metadata(pdf_path)
-        # Always overwrite with resolved metadata — upload sets filename as
-        # placeholder title, resolve_metadata() gets real data from S2/CrossRef
-        if any(meta.get(k) for k in ("title", "authors", "year", "doi", "abstract")):
-            paper_store.update_paper_metadata(
-                paper_id,
-                title=meta.get("title", ""),
-                authors=meta.get("authors", ""),
-                year=meta.get("year"),
-                doi=meta.get("doi", ""),
-                abstract=meta.get("abstract", ""),
-            )
-            logger.info(
-                "Metadata enriched for %s: title=%s, authors=%s, year=%s",
-                citekey, meta.get("title", "")[:50], meta.get("authors", "")[:30], meta.get("year"),
-            )
+        abstract = _extract_abstract_from_text(pdf_text)
+        if abstract:
+            paper_store.update_paper_metadata(paper_id, abstract=abstract)
+            logger.info("Extracted abstract from PDF text for %s (%d chars)", citekey, len(abstract))
     except Exception as exc:
-        logger.warning("Metadata extraction failed for %s (non-fatal): %s", citekey, exc)
+        logger.warning("Abstract extraction failed for %s (non-fatal): %s", citekey, exc)
 
     # Check AI config
     if not os.getenv("ANTHROPIC_API_KEY") and not os.getenv("OPENAI_API_KEY"):
@@ -366,12 +413,21 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             user_library.update_status(citekey, "failed", user_id=user_id or None)
             return {"status": "error", "detail": "No fragments extracted from PDF"}
 
-        # Verbatim integrity check: match the AI's verbatim claims against the
-        # same pdf_text the AI saw (50K cap matches prompt input). The
-        # validator mutates the Pydantic list; mirror the final flag onto each
-        # FragmentRecord so what gets saved matches what was validated.
+        # Verbatim integrity check — validator does offline substring matching,
+        # so it's safe to use a larger window than the AI prompt (50K cap).
+        # For small PDFs validate against full text; cap large PDFs at 150K to
+        # keep peak RAM predictable while still catching bibliography fragments.
+        from klemma.api.constants import (
+            VERBATIM_VALIDATION_CAP_LARGE,
+            VERBATIM_VALIDATION_CAP_SMALL,
+        )
+        _verbatim_window = (
+            pdf_text
+            if len(pdf_text) < VERBATIM_VALIDATION_CAP_SMALL
+            else pdf_text[:VERBATIM_VALIDATION_CAP_LARGE]
+        )
         downgrade_stats = validate_verbatim_fragments(
-            pydantic_frags, pdf_text[:50000], citekey,
+            pydantic_frags, _verbatim_window, citekey,
         )
         for record, pyd in zip(fragments, pydantic_frags):
             record.verbatim = pyd.verbatim
@@ -484,45 +540,159 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             links_saved = paper_store.save_citation_links(paper_id, key_refs)
             logger.info("Saved %d citation links for %s", links_saved, citekey)
 
-        # ── Auto-suggest fragment assignments ──────────────────────────
-        if project_id and user_store and user_id:
-            try:
-                from klemma.section_types import auto_assign_section as _auto_assign
-                _proj = user_store.get_project_by_id(project_id)
-                if not _proj or _proj.get("user_id") != user_id:
-                    logger.warning("Auto-suggest skipped: project %s not found or not owned by %s", project_id, user_id)
-                else:
-                    _outline = _proj.get("outline")
-                    suggestions = []
-                    for frag in fragments:
-                        ai_sec = fragment_ai_sections.get(frag.fragment_id)
-                        assigned = _auto_assign(frag.citation_intent, _outline, ai_sec)
-                        suggestions.append({
-                            "fragment_id": frag.fragment_id,
-                            "citekey": citekey,
-                            "verdict": "suggested",
-                            "assigned_section": assigned,
-                        })
-                    if suggestions:
-                        count = user_store.curate_fragments(project_id, suggestions)
-                        logger.info("Auto-suggested %d fragments for %s", count, citekey)
-            except Exception as exc:
-                logger.warning("Auto-suggestion failed for %s (non-fatal): %s", citekey, exc)
+        # ── Auto-suggest: enqueue as post-hook job (non-blocking) ────────
+        auto_suggest_job_id: str | None = None
+        if project_id and user_id:
+            auto_suggest_job_id = _enqueue_auto_suggest(
+                paper_id=paper_id,
+                citekey=citekey,
+                user_id=user_id,
+                project_id=project_id,
+                fragment_ids=[f.fragment_id for f in fragments],
+                citation_intents={f.fragment_id: f.citation_intent for f in fragments},
+                fragment_ai_sections=fragment_ai_sections,
+                data_dir=data_dir,
+            )
 
         user_library.update_status(citekey, "completed", user_id=user_id or None)
         logger.info("Extracted %d fragments for %s (%s)", saved, citekey, paper_id)
 
-        return {
+        result_dict: dict = {
             "status": "completed",
             "citekey": citekey,
             "fragment_count": saved,
             "downgrade_stats": downgrade_stats.as_dict(),
         }
+        if auto_suggest_job_id:
+            result_dict["auto_suggest_job_id"] = auto_suggest_job_id
+        return result_dict
 
     except Exception as exc:
         logger.error("AI extraction failed for %s: %s", citekey, exc, exc_info=True)
         user_library.update_status(citekey, "failed", user_id=user_id or None)
         return {"status": "error", "detail": f"Extraction failed: {type(exc).__name__}: {exc}"}
+
+
+def _run_auto_suggest(
+    paper_id: str,
+    citekey: str,
+    user_id: str,
+    project_id: str,
+    fragment_ids: list[str],
+    citation_intents: dict[str, str | None],
+    fragment_ai_sections: dict[str, str | None],
+    data_dir: str,
+) -> dict:
+    """Write auto-suggest curation entries for all fragments of a processed paper.
+
+    Runs as an async post-hook job so process_source() returns immediately.
+    Idempotent: curate_fragments() uses INSERT OR REPLACE so re-runs are safe.
+    Errors are logged but never re-raised to avoid crashing the rq worker.
+    """
+    try:
+        from klemma.section_types import auto_assign_section as _auto_assign
+        from klemma.stores.user_store import LocalUserStore
+
+        data_path = Path(data_dir)
+        user_store = LocalUserStore(data_path / "users.db")
+
+        _proj = user_store.get_project_by_id(project_id)
+        if not _proj or _proj.get("user_id") != user_id:
+            logger.warning(
+                "Auto-suggest skipped: project %s not found or not owned by %s",
+                project_id, user_id,
+            )
+            return {"status": "skipped", "reason": "project_not_found"}
+
+        _outline = _proj.get("outline")
+        suggestions = []
+        for frag_id in fragment_ids:
+            intent = citation_intents.get(frag_id)
+            ai_sec = fragment_ai_sections.get(frag_id)
+            assigned = _auto_assign(intent, _outline, ai_sec)
+            suggestions.append({
+                "fragment_id": frag_id,
+                "citekey": citekey,
+                "verdict": "suggested",
+                "assigned_section": assigned,
+            })
+
+        if suggestions:
+            count = user_store.curate_fragments(project_id, suggestions)
+            logger.info("Auto-suggested %d fragments for %s (project %s)", count, citekey, project_id)
+            return {"status": "completed", "suggested": count}
+        return {"status": "completed", "suggested": 0}
+
+    except Exception as exc:
+        logger.warning("Auto-suggestion failed for %s (non-fatal): %s", citekey, exc)
+        return {"status": "error", "detail": str(exc)}
+
+
+def _enqueue_auto_suggest(
+    paper_id: str,
+    citekey: str,
+    user_id: str,
+    project_id: str,
+    fragment_ids: list[str],
+    citation_intents: dict[str, str | None],
+    fragment_ai_sections: dict[str, str | None],
+    data_dir: str,
+) -> str | None:
+    """Enqueue _run_auto_suggest as an rq job. Returns job_id or None."""
+    try:
+        from redis import Redis
+        from rq import Queue
+
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        q = Queue(connection=Redis.from_url(redis_url))
+        job = q.enqueue(
+            _run_auto_suggest,
+            paper_id, citekey, user_id, project_id,
+            fragment_ids, citation_intents, fragment_ai_sections, data_dir,
+            job_timeout=60,
+        )
+        logger.info("Enqueued auto-suggest job %s for %s", job.id, citekey)
+        return job.id
+    except Exception as exc:
+        # Fallback: run synchronously (no Redis available)
+        logger.warning("Auto-suggest enqueue failed for %s, running synchronously: %s", citekey, exc)
+        _run_auto_suggest(
+            paper_id, citekey, user_id, project_id,
+            fragment_ids, citation_intents, fragment_ai_sections, data_dir,
+        )
+        return None
+
+
+def re_embed_source_task(paper_id: str, citekey: str, data_dir: str) -> dict:
+    """Re-compute the source embedding after metadata enrichment.
+
+    Called asynchronously by enrich-metadata endpoint.
+    Idempotent: overwrites existing embedding with updated title+abstract.
+    """
+    try:
+        from klemma.stores.paper_store import LocalPaperStore
+
+        data_path = Path(data_dir)
+        paper_store = LocalPaperStore(data_path / "library.db")
+
+        paper = paper_store.get_paper_by_id(paper_id)
+        if not paper:
+            logger.warning("re_embed_source_task: paper %s not found", paper_id)
+            return {"status": "error", "detail": "paper_not_found"}
+
+        emb = _create_embeddings_provider()
+        if not emb:
+            return {"status": "skipped", "reason": "embeddings_disabled"}
+
+        vec = emb.embed(paper.title or citekey, paper.abstract or "")
+        if vec:
+            paper_store.save_paper_embedding(paper_id, vec, emb.model_name)
+            logger.info("Re-embedded source %s after metadata enrichment", citekey)
+            return {"status": "completed"}
+        return {"status": "skipped", "reason": "no_vector"}
+    except Exception as exc:
+        logger.warning("Re-embed failed for %s (non-fatal): %s", citekey, exc)
+        return {"status": "error", "detail": str(exc)}
 
 
 def generate_outline_saas(
