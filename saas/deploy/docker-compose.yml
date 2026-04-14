@@ -11,6 +11,12 @@ services:
       - KLEMMA_JWT_SECRET=${KLEMMA_JWT_SECRET}
       - KLEMMA_CORS_ORIGINS=${KLEMMA_CORS_ORIGINS:-}
       - REDIS_URL=redis://redis:6379
+      # Embeddings — validated at startup by _validate_embeddings_config().
+      # API process doesn't embed directly but must pass the same config check
+      # as the worker so misconfigurations are caught before any job runs.
+      - KLEMMA_EMBEDDINGS_BACKEND=${KLEMMA_EMBEDDINGS_BACKEND:-litellm}
+      - KLEMMA_EMBEDDINGS_MODEL=${KLEMMA_EMBEDDINGS_MODEL:-ollama/bge-m3}
+      - KLEMMA_EMBEDDINGS_BASE_URL=${KLEMMA_EMBEDDINGS_BASE_URL:-http://ollama:11434}
       # Host-side tinyproxy on 172.17.0.1:8888 routes egress via OpenVPN tun0 so
       # Anthropic/OpenAI calls originate from an allowed region. Intra-compose
       # hostnames are exempt so Redis/Ollama/self traffic stays on the bridge.
