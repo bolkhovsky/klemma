@@ -196,9 +196,17 @@ function stopPolling() {
   }
 }
 
-onMounted(() => {
-  loadSource()
+onMounted(async () => {
+  await loadSource()
   loadSections()
+  // Resume polling if redirected here immediately after upload
+  const incomingJobId = route.query.job_id as string | undefined
+  if (incomingJobId && source.value?.status !== 'completed') {
+    jobId.value = incomingJobId
+    processing.value = true
+    jobStatus.value = 'queued'
+    startPolling()
+  }
 })
 onUnmounted(stopPolling)
 </script>
