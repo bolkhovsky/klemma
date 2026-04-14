@@ -29,6 +29,8 @@ interface Fragment {
   page: number | null
   citekey: string
   verbatim: boolean
+  suggested_text?: string | null
+  sentence_model?: string | null
 }
 
 const allFragments = ref<Fragment[]>([])
@@ -43,6 +45,16 @@ const assignedSections = ref<Record<string, string>>({})
 const notes = ref<Record<string, string>>({})
 const editingNote = ref<Record<string, boolean>>({})
 const openNotes = ref<Record<string, boolean>>({})
+
+// Suggested sentences (editable per-fragment)
+const suggestedTexts = ref<Record<string, string>>({})
+const sentenceModels = ref<Record<string, string>>({})
+const sentenceJobId = ref<string | null>(null)
+const sentenceJobStatus = ref<string>('')
+const inProgressIds = ref<Set<string>>(new Set())
+const failedIds = ref<Set<string>>(new Set())
+const sentenceToast = ref<string>('')
+let sentencePollTimer: ReturnType<typeof setInterval> | null = null
 
 // Outline sections
 const outline = ref<OutlineSection[]>([])
@@ -98,6 +110,13 @@ const sourceDisplay = computed(() => {
 
 // Whether to show the review UI (source processed with fragments)
 const hasFragments = computed(() => sourceStatus.value === 'completed' && totalCount.value > 0)
+const missingSentencesCount = computed(() =>
+  allFragments.value.filter(f => !(suggestedTexts.value[f.fragment_id] || '').trim()).length,
+)
+const allHaveSentences = computed(() =>
+  allFragments.value.length > 0 && missingSentencesCount.value === 0,
+)
+const isGeneratingSentences = computed(() => sentenceJobId.value !== null)
 const isPending = computed(() => sourceStatus.value === 'pending' && !processing.value)
 const isProcessing = computed(() => processing.value || sourceStatus.value === 'processing')
 
@@ -128,6 +147,12 @@ async function loadData() {
         if ((f as any).suggested_section && !assignedSections.value[f.fragment_id]) {
           assignedSections.value[f.fragment_id] = (f as any).suggested_section
         }
+        if (f.suggested_text) {
+          suggestedTexts.value[f.fragment_id] = f.suggested_text
+        }
+        if (f.sentence_model) {
+          sentenceModels.value[f.fragment_id] = f.sentence_model
+        }
       }
 
       // Load already-curated for this source to show them too
@@ -147,6 +172,12 @@ async function loadData() {
           notes.value[c.fragment_id] = c.note
           openNotes.value[c.fragment_id] = true
         }
+        if (c.suggested_text) {
+          suggestedTexts.value[c.fragment_id] = c.suggested_text
+        }
+        if (c.sentence_model) {
+          sentenceModels.value[c.fragment_id] = c.sentence_model
+        }
         // Add to allFragments if not already there
         if (!allFragments.value.find(f => f.fragment_id === c.fragment_id)) {
           allFragments.value.push({
@@ -156,6 +187,8 @@ async function loadData() {
             page: null,
             citekey: c.citekey,
             verbatim: false,
+            suggested_text: c.suggested_text,
+            sentence_model: c.sentence_model,
           })
         }
       }
@@ -221,13 +254,135 @@ async function setVerdict(fragmentId: string, verdict: 'accepted' | 'rejected') 
   verdicts.value[fragmentId] = verdict
   const frag = allFragments.value.find(f => f.fragment_id === fragmentId)
   if (!frag) return
+  const sentence = (suggestedTexts.value[fragmentId] || '').trim()
+  const model = sentenceModels.value[fragmentId]
   await curation.curate(projectId.value, [{
     fragment_id: fragmentId,
     citekey: frag.citekey,
     verdict,
     assigned_section: assignedSections.value[fragmentId] || undefined,
     note: notes.value[fragmentId] || undefined,
+    suggested_text: sentence || undefined,
+    sentence_model: sentence && model ? model : undefined,
   }])
+}
+
+function onSuggestedInput(fragmentId: string, value: string) {
+  suggestedTexts.value[fragmentId] = value
+}
+
+async function saveSuggested(fragmentId: string) {
+  if (!verdicts.value[fragmentId] && !suggestedIds.value.has(fragmentId)) return
+  const sentence = (suggestedTexts.value[fragmentId] || '').trim()
+  const model = sentenceModels.value[fragmentId]
+  await curation.update(projectId.value, fragmentId, {
+    suggested_text: sentence,
+    sentence_model: sentence && model ? model : undefined,
+  })
+}
+
+async function generateSentences(mode: 'missing' | 'force') {
+  if (sentenceJobId.value) return
+  sentenceToast.value = ''
+  failedIds.value = new Set()
+  const targets = mode === 'force'
+    ? allFragments.value.map(f => f.fragment_id)
+    : allFragments.value.filter(f => !(suggestedTexts.value[f.fragment_id] || '').trim()).map(f => f.fragment_id)
+  if (targets.length === 0) return
+  inProgressIds.value = new Set(targets)
+  try {
+    const resp = await curation.generateSentences(projectId.value, citekey.value, mode)
+    sentenceJobId.value = resp.job_id
+    sentenceJobStatus.value = resp.status
+    startSentencePolling()
+  } catch (e: any) {
+    inProgressIds.value = new Set()
+    sentenceJobId.value = null
+    sentenceToast.value = e?.message || 'Не удалось запустить генерацию'
+  }
+}
+
+function startSentencePolling() {
+  if (sentencePollTimer) clearInterval(sentencePollTimer)
+  sentencePollTimer = setInterval(async () => {
+    if (!sentenceJobId.value) return
+    try {
+      const resp = await process.jobStatus(sentenceJobId.value)
+      sentenceJobStatus.value = resp.status
+      if (resp.status === 'finished') {
+        stopSentencePolling()
+        const result = resp.result || {}
+        if (result.status === 'error') {
+          sentenceToast.value = result.detail || 'Ошибка генерации предложений'
+        } else {
+          const sentences: Record<string, string> = result.sentences || {}
+          const model: string = result.model || ''
+          for (const [fid, text] of Object.entries(sentences)) {
+            suggestedTexts.value[fid] = text
+            if (model) sentenceModels.value[fid] = model
+            // Persist on fragments already curated
+            if (verdicts.value[fid] || suggestedIds.value.has(fid)) {
+              curation.update(projectId.value, fid, {
+                suggested_text: text,
+                sentence_model: model || undefined,
+              }).catch(() => {})
+            }
+          }
+          const failed: string[] = result.failed_ids || []
+          failedIds.value = new Set(failed)
+          const generated = result.generated || 0
+          const failedCount = result.failed || 0
+          if (failedCount > 0) {
+            sentenceToast.value = `Сгенерировано ${generated} из ${generated + failedCount}. Нажмите 🔄 на карточке, чтобы повторить.`
+          }
+        }
+        inProgressIds.value = new Set()
+        sentenceJobId.value = null
+      } else if (resp.status === 'failed') {
+        stopSentencePolling()
+        sentenceToast.value = resp.result?.detail || 'Задача завершилась с ошибкой'
+        inProgressIds.value = new Set()
+        sentenceJobId.value = null
+      }
+    } catch {
+      // keep polling on transient errors
+    }
+  }, 2000)
+}
+
+function stopSentencePolling() {
+  if (sentencePollTimer) {
+    clearInterval(sentencePollTimer)
+    sentencePollTimer = null
+  }
+}
+
+async function retryFragmentSentence(fragmentId: string) {
+  // Clear the local sentence so mode=missing picks it up, then trigger single-source generation
+  suggestedTexts.value[fragmentId] = ''
+  failedIds.value.delete(fragmentId)
+  await generateSentences('missing')
+}
+
+async function acceptAllAsIs() {
+  const pending = allFragments.value.filter(f => !verdicts.value[f.fragment_id])
+  const decisions = pending.map(f => {
+    const sentence = (suggestedTexts.value[f.fragment_id] || '').trim()
+    const model = sentenceModels.value[f.fragment_id]
+    return {
+      fragment_id: f.fragment_id,
+      citekey: f.citekey,
+      verdict: 'accepted' as const,
+      assigned_section: assignedSections.value[f.fragment_id] || undefined,
+      note: notes.value[f.fragment_id] || undefined,
+      suggested_text: sentence || undefined,
+      sentence_model: sentence && model ? model : undefined,
+    }
+  })
+  for (const f of pending) verdicts.value[f.fragment_id] = 'accepted'
+  if (decisions.length > 0) {
+    await curation.curate(projectId.value, decisions)
+  }
 }
 
 async function undo(fragmentId: string) {
@@ -262,13 +417,19 @@ async function saveNote(fragmentId: string, text: string) {
 
 async function acceptAllRemaining() {
   const pending = allFragments.value.filter(f => !verdicts.value[f.fragment_id])
-  const decisions = pending.map(f => ({
-    fragment_id: f.fragment_id,
-    citekey: f.citekey,
-    verdict: 'accepted' as const,
-    assigned_section: assignedSections.value[f.fragment_id] || undefined,
-    note: notes.value[f.fragment_id] || undefined,
-  }))
+  const decisions = pending.map(f => {
+    const sentence = (suggestedTexts.value[f.fragment_id] || '').trim()
+    const model = sentenceModels.value[f.fragment_id]
+    return {
+      fragment_id: f.fragment_id,
+      citekey: f.citekey,
+      verdict: 'accepted' as const,
+      assigned_section: assignedSections.value[f.fragment_id] || undefined,
+      note: notes.value[f.fragment_id] || undefined,
+      suggested_text: sentence || undefined,
+      sentence_model: sentence && model ? model : undefined,
+    }
+  })
   for (const f of pending) verdicts.value[f.fragment_id] = 'accepted'
   if (decisions.length > 0) {
     await curation.curate(projectId.value, decisions)
@@ -288,7 +449,10 @@ async function deleteSource() {
 }
 
 onMounted(loadData)
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  stopPolling()
+  stopSentencePolling()
+})
 </script>
 
 <template>
@@ -396,6 +560,40 @@ onUnmounted(stopPolling)
             </span>
           </div>
 
+          <!-- Sentence generation controls -->
+          <div class="flex items-center gap-2 mb-3 flex-wrap">
+            <button
+              v-if="missingSentencesCount > 0"
+              :disabled="isGeneratingSentences"
+              @click="generateSentences('missing')"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium cursor-pointer border border-[#0d7377] bg-[#e6f3f3] text-[#065a5e] hover:bg-[#d3ecec] disabled:opacity-60 disabled:cursor-not-allowed"
+              title="Сгенерировать академические предложения на русском для всех фрагментов без суждения"
+            >
+              <span>✨</span>
+              <span>{{ isGeneratingSentences ? 'Генерация…' : `Сгенерировать предложения (${missingSentencesCount})` }}</span>
+            </button>
+            <button
+              v-if="allFragments.length > 0"
+              :disabled="isGeneratingSentences"
+              @click="generateSentences('force')"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] cursor-pointer border border-[#e8e5df] bg-white text-[#6b6b8a] hover:text-[#0d7377] hover:border-[#0d7377] disabled:opacity-60 disabled:cursor-not-allowed"
+              title="Перегенерировать все предложения (старые будут перезаписаны)"
+            >
+              🔄 Перегенерировать все
+            </button>
+            <button
+              v-if="allHaveSentences && stats.pending > 0"
+              @click="acceptAllAsIs"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium cursor-pointer border-none bg-[#2d6a4f] text-white hover:bg-[#1b5e3a] ml-auto"
+            >
+              ✓ Принять все без правок
+            </button>
+          </div>
+          <div
+            v-if="sentenceToast"
+            class="mb-3 rounded-md border border-[#fbbf24] bg-[#fef9c3] px-3 py-2 text-[13px] text-[#78350f]"
+          >{{ sentenceToast }}</div>
+
           <!-- Filters -->
           <div class="flex gap-1.5 mb-4 flex-wrap">
             <button
@@ -421,7 +619,33 @@ onUnmounted(stopPolling)
             }"
           >
             <div class="p-4">
-              <div class="text-sm leading-7 text-[#3d3d5c] mb-3">{{ f.text }}</div>
+              <!-- Suggested sentence (primary) -->
+              <div class="mb-3">
+                <div
+                  v-if="inProgressIds.has(f.fragment_id)"
+                  class="animate-pulse rounded-lg bg-[#e6f3f3] border border-[#b8dcdc] px-3 py-2 text-[13px] text-[#065a5e] italic"
+                >✨ Генерируем академическое предложение…</div>
+                <template v-else>
+                  <textarea
+                    class="w-full rounded-lg border border-[#0d7377] bg-[#e6f3f3] px-3 py-2 text-[14px] leading-6 text-[#0b3d3f] font-medium resize-y min-h-[56px] focus:outline-none focus:border-[#065a5e] focus:bg-[#d9ecec]"
+                    :placeholder="suggestedTexts[f.fragment_id] === '' && failedIds.has(f.fragment_id) ? 'Не удалось сгенерировать. Нажмите 🔄, чтобы повторить.' : 'Академическое предложение появится здесь после генерации.'"
+                    :value="suggestedTexts[f.fragment_id] || ''"
+                    @input="onSuggestedInput(f.fragment_id, ($event.target as HTMLTextAreaElement).value)"
+                    @blur="saveSuggested(f.fragment_id)"
+                  />
+                  <div class="flex items-center gap-2 mt-1 text-[12px] text-[#6b6b8a]">
+                    <span v-if="sentenceModels[f.fragment_id]">модель: {{ sentenceModels[f.fragment_id] }}</span>
+                    <button
+                      v-if="failedIds.has(f.fragment_id)"
+                      class="text-[#c62828] cursor-pointer border-none bg-transparent hover:underline"
+                      @click="retryFragmentSentence(f.fragment_id)"
+                      title="Повторить генерацию для этого фрагмента"
+                    >🔄 повторить</button>
+                  </div>
+                </template>
+              </div>
+              <!-- Original fragment (provenance, secondary) -->
+              <div class="text-[13px] leading-6 text-[#6b6b8a] italic mb-3 border-l-2 border-[#e8e5df] pl-3">{{ f.text }}</div>
               <div class="flex items-center gap-1.5 flex-wrap mb-3">
                 <span
                   v-if="f.citation_intent"

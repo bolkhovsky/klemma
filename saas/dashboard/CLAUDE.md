@@ -24,7 +24,9 @@ saas/dashboard/
 │   │   ├── SourceView     — source detail: fragments, section assignment, processing + "Отобрать цитаты" CTA
 │   │   ├── FragmentReviewView — /:projectId/library/:citekey/review — citation curation cards
 │   │   │     standalone layout, accept/reject per fragment, intent color badges, section dropdown,
-│   │   │     notes, progress bar, batch accept, undo support
+│   │   │     notes, progress bar, batch accept, undo support, suggested-sentence textarea per card (ADR-017,
+│   │   │     teal primary + italic grey provenance), sentence-generation job polling, partial-failure retry,
+│   │   │     "Accept all as-is" bulk button when every fragment has a sentence
 │   │   ├── MapView        — /:projectId/map — curated citation bank grouped by outline sections
 │   │   │     AppLayout, accepted fragments per section, suggest popup, move/exclude actions
 │   │   ├── SectionEditorView — /:projectId/write — section-card write paradigm (Phase 5A, #273)

@@ -112,9 +112,10 @@ Library-first pivot: users accept/reject fragments, assign them to outline secti
 - `PATCH /projects/{id}/fragments/curate/{fragment_id}` → partial update (verdict, section, note)
 - `GET /projects/{id}/fragments/suggest?section=X` → `SuggestFragmentsResponse` — smart suggestions: intent match + gap alerts for missing intents
 - `POST /projects/{id}/fragments/auto-suggest` → `{suggested: N}` — backfill `verdict='suggested'` entries for all uncurated fragments in a project; idempotent; uses `auto_assign_section()` from `klemma.section_types`
+- `POST /projects/{id}/fragments/generate-sentences` → `{job_id, status, citekey}` (202) — enqueue suggested-sentence generation job (ADR-017). Body: `{citekey, mode: "missing"|"force"}`. Uses Redis/rq when available, falls back to asyncio local job queue (shares `process.py`'s `_local_jobs` registry). Poll result via `GET /process/jobs/{job_id}` — final payload: `{status, generated, failed, failed_ids, sentences: {fragment_id: text}, model}`.
 - Uses `INTENT_TO_SECTION_TYPES` and `auto_assign_section()` from `klemma.section_types` for auto-assignment
 - Depends on: `user_store`, `paper_store`, `user_library` from `deps.py`
-- Schemas: `PendingFragmentsResponse`, `CurateRequest`, `CuratedBankResponse`, `CuratedFragmentResponse`, `SuggestFragmentsResponse`
+- Schemas: `PendingFragmentsResponse`, `CurateRequest`, `CuratedBankResponse`, `CuratedFragmentResponse`, `SuggestFragmentsResponse`, `GenerateSentencesRequest`, `GenerateSentencesResponse`. `PendingFragment` / `CuratedFragmentResponse` include optional `suggested_text` + `sentence_model` (ADR-017).
 
 ## Adding a new router
 

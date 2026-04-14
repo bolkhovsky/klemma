@@ -23,9 +23,14 @@ Shared context-loading helpers (ADR-008). Extracted from researcher.py for reuse
 ### drafter.py (145 lines)
 Section draft generation — general prose from research context.
 - `DraftResult` — dataclass: section, chapter, text, word_count, citations_used, filtered_citekeys, research_report_used
-- `generate_draft(section, chapter, config, ai, ..., rag_fragments?, prev_ending="", outline_context=None)` — pure skill: renders `prompts/section_draft.md` → AI → parse citations → filter hallucinated → `DraftResult`; accepts `prev_ending` (last paragraph of previous section) and `outline_context` (dict from `load_outline_context()`) for structured context
+- `generate_draft(section, chapter, config, ai, ..., rag_fragments?, prev_ending="", outline_context=None, candidate_sentences=None)` — pure skill: renders `prompts/section_draft.md` → AI → parse citations → filter hallucinated → `DraftResult`; accepts `prev_ending` (last paragraph of previous section), `outline_context` (dict from `load_outline_context()`), and `candidate_sentences` (list of {citekey, sentence} user-approved suggested sentences, ADR-017) for structured context
 - `_extract_citations(text)` — regex `[@citekey]` parsing
 - `_filter_hallucinated_citations(text, valid_ids)` — remove invalid `[@citekey]` from prose, return cleaned text + removed list
+
+### sentence_generator.py (ADR-017)
+Pure skill — generates one academic sentence per verbatim fragment in the project's target language.
+- `SentenceResult` — dataclass: `sentences: dict[str, str]` (fragment_id → sentence), `failed: list[str]`, `model: str`, `input_tokens: int`, `output_tokens: int`
+- `generate_sentences(fragments, citekey, authors, year, outline, language, ai, klemma_home)` — renders `prompts/suggest_sentence.md` → `ai.call_with_meta()` → extracts JSON (tolerates non-JSON wrapper prose via regex pre-pass) → partial-failure aware: persists whatever the model returned, reports `failed` for malformed/missing entries. No DB I/O — results are passed back to the caller (the rq task) for persistence via `curate_fragments` / `update_curation`.
 
 ### planner.py (248 lines)
 Morning briefing generation. Gathers: deadline, streak, yesterday's plan, chapter plan, library digest, coverage stats, ref-gaps.

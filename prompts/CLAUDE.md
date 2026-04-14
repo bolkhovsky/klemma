@@ -17,6 +17,7 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 | `outline.md` | `skills/outliner.py` | Project outline generation |
 | `outline_incremental.md` | `skills/outliner.py` | Incremental outline update |
 | `section_draft.md` | `skills/drafter.py` | Section draft generation from research context |
+| `suggest_sentence.md` | `skills/sentence_generator.py` | Generate academic sentences in project language from verbatim fragments (ADR-017) |
 | `insight_curator.md` | `skills/insights.py` | LLM curation of raw insight candidates (multi-objective ranking) |
 | `analyst.md` | `evaluation/reconstruction.py` | Extract ground truth citation map from paper PDF |
 | `reconstruct.md` | `evaluation/reconstruction.py` | AI citation recommendation (blind to paper text) |
@@ -51,7 +52,10 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 `project_type`, `dissertation_context`, `project_files`, `library_summary`, `previous_outline`, `user_notes`, `previous_date`, `custom_prompt`, `language`
 
 ### section_draft.md
-`dissertation_context`, `dissertation_context_title`, `section`, `chapter_num`, `chapter_name`, `section_title` (from outline), `research_report` (full research briefing text), `existing_draft` (current section text — expand, don't rewrite), `fragments` (list of section-level fragment dicts — fallback/supplementary), `rag_fragments` (list of per-block RAG fragment groups — each with `block_order`, `block_title`, `fragments` with `source`, `text`, `type`, `similarity`; He et al. 2010 context-aware retrieval), `source_summaries` (list of source metadata dicts with citekey, quality, priority, summary), `language`, `prev_ending` (last paragraph of previous section — continuity bridge; empty string if first section), `outline_context` (dict: `description`, `scientific_contributions`, `current_chapter_desc`, `current_section_desc` — from KLEMMA.md frontmatter + `## Outline`; empty dict if no outline), `custom_prompt`
+`dissertation_context`, `dissertation_context_title`, `section`, `chapter_num`, `chapter_name`, `section_title` (from outline), `research_report` (full research briefing text), `existing_draft` (current section text — expand, don't rewrite), `fragments` (list of section-level fragment dicts — fallback/supplementary), `rag_fragments` (list of per-block RAG fragment groups — each with `block_order`, `block_title`, `fragments` with `source`, `text`, `type`, `similarity`; He et al. 2010 context-aware retrieval), `source_summaries` (list of source metadata dicts with citekey, quality, priority, summary), `language`, `prev_ending` (last paragraph of previous section — continuity bridge; empty string if first section), `outline_context` (dict: `description`, `scientific_contributions`, `current_chapter_desc`, `current_section_desc` — from KLEMMA.md frontmatter + `## Outline`; empty dict if no outline), `candidate_sentences` (list of {citekey, sentence} — user-approved sentences from suggested-sentence curation; integrate verbatim or with minimal edits; ADR-017), `custom_prompt`
+
+### suggest_sentence.md
+`fragments` (list of {fragment_id, text, citation_intent, assigned_section}), `citekey`, `authors`, `year`, `outline` (list of {section_id, title, description}), `language`. Output: JSON `{"sentences": [{"fragment_id": "...", "text": "..."}]}`. Transliterates Latin author names phonetically to target language; preserves numbers/caveats verbatim; style varies by `citation_intent`.
 
 ### insight_curator.md
 `language`, `dissertation_context`, `candidates` (formatted text of raw candidates with index numbers), `candidate_count` (int), `feedback_summary` (formatted researcher preferences — liked/disliked types, recent notes)
