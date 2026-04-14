@@ -347,6 +347,174 @@ class TestLookupCrossRef:
         from klemma.literature.metadata import lookup_crossref
         assert lookup_crossref("") is None
 
+    def test_timeout_kwarg_passed_to_requests(self):
+        from klemma.literature.metadata import lookup_crossref
+
+        with patch("klemma.literature.metadata.requests") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"message": {"items": []}}
+            mock_resp.raise_for_status = MagicMock()
+            mock_req.get.return_value = mock_resp
+            lookup_crossref("Some Title", timeout=5)
+
+        assert mock_req.get.call_args.kwargs["timeout"] == 5
+
+
+# ---------------------------------------------------------------------------
+# _extract_abstract_from_text
+# ---------------------------------------------------------------------------
+
+
+class TestExtractAbstractFromText:
+    def test_english_abstract(self):
+        from klemma.literature.metadata import _extract_abstract_from_text
+
+        text = "Title\n\nAbstract\nThis paper studies sea ice dynamics in the Arctic.\n\nKeywords: ice, Arctic"
+        result = _extract_abstract_from_text(text)
+        assert "sea ice dynamics" in result
+
+    def test_russian_annotation(self):
+        from klemma.literature.metadata import _extract_abstract_from_text
+
+        text = "Заголовок\n\nАннотация\nВ данной работе исследуется морской лёд.\n\nКлючевые слова: лёд"
+        result = _extract_abstract_from_text(text)
+        assert "морской лёд" in result
+
+    def test_no_abstract_marker_returns_empty(self):
+        from klemma.literature.metadata import _extract_abstract_from_text
+
+        text = "Introduction\nThis is the intro section.\n\n1. Methods\nWe used data."
+        result = _extract_abstract_from_text(text)
+        assert result == ""
+
+    def test_empty_input_returns_empty_string(self):
+        from klemma.literature.metadata import _extract_abstract_from_text
+
+        assert _extract_abstract_from_text("") == ""
+
+    def test_stops_before_keywords(self):
+        from klemma.literature.metadata import _extract_abstract_from_text
+
+        text = "Abstract\nShort abstract text.\n\nKeywords: foo, bar\n\nIntroduction\nMore text."
+        result = _extract_abstract_from_text(text)
+        assert result == "Short abstract text."
+        assert "foo" not in result
+
+    def test_caps_at_2000_chars(self):
+        from klemma.literature.metadata import _extract_abstract_from_text
+
+        long_abstract = "word " * 600  # ~3000 chars
+        text = f"Abstract\n{long_abstract}\n\nKeywords: something"
+        result = _extract_abstract_from_text(text)
+        assert len(result) <= 2000
+
+
+# ---------------------------------------------------------------------------
+# _extract_doi_from_text
+# ---------------------------------------------------------------------------
+
+
+class TestExtractDoiFromText:
+    def test_valid_doi(self):
+        from klemma.literature.metadata import _extract_doi_from_text
+
+        text = "Published in Nature. DOI: 10.1038/s41586-021-03819-2. Methods follow..."
+        assert _extract_doi_from_text(text) == "10.1038/s41586-021-03819-2"
+
+    def test_arxiv_doi_kept(self):
+        from klemma.literature.metadata import _extract_doi_from_text
+
+        text = "arXiv preprint. doi:10.48550/arXiv.2106.09685"
+        result = _extract_doi_from_text(text)
+        assert result == "10.48550/arXiv.2106.09685"
+
+    def test_sentinel_doi_rejected(self):
+        from klemma.literature.metadata import _extract_doi_from_text
+
+        text = "10.0000/example should be ignored"
+        assert _extract_doi_from_text(text) == ""
+
+    def test_empty_input_returns_empty(self):
+        from klemma.literature.metadata import _extract_doi_from_text
+
+        assert _extract_doi_from_text("") == ""
+
+    def test_no_doi_returns_empty(self):
+        from klemma.literature.metadata import _extract_doi_from_text
+
+        assert _extract_doi_from_text("This text has no DOI at all.") == ""
+
+
+# ---------------------------------------------------------------------------
+# lookup_crossref_by_doi
+# ---------------------------------------------------------------------------
+
+
+class TestLookupCrossrefByDoi:
+    def _mock_crossref_item(self):
+        return {
+            "title": ["Sea Ice Forecasting"],
+            "author": [{"family": "Smith", "given": "J"}],
+            "issued": {"date-parts": [[2021]]},
+            "DOI": "10.1038/test-doi",
+            "abstract": "<jats:p>Abstract text.</jats:p>",
+        }
+
+    def test_success(self):
+        from klemma.literature.metadata import lookup_crossref_by_doi
+
+        with patch("klemma.literature.metadata.requests") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"message": self._mock_crossref_item()}
+            mock_resp.raise_for_status = MagicMock()
+            mock_req.get.return_value = mock_resp
+            result = lookup_crossref_by_doi("10.1038/test-doi")
+
+        assert result is not None
+        assert result["title"] == "Sea Ice Forecasting"
+        assert result["year"] == 2021
+        assert "Abstract text." in result["abstract"]
+        assert result["doi"] == "10.1038/test-doi"
+
+    def test_404_returns_none(self):
+        from klemma.literature.metadata import lookup_crossref_by_doi
+
+        with patch("klemma.literature.metadata.requests") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 404
+            mock_req.get.return_value = mock_resp
+            result = lookup_crossref_by_doi("10.9999/nonexistent")
+
+        assert result is None
+
+    def test_network_error_returns_none(self):
+        from klemma.literature.metadata import lookup_crossref_by_doi
+
+        with patch("klemma.literature.metadata.requests") as mock_req:
+            mock_req.get.side_effect = Exception("connection timeout")
+            result = lookup_crossref_by_doi("10.1038/test-doi")
+
+        assert result is None
+
+    def test_empty_doi_returns_none(self):
+        from klemma.literature.metadata import lookup_crossref_by_doi
+
+        assert lookup_crossref_by_doi("") is None
+
+    def test_timeout_kwarg_passed(self):
+        from klemma.literature.metadata import lookup_crossref_by_doi
+
+        with patch("klemma.literature.metadata.requests") as mock_req:
+            mock_req.get.side_effect = Exception("bypass")
+            try:
+                lookup_crossref_by_doi("10.1038/x", timeout=3)
+            except Exception:
+                pass
+            # Verify the timeout kwarg was forwarded
+            if mock_req.get.called:
+                assert mock_req.get.call_args.kwargs.get("timeout") == 3
+
 
 # ---------------------------------------------------------------------------
 # Citekey from resolved metadata

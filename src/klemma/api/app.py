@@ -49,6 +49,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Phase 2 swaps to PostgreSQL — same Protocols, different implementations.
     # project.db lives in KLEMMA_DATA_DIR (not per-directory) because the SaaS
     # API has no concept of filesystem project directories — one project per user.
+    # Validate embeddings config before accepting requests — fail fast rather
+    # than surfacing the error on the first job.
+    from .tasks import _validate_embeddings_config
+    _validate_embeddings_config()
+
     data_dir = Path(os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma")))
     user_store = LocalUserStore(data_dir / "users.db")
     set_user_store(user_store)

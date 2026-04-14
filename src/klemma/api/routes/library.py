@@ -6,6 +6,7 @@ import hashlib
 import logging
 import os
 import re
+import time as _time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, status
@@ -102,6 +103,71 @@ class FragmentSearchResponse(BaseModel):
     results: list[FragmentSearchResult]
     total: int
     query: str
+
+
+class MetadataCurrentFields(BaseModel):
+    title: str = ""
+    authors: str = ""
+    year: int | None = None
+    doi: str = ""  # empty string when unknown (not None)
+    abstract: str = ""
+
+    @classmethod
+    def from_paper(cls, paper) -> "MetadataCurrentFields":
+        """Build from a PaperRecord, coercing None → empty strings."""
+        if paper is None:
+            return cls()
+        return cls(
+            title=paper.title or "",
+            authors=paper.authors or "",
+            year=paper.year,
+            doi=paper.doi or "",
+            abstract=paper.abstract or "",
+        )
+
+
+class MetadataPreviewResponse(BaseModel):
+    """Response from GET /library/sources/{citekey}/metadata-preview."""
+
+    current: MetadataCurrentFields
+    suggested_doi: str | None = None
+
+
+class EnrichRequest(BaseModel):
+    """Request body for POST /library/sources/{citekey}/enrich-metadata."""
+
+    doi: str = ""
+    abstract_override: str | None = None
+
+
+class EnrichResponse(BaseModel):
+    """Response from POST /library/sources/{citekey}/enrich-metadata."""
+
+    matched: bool
+    source: str  # "doi" | "title" | "timeout" | "none"
+    fields: MetadataCurrentFields
+    embedding_status: str  # "pending" | "skipped"
+
+
+# In-memory rate limiter for enrich-metadata: 10 req/min per user
+_enrich_rate_limit_store: dict[str, list[float]] = {}
+
+
+def _check_enrich_rate_limit(user_id: str) -> None:
+    """Raise HTTP 429 if user exceeds 10 enrich-metadata requests per minute."""
+    now = _time.monotonic()
+    window = 60.0
+    max_requests = 10
+    timestamps = _enrich_rate_limit_store.get(user_id, [])
+    # Evict expired entries
+    timestamps = [t for t in timestamps if now - t < window]
+    if len(timestamps) >= max_requests:
+        raise HTTPException(
+            status_code=429,
+            detail="Слишком частые запросы — максимум 10 запросов в минуту",
+        )
+    timestamps.append(now)
+    _enrich_rate_limit_store[user_id] = timestamps
 
 
 # ---------------------------------------------------------------------------
@@ -371,27 +437,6 @@ async def upload_pdf(
     # Dedup: check if this PDF already exists in the global corpus
     existing = paper_store.find_paper(pdf_hash=pdf_hash)
     if existing:
-        # Re-enrich metadata if paper record is missing year/DOI
-        # (may have been processed before the metadata overwrite fix)
-        if not existing.year or not existing.doi:
-            try:
-                from klemma.literature.metadata import resolve_metadata as _resolve
-
-                paper_dir = file_store.get_paper_dir(existing.paper_id)
-                pdfs = list(paper_dir.glob("*.pdf")) if paper_dir.is_dir() else []
-                if pdfs:
-                    meta = _resolve(pdfs[0])
-                    if any(meta.get(k) for k in ("title", "authors", "year", "doi")):
-                        paper_store.update_paper_metadata(
-                            existing.paper_id,
-                            title=meta.get("title", ""),
-                            authors=meta.get("authors", ""),
-                            year=meta.get("year"),
-                            doi=meta.get("doi", ""),
-                            abstract=meta.get("abstract", ""),
-                        )
-            except Exception:
-                pass  # non-fatal
 
         # If the user already has this paper, return the existing citekey unchanged.
         # This preserves citekey stability: re-uploading the same PDF does not create
@@ -467,6 +512,158 @@ async def upload_pdf(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Upload failed: {type(exc).__name__}: {exc}",
         )
+
+
+@router.get("/sources/{citekey}/metadata-preview", response_model=MetadataPreviewResponse)
+async def metadata_preview(
+    citekey: str,
+    user: UserRecord = Depends(get_current_user),
+) -> MetadataPreviewResponse:
+    """Return current metadata fields + DOI suggestion from PDF text regex.
+
+    Used to pre-fill the MetadataEnrichDialog on SourceView.
+    """
+    library = get_user_library()
+    paper_store = get_paper_store()
+    file_store = get_file_store()
+
+    # Ownership check
+    paper_id = library.resolve_paper_id(citekey, user_id=user.user_id)
+    if not paper_id:
+        raise HTTPException(status_code=404, detail=f"Source '{citekey}' not found")
+
+    paper = paper_store.get_paper_by_id(paper_id)
+    current = MetadataCurrentFields.from_paper(paper)
+
+    # Try to extract DOI from PDF text
+    suggested_doi: str | None = None
+    try:
+        from klemma.literature.metadata import _extract_doi_from_text
+        from klemma.literature.pdf import PDFExtractor
+
+        paper_dir = file_store.get_paper_dir(paper_id)
+        pdf_files = list(paper_dir.glob("*.pdf")) if paper_dir.is_dir() else []
+        if pdf_files:
+            extractor = PDFExtractor(max_chars=3000)
+            text = extractor.extract(pdf_files[0]) or ""
+            doi = _extract_doi_from_text(text)
+            if doi:
+                suggested_doi = doi
+    except Exception as exc:
+        logger.warning("DOI extraction for preview failed for %s (non-fatal): %s", citekey, exc)
+
+    return MetadataPreviewResponse(current=current, suggested_doi=suggested_doi)
+
+
+@router.post("/sources/{citekey}/enrich-metadata", response_model=EnrichResponse)
+async def enrich_metadata(
+    citekey: str,
+    body: EnrichRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> EnrichResponse:
+    """Enrich a source with metadata from CrossRef.
+
+    Uses DOI for exact lookup if provided; falls back to title-based search.
+    After enrichment, re-embed job is enqueued asynchronously.
+    Rate-limited to 10 requests/min per user.
+    """
+    _check_enrich_rate_limit(user.user_id)
+
+    library = get_user_library()
+    paper_store = get_paper_store()
+
+    # Ownership check
+    paper_id = library.resolve_paper_id(citekey, user_id=user.user_id)
+    if not paper_id:
+        raise HTTPException(status_code=404, detail=f"Source '{citekey}' not found")
+
+    paper = paper_store.get_paper_by_id(paper_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail=f"Paper record for '{citekey}' not found")
+
+    from klemma.literature.metadata import lookup_crossref, lookup_crossref_by_doi
+
+    meta: dict | None = None
+    lookup_source = "none"
+
+    doi = (body.doi or "").strip()
+    if doi:
+        meta = lookup_crossref_by_doi(doi, timeout=10)
+        if meta:
+            lookup_source = "doi"
+        else:
+            lookup_source = "none"
+    elif paper.title:
+        try:
+            meta = lookup_crossref(paper.title, timeout=5)
+            if meta:
+                lookup_source = "title"
+        except Exception:
+            lookup_source = "timeout"
+            meta = None
+
+    if meta is None and lookup_source not in ("timeout",):
+        lookup_source = "none"
+
+    # Apply abstract_override if user provided it
+    if body.abstract_override and body.abstract_override.strip():
+        if meta is None:
+            meta = {}
+        meta["abstract"] = body.abstract_override.strip()
+
+    # Persist enriched fields
+    if meta:
+        update_kwargs: dict = {}
+        if meta.get("title"):
+            update_kwargs["title"] = meta["title"]
+        if meta.get("authors"):
+            update_kwargs["authors"] = meta["authors"]
+        if meta.get("year"):
+            update_kwargs["year"] = meta["year"]
+        if meta.get("doi"):
+            # Log if DOI collision — two paper_ids with same DOI (V1 policy: allow)
+            existing_doi_paper = paper_store.find_paper(doi=meta["doi"])
+            if existing_doi_paper and existing_doi_paper.paper_id != paper_id:
+                logger.warning(
+                    "DOI collision: %s already assigned to paper_id %s, also assigning to %s",
+                    meta["doi"], existing_doi_paper.paper_id, paper_id,
+                )
+            update_kwargs["doi"] = meta["doi"]
+        if meta.get("abstract"):
+            update_kwargs["abstract"] = meta["abstract"]
+        if update_kwargs:
+            paper_store.update_paper_metadata(paper_id, **update_kwargs)
+            logger.info("Metadata enriched for %s via %s: %s", citekey, lookup_source, list(update_kwargs.keys()))
+
+    # Re-embed asynchronously (non-blocking)
+    embedding_status = "skipped"
+    try:
+        _enqueue_re_embed(paper_id, citekey, user.user_id)
+        embedding_status = "pending"
+    except Exception as exc:
+        logger.warning("Re-embed enqueue failed for %s (non-fatal): %s", citekey, exc)
+
+    # Build response from updated paper record
+    updated_paper = paper_store.get_paper_by_id(paper_id)
+    fields = MetadataCurrentFields.from_paper(updated_paper)
+    return EnrichResponse(
+        matched=meta is not None,
+        source=lookup_source,
+        fields=fields,
+        embedding_status=embedding_status,
+    )
+
+
+def _enqueue_re_embed(paper_id: str, citekey: str, user_id: str) -> None:
+    """Enqueue a lightweight re-embedding job for a paper after metadata enrichment."""
+    if not _RQ_AVAILABLE:
+        return
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    redis_conn = Redis.from_url(redis_url)
+    q = Queue(connection=redis_conn)
+    from ..tasks import re_embed_source_task
+    data_dir = os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma"))
+    q.enqueue(re_embed_source_task, paper_id, citekey, data_dir, job_timeout=120)
 
 
 @router.get("/gaps")

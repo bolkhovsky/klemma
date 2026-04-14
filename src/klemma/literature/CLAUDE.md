@@ -4,12 +4,15 @@ PDF text extraction, Pydantic data models, vault note generation, and metadata a
 
 ## Modules
 
-### metadata.py (~220 lines)
+### metadata.py (~320 lines)
 Auto-extract paper metadata from PDF properties + CrossRef lookup.
 - `extract_pdf_metadata(pdf_path)` — PyMuPDF `doc.metadata` for title/author; first-page heuristic fallback for generic titles
-- `lookup_crossref(title, mailto?)` — CrossRef `/works` API with polite-pool `mailto` (env `KLEMMA_CROSSREF_MAILTO` or default); fuzzy title match; returns title/authors/year/abstract/doi. JATS tags stripped from abstract.
+- `_extract_abstract_from_text(text)` — regex-based abstract extraction from PDF text (markers: Abstract/Аннотация/Резюме); cap 2000 chars; empty string on no match or empty input
+- `_extract_doi_from_text(text)` — regex DOI extraction from first 3000 chars; filters sentinel values (10.0000/*, 10.1000/*); arxiv DOIs kept
+- `lookup_crossref(title, mailto?, timeout=10)` — CrossRef `/works` API with polite-pool `mailto`; fuzzy title match; `timeout` kwarg (use 5s in SaaS routes, 10s for CLI); JATS tags stripped from abstract
+- `lookup_crossref_by_doi(doi, mailto?, timeout=10)` — CrossRef `/works/{doi}` exact lookup; 404 → None; no retry; same return format as `lookup_crossref`
 - `lookup_s2(title)` — S2 `paper/search` API (kept for CLI acquirer; **not** called from `resolve_metadata` — S2 is rate-limited and unreliable under load)
-- `resolve_metadata(pdf_path, cli_title?, cli_authors?, cli_year?, cli_doi?)` — orchestrator: CLI flags → PDF metadata → CrossRef enrichment → empty fallback. Only one network lookup (CrossRef).
+- `resolve_metadata(pdf_path, cli_title?, cli_authors?, cli_year?, cli_doi?)` — orchestrator: CLI flags → PDF metadata → CrossRef enrichment → empty fallback. **CLI only** — not called from SaaS worker (CrossRef moved to user-triggered `enrich-metadata` endpoint)
 - `_titles_match(query, candidate)` — fuzzy word-overlap comparison (>0.6 threshold)
 
 ### zotero_api.py (~80 lines)
