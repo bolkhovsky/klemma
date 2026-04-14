@@ -154,7 +154,12 @@ _enrich_rate_limit_store: dict[str, list[float]] = {}
 
 
 def _check_enrich_rate_limit(user_id: str) -> None:
-    """Raise HTTP 429 if user exceeds 10 enrich-metadata requests per minute."""
+    """Raise HTTP 429 if user exceeds 10 enrich-metadata requests per minute.
+
+    NOTE: This limiter is **process-local** — it resets on API restart and does
+    not synchronize across multiple worker processes. Acceptable for single-worker
+    SaaS deployment; replace with Redis-backed rate limiting if workers scale to >1.
+    """
     now = _time.monotonic()
     window = 60.0
     max_requests = 10

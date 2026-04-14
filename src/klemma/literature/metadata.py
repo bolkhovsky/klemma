@@ -156,7 +156,7 @@ def _extract_abstract_from_text(text: str) -> str:
         return ""
     try:
         pattern = re.compile(
-            r"(?is)\b(abstract|аннотация|резюме)\b\s*[:.]?\s*\n"
+            r"(?is)\b(abstract|аннотация|резюме)\b\s*[:.]?\s*\n?"
             r"(.+?)"
             r"(?=\n\s*\n|\b(?:keywords|ключевые\s+слова|introduction|введение|1[.\s])\b)",
         )
