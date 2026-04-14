@@ -344,10 +344,11 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         # Adaptive max_tokens: short PDFs produce few fragments, so a high
         # cap is wasted latency + cost. ~4 chars per token, fragments are
         # typically 200-400 tokens each; we scale with pdf size but floor
-        # at 1024 (to cover at least the dissertation_context + few frags)
+        # at 2048 (floor was 1024, but PDFs shorter than 8K chars would get
+        # truncated JSON responses — raised after e2e test confirmed the bug)
         # and cap at 8192 (the previous hardcoded ceiling).
         pdf_chars = len(pdf_text)
-        adaptive_max_tokens = max(1024, min(8192, pdf_chars // 4))
+        adaptive_max_tokens = max(2048, min(8192, pdf_chars // 4))
         result = ai.call_with_meta(system, user_prompt, max_tokens=adaptive_max_tokens)
         if not result or not result.text:
             user_library.update_status(citekey, "failed", user_id=user_id or None)
