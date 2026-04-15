@@ -26,6 +26,7 @@ from klemma.stores.user_store import LocalUserStore
 from .auth.deps import set_user_store
 from .deps import set_file_store, set_paper_store, set_project_store, set_user_library
 from .routes import (
+    admin,
     analyze,
     auth,
     curation,
@@ -120,5 +121,6 @@ def create_app() -> FastAPI:
     app.include_router(usage.router, prefix="/usage", tags=["usage"])
     app.include_router(sync.router, prefix="/sync", tags=["sync"])
     app.include_router(git.router, tags=["git"])  # no prefix — route itself starts with /git/
+    app.include_router(admin.router, prefix="/admin", tags=["admin"])
 
     return app

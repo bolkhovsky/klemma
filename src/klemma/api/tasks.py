@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -1219,4 +1220,100 @@ def generate_sentences_task(
         "failed_ids": result.failed,
         "sentences": result.sentences,
         "model": result.model,
+    }
+
+
+def backfill_citation_intents(
+    user_id: str,
+    data_dir: str,
+    batch_size: int = 20,
+    cursor: Optional[str] = None,
+) -> dict:
+    """Backfill citation_intent for existing citation_graph entries.
+
+    Uses full raw_text (body context) to extract intent — same extract.md prompt.
+    Cursor-based: resumable by passing next_cursor from previous result.
+
+    Returns:
+        {processed, skipped_no_raw_text, failed, next_cursor, remaining}
+    """
+    from pathlib import Path as _Path
+
+    from klemma.ai import extract_json
+    from klemma.stores.paper_store import LocalPaperStore
+
+    _data_dir = _Path(data_dir)
+    paper_store = LocalPaperStore(_data_dir / "library.db")
+
+    ai, ai_config = _create_ai_provider()
+
+    papers, remaining_before = paper_store.get_papers_for_user_backfill(
+        user_id, batch_size=batch_size, cursor=cursor
+    )
+
+    processed = 0
+    skipped_no_raw_text = 0
+    failed = 0
+    last_paper_id = cursor
+
+    for paper in papers:
+        paper_id = paper["paper_id"]
+        last_paper_id = paper_id
+
+        raw_text = paper_store.get_raw_text(paper_id)
+        if not raw_text:
+            skipped_no_raw_text += 1
+            processed += 1
+            continue
+
+        # Truncate to 50K chars (same as main extraction)
+        text_for_ai = raw_text[:50000]
+
+        try:
+            system = (
+                "You are a research assistant analyzing in-text citation patterns."
+                " Output only valid JSON."
+            )
+            user_prompt = (
+                "Analyze the in-text citations in this paper body and identify the "
+                "citation intent for key references. For each reference you can find "
+                "cited in the body text (not just listed in the bibliography), identify "
+                "the citation function.\n\n"
+                "Return JSON: {\"key_references\": [{\"title\": \"...\", \"citation_intent\": \"method\"}]}\n\n"
+                "Rules:\n"
+                "- citation_intent must be one of: background, method, result_comparison, "
+                "extends, contrasts, uses_data\n"
+                "- Only include references with clear in-text citation context\n"
+                "- If a reference is only in the bibliography without in-text context, skip it\n\n"
+                f"Paper text:\n{text_for_ai}"
+            )
+
+            result = ai.call_with_meta(system, user_prompt, max_tokens=4096)
+            if result and result.text:
+                data = extract_json(result.text)
+                if data:
+                    refs = data.get("key_references", [])
+                    if refs:
+                        updated = paper_store.update_citation_intents(paper_id, refs)
+                        logger.info(
+                            "Backfill: updated %d intents for paper %s",
+                            updated, paper_id,
+                        )
+            processed += 1
+        except Exception as exc:
+            logger.warning("Backfill failed for paper %s: %s", paper_id, exc)
+            failed += 1
+            processed += 1
+
+    # Re-count remaining after processing
+    _, remaining_after = paper_store.get_papers_for_user_backfill(
+        user_id, batch_size=1, cursor=last_paper_id
+    )
+
+    return {
+        "processed": processed,
+        "skipped_no_raw_text": skipped_no_raw_text,
+        "failed": failed,
+        "next_cursor": last_paper_id,
+        "remaining": remaining_after,
     }

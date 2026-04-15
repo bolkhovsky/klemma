@@ -81,6 +81,9 @@ Templates encode domain-specific academic writing knowledge from peer-reviewed s
 ### Citation intent types (6 values)
 `background`, `method`, `result_comparison`, `extends`, `contrasts`, `uses_data` — used across extraction, annotation, analysis, and recommendation prompts. Intent-weighted scoring in `gaps.py` assigns higher weights to `method` (3.0) and `extends` (2.5).
 
+### citation_intent in extract.md `key_references`
+`key_references[].citation_intent` is extracted in the main `extract.md` prompt and the `backfill_citation_intents` task. **Critical rule (Guideline 12):** `citation_intent` must be derived from the **in-text citation context** (citing sentence visible in `pdf_text`). If a reference appears only in the bibliography without in-text context, return `citation_intent: null` — DO NOT guess from the title. The inline bibliography fallback prompt (triggered when main extraction returns no `key_references`) does NOT request `citation_intent` — it returns only title/authors/year. This avoids hallucinated intents from bibliography-only text.
+
 ## Conventions
 - All templates in Russian (dissertation language) except `extract.md` (English for international papers)
 - `{{ variable }}` syntax with Jinja2 control flow (`{% for %}`, `{% if %}`)

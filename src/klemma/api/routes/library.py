@@ -105,6 +105,36 @@ class FragmentSearchResponse(BaseModel):
     query: str
 
 
+class SectionServed(BaseModel):
+    section: str
+    count: int
+
+
+class ReferenceGapResponse(BaseModel):
+    """A single reference gap — a paper cited by library sources but not in the library."""
+
+    title: str
+    authors: str | None = None
+    year: int | None = None
+    doi: str | None = None
+    cited_by_count: int
+    score: float = 0.0
+    avg_quality: float = 3.0
+    intent_weight: float = 1.0
+    semantic_factor: float = 1.0
+    intents: list[str] = []
+    top_intent: str | None = None
+    sections_served: list[SectionServed] = []
+
+
+class ReferenceGapsResponse(BaseModel):
+    """Response from GET /library/gaps."""
+
+    gaps: list[ReferenceGapResponse]
+    total: int
+    detail: str | None = None
+
+
 class MetadataCurrentFields(BaseModel):
     title: str = ""
     authors: str = ""
@@ -671,44 +701,134 @@ def _enqueue_re_embed(paper_id: str, citekey: str, user_id: str) -> None:
     q.enqueue(re_embed_source_task, paper_id, citekey, data_dir, job_timeout=120)
 
 
-@router.get("/gaps")
+@router.get("/gaps", response_model=ReferenceGapsResponse)
 async def list_reference_gaps(
     user: UserRecord = Depends(get_current_user),
-) -> dict:
-    """Return reference gaps — papers cited by library sources but not in the library."""
+) -> ReferenceGapsResponse:
+    """Return reference gaps — papers cited by library sources but not in the library.
+
+    Gaps scored by: count × avg_quality × intent_weight × semantic_factor
+    (Teufel 2006 citation intent taxonomy; semantic_factor is a noise penalty).
+    """
+    from datetime import date
+
+    from ..scoring import score_gaps
+
     paper_store = get_paper_store()
     library = get_user_library()
+    project_store = get_project_store()
 
     user_sources = library.get_all_sources(user_id=user.user_id)
     if len(user_sources) < 3:
-        return {"gaps": [], "total": 0, "detail": "Загрузите больше источников (минимум 3) для анализа пробелов"}
+        return ReferenceGapsResponse(
+            gaps=[],
+            total=0,
+            detail="Загрузите больше источников (минимум 3) для анализа пробелов",
+        )
 
-    from datetime import date
-
-    # Scope to user's papers only — don't leak other users' citation graphs
     user_paper_ids = [s.paper_id for s in user_sources]
-    raw_gaps = paper_store.get_reference_gaps(limit=100, paper_ids=user_paper_ids)
 
-    # Recency filter matching CLI `suggest`: skip old papers unless
-    # they're high-citation classics (cited by >= 3 of our sources).
-    # Config defaults: max_age_years=10, classic_min_cited_by=3
+    # Step 1+2: two-step gap query (aggregates + citing paper_ids separately)
+    raw_gaps, citing_by_hash = paper_store.get_reference_gaps(
+        paper_ids=user_paper_ids,
+        user_id=user.user_id,
+        limit=200,
+    )
+
+    if not raw_gaps:
+        return ReferenceGapsResponse(gaps=[], total=0)
+
+    # Build paper_id → citekey map for translation to section assignments
+    all_user_paper_id_to_citekey: dict[str, str] = library.get_citekey_map(
+        user_paper_ids, user.user_id
+    ) if hasattr(library, "get_citekey_map") else {s.paper_id: s.citekey for s in user_sources}
+
+    # All citing paper_ids (union across all gaps)
+    all_citing_ids = list({pid for pids in citing_by_hash.values() for pid in pids})
+
+    # Citing paper citekeys (subset of user papers)
+    all_citing_citekeys = [
+        all_user_paper_id_to_citekey[pid]
+        for pid in all_citing_ids
+        if pid in all_user_paper_id_to_citekey
+    ]
+
+    # Section assignments for citing papers
+    citekey_sections: dict[str, set[str]] = project_store.get_source_sections_bulk(
+        all_citing_citekeys, user.user_id
+    ) if hasattr(project_store, "get_source_sections_bulk") else {}
+
+    # sections_by_citing_paper: {paper_id: {section, ...}}
+    sections_by_citing_paper: dict[str, set[str]] = {
+        pid: citekey_sections.get(all_user_paper_id_to_citekey[pid], set())
+        for pid in all_citing_ids
+        if pid in all_user_paper_id_to_citekey
+    }
+
+    # Embeddings for citing papers (for semantic factor)
+    citing_embeddings: dict[str, list[float]] = paper_store.get_paper_embeddings_batch(
+        all_citing_ids
+    ) if hasattr(paper_store, "get_paper_embeddings_batch") else {}
+
+    # Section centroids from ALL user papers (for semantic penalty)
+    section_centroids: dict[str, list[float]] = {}
+    if hasattr(paper_store, "get_paper_embeddings_batch") and hasattr(project_store, "get_section_centroids"):
+        all_user_embeddings = paper_store.get_paper_embeddings_batch(user_paper_ids)
+        if all_user_embeddings:
+            section_centroids = project_store.get_section_centroids(
+                user.user_id,
+                all_user_embeddings,
+                all_user_paper_id_to_citekey,
+            )
+
+    # Score gaps with the full formula
+    scored_gaps = score_gaps(
+        raw_gaps,
+        citing_by_hash,
+        citing_embeddings,
+        section_centroids,
+        sections_by_citing_paper,
+    )
+
+    # Recency filter: skip old papers unless high-citation classics
     current_year = date.today().year
     max_age_years = 10
     classic_min_cited_by = 3
 
-    filtered = []
-    for g in raw_gaps:
-        year = g.get("year")
-        cited_by = g.get("cited_by_count", 0)
-        # Skip old papers unless they're high-citation classics
-        if year and isinstance(year, int) and (current_year - year) > max_age_years:
-            if cited_by < classic_min_cited_by:
-                continue
-        filtered.append(g)
+    filtered = [
+        g for g in scored_gaps
+        if not (
+            g.get("year")
+            and isinstance(g["year"], int)
+            and (current_year - g["year"]) > max_age_years
+            and g.get("cited_by_count", 0) < classic_min_cited_by
+        )
+    ]
 
-    # Already sorted by cited_by_count DESC from query; limit to 10
     gaps = filtered[:10]
-    return {"gaps": gaps, "total": len(gaps)}
+
+    gap_responses = [
+        ReferenceGapResponse(
+            title=g.get("title", ""),
+            authors=g.get("authors") or None,
+            year=g.get("year"),
+            doi=g.get("doi"),
+            cited_by_count=g.get("cited_by_count", 0),
+            score=g.get("score", 0.0),
+            avg_quality=g.get("avg_quality", 3.0),
+            intent_weight=g.get("intent_weight", 1.0),
+            semantic_factor=g.get("semantic_factor", 1.0),
+            intents=g.get("intents", []),
+            top_intent=g.get("top_intent"),
+            sections_served=[
+                SectionServed(section=s["section"], count=s["count"])
+                for s in g.get("sections_served", [])
+            ],
+        )
+        for g in gaps
+    ]
+
+    return ReferenceGapsResponse(gaps=gap_responses, total=len(gap_responses))
 
 
 def _enqueue_processing(paper_id: str, citekey: str, user_id: str, project_id: str | None = None) -> str | None:

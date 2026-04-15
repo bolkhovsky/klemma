@@ -484,3 +484,30 @@ class LocalUserLibrary:
                     "SELECT COUNT(*) FROM user_sources WHERE user_id = ?", (user_id,)
                 ).fetchone()[0]
             return conn.execute("SELECT COUNT(*) FROM user_sources").fetchone()[0]
+
+    def get_citekey_map(
+        self, paper_ids: list[str], user_id: Optional[str] = None
+    ) -> dict[str, str]:
+        """Return {paper_id: citekey} for the given paper_ids scoped to a user.
+
+        Used by list_reference_gaps to resolve paper_id → citekey for section
+        lookups without N+1 queries.
+        """
+        if not paper_ids:
+            return {}
+        uid = self._uid(user_id)
+        placeholders = ",".join("?" for _ in paper_ids)
+        with self._conn() as conn:
+            if user_id is not None:
+                rows = conn.execute(
+                    f"SELECT paper_id, citekey FROM user_sources"
+                    f" WHERE paper_id IN ({placeholders}) AND user_id = ?",
+                    (*paper_ids, uid),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"SELECT paper_id, citekey FROM user_sources"
+                    f" WHERE paper_id IN ({placeholders})",
+                    paper_ids,
+                ).fetchall()
+        return {row["paper_id"]: row["citekey"] for row in rows}

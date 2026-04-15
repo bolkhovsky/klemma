@@ -114,7 +114,8 @@ Return a JSON object:
     {
       "title": "Title of a key paper cited in the bibliography",
       "authors": "First Author et al.",
-      "year": 2020
+      "year": 2020,
+      "citation_intent": "method"
     }
   ]
 }
@@ -134,5 +135,6 @@ Guidelines:
 {% if section_types %}
 11. When assigning section, prefer semantic section types: {{ section_types }}
 {% endif %}
+12. citation_intent in key_references must be derived from the in-text citation context (citing sentence) visible in the body text (pdf_text). If a reference appears only in the bibliography without any in-text citation context in the provided body excerpt, return citation_intent: null — DO NOT guess from the title. Valid values: background, method, result_comparison, extends, contrasts, uses_data.
 
 Respond with ONLY valid JSON.

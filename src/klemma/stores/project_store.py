@@ -552,3 +552,93 @@ class LocalProjectStore:
                 conn.execute(
                     "DELETE FROM prune_verdicts WHERE source_id=?", (source_id,)
                 )
+
+    def get_source_sections_bulk(
+        self, citekeys: list[str], user_id: Optional[str] = None
+    ) -> dict[str, list[str]]:
+        """Return {citekey: [section, ...]} for all given citekeys in one query.
+
+        Used by list_reference_gaps to map citing citekeys to sections without
+        N+1 queries.
+        """
+        if not citekeys:
+            return {}
+        uid = self._uid(user_id)
+        placeholders = ",".join("?" for _ in citekeys)
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"""SELECT citekey, section
+                    FROM project_source_sections
+                    WHERE citekey IN ({placeholders}) AND user_id = ?
+                    ORDER BY citekey, section""",
+                (*citekeys, uid),
+            ).fetchall()
+        result: dict[str, list[str]] = {ck: [] for ck in citekeys}
+        for row in rows:
+            result[row["citekey"]].append(row["section"])
+        return result
+
+    def get_section_centroids(
+        self,
+        user_id: str,
+        all_user_embeddings: dict[str, list[float]],
+        all_user_paper_id_to_citekey: dict[str, str],
+    ) -> dict[str, list[float]]:
+        """Compute per-section centroid embeddings from user paper embeddings.
+
+        For each section assigned to the user's sources, averages the embeddings
+        of all papers assigned to that section. Uses ALL user paper embeddings
+        (not just citing ones) for a comprehensive centroid.
+
+        Args:
+            user_id: The user whose section assignments to read.
+            all_user_embeddings: {paper_id: embedding_vector} for all user papers.
+            all_user_paper_id_to_citekey: {paper_id: citekey} for all user papers.
+
+        Returns:
+            {section: centroid_vector} — only sections with at least one embedded paper.
+        """
+        if not all_user_embeddings:
+            return {}
+
+        # Build citekey → paper_id reverse map
+        citekey_to_paper_id = {v: k for k, v in all_user_paper_id_to_citekey.items()}
+
+        # Get all section assignments for this user's citekeys
+        uid = self._uid(user_id)
+        citekeys = list(citekey_to_paper_id.keys())
+        if not citekeys:
+            return {}
+
+        section_vectors: dict[str, list[list[float]]] = {}
+        placeholders = ",".join("?" for _ in citekeys)
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"""SELECT citekey, section
+                    FROM project_source_sections
+                    WHERE citekey IN ({placeholders}) AND user_id = ?""",
+                (*citekeys, uid),
+            ).fetchall()
+
+        for row in rows:
+            ck = row["citekey"]
+            section = row["section"]
+            paper_id = citekey_to_paper_id.get(ck)
+            if paper_id and paper_id in all_user_embeddings:
+                section_vectors.setdefault(section, []).append(
+                    all_user_embeddings[paper_id]
+                )
+
+        # Compute centroids
+        centroids: dict[str, list[float]] = {}
+        for section, vectors in section_vectors.items():
+            if not vectors:
+                continue
+            dim = len(vectors[0])
+            centroid = [0.0] * dim
+            for vec in vectors:
+                for i, v in enumerate(vec):
+                    centroid[i] += v
+            n = len(vectors)
+            centroids[section] = [x / n for x in centroid]
+        return centroids
