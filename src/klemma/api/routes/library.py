@@ -741,7 +741,7 @@ async def list_reference_gaps(
     # Build paper_id → citekey map for translation to section assignments
     all_user_paper_id_to_citekey: dict[str, str] = library.get_citekey_map(
         user_paper_ids, user.user_id
-    ) if hasattr(library, "get_citekey_map") else {s.paper_id: s.citekey for s in user_sources}
+    )
 
     # All citing paper_ids (union across all gaps)
     all_citing_ids = list({pid for pids in citing_by_hash.values() for pid in pids})
@@ -756,7 +756,7 @@ async def list_reference_gaps(
     # Section assignments for citing papers
     citekey_sections: dict[str, set[str]] = project_store.get_source_sections_bulk(
         all_citing_citekeys, user.user_id
-    ) if hasattr(project_store, "get_source_sections_bulk") else {}
+    )
 
     # sections_by_citing_paper: {paper_id: {section, ...}}
     sections_by_citing_paper: dict[str, set[str]] = {
@@ -768,18 +768,19 @@ async def list_reference_gaps(
     # Embeddings for citing papers (for semantic factor)
     citing_embeddings: dict[str, list[float]] = paper_store.get_paper_embeddings_batch(
         all_citing_ids
-    ) if hasattr(paper_store, "get_paper_embeddings_batch") else {}
+    )
 
     # Section centroids from ALL user papers (for semantic penalty)
+    # Note: quality_score in user_sources is always NULL until a rating feature is added;
+    # avg_quality defaults to 3.0 (COALESCE) for all papers until then.
     section_centroids: dict[str, list[float]] = {}
-    if hasattr(paper_store, "get_paper_embeddings_batch") and hasattr(project_store, "get_section_centroids"):
-        all_user_embeddings = paper_store.get_paper_embeddings_batch(user_paper_ids)
-        if all_user_embeddings:
-            section_centroids = project_store.get_section_centroids(
-                user.user_id,
-                all_user_embeddings,
-                all_user_paper_id_to_citekey,
-            )
+    all_user_embeddings = paper_store.get_paper_embeddings_batch(user_paper_ids)
+    if all_user_embeddings:
+        section_centroids = project_store.get_section_centroids(
+            user.user_id,
+            all_user_embeddings,
+            all_user_paper_id_to_citekey,
+        )
 
     # Score gaps with the full formula
     scored_gaps = score_gaps(
