@@ -143,7 +143,116 @@ def _crossref_mailto() -> str:
     return os.environ.get("KLEMMA_CROSSREF_MAILTO", _DEFAULT_CROSSREF_MAILTO)
 
 
-def lookup_crossref(title: str, mailto: Optional[str] = None) -> Optional[dict]:
+def _extract_abstract_from_text(text: str) -> str:
+    """Extract abstract from PDF text using heading markers.
+
+    Searches for 'Abstract', 'Аннотация', or 'Резюме' markers and captures
+    the following paragraph (up to the next section heading or blank line).
+    Returns empty string for empty/missing input — never raises.
+
+    Cap: 2000 characters.
+    """
+    if not text:
+        return ""
+    try:
+        pattern = re.compile(
+            r"(?is)\b(abstract|аннотация|резюме)\b\s*[:.]?\s*\n?"
+            r"(.+?)"
+            r"(?=\n\s*\n|\b(?:keywords|ключевые\s+слова|introduction|введение|1[.\s])\b)",
+        )
+        m = pattern.search(text[:8000])  # abstracts are near the top
+        if m:
+            abstract = m.group(2).strip()
+            # Collapse internal newlines (multi-line PDF extraction artifacts)
+            abstract = re.sub(r"\s*\n\s*", " ", abstract)
+            return abstract[:2000]
+    except Exception:
+        pass
+    return ""
+
+
+def _extract_doi_from_text(text: str) -> str:
+    """Extract the first DOI from PDF text (first 3000 chars).
+
+    Filters obvious sentinel values (10.0000/*, 10.1000/*).
+    Returns empty string for empty input — never raises.
+    """
+    if not text:
+        return ""
+    try:
+        m = re.search(r"\b(10\.\d{4,9}/[-._;()/:\w]+)\b", text[:3000])
+        if m:
+            doi = m.group(1).rstrip(".")
+            # Reject known sentinel patterns
+            if re.match(r"10\.(0000|1000)/", doi):
+                return ""
+            return doi
+    except Exception:
+        pass
+    return ""
+
+
+def lookup_crossref_by_doi(
+    doi: str,
+    mailto: Optional[str] = None,
+    timeout: int = 10,
+) -> Optional[dict]:
+    """Look up paper metadata on CrossRef by DOI (exact lookup).
+
+    Returns ``{"title", "authors", "year", "abstract", "doi"}`` or ``None``.
+    Unlike the title-based lookup, this is a single deterministic request —
+    no fuzzy matching needed.
+
+    Returns None on 404 or network error (does not raise).
+    """
+    if not doi:
+        return None
+
+    mailto = mailto or _crossref_mailto()
+    url = f"https://api.crossref.org/works/{doi}"
+    try:
+        resp = requests.get(
+            url,
+            timeout=timeout,
+            headers={"User-Agent": f"klemma/1.0 (mailto:{mailto})"},
+            params={"mailto": mailto},
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        item = resp.json().get("message", {})
+    except Exception as e:
+        logger.warning("CrossRef DOI lookup failed for '%s': %s", doi, e)
+        return None
+
+    item_title = " ".join(item.get("title", []) or [])
+    authors = ", ".join(
+        f"{a.get('family', '')} {a.get('given', '')}".strip()
+        for a in item.get("author", [])
+        if a.get("family") or a.get("given")
+    )
+    year: Optional[int] = None
+    for date_field in ("published-print", "issued", "published-online"):
+        parts = (item.get(date_field) or {}).get("date-parts") or [[]]
+        if parts and parts[0] and parts[0][0]:
+            try:
+                year = int(parts[0][0])
+                break
+            except (TypeError, ValueError):
+                pass
+    raw_abstract = item.get("abstract") or ""
+    abstract = re.sub(r"<[^>]+>", "", raw_abstract).strip()
+
+    return {
+        "title": item_title,
+        "authors": authors,
+        "year": year,
+        "abstract": abstract,
+        "doi": item.get("DOI", "") or doi,
+    }
+
+
+def lookup_crossref(title: str, mailto: Optional[str] = None, timeout: int = 10) -> Optional[dict]:
     """Look up paper metadata on CrossRef by title.
 
     Returns ``{"title", "authors", "year", "abstract", "doi"}`` or ``None``.
@@ -167,7 +276,7 @@ def lookup_crossref(title: str, mailto: Optional[str] = None) -> Optional[dict]:
     try:
         resp = requests.get(
             url,
-            timeout=10,
+            timeout=timeout,
             headers={"User-Agent": f"klemma/1.0 (mailto:{mailto})"},
         )
         resp.raise_for_status()

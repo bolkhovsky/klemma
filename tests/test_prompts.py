@@ -202,6 +202,23 @@ TEMPLATE_CONTEXTS = {
         "source_summaries": [],
         "language": "ru",
     },
+    "suggest_sentence.md": {
+        "language": "Russian",
+        "citekey": "kvanum2024",
+        "year": 2024,
+        "authors_json": '[{"last": "Kvanum", "first_initial": "J."}]',
+        "outline": [
+            {"section_id": "3.2", "title": "Experiments", "description": "IIEE experiments"},
+        ],
+        "fragments": [
+            {
+                "fragment_id": "f1",
+                "text": "deep learning methods outperform dynamical models for 1-3 day lead time",
+                "citation_intent": "result_comparison",
+                "assigned_section": "3.2",
+            },
+        ],
+    },
     "briefing.md": {
         "language": "Russian",
         "dissertation_context": "Test context",

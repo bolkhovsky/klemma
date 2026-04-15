@@ -376,12 +376,12 @@ export const drafts = {
 export const curation = {
   pending: (projectId: string, citekey: string) =>
     request<{
-      fragments: { fragment_id: string; text: string; citation_intent: string; fragment_type: string; page: number | null; citekey: string; verbatim: boolean }[]
+      fragments: { fragment_id: string; text: string; citation_intent: string; fragment_type: string; page: number | null; citekey: string; verbatim: boolean; suggested_text: string | null; sentence_model: string | null }[]
       total: number
       curated_count: number
     }>(`/projects/${projectId}/fragments/pending?citekey=${encodeURIComponent(citekey)}`),
 
-  curate: (projectId: string, decisions: { fragment_id: string; citekey: string; verdict: string; assigned_section?: string; note?: string }[]) =>
+  curate: (projectId: string, decisions: { fragment_id: string; citekey: string; verdict: string; assigned_section?: string; note?: string; suggested_text?: string; sentence_model?: string }[]) =>
     request<{ curated: number; accepted: number; rejected: number }>(`/projects/${projectId}/fragments/curate`, {
       method: 'POST',
       body: JSON.stringify({ decisions }),
@@ -390,13 +390,13 @@ export const curation = {
   curated: (projectId: string, params?: { verdict?: string; section?: string; citekey?: string }) => {
     const qs = params ? `?${new URLSearchParams(params as Record<string, string>)}` : ''
     return request<{
-      fragments: { fragment_id: string; citekey: string; text: string; citation_intent: string; assigned_section: string | null; note: string | null; verdict: string; curated_at: string }[]
+      fragments: { fragment_id: string; citekey: string; text: string; citation_intent: string; assigned_section: string | null; note: string | null; verdict: string; curated_at: string; suggested_text: string | null; sentence_model: string | null }[]
       total: number
       by_section: Record<string, number>
     }>(`/projects/${projectId}/fragments/curated${qs}`)
   },
 
-  update: (projectId: string, fragmentId: string, patch: { verdict?: string; assigned_section?: string; note?: string }) =>
+  update: (projectId: string, fragmentId: string, patch: { verdict?: string; assigned_section?: string; note?: string; suggested_text?: string; sentence_model?: string }) =>
     request<{ ok: boolean }>(`/projects/${projectId}/fragments/curate/${fragmentId}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
@@ -407,6 +407,15 @@ export const curation = {
       gap_alert: { missing_intents: string[]; message: string } | null
       suggestions: { fragment_id: string; text: string; citation_intent: string; source: string; citekey: string; match_reason: string; score: number }[]
     }>(`/projects/${projectId}/fragments/suggest?section=${encodeURIComponent(section)}`),
+
+  generateSentences: (projectId: string, citekey: string, mode: 'missing' | 'force' = 'missing') =>
+    request<{ job_id: string; status: string; citekey: string }>(
+      `/projects/${projectId}/fragments/generate-sentences`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ citekey, mode }),
+      },
+    ),
 }
 
 // Research (literature review generation + stored reports)

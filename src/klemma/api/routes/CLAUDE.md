@@ -30,8 +30,10 @@ Library CRUD endpoints — mounted with `prefix="/library"`. All require Bearer 
 - `GET /library/fragments/search?q={text}&limit=N` → `FragmentSearchResponse` — text search over fragment_text for user's library; requires `q` ≥ 2 chars; returns up to `limit` (default 10, max 50) results ordered by length; uses `LocalPaperStore.search_fragments_for_user()` (JOIN fragments + papers + user_sources in library.db)
 - `POST /library/sources` → `SourceResponse` (201) — add source by metadata (DOI dedup); uses caller-supplied `citekey` as primary key (no UUID generated)
 - `DELETE /library/sources/{citekey}` → 204 — remove from user library (keeps global corpus)
-- `POST /library/upload` → `UploadResponse` (201) — upload PDF with content-addressable dedup (`pdf_hash`); citekey derived from filename; **if same user re-uploads the same PDF, returns existing citekey unchanged** (citekey stability guarantee — issue #268)
-- Schemas: `SourceResponse`, `SourceListResponse`, `SourceCreateRequest`, `FragmentResponse`, `SourceDetailResponse`, `UploadResponse`, `FragmentSearchResult`, `FragmentSearchResponse`
+- `POST /library/upload` → `UploadResponse` (201) — upload PDF with content-addressable dedup (`pdf_hash`); citekey derived from filename; **if same user re-uploads the same PDF, returns existing citekey unchanged** (citekey stability guarantee — issue #268). CrossRef is NOT called during upload — metadata enrichment is a separate user-triggered action.
+- `GET /library/sources/{citekey}/metadata-preview` → `MetadataPreviewResponse` — returns current metadata fields + DOI extracted from PDF text via regex (`suggested_doi: str | null`). Used to pre-fill the MetadataEnrichDialog. Requires source ownership.
+- `POST /library/sources/{citekey}/enrich-metadata` → `EnrichResponse` — call CrossRef by DOI (exact) or title (fuzzy, 5s timeout), update paper metadata, enqueue re-embed job. Rate-limited 10 req/min per user. Accepts `abstract_override` for scan PDFs. Returns `{matched, source: "doi"|"title"|"timeout"|"none", fields, embedding_status: "pending"|"skipped"}`.
+- Schemas: `SourceResponse`, `SourceListResponse`, `SourceCreateRequest`, `FragmentResponse`, `SourceDetailResponse`, `UploadResponse`, `FragmentSearchResult`, `FragmentSearchResponse`, `MetadataCurrentFields`, `MetadataPreviewResponse`, `EnrichRequest`, `EnrichResponse`
 
 **Citekey stability guarantee** (issue #268): citekeys must remain stable across push/pull round-trips because `draft/*.md` files embed `[@citekey]` references and section assignments are keyed by citekey.
 - `POST /library/sources` — uses caller-provided `citekey` verbatim. ✅
@@ -112,9 +114,10 @@ Library-first pivot: users accept/reject fragments, assign them to outline secti
 - `PATCH /projects/{id}/fragments/curate/{fragment_id}` → partial update (verdict, section, note)
 - `GET /projects/{id}/fragments/suggest?section=X` → `SuggestFragmentsResponse` — smart suggestions: intent match + gap alerts for missing intents
 - `POST /projects/{id}/fragments/auto-suggest` → `{suggested: N}` — backfill `verdict='suggested'` entries for all uncurated fragments in a project; idempotent; uses `auto_assign_section()` from `klemma.section_types`
+- `POST /projects/{id}/fragments/generate-sentences` → `{job_id, status, citekey}` (202) — enqueue suggested-sentence generation job (ADR-017). Body: `{citekey, mode: "missing"|"force"}`. Uses Redis/rq when available, falls back to asyncio local job queue (shares `process.py`'s `_local_jobs` registry). Poll result via `GET /process/jobs/{job_id}` — final payload: `{status, generated, failed, failed_ids, sentences: {fragment_id: text}, model}`.
 - Uses `INTENT_TO_SECTION_TYPES` and `auto_assign_section()` from `klemma.section_types` for auto-assignment
 - Depends on: `user_store`, `paper_store`, `user_library` from `deps.py`
-- Schemas: `PendingFragmentsResponse`, `CurateRequest`, `CuratedBankResponse`, `CuratedFragmentResponse`, `SuggestFragmentsResponse`
+- Schemas: `PendingFragmentsResponse`, `CurateRequest`, `CuratedBankResponse`, `CuratedFragmentResponse`, `SuggestFragmentsResponse`, `GenerateSentencesRequest`, `GenerateSentencesResponse`. `PendingFragment` / `CuratedFragmentResponse` include optional `suggested_text` + `sentence_model` (ADR-017).
 
 ## Adding a new router
 

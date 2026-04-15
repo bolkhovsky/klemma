@@ -203,6 +203,7 @@ async function handleUpload(files: FileList | null) {
   const rejected: string[] = []
   const fileArray = Array.from(files)
   let lastUploadedCitekey: string | null = null
+  let lastJobId: string | null = null
   for (const file of fileArray) {
     if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
       errors++
@@ -218,6 +219,7 @@ async function handleUpload(files: FileList | null) {
       } else if (result.deduplicated) {
         uploadSuccess.value = `${file.name} — загружен (обработка не требуется)`
       } else if (result.job_id) {
+        lastJobId = result.job_id
         processingJobs.value[result.citekey] = result.job_id
         pollJob(result.citekey, result.job_id)
         uploadSuccess.value = `${file.name} — загружен, обработка запущена`
@@ -232,7 +234,9 @@ async function handleUpload(files: FileList | null) {
     uploadSuccess.value = uploadSuccess.value || `Загружено: ${uploaded} файл(ов)`
     await loadSources()
     if (fileArray.length === 1 && lastUploadedCitekey && route.params.projectId) {
-      router.push(`/${route.params.projectId}/library/${lastUploadedCitekey}/review`)
+      // Pass job_id so SourceView can resume polling without a manual click
+      const query = lastJobId ? { job_id: lastJobId } : {}
+      router.push({ path: `/${route.params.projectId}/library/${lastUploadedCitekey}/review`, query })
     }
   }
   if (errors > 0 && !uploadError.value) {

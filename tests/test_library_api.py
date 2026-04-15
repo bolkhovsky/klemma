@@ -278,3 +278,184 @@ def test_upload_requires_auth(client):
         files={"file": ("test.pdf", _fake_pdf(), "application/pdf")},
     )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Metadata preview
+# ---------------------------------------------------------------------------
+
+
+def test_metadata_preview_returns_current_fields_and_null_doi(client, stores, tmp_path):
+    """Preview for a source without a PDF file returns current fields + null DOI."""
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+
+    # Add source directly (no PDF)
+    paper_id = paper_store.register_paper(title="Sea Ice Paper", pdf_hash="abc123")
+    paper_store.update_paper_metadata(paper_id, authors="Smith J", year=2021)
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+    user_library.add_source(paper_id, "smith2021", status="completed", user_id=user_id)
+
+    resp = client.get("/library/sources/smith2021/metadata-preview", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["current"]["title"] == "Sea Ice Paper"
+    assert data["current"]["authors"] == "Smith J"
+    assert data["current"]["year"] == 2021
+    # No PDF file in store → suggested_doi should be null
+    assert data["suggested_doi"] is None
+
+
+def test_metadata_preview_ownership_404(client, stores):
+    """Preview for a citekey that doesn't belong to the user returns 404."""
+    token = _register_and_get_token(client)
+    resp = client.get("/library/sources/nonexistent_citekey/metadata-preview", headers=_auth_headers(token))
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Enrich metadata
+# ---------------------------------------------------------------------------
+
+
+def test_enrich_metadata_by_doi(client, stores, monkeypatch):
+    """Enrichment by DOI calls CrossRef DOI endpoint and updates the paper."""
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+
+    paper_id = paper_store.register_paper(title="Old Title", pdf_hash="doi_hash_1")
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+    user_library.add_source(paper_id, "smith2021doi", status="completed", user_id=user_id)
+
+    mock_meta = {
+        "title": "Enriched Title from CrossRef",
+        "authors": "Smith J., Jones K.",
+        "year": 2021,
+        "doi": "10.1038/test",
+        "abstract": "Abstract text from CrossRef.",
+    }
+
+    import klemma.literature.metadata as meta_mod
+    monkeypatch.setattr(meta_mod, "lookup_crossref_by_doi", lambda *a, **kw: mock_meta)
+
+    resp = client.post(
+        "/library/sources/smith2021doi/enrich-metadata",
+        json={"doi": "10.1038/test"},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["matched"] is True
+    assert data["source"] == "doi"
+    assert data["fields"]["title"] == "Enriched Title from CrossRef"
+    assert data["fields"]["year"] == 2021
+
+
+def test_enrich_metadata_matched_false_for_unknown_doi(client, stores, monkeypatch):
+    """When DOI lookup returns None, matched=False and source='none'."""
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+
+    paper_id = paper_store.register_paper(title="Unknown Paper", pdf_hash="doi_hash_2")
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+    user_library.add_source(paper_id, "unknown2020", status="completed", user_id=user_id)
+
+    import klemma.literature.metadata as meta_mod
+    monkeypatch.setattr(meta_mod, "lookup_crossref_by_doi", lambda *a, **kw: None)
+
+    resp = client.post(
+        "/library/sources/unknown2020/enrich-metadata",
+        json={"doi": "10.9999/nonexistent"},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["matched"] is False
+    assert data["source"] == "none"
+
+
+def test_enrich_metadata_abstract_override(client, stores, monkeypatch):
+    """abstract_override is saved even when CrossRef returns no match."""
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+
+    paper_id = paper_store.register_paper(title="Scan PDF", pdf_hash="doi_hash_3")
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+    user_library.add_source(paper_id, "scanpdf2022", status="completed", user_id=user_id)
+
+    import klemma.literature.metadata as meta_mod
+    monkeypatch.setattr(meta_mod, "lookup_crossref_by_doi", lambda *a, **kw: None)
+
+    resp = client.post(
+        "/library/sources/scanpdf2022/enrich-metadata",
+        json={"doi": "", "abstract_override": "Hand-typed abstract for scanned PDF."},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["fields"]["abstract"] == "Hand-typed abstract for scanned PDF."
+
+
+def test_enrich_metadata_ownership_404(client):
+    """Enriching a source that doesn't exist returns 404."""
+    token = _register_and_get_token(client)
+    resp = client.post(
+        "/library/sources/ghost_citekey/enrich-metadata",
+        json={"doi": "10.1234/x"},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 404
+
+
+def test_enrich_metadata_rate_limit_429(client, stores, monkeypatch):
+    """11 consecutive requests trigger 429."""
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+
+    paper_id = paper_store.register_paper(title="Rate Paper", pdf_hash="rate_hash")
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+    user_library.add_source(paper_id, "ratepaper", status="completed", user_id=user_id)
+
+    import klemma.literature.metadata as meta_mod
+    monkeypatch.setattr(meta_mod, "lookup_crossref_by_doi", lambda *a, **kw: None)
+
+    # Clear rate limiter state from previous test runs
+    from klemma.api.routes.library import _enrich_rate_limit_store
+    _enrich_rate_limit_store.clear()
+
+    statuses = []
+    for _ in range(12):
+        r = client.post(
+            "/library/sources/ratepaper/enrich-metadata",
+            json={"doi": "10.1234/x"},
+            headers=_auth_headers(token),
+        )
+        statuses.append(r.status_code)
+
+    assert 429 in statuses, "Expected at least one 429 response"
+
+
+def test_upload_no_longer_calls_resolve_metadata(client, stores, monkeypatch, tmp_path):
+    """Critical: resolve_metadata must NOT be called from upload/process_source."""
+    from unittest.mock import patch
+
+    token = _register_and_get_token(client)
+
+    resolve_calls = []
+
+    def track_resolve(*args, **kwargs):
+        resolve_calls.append(args)
+        return {}
+
+    with patch("klemma.literature.metadata.resolve_metadata", side_effect=track_resolve):
+        resp = client.post(
+            "/library/upload",
+            files={"file": ("test_paper.pdf", _fake_pdf(), "application/pdf")},
+            headers=_auth_headers(token),
+        )
+
+    assert resp.status_code == 201
+    assert len(resolve_calls) == 0, (
+        f"resolve_metadata was called {len(resolve_calls)} time(s) — it must not be "
+        "called from the upload path after the lazy metadata enrichment refactor"
+    )
