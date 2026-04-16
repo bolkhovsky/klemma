@@ -635,10 +635,15 @@ class LocalProjectStore:
             if not vectors:
                 continue
             dim = len(vectors[0])
+            # Discard vectors with a different dimension — different embedding models
+            # stored in the same table can have mismatched dims and cause IndexError.
+            consistent = [v for v in vectors if len(v) == dim]
+            if not consistent:
+                continue
             centroid = [0.0] * dim
-            for vec in vectors:
+            for vec in consistent:
                 for i, v in enumerate(vec):
                     centroid[i] += v
-            n = len(vectors)
+            n = len(consistent)
             centroids[section] = [x / n for x in centroid]
         return centroids

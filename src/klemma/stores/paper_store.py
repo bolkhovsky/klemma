@@ -630,12 +630,17 @@ class LocalPaperStore:
                     (*paper_ids, model),
                 ).fetchall()
             else:
-                # Get latest embedding per paper (any model)
+                # Get most recently inserted embedding per paper (any model).
+                # MAX(rowid) is deterministic — avoids returning mixed-model vectors
+                # from arbitrary GROUP BY which can produce different dimensions.
                 placeholders = ",".join("?" for _ in paper_ids)
                 rows = conn.execute(
                     f"""SELECT paper_id, vector FROM paper_embeddings
-                        WHERE paper_id IN ({placeholders})
-                        GROUP BY paper_id""",
+                        WHERE rowid IN (
+                            SELECT MAX(rowid) FROM paper_embeddings
+                            WHERE paper_id IN ({placeholders})
+                            GROUP BY paper_id
+                        )""",
                     paper_ids,
                 ).fetchall()
         result = {}
@@ -651,7 +656,8 @@ class LocalPaperStore:
         """Update citation_intent for existing citation_graph entries (backfill).
 
         Matches by (citing_paper_id, cited_title_hash).
-        Only updates entries where current intent is NULL or 'background' (legacy default).
+        Only updates entries where current intent IS NULL — 'background' is now a
+        valid intent (Teufel 2006 taxonomy) and must not be overwritten by re-runs.
         Returns count of updated rows.
         """
         import hashlib as _hashlib
@@ -675,7 +681,7 @@ class LocalPaperStore:
                     """UPDATE citation_graph
                        SET citation_intent = ?
                        WHERE citing_paper_id = ? AND cited_title_hash = ?
-                         AND (citation_intent IS NULL OR citation_intent = 'background')""",
+                         AND citation_intent IS NULL""",
                     (raw_intent, paper_id, title_hash),
                 )
                 updated += cur.rowcount
@@ -691,35 +697,36 @@ class LocalPaperStore:
 
         Returns (papers_batch, remaining_count).
         Each paper dict has: paper_id, title.
-        Only returns papers where citation_graph has rows with intent=NULL or 'background'.
+
+        Only returns papers where:
+        - At least one citation_graph entry has intent IS NULL (not 'background' —
+          that is now a valid intent that must not be overwritten by re-runs)
+        - raw_text IS NOT NULL (paper has processable text; otherwise no AI call possible)
+
+        remaining_count is the total across ALL cursor positions — not filtered by
+        cursor — so failed papers that are behind the cursor still appear in the count
+        and the caller can detect that the loop finished with unresolved work.
         """
         with self._conn() as conn:
-            # Count remaining (for progress reporting)
-            if cursor:
-                remaining = conn.execute(
-                    """SELECT COUNT(DISTINCT p.paper_id) FROM papers p
-                       JOIN user_sources us ON p.paper_id = us.paper_id AND us.user_id = ?
-                       JOIN citation_graph cg ON cg.citing_paper_id = p.paper_id
-                       WHERE (cg.citation_intent IS NULL OR cg.citation_intent = 'background')
-                         AND p.paper_id > ?""",
-                    (user_id, cursor),
-                ).fetchone()[0]
-            else:
-                remaining = conn.execute(
-                    """SELECT COUNT(DISTINCT p.paper_id) FROM papers p
-                       JOIN user_sources us ON p.paper_id = us.paper_id AND us.user_id = ?
-                       JOIN citation_graph cg ON cg.citing_paper_id = p.paper_id
-                       WHERE (cg.citation_intent IS NULL OR cg.citation_intent = 'background')""",
-                    (user_id,),
-                ).fetchone()[0]
+            # Remaining = total processable papers still with NULL intents (no cursor filter).
+            # Cursor-independence is intentional: failed papers behind the cursor still count.
+            remaining = conn.execute(
+                """SELECT COUNT(DISTINCT p.paper_id) FROM papers p
+                   JOIN user_sources us ON p.paper_id = us.paper_id AND us.user_id = ?
+                   JOIN citation_graph cg ON cg.citing_paper_id = p.paper_id
+                   WHERE cg.citation_intent IS NULL
+                     AND p.raw_text IS NOT NULL""",
+                (user_id,),
+            ).fetchone()[0]
 
-            # Fetch batch
+            # Fetch batch (cursor-based pagination for the loop)
             if cursor:
                 rows = conn.execute(
                     """SELECT DISTINCT p.paper_id, p.title FROM papers p
                        JOIN user_sources us ON p.paper_id = us.paper_id AND us.user_id = ?
                        JOIN citation_graph cg ON cg.citing_paper_id = p.paper_id
-                       WHERE (cg.citation_intent IS NULL OR cg.citation_intent = 'background')
+                       WHERE cg.citation_intent IS NULL
+                         AND p.raw_text IS NOT NULL
                          AND p.paper_id > ?
                        ORDER BY p.paper_id ASC
                        LIMIT ?""",
@@ -730,7 +737,8 @@ class LocalPaperStore:
                     """SELECT DISTINCT p.paper_id, p.title FROM papers p
                        JOIN user_sources us ON p.paper_id = us.paper_id AND us.user_id = ?
                        JOIN citation_graph cg ON cg.citing_paper_id = p.paper_id
-                       WHERE (cg.citation_intent IS NULL OR cg.citation_intent = 'background')
+                       WHERE cg.citation_intent IS NULL
+                         AND p.raw_text IS NOT NULL
                        ORDER BY p.paper_id ASC
                        LIMIT ?""",
                     (user_id, batch_size),

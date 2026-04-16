@@ -1228,11 +1228,17 @@ def backfill_citation_intents(
     data_dir: str,
     batch_size: int = 20,
     cursor: Optional[str] = None,
+    dry_run: bool = False,
 ) -> dict:
     """Backfill citation_intent for existing citation_graph entries.
 
     Uses full raw_text (body context) to extract intent — same extract.md prompt.
     Cursor-based: resumable by passing next_cursor from previous result.
+
+    Args:
+        dry_run: When True, run AI extraction but skip DB updates. Returns what
+                 *would* be updated without mutating citation_graph. Safe to run
+                 repeatedly — no side effects beyond token consumption.
 
     Returns:
         {processed, skipped_no_raw_text, failed, next_cursor, remaining}
@@ -1294,11 +1300,17 @@ def backfill_citation_intents(
                 if data:
                     refs = data.get("key_references", [])
                     if refs:
-                        updated = paper_store.update_citation_intents(paper_id, refs)
-                        logger.info(
-                            "Backfill: updated %d intents for paper %s",
-                            updated, paper_id,
-                        )
+                        if dry_run:
+                            logger.info(
+                                "Backfill (dry_run): would update intents for %d refs in paper %s",
+                                len(refs), paper_id,
+                            )
+                        else:
+                            updated = paper_store.update_citation_intents(paper_id, refs)
+                            logger.info(
+                                "Backfill: updated %d intents for paper %s",
+                                updated, paper_id,
+                            )
             processed += 1
         except Exception as exc:
             logger.warning("Backfill failed for paper %s: %s", paper_id, exc)

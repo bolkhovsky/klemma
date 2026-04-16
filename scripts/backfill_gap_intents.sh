@@ -8,10 +8,8 @@
 #   ./scripts/backfill_gap_intents.sh [--dry-run] <target_user_id> [batch_size]
 #
 # Options:
-#   --dry-run   Run only the first batch and print what would be updated;
-#               does NOT loop and does NOT mutate the database.
-#               (The endpoint is still called once — all mutations are in AI
-#               extraction + update_citation_intents inside the task.)
+#   --dry-run   Run only the first batch with &dry_run=true on the endpoint.
+#               The AI extraction runs but DB writes are skipped — truly non-mutating.
 #               Use batch_size=5 with --dry-run to see a small sample.
 #
 # Environment:
@@ -83,6 +81,9 @@ while true; do
   QS="target_user_id=${TARGET_USER_ID}&batch_size=${BATCH_SIZE}"
   if [ -n "$CURSOR" ]; then
     QS="${QS}&cursor=${CURSOR}"
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    QS="${QS}&dry_run=true"
   fi
 
   echo -n "Batch $BATCH ... "

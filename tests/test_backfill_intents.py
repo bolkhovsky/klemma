@@ -106,8 +106,13 @@ def test_update_intents_updates_null(db):
     assert _get_intent(paper_store, pid, "Gap Paper") == "method"
 
 
-def test_update_intents_updates_background(db):
-    """update_citation_intents updates rows where intent='background' (legacy)."""
+def test_update_intents_does_not_overwrite_background(db):
+    """update_citation_intents does NOT overwrite existing 'background' intent.
+
+    'background' is now a valid intent (Teufel 2006) — the backfill must not
+    replace legitimately-classified background citations on re-runs.
+    Only NULL entries are eligible for backfill.
+    """
     paper_store, _, _ = db
     pid = paper_store.register_paper(title="Test Paper", pdf_hash="hash2")
     paper_store.save_citation_links(pid, [
@@ -116,8 +121,8 @@ def test_update_intents_updates_background(db):
     updated = paper_store.update_citation_intents(pid, [
         {"title": "Legacy Gap", "citation_intent": "extends"}
     ])
-    assert updated == 1
-    assert _get_intent(paper_store, pid, "Legacy Gap") == "extends"
+    assert updated == 0  # NOT overwritten — background is a valid intent
+    assert _get_intent(paper_store, pid, "Legacy Gap") == "background"
 
 
 def test_update_intents_does_not_overwrite_method(db):
@@ -163,7 +168,11 @@ def test_update_intents_idempotent(db):
 
 
 def test_backfill_pagination_cursor(db):
-    """Cursor-based pagination returns remaining count after cursor position."""
+    """Cursor advances the batch window; remaining count is cursor-independent (total).
+
+    remaining always reflects ALL papers still needing backfill, not just those
+    after the cursor — so failed/stuck papers behind the cursor still appear.
+    """
     paper_store, user_library, user_store = db
     user = user_store.create_user(email="cursor@test.com", password_hash="hashed")
     user_id = user.user_id
@@ -174,18 +183,21 @@ def test_backfill_pagination_cursor(db):
         citekey = f"cursor_paper_{i}"
         user_library.add_source(pid, citekey, status="completed", user_id=user_id)
         paper_store.save_citation_links(pid, [{"title": f"Gap {i}", "authors": "X", "year": 2020}])
+        paper_store.update_paper_raw_text(pid, f"Body text for paper {i}.")
         pids.append(pid)
 
     # First batch of 2
     batch1, remaining1 = paper_store.get_papers_for_user_backfill(user_id, batch_size=2, cursor=None)
     assert len(batch1) == 2
-    assert remaining1 == 4  # total before we start
+    assert remaining1 == 4  # total — cursor-independent
 
     cursor = batch1[-1]["paper_id"]
 
     # Second batch starting after cursor
     batch2, remaining2 = paper_store.get_papers_for_user_backfill(user_id, batch_size=2, cursor=cursor)
     assert len(batch2) == 2
+    # remaining2 is still 4 — cursor doesn't subtract from the total count
+    assert remaining2 == 4
     # IDs in batch2 should be distinct from batch1
     ids1 = {p["paper_id"] for p in batch1}
     ids2 = {p["paper_id"] for p in batch2}
@@ -205,12 +217,13 @@ def test_backfill_skip_already_updated(db):
         {"title": "Method Gap", "authors": "M", "year": 2020, "citation_intent": "method"}
     ])
 
-    # One paper with NULL intent (should be backfilled)
+    # One paper with NULL intent (should be backfilled) — must have raw_text
     pid_null = paper_store.register_paper(title="NullIntents", pdf_hash="nhash1")
     user_library.add_source(pid_null, "null_paper", status="completed", user_id=user_id)
     paper_store.save_citation_links(pid_null, [
         {"title": "Null Gap", "authors": "N", "year": 2020}
     ])
+    paper_store.update_paper_raw_text(pid_null, "Body text referencing Null Gap.")
 
     papers, _ = paper_store.get_papers_for_user_backfill(user_id, batch_size=10, cursor=None)
     paper_ids = {p["paper_id"] for p in papers}
@@ -218,8 +231,12 @@ def test_backfill_skip_already_updated(db):
     assert pid_method not in paper_ids
 
 
-def test_backfill_no_raw_text_counted_as_skipped(db, tmp_path):
-    """Papers without raw_text are counted in skipped_no_raw_text."""
+def test_backfill_excludes_papers_without_raw_text(db, tmp_path):
+    """Papers without raw_text are excluded from the backfill query entirely.
+
+    The query now has AND p.raw_text IS NOT NULL — unprocessable papers never
+    enter the batch, so processed=0 and the loop terminates immediately.
+    """
     paper_store, user_library, user_store = db
     user = user_store.create_user(email="skip2@test.com", password_hash="hashed")
     user_id = user.user_id
@@ -227,9 +244,8 @@ def test_backfill_no_raw_text_counted_as_skipped(db, tmp_path):
     pid = paper_store.register_paper(title="NoText Paper", pdf_hash="nohash")
     user_library.add_source(pid, "notext_paper", status="completed", user_id=user_id)
     paper_store.save_citation_links(pid, [{"title": "Gap", "authors": "X", "year": 2020}])
-    # raw_text intentionally NOT set (no paper_store.update_paper_raw_text call)
+    # raw_text intentionally NOT set
 
-    # Use task function with mocked AI
     from unittest.mock import patch
 
     mock_ai = MagicMock()
@@ -246,9 +262,11 @@ def test_backfill_no_raw_text_counted_as_skipped(db, tmp_path):
             cursor=None,
         )
 
-    assert result["skipped_no_raw_text"] == 1
-    assert result["processed"] == 1
-    mock_ai.call_with_meta.assert_not_called()  # No AI call when no raw_text
+    # Paper with no raw_text is excluded from the query — no AI call, nothing processed
+    assert result["processed"] == 0
+    assert result["skipped_no_raw_text"] == 0
+    assert result["remaining"] == 0
+    mock_ai.call_with_meta.assert_not_called()
 
 
 def test_backfill_with_raw_text_updates_intents(db, tmp_path):
@@ -328,7 +346,7 @@ def test_backfill_endpoint_admin_succeeds(client, stores, tmp_path, monkeypatch)
 
     # Monkeypatch the task to avoid AI call
 
-    def _fake_backfill(user_id, data_dir, batch_size=20, cursor=None):
+    def _fake_backfill(user_id, data_dir, batch_size=20, cursor=None, dry_run=False):
         return {"processed": 0, "skipped_no_raw_text": 0, "failed": 0,
                 "next_cursor": None, "remaining": 0}
 

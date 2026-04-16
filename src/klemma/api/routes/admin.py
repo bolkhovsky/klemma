@@ -71,6 +71,7 @@ async def backfill_citation_intents_route(
     target_user_id: str = Query(..., description="user_id whose papers to backfill"),
     batch_size: int = Query(default=20, ge=1, le=100, description="Papers per batch"),
     cursor: str | None = Query(default=None, description="Resume cursor from previous call"),
+    dry_run: bool = Query(default=False, description="Run AI extraction but skip DB writes"),
     user: UserRecord = Depends(get_current_user),
 ) -> BackfillIntentsResponse:
     """Backfill citation_intent for existing citation_graph entries.
@@ -80,6 +81,8 @@ async def backfill_citation_intents_route(
 
     Cursor-based pagination: pass ``next_cursor`` from the previous response
     to process the next batch. Repeat until ``remaining == 0``.
+
+    Set ``dry_run=true`` to see what would be updated without mutating the DB.
 
     Returns 503 if the AI provider is not configured.
     """
@@ -95,6 +98,7 @@ async def backfill_citation_intents_route(
             data_dir=data_dir,
             batch_size=batch_size,
             cursor=cursor or None,
+            dry_run=dry_run,
         )
     except RuntimeError as exc:
         raise HTTPException(

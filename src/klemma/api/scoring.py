@@ -92,6 +92,13 @@ def _compute_semantic_factor(
         return 1.0
 
     vecs = [paper_embeddings[pid] for pid in citing_paper_ids if pid in paper_embeddings]
+    if not vecs:
+        return 1.0
+
+    # Filter to consistent dimensions — mixed embedding models can produce
+    # vectors of different lengths, which would cause IndexError in cosine similarity.
+    dim = len(vecs[0])
+    vecs = [v for v in vecs if len(v) == dim]
     if len(vecs) < 2:
         return 1.0  # Not enough data — neutral
 
