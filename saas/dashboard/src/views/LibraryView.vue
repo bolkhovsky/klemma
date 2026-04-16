@@ -37,9 +37,15 @@ interface Gap {
   title: string
   authors: string | null
   year: number | null
+  doi: string | null
   cited_by_count: number
-  intents: string | null
-  doi?: string | null
+  score?: number
+  avg_quality?: number
+  intent_weight?: number
+  semantic_factor?: number
+  intents?: string[]
+  top_intent?: string | null
+  sections_served?: Array<{ section: string; count: number }>
 }
 const gaps = ref<Gap[]>([])
 const gapsDetail = ref('')
@@ -67,6 +73,63 @@ function plural(n: number, one: string, few: string, many: string): string {
   if (n10 === 1 && n100 !== 11) return one
   if (n10 >= 2 && n10 <= 4 && !(n100 >= 12 && n100 <= 14)) return few
   return many
+}
+
+/** Map citation intent identifiers to human-readable Russian labels. */
+const INTENT_LABELS: Record<string, string> = {
+  background: 'Фон',
+  method: 'Метод',
+  result_comparison: 'Сравнение',
+  extends: 'Развивает',
+  contrasts: 'Оппозиция',
+  uses_data: 'Данные',
+}
+
+/** Map citation intent identifiers to Tailwind-compatible colour classes. */
+const INTENT_COLORS: Record<string, string> = {
+  background: 'intent-background',
+  method: 'intent-method',
+  result_comparison: 'intent-result',
+  extends: 'intent-extends',
+  contrasts: 'intent-contrasts',
+  uses_data: 'intent-data',
+}
+
+function intentLabel(intent: string): string {
+  return INTENT_LABELS[intent] ?? intent
+}
+
+function intentColor(intent: string): string {
+  return INTENT_COLORS[intent] ?? 'intent-default'
+}
+
+/**
+ * Return deduplicated intent array (API returns string[] already).
+ * Also handles legacy comma-separated string for backward compatibility.
+ */
+function parseIntents(raw: string[] | string | null | undefined): string[] {
+  if (!raw) return []
+  if (Array.isArray(raw)) return [...new Set(raw)]
+  // Fallback: legacy comma-separated string
+  const seen = new Set<string>()
+  return raw.split(',').map(s => s.trim()).filter(s => s && !seen.has(s) && seen.add(s))
+}
+
+/**
+ * Format a numeric score with decomposition for tooltip.
+ */
+function formatScore(gap: Gap): string {
+  if (gap.score == null) return String(gap.cited_by_count)
+  return gap.score.toFixed(1)
+}
+
+function formatScoreTooltip(gap: Gap): string {
+  if (gap.score == null) return `Ссылок: ${gap.cited_by_count}`
+  const count = gap.cited_by_count
+  const quality = (gap.avg_quality ?? 3).toFixed(1)
+  const intent = (gap.intent_weight ?? 1).toFixed(2)
+  const semantic = (gap.semantic_factor ?? 1).toFixed(2)
+  return `${gap.score.toFixed(1)} = ${count} × ${quality}q × ${intent}i × ${semantic}s`
 }
 
 // Briefing coverage counters — derived from by_section readiness flags.
@@ -466,11 +529,18 @@ watch(sources, () => { loadFragmentCounts() })
             <th>Авторы</th>
             <th>Год</th>
             <th>DOI</th>
+            <th>Роль</th>
+            <th>Для разделов</th>
+            <th style="text-align: right">Важность</th>
             <th style="text-align: center">Ссылок</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(gap, i) in gaps" :key="i">
+          <tr
+            v-for="(gap, i) in gaps"
+            :key="i"
+            :class="{ 'gap-row-muted': gap.semantic_factor != null && gap.semantic_factor < 0.7 }"
+          >
             <td><span class="gap-title">{{ gap.title }}</span></td>
             <td class="text-[13px] text-[var(--color-ink-muted)]">{{ shortAuthors(gap.authors) }}</td>
             <td class="font-mono text-[14px]">{{ gap.year || '—' }}</td>
@@ -484,6 +554,36 @@ watch(sources, () => { loadFragmentCounts() })
                 :title="gap.doi"
               >{{ gap.doi.length > 20 ? gap.doi.slice(0, 18) + '...' : gap.doi }}</a>
               <span v-else class="text-[var(--color-ink-muted)]">—</span>
+            </td>
+            <td>
+              <div class="flex flex-wrap gap-1">
+                <span
+                  v-if="gap.top_intent"
+                  class="intent-chip"
+                  :class="intentColor(gap.top_intent)"
+                  :title="gap.intents?.length ? 'Намерения: ' + gap.intents.join(', ') : gap.top_intent"
+                >{{ intentLabel(gap.top_intent) }}</span>
+                <span v-else class="text-[var(--color-ink-muted)]">—</span>
+              </div>
+            </td>
+            <td>
+              <div v-if="gap.sections_served && gap.sections_served.length" class="flex flex-wrap gap-1">
+                <span
+                  v-for="s in gap.sections_served.slice(0, 3)"
+                  :key="s.section"
+                  class="section-chip"
+                  :title="gap.sections_served.map(x => x.section + ' (' + x.count + ')').join(', ')"
+                >{{ s.section }} · {{ s.count }}</span>
+                <span
+                  v-if="gap.sections_served.length > 3"
+                  class="text-[var(--color-ink-muted)] text-[12px]"
+                  :title="gap.sections_served.slice(3).map(x => x.section + ' (' + x.count + ')').join(', ')"
+                >+{{ gap.sections_served.length - 3 }}</span>
+              </div>
+              <span v-else class="text-[var(--color-ink-muted)]">—</span>
+            </td>
+            <td class="gap-score" :title="formatScoreTooltip(gap)">
+              {{ formatScore(gap) }}
             </td>
             <td class="gap-refs">{{ gap.cited_by_count }}</td>
           </tr>
@@ -568,4 +668,38 @@ watch(sources, () => { loadFragmentCounts() })
 .gap-doi { font-size: 14px; color: var(--color-accent); text-decoration: none; }
 .gap-doi:hover { text-decoration: underline; }
 .gap-refs { font-family: monospace; font-size: 14px; color: var(--color-warn); text-align: center; }
+.gap-score { font-family: monospace; font-size: 14px; color: var(--color-ink-muted); text-align: right; cursor: default; }
+
+/* Row muting when semantic relevance is low */
+.gap-row-muted td { opacity: 0.45; }
+
+/* Intent chips — colour-coded citation role badges */
+.intent-chip {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.intent-background { background: #f3f4f6; color: #6b7280; border: 1px solid #e5e7eb; }
+.intent-method     { background: #ede9fe; color: #6d28d9; border: 1px solid #c4b5fd; }
+.intent-result     { background: #d1fae5; color: #065f46; border: 1px solid #6ee7b7; }
+.intent-extends    { background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc; }
+.intent-contrasts  { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
+.intent-data       { background: #fce7f3; color: #9d174d; border: 1px solid #f9a8d4; }
+.intent-default    { background: var(--color-rule-light); color: var(--color-ink-muted); border: 1px solid var(--color-rule); }
+
+/* Section chips — compact numeric section labels */
+.section-chip {
+  display: inline-block;
+  font-size: 12px;
+  font-family: monospace;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--color-rule-light);
+  color: var(--color-ink-muted);
+  border: 1px solid var(--color-rule);
+  white-space: nowrap;
+}
 </style>

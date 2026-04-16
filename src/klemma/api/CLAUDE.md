@@ -43,8 +43,49 @@ Shared numeric constants for the API layer.
 ### worker.py (~25 lines)
 RQ worker entry point: `python -m klemma.api.worker`
 
+### scoring.py (~170 lines)
+Pure gap scoring function — no DB/network dependencies.
+- `score_gaps(raw_gaps, citing_paper_ids_by_gap, citing_embeddings, section_centroids, sections_by_citing_paper) -> list[dict]`
+  Formula: `count × avg_quality × intent_weight × semantic_factor`
+  `intent_weight` = AVG of per-intent weights (Teufel 2006 taxonomy): method=3.0, extends=2.5, result_comparison=2.0, contrasts=2.0, uses_data=1.5, background/None=1.0
+  `semantic_factor` = 0.5 + 0.5 × max_section_cosine — range [0.5, 1.0]. **Noise penalty, not boost**: cosine=0 → 0.5 (halves score), cosine=1 → 1.0 (neutral). <2 citing papers with embeddings → 1.0.
+- `_compute_semantic_factor(citing_paper_ids, paper_embeddings, section_centroids)` — cosine similarity of citing embeddings vs section centroids; neutral if insufficient data
+- `_parse_intents(intents_str)` — parse GROUP_CONCAT string, validate whitelist
+- `_compute_intent_weight(intents)` — AVG weights, empty → 1.0
+- `_compute_top_intent(intents)` — most frequent, weight-tiebreaker
+
 ### routes/
 Route modules. See [routes/CLAUDE.md](routes/CLAUDE.md).
+
+## Backfill operations
+
+### backfill_citation_intents (tasks.py)
+Cursor-based task to retroactively extract `citation_intent` for papers processed before intent detection was added.
+
+```python
+backfill_citation_intents(
+    user_id: str,
+    data_dir: str,
+    batch_size: int = 20,
+    cursor: str | None = None,
+) -> dict  # {processed, skipped_no_raw_text, failed, next_cursor, remaining}
+```
+
+- Uses full `raw_text` (50K truncated) — NOT bibliography text (hallucination risk)
+- Only updates citation_graph entries where intent IS NULL or 'background' (legacy default)
+- Papers without raw_text: counted in `skipped_no_raw_text` (not an error)
+- Cursor: `paper_id` ASC ordering — pass `next_cursor` to resume; repeat until `remaining == 0`
+
+### Admin script
+
+`scripts/backfill_gap_intents.sh <user_id>` — cursor-loop around the admin endpoint.
+- `--dry-run` flag: first batch without UPDATE (report only)
+- Logs progress and estimated token usage before starting
+- Requires `ADMIN_TOKEN` env var
+
+### Admin endpoint
+
+`POST /admin/backfill/citation-intents` — see [routes/CLAUDE.md](routes/CLAUDE.md).
 
 ## Adding a new feature
 

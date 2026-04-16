@@ -459,3 +459,181 @@ def test_upload_no_longer_calls_resolve_metadata(client, stores, monkeypatch, tm
         f"resolve_metadata was called {len(resolve_calls)} time(s) — it must not be "
         "called from the upload path after the lazy metadata enrichment refactor"
     )
+
+
+# ---------------------------------------------------------------------------
+# Reference gaps — scoring formula integration
+# ---------------------------------------------------------------------------
+
+
+def _setup_gaps_scenario(client, stores, *, gap_refs_by_paper: dict):
+    """Seed a gaps scenario.
+
+    gap_refs_by_paper: {paper_seed_title: [ref_dict, ...]}
+    Each paper is registered in paper_store + user_library + user_sources.
+    Returns user_id.
+    """
+    user_store, paper_store, user_library, project_store, file_store = stores
+    token = _register_and_get_token(client)
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    for seed_title, refs in gap_refs_by_paper.items():
+        pid = paper_store.register_paper(title=seed_title, pdf_hash=f"hash_{seed_title[:8]}")
+        citekey = seed_title.replace(" ", "_")[:20].lower()
+        user_library.add_source(pid, citekey, status="completed", user_id=user_id)
+        paper_store.save_citation_links(pid, refs)
+
+    return token, user_id
+
+
+def test_gaps_requires_min_3_sources(client):
+    """Fewer than 3 sources → empty gaps with detail message."""
+    token = _register_and_get_token(client)
+    resp = client.get("/library/gaps", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["gaps"] == []
+    assert data["detail"]  # non-empty hint message
+
+
+def test_gaps_scored_by_intent(client, stores):
+    """Same citation count, different intents: method gap ranks above background gap."""
+    user_store, paper_store, user_library, _, _ = stores
+    token = _register_and_get_token(client)
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    # Three user papers: p1..p3 each cite both gaps once
+    for i in range(1, 4):
+        pid = paper_store.register_paper(title=f"User Paper {i}", pdf_hash=f"uhash{i}")
+        citekey = f"user_paper_{i}"
+        user_library.add_source(pid, citekey, status="completed", user_id=user_id)
+        paper_store.save_citation_links(pid, [
+            {"title": "Gap Method Paper", "authors": "A", "year": 2020, "citation_intent": "method"},
+            {"title": "Gap Background Paper", "authors": "B", "year": 2020, "citation_intent": "background"},
+        ])
+
+    resp = client.get("/library/gaps", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    gaps = resp.json()["gaps"]
+    assert len(gaps) >= 2
+
+    method_gap = next((g for g in gaps if "Method" in g["title"]), None)
+    bg_gap = next((g for g in gaps if "Background" in g["title"]), None)
+    assert method_gap is not None
+    assert bg_gap is not None
+    assert method_gap["score"] > bg_gap["score"]
+    assert method_gap["intent_weight"] > bg_gap["intent_weight"]
+
+
+def test_gaps_quality_multiplier(client, stores):
+    """avg_quality multiplies the score: higher quality source → higher gap score."""
+    user_store, paper_store, user_library, _, _ = stores
+    token = _register_and_get_token(client)
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    # Two groups of 3 papers; each group cites its own gap
+    for i, (quality, gap_title) in enumerate([
+        (5, "High Quality Gap"),
+        (1, "Low Quality Gap"),
+        (5, "High Quality Gap"),  # second paper same gap
+        (1, "Low Quality Gap"),
+        (5, "High Quality Gap"),  # third paper
+        (1, "Low Quality Gap"),
+    ]):
+        pid = paper_store.register_paper(title=f"QualityPaper {i}", pdf_hash=f"qhash{i}")
+        citekey = f"quality_paper_{i}"
+        user_library.add_source(pid, citekey, status="completed", quality_score=quality, user_id=user_id)
+        paper_store.save_citation_links(pid, [
+            {"title": gap_title, "authors": "X", "year": 2021}
+        ])
+
+    resp = client.get("/library/gaps", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    gaps = resp.json()["gaps"]
+
+    high_q_gap = next(g for g in gaps if g["title"] == "High Quality Gap")
+    low_q_gap = next(g for g in gaps if g["title"] == "Low Quality Gap")
+    assert high_q_gap["score"] > low_q_gap["score"]
+    assert high_q_gap["avg_quality"] > low_q_gap["avg_quality"]
+
+
+def test_gaps_sections_served_populated(client, stores):
+    """sections_served is populated from citing-paper section assignments."""
+    user_store, paper_store, user_library, project_store, _ = stores
+    token = _register_and_get_token(client)
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    paper_ids = []
+    for i in range(1, 4):
+        pid = paper_store.register_paper(title=f"SectionPaper {i}", pdf_hash=f"sphash{i}")
+        citekey = f"section_paper_{i}"
+        user_library.add_source(pid, citekey, status="completed", user_id=user_id)
+        paper_store.save_citation_links(pid, [
+            {"title": "Gap With Sections", "authors": "G", "year": 2022}
+        ])
+        paper_ids.append((pid, citekey))
+
+    # Assign p1 and p2 to section "1.1", p3 to "2.1"
+    project_store.set_source_sections(paper_ids[0][1], paper_ids[0][0], ["1.1"], [], user_id=user_id)
+    project_store.set_source_sections(paper_ids[1][1], paper_ids[1][0], ["1.1"], [], user_id=user_id)
+    project_store.set_source_sections(paper_ids[2][1], paper_ids[2][0], ["2.1"], [], user_id=user_id)
+
+    resp = client.get("/library/gaps", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    gaps = resp.json()["gaps"]
+    gap = next(g for g in gaps if g["title"] == "Gap With Sections")
+
+    sections_map = {s["section"]: s["count"] for s in gap["sections_served"]}
+    assert sections_map.get("1.1", 0) == 2
+    assert sections_map.get("2.1", 0) == 1
+
+
+def test_gaps_legacy_background_neutralized(client, stores):
+    """Papers cited with background intent get weight=1.0 (neutral, not penalized)."""
+    user_store, paper_store, user_library, _, _ = stores
+    token = _register_and_get_token(client)
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    for i in range(1, 4):
+        pid = paper_store.register_paper(title=f"BgPaper {i}", pdf_hash=f"bghash{i}")
+        citekey = f"bg_paper_{i}"
+        user_library.add_source(pid, citekey, status="completed", user_id=user_id)
+        paper_store.save_citation_links(pid, [
+            {"title": "Background Only Gap", "authors": "Legacy", "year": 2019, "citation_intent": "background"}
+        ])
+
+    resp = client.get("/library/gaps", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    gaps = resp.json()["gaps"]
+    gap = next((g for g in gaps if g["title"] == "Background Only Gap"), None)
+    assert gap is not None
+    assert gap["score"] > 0
+    assert abs(gap["intent_weight"] - 1.0) < 0.01  # neutral weight
+
+
+def test_gaps_recency_filter(client, stores):
+    """Papers older than 10 years with cited_by_count<3 are filtered out."""
+    user_store, paper_store, user_library, _, _ = stores
+    token = _register_and_get_token(client)
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    from datetime import date
+    old_year = date.today().year - 15  # 15 years old → filtered if count < 3
+    recent_year = date.today().year - 2  # recent → kept
+
+    for i in range(1, 4):
+        pid = paper_store.register_paper(title=f"FilterPaper {i}", pdf_hash=f"fhash{i}")
+        citekey = f"filter_paper_{i}"
+        user_library.add_source(pid, citekey, status="completed", user_id=user_id)
+        paper_store.save_citation_links(pid, [
+            {"title": "Old Obscure Gap", "authors": "O", "year": old_year},
+            {"title": "Recent Gap", "authors": "R", "year": recent_year},
+        ])
+
+    resp = client.get("/library/gaps", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    gaps = resp.json()["gaps"]
+    titles = [g["title"] for g in gaps]
+    # Old gap with only 3 citations: count=3 ≥ classic_min_cited_by → KEPT
+    # (the threshold is <3; 3 is exactly the minimum to be kept as a "classic")
+    assert "Recent Gap" in titles

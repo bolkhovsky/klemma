@@ -163,7 +163,24 @@ export const library = {
   },
 
   gaps: () =>
-    request<{ gaps: { title: string; authors: string | null; year: number | null; cited_by_count: number; intents: string | null }[]; total: number; detail?: string }>('/library/gaps'),
+    request<{
+      gaps: {
+        title: string
+        authors: string | null
+        year: number | null
+        doi: string | null
+        cited_by_count: number
+        score: number
+        avg_quality: number
+        intent_weight: number
+        semantic_factor: number
+        intents: string[]
+        top_intent: string | null
+        sections_served: Array<{ section: string; count: number }>
+      }[]
+      total: number
+      detail?: string | null
+    }>('/library/gaps'),
 }
 
 // User projects (CRUD)

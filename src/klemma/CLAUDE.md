@@ -140,6 +140,11 @@ SQLite backends implementing the three-tier library protocols.
 - `save_fragments(paper_id, fragments, prompt_hash, ai_model) -> int` — insert with `INSERT OR IGNORE`, creates `extractions` record
 - `get/save_paper_embedding(paper_id, vector, model)` — blob-packed float32 roundtrip
 - `get/save_fragment_embedding(fragment_id, vector, model)` — same pattern
+- `save_citation_links(paper_id, references) -> int` — save citation graph entries; validates `citation_intent` against whitelist {background, method, result_comparison, extends, contrasts, uses_data}; invalid/missing → NULL (not "background" default)
+- `get_reference_gaps(*, paper_ids, user_id, limit=200) -> tuple[list[dict], dict[str, list[str]]]` — two-step query: (1) aggregate with avg_quality JOIN user_sources, (2) separate citing paper_ids per gap hash. Avoids GROUP_CONCAT truncation.
+- `get_paper_embeddings_batch(paper_ids, model=None) -> dict[str, list[float]]` — bulk embedding fetch for semantic factor calculation
+- `update_citation_intents(paper_id, refs) -> int` — backfill: UPDATE only where intent IS NULL or 'background'; skips non-null valid intents; validates whitelist
+- `get_papers_for_user_backfill(user_id, batch_size, cursor) -> tuple[list[dict], int]` — cursor-based pagination of papers needing backfill (have NULL/background intents)
 - Tables: `papers`, `extractions`, `fragments`, `paper_embeddings`, `fragment_embeddings`, `citation_graph`
 - Used by: `_init_components()` in `cli.py` (always created); `_process_single()` in `cli.py` (dedup check + dual-write)
 
@@ -152,6 +157,7 @@ SQLite backends implementing the three-tier library protocols.
 - `remove_source(citekey) -> bool` — delete from user library (keeps global corpus)
 - `get_project_citekeys(project_id, user_id?) -> set[str]` — strictly project-attached citekeys (excludes unassigned)
 - `update_status(citekey, status)`, `get_all_sources()`, `count()`
+- `get_citekey_map(paper_ids, user_id) -> dict[str, str]` — bulk {paper_id: citekey} for translating paper_ids to section assignment keys
 - Tables: `user_sources`, `user_source_chapters`, `user_source_sections`
 - Called from `_process_single()` in `cli.py` to register citekey after successful extraction
 
@@ -176,6 +182,8 @@ SQLite backends implementing the three-tier library protocols.
 - `get_prune_drop_ids(max_age_days?, user_id=None) -> set[str]` — citekeys with 'drop' verdict; user-scoped
 - `get_prune_summary(user_id=None) -> dict` — `{drop, maybe, total}` counts; user-scoped
 - `clear_prune_verdict(source_id, user_id=None) -> None` — remove single verdict; user-scoped
+- `get_source_sections_bulk(citekeys, user_id) -> dict[str, set[str]]` — bulk {citekey: {section}} from project_source_sections; one query for all citekeys
+- `get_section_centroids(user_id, paper_embeddings, paper_id_to_citekey) -> dict[str, list[float]]` — average embeddings per section from user paper assignments; returns empty dict if no embeddings or sections
 - Tables: `project_sources` (PK: user_id, citekey), `project_source_sections` (PK: user_id, citekey, section), `project_fragments`, `prune_verdicts` (PK: user_id, source_id) (v5)
 
 #### stores/user_store.py (~390 lines)

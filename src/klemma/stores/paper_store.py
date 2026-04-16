@@ -11,6 +11,7 @@ need citekey-based lookup use find_paper(pdf_hash=...) or find_paper(doi=...).
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import struct
 import uuid
@@ -18,8 +19,14 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Generator, Optional
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from ..models import FragmentRecord, PaperRecord
+
+_VALID_CITATION_INTENTS = frozenset({
+    "background", "method", "result_comparison", "extends", "contrasts", "uses_data"
+})
 
 # NOTE: library.db's user_version is co-owned with LocalUserLibrary (same file).
 # LocalUserLibrary's migration chain gates `CREATE TABLE` on `version < 2` and
@@ -422,6 +429,8 @@ class LocalPaperStore:
                 if not title:
                     continue
                 title_hash = hashlib.md5(title.lower().encode()).hexdigest()
+                _raw_intent = ref.get("citation_intent")
+                _intent = _raw_intent if _raw_intent in _VALID_CITATION_INTENTS else None
                 conn.execute(
                     """INSERT OR IGNORE INTO citation_graph
                        (citing_paper_id, cited_title_hash, cited_title,
@@ -433,7 +442,7 @@ class LocalPaperStore:
                         title,
                         ref.get("authors", ""),
                         ref.get("year"),
-                        ref.get("citation_intent", "background"),
+                        _intent,
                     ),
                 )
                 saved += 1
@@ -443,55 +452,74 @@ class LocalPaperStore:
     # Citation graph — reference gaps                                      #
     # ------------------------------------------------------------------ #
 
-    def get_reference_gaps(self, limit: int = 50, paper_ids: list[str] | None = None) -> list[dict]:
-        """Return cited papers not in the library, sorted by citation frequency.
+    def get_reference_gaps(
+        self,
+        *,
+        paper_ids: list[str],
+        user_id: str,
+        limit: int = 200,
+    ) -> tuple[list[dict], dict[str, list[str]]]:
+        """Return (gaps, citing_paper_ids_by_gap_hash).
 
-        A "gap" is a paper referenced in citation_graph but whose normalized
-        title doesn't match any paper in the library.
-
-        When paper_ids is provided, only consider citations FROM those papers
-        (user-scoped mode for SaaS).
+        Two-step query to avoid GROUP_CONCAT truncation for paper_ids.
+        gaps: list of dicts with keys: cited_title_hash, title, authors, year,
+              count, intents, avg_quality
+        citing_paper_ids_by_gap_hash: {cited_title_hash: [paper_id, ...]}
         """
+        if not paper_ids:
+            return [], {}
+
+        placeholders = ",".join("?" for _ in paper_ids)
+
         with self._conn() as conn:
-            if paper_ids:
-                placeholders = ",".join("?" for _ in paper_ids)
-                rows = conn.execute(
-                    f"""SELECT
-                         cg.cited_title as title,
-                         cg.cited_authors as authors,
-                         cg.cited_year as year,
-                         COUNT(DISTINCT cg.citing_paper_id) as cited_by_count,
-                         GROUP_CONCAT(DISTINCT cg.citation_intent) as intents
-                       FROM citation_graph cg
-                       WHERE cg.citing_paper_id IN ({placeholders})
-                         AND NOT EXISTS (
-                           SELECT 1 FROM papers p
-                           WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
-                         )
-                       GROUP BY cg.cited_title_hash
-                       ORDER BY cited_by_count DESC
-                       LIMIT ?""",
-                    (*paper_ids, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """SELECT
-                         cg.cited_title as title,
-                         cg.cited_authors as authors,
-                         cg.cited_year as year,
-                         COUNT(DISTINCT cg.citing_paper_id) as cited_by_count,
-                         GROUP_CONCAT(DISTINCT cg.citation_intent) as intents
-                       FROM citation_graph cg
-                       WHERE NOT EXISTS (
-                         SELECT 1 FROM papers p
-                         WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
-                       )
-                       GROUP BY cg.cited_title_hash
-                       ORDER BY cited_by_count DESC
-                       LIMIT ?""",
-                    (limit,),
-                ).fetchall()
-        return [dict(r) for r in rows]
+            # Step 1 — aggregate: count citations and collect intents per gap
+            rows = conn.execute(
+                f"""SELECT
+                     cg.cited_title_hash,
+                     cg.cited_title as title,
+                     cg.cited_authors as authors,
+                     cg.cited_year as year,
+                     COUNT(DISTINCT cg.citing_paper_id) as count,
+                     GROUP_CONCAT(cg.citation_intent) as intents,
+                     AVG(COALESCE(us.quality_score, 3)) as avg_quality
+                   FROM citation_graph cg
+                   LEFT JOIN user_sources us
+                     ON cg.citing_paper_id = us.paper_id AND us.user_id = ?
+                   WHERE cg.citing_paper_id IN ({placeholders})
+                     AND NOT EXISTS (
+                       SELECT 1 FROM papers p
+                       WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
+                     )
+                   GROUP BY cg.cited_title_hash
+                   ORDER BY count DESC
+                   LIMIT ?""",
+                (user_id, *paper_ids, limit),
+            ).fetchall()
+
+            gaps = [dict(r) for r in rows]
+
+            if not gaps:
+                return [], {}
+
+            gap_hashes = [g["cited_title_hash"] for g in gaps]
+            hash_placeholders = ",".join("?" for _ in gap_hashes)
+
+            # Step 2 — fetch citing paper IDs for each gap hash
+            citing_rows = conn.execute(
+                f"""SELECT cited_title_hash, citing_paper_id
+                    FROM citation_graph
+                    WHERE cited_title_hash IN ({hash_placeholders})
+                      AND citing_paper_id IN ({placeholders})""",
+                (*gap_hashes, *paper_ids),
+            ).fetchall()
+
+        citing_ids_by_hash: dict[str, list[str]] = {}
+        for row in citing_rows:
+            h = row["cited_title_hash"]
+            pid = row["citing_paper_id"]
+            citing_ids_by_hash.setdefault(h, []).append(pid)
+
+        return gaps, citing_ids_by_hash
 
     def count_citation_gaps(self, paper_ids: list[str] | None = None) -> int:
         """Count unique cited papers not in the library.
@@ -587,6 +615,136 @@ class LocalPaperStore:
                    VALUES (?, ?, ?, ?)""",
                 (fragment_id, model, blob, len(vector)),
             )
+
+    def get_paper_embeddings_batch(
+        self, paper_ids: list[str], model: Optional[str] = None
+    ) -> dict[str, list[float]]:
+        """Return {paper_id: embedding_vector} for paper_ids that have embeddings."""
+        if not paper_ids:
+            return {}
+        with self._conn() as conn:
+            if model:
+                placeholders = ",".join("?" for _ in paper_ids)
+                rows = conn.execute(
+                    f"SELECT paper_id, vector FROM paper_embeddings WHERE paper_id IN ({placeholders}) AND model_name = ?",
+                    (*paper_ids, model),
+                ).fetchall()
+            else:
+                # Get most recently inserted embedding per paper (any model).
+                # MAX(rowid) is deterministic — avoids returning mixed-model vectors
+                # from arbitrary GROUP BY which can produce different dimensions.
+                placeholders = ",".join("?" for _ in paper_ids)
+                rows = conn.execute(
+                    f"""SELECT paper_id, vector FROM paper_embeddings
+                        WHERE rowid IN (
+                            SELECT MAX(rowid) FROM paper_embeddings
+                            WHERE paper_id IN ({placeholders})
+                            GROUP BY paper_id
+                        )""",
+                    paper_ids,
+                ).fetchall()
+        result = {}
+        for row in rows:
+            try:
+                vec = list(struct.unpack(f"{len(row['vector']) // 4}f", row["vector"]))
+                result[row["paper_id"]] = vec
+            except Exception:
+                pass
+        return result
+
+    def update_citation_intents(self, paper_id: str, refs: list[dict]) -> int:
+        """Update citation_intent for existing citation_graph entries (backfill).
+
+        Matches by (citing_paper_id, cited_title_hash).
+        Only updates entries where current intent IS NULL — 'background' is now a
+        valid intent (Teufel 2006 taxonomy) and must not be overwritten by re-runs.
+        Returns count of updated rows.
+        """
+        import hashlib as _hashlib
+
+        updated = 0
+        with self._conn() as conn:
+            for ref in refs:
+                title = (ref.get("title") or "").strip()
+                if not title:
+                    continue
+                raw_intent = ref.get("citation_intent")
+                if raw_intent not in _VALID_CITATION_INTENTS:
+                    if raw_intent is not None:
+                        logger.warning(
+                            "update_citation_intents: invalid intent %r for %s, skipping",
+                            raw_intent, title,
+                        )
+                    continue  # only update if we have a valid non-null intent
+                title_hash = _hashlib.md5(title.lower().encode()).hexdigest()
+                cur = conn.execute(
+                    """UPDATE citation_graph
+                       SET citation_intent = ?
+                       WHERE citing_paper_id = ? AND cited_title_hash = ?
+                         AND citation_intent IS NULL""",
+                    (raw_intent, paper_id, title_hash),
+                )
+                updated += cur.rowcount
+        return updated
+
+    def get_papers_for_user_backfill(
+        self,
+        user_id: str,
+        batch_size: int = 20,
+        cursor: Optional[str] = None,
+    ) -> tuple[list[dict], int]:
+        """Return papers needing citation intent backfill, with cursor-based pagination.
+
+        Returns (papers_batch, remaining_count).
+        Each paper dict has: paper_id, title.
+
+        Only returns papers where:
+        - At least one citation_graph entry has intent IS NULL (not 'background' —
+          that is now a valid intent that must not be overwritten by re-runs)
+        - raw_text IS NOT NULL (paper has processable text; otherwise no AI call possible)
+
+        remaining_count is the total across ALL cursor positions — not filtered by
+        cursor — so failed papers that are behind the cursor still appear in the count
+        and the caller can detect that the loop finished with unresolved work.
+        """
+        with self._conn() as conn:
+            # Remaining = total processable papers still with NULL intents (no cursor filter).
+            # Cursor-independence is intentional: failed papers behind the cursor still count.
+            remaining = conn.execute(
+                """SELECT COUNT(DISTINCT p.paper_id) FROM papers p
+                   JOIN user_sources us ON p.paper_id = us.paper_id AND us.user_id = ?
+                   JOIN citation_graph cg ON cg.citing_paper_id = p.paper_id
+                   WHERE cg.citation_intent IS NULL
+                     AND p.raw_text IS NOT NULL""",
+                (user_id,),
+            ).fetchone()[0]
+
+            # Fetch batch (cursor-based pagination for the loop)
+            if cursor:
+                rows = conn.execute(
+                    """SELECT DISTINCT p.paper_id, p.title FROM papers p
+                       JOIN user_sources us ON p.paper_id = us.paper_id AND us.user_id = ?
+                       JOIN citation_graph cg ON cg.citing_paper_id = p.paper_id
+                       WHERE cg.citation_intent IS NULL
+                         AND p.raw_text IS NOT NULL
+                         AND p.paper_id > ?
+                       ORDER BY p.paper_id ASC
+                       LIMIT ?""",
+                    (user_id, cursor, batch_size),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT DISTINCT p.paper_id, p.title FROM papers p
+                       JOIN user_sources us ON p.paper_id = us.paper_id AND us.user_id = ?
+                       JOIN citation_graph cg ON cg.citing_paper_id = p.paper_id
+                       WHERE cg.citation_intent IS NULL
+                         AND p.raw_text IS NOT NULL
+                       ORDER BY p.paper_id ASC
+                       LIMIT ?""",
+                    (user_id, batch_size),
+                ).fetchall()
+        papers = [{"paper_id": r["paper_id"], "title": r["title"]} for r in rows]
+        return papers, remaining
 
     # ---------------------------------------------------------------- #
     # Multi-user safety                                                 #
