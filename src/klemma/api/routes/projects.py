@@ -192,11 +192,8 @@ async def update_project_outline(
     sections = [{"id": s.id, "name": s.name} for s in body.sections]
     store.update_project_outline(project_id, sections)
     project["outline"] = sections
-    try:
-        get_paper_store().invalidate_recommendations_cache(user.user_id, project_id)
-    except Exception as exc:  # pragma: no cover — non-fatal
-        logger.warning("Recommendation cache invalidation failed for %s: %s",
-                       project_id, exc)
+    from ..recommendations import invalidate_for_user
+    invalidate_for_user(get_paper_store(), user.user_id, project_id)
     return ProjectResponse(**project)
 
 

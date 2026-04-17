@@ -380,6 +380,23 @@ def _clamp_score(raw: Any) -> float:
     return val
 
 
+def invalidate_for_user(paper_store, user_id: str, project_id: Optional[str] = None) -> None:
+    """Fire-and-forget cache invalidation on library or outline mutation.
+
+    Wraps ``LocalPaperStore.invalidate_recommendations_cache`` but never raises
+    — keeps the calling mutation path's happy-path unaffected by cache issues.
+    ``project_id=None`` drops all cached rows for the user (used on library
+    mutations where any project's cache could be stale).
+    """
+    try:
+        paper_store.invalidate_recommendations_cache(user_id, project_id)
+    except Exception as exc:  # pragma: no cover — non-fatal
+        logger.debug(
+            "Recommendation cache invalidation failed for user=%s project=%s: %s",
+            user_id, project_id, exc,
+        )
+
+
 def parse_llm_output(raw: Any) -> list[dict]:
     """Tolerant parser: accepts dict from ``call_json`` or a JSON string.
 

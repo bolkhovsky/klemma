@@ -16,6 +16,7 @@ from klemma.models import UserRecord
 
 from ..auth.deps import get_current_user, get_user_store
 from ..deps import get_file_store, get_paper_store, get_project_store, get_user_library
+from ..recommendations import invalidate_for_user
 
 try:
     from redis import Redis
@@ -396,7 +397,7 @@ async def add_source(
         project_id=body.project_id,
         user_id=user.user_id,
     )
-    _invalidate_user_recommendations(paper_store, user.user_id)
+    invalidate_for_user(paper_store, user.user_id)
 
     return SourceResponse(
         citekey=body.citekey,
@@ -430,7 +431,7 @@ async def delete_source(
         )
 
     library.remove_source(citekey, user_id=user.user_id)
-    _invalidate_user_recommendations(get_paper_store(), user.user_id)
+    invalidate_for_user(get_paper_store(), user.user_id)
 
 
 class UploadResponse(BaseModel):
@@ -524,7 +525,7 @@ async def upload_pdf(
             project_id=project_id,
             user_id=user.user_id,
         )
-        _invalidate_user_recommendations(paper_store, user.user_id)
+        invalidate_for_user(paper_store, user.user_id)
         return UploadResponse(
             citekey=citekey,
             paper_id=existing.paper_id,
@@ -555,7 +556,7 @@ async def upload_pdf(
             project_id=project_id,
             user_id=user.user_id,
         )
-        _invalidate_user_recommendations(paper_store, user.user_id)
+        invalidate_for_user(paper_store, user.user_id)
 
         job_id = _enqueue_processing(paper_id, citekey, user.user_id, project_id)
 
@@ -944,17 +945,20 @@ async def list_recommendations(
             warning=warning,
         )
 
-    # LLM call
+    # LLM call — resolve prompts with system-home override support.
+    # ``resolve_prompt(name, get_system_home())`` honors ``~/.klemma/prompts/``
+    # overrides and falls back to the shipped template bundled with the package.
     env = SandboxedEnvironment()
-    from klemma.config import _SHIPPED_PROMPTS_DIR
-    prompts_dir = _SHIPPED_PROMPTS_DIR
+    from klemma.config import get_system_home, resolve_prompt
     try:
-        system_raw = (prompts_dir / "library_recommendations_system.md").read_text(
-            encoding="utf-8"
+        system_path = resolve_prompt(
+            "library_recommendations_system.md", get_system_home()
         )
-        user_raw = (prompts_dir / "library_recommendations_user.md").read_text(
-            encoding="utf-8"
+        user_path = resolve_prompt(
+            "library_recommendations_user.md", get_system_home()
         )
+        system_raw = system_path.read_text(encoding="utf-8")
+        user_raw = user_path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         logger.error("Recommendation prompt missing: %s", exc)
         return RecommendationsResponse(
@@ -1104,11 +1108,3 @@ def _citekey_from_filename(filename: str) -> str:
     if slug:
         key += f"_{slug}"
     return key or "unknown"
-
-
-def _invalidate_user_recommendations(paper_store, user_id: str) -> None:
-    """Fire-and-forget cache invalidation on library mutation. Never raises."""
-    try:
-        paper_store.invalidate_recommendations_cache(user_id)
-    except Exception as exc:  # pragma: no cover — non-fatal
-        logger.debug("Recommendation cache invalidation failed for %s: %s", user_id, exc)

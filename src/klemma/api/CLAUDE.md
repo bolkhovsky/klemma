@@ -54,6 +54,19 @@ Pure gap scoring function — no DB/network dependencies.
 - `_compute_intent_weight(intents)` — AVG weights, empty → 1.0
 - `_compute_top_intent(intents)` — most frequent, weight-tiebreaker
 
+### recommendations.py (~440 lines, #332)
+LLM-curated library recommendations pipeline — mostly pure, one helper reads stores.
+- `compute_scored_gaps(paper_store, library, project_store, user_id, limit=50) -> list[dict]` — the full `score_gaps` pipeline **before** recency filter; shared between `GET /library/gaps` and `GET /library/recommendations`
+- `apply_recency_filter(scored, today_year=None, max_age_years=10, classic_min_cited_by=3)` — drop papers older than 10y unless cited ≥3x
+- `select_loaded_sources(paper_store, library, user_id, max_items=5)` — pick up to 5 `completed` sources, preview = abstract OR raw_text[:1500] (separate `get_raw_text` call — `get_paper_by_id` doesn't return raw_text)
+- `build_prompt_inputs(project_name, outline, loaded_sources, candidates, rationale_language) -> dict` — Jinja context
+- `compute_library_state_hash(user_sources)` — stable sha256 over sorted (paper_id, status)
+- `compute_outline_hash(outline)` — order-insensitive sha256 over `{id: name}` map
+- `detect_rationale_language(project_name)` — Cyrillic present → "Russian"; fallback "Russian"
+- `parse_llm_output(raw)` — tolerant parse of `call_json` output; drops items without title; clamps `score ∈ [1, 10]`
+- `invalidate_for_user(paper_store, user_id, project_id=None)` — helper called on library mutations and outline changes (wraps `LocalPaperStore.invalidate_recommendations_cache`, never raises)
+Constants: `CANDIDATE_LIMIT=50`, `LOADED_SOURCES_LIMIT=5`, `ABSTRACT_PREVIEW_CHARS=1500`, `RECENCY_MAX_AGE_YEARS=10`, `RECENCY_CLASSIC_MIN_CITED_BY=3`.
+
 ### routes/
 Route modules. See [routes/CLAUDE.md](routes/CLAUDE.md).
 

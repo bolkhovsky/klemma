@@ -145,8 +145,9 @@ SQLite backends implementing the three-tier library protocols.
 - `get_paper_embeddings_batch(paper_ids, model=None) -> dict[str, list[float]]` — bulk embedding fetch for semantic factor calculation
 - `update_citation_intents(paper_id, refs) -> int` — backfill: UPDATE only where intent IS NULL or 'background'; skips non-null valid intents; validates whitelist
 - `get_papers_for_user_backfill(user_id, batch_size, cursor) -> tuple[list[dict], int]` — cursor-based pagination of papers needing backfill (have NULL/background intents)
-- Tables: `papers`, `extractions`, `fragments`, `paper_embeddings`, `fragment_embeddings`, `citation_graph`
-- Used by: `_init_components()` in `cli.py` (always created); `_process_single()` in `cli.py` (dedup check + dual-write)
+- `get_cached_recommendations(*, user_id, project_id, library_state_hash, outline_hash, model) -> dict | None` / `save_cached_recommendations(...)` / `invalidate_recommendations_cache(user_id, project_id=None) -> int` — LLM-curated recommendations cache (#332). **Does NOT bump `_SCHEMA_VERSION`** — library.db user_version is co-owned with LocalUserLibrary (see comment block at `paper_store.py:31`); table created via idempotent `CREATE TABLE IF NOT EXISTS`.
+- Tables: `papers`, `extractions`, `fragments`, `paper_embeddings`, `fragment_embeddings`, `citation_graph`, `recommendations_cache` (PK: user_id, project_id, library_state_hash, outline_hash, model)
+- Used by: `_init_components()` in `cli.py` (always created); `_process_single()` in `cli.py` (dedup check + dual-write); `GET /library/recommendations` (cache); `POST /library/upload`, `DELETE /library/sources/{citekey}`, `PATCH /projects/{id}/outline` (cache invalidation)
 
 #### stores/user_library.py (~460 lines)
 `LocalUserLibrary` — SQLite-backed `UserLibrary` at `~/.klemma/library.db` (same file as `LocalPaperStore`, schema version 5). Maps citekey → paper_id for the User Library tier. Composite PK `(user_id, citekey)` for multi-user SaaS isolation (v5).
