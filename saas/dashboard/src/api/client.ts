@@ -181,6 +181,24 @@ export const library = {
       total: number
       detail?: string | null
     }>('/library/gaps'),
+
+  recommendations: (projectId: string) =>
+    request<{
+      recommendations: {
+        title: string
+        authors: string
+        year: number | null
+        doi: string | null
+        rationale: string
+        score: number
+      }[]
+      total: number
+      model: string
+      generated_at: string
+      cached: boolean
+      detail?: string | null
+      warning?: string | null
+    }>(`/library/recommendations?project_id=${encodeURIComponent(projectId)}`),
 }
 
 // User projects (CRUD)

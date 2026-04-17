@@ -241,6 +241,18 @@ TEMPLATE_CONTEXTS = {
         "candidate_count": 1,
         "feedback_summary": "No feedback yet.",
     },
+    "library_recommendations_system.md": {
+        "rationale_language": "Russian",
+        "max_recommendations": 10,
+    },
+    "library_recommendations_user.md": {
+        "rationale_language": "Russian",
+        "max_recommendations": 10,
+        "project_name": "Seasonal sea-ice forecasting",
+        "outline_md": "- 1. Introduction\n- 2. Methods",
+        "loaded_sources_md": "- **Paper A** — Author A, 2023\n  Abstract preview",
+        "candidates_md": "1. **Cand** — Author, 2022 (cited_by=2, intent=method)",
+    },
     "reconstruct.md": {
         "paper_title": "Test Paper",
         "abstract": "An abstract",

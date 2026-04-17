@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from klemma.models import UserRecord
 
-from ..auth.deps import get_current_user
+from ..auth.deps import get_current_user, get_user_store
 from ..deps import get_file_store, get_paper_store, get_project_store, get_user_library
 
 try:
@@ -133,6 +133,29 @@ class ReferenceGapsResponse(BaseModel):
     gaps: list[ReferenceGapResponse]
     total: int
     detail: str | None = None
+
+
+class RecommendationItem(BaseModel):
+    """One LLM-curated recommendation."""
+
+    title: str
+    authors: str = ""
+    year: int | None = None
+    doi: str | None = None
+    rationale: str = ""
+    score: float = 5.0
+
+
+class RecommendationsResponse(BaseModel):
+    """Response from GET /library/recommendations."""
+
+    recommendations: list[RecommendationItem]
+    total: int
+    model: str = ""
+    generated_at: str = ""
+    cached: bool = False
+    detail: str | None = None
+    warning: str | None = None
 
 
 class MetadataCurrentFields(BaseModel):
@@ -373,6 +396,7 @@ async def add_source(
         project_id=body.project_id,
         user_id=user.user_id,
     )
+    _invalidate_user_recommendations(paper_store, user.user_id)
 
     return SourceResponse(
         citekey=body.citekey,
@@ -406,6 +430,7 @@ async def delete_source(
         )
 
     library.remove_source(citekey, user_id=user.user_id)
+    _invalidate_user_recommendations(get_paper_store(), user.user_id)
 
 
 class UploadResponse(BaseModel):
@@ -499,6 +524,7 @@ async def upload_pdf(
             project_id=project_id,
             user_id=user.user_id,
         )
+        _invalidate_user_recommendations(paper_store, user.user_id)
         return UploadResponse(
             citekey=citekey,
             paper_id=existing.paper_id,
@@ -529,6 +555,7 @@ async def upload_pdf(
             project_id=project_id,
             user_id=user.user_id,
         )
+        _invalidate_user_recommendations(paper_store, user.user_id)
 
         job_id = _enqueue_processing(paper_id, citekey, user.user_id, project_id)
 
@@ -710,9 +737,7 @@ async def list_reference_gaps(
     Gaps scored by: count × avg_quality × intent_weight × semantic_factor
     (Teufel 2006 citation intent taxonomy; semantic_factor is a noise penalty).
     """
-    from datetime import date
-
-    from ..scoring import score_gaps
+    from ..recommendations import apply_recency_filter, compute_scored_gaps
 
     paper_store = get_paper_store()
     library = get_user_library()
@@ -726,86 +751,17 @@ async def list_reference_gaps(
             detail="Загрузите больше источников (минимум 3) для анализа пробелов",
         )
 
-    user_paper_ids = [s.paper_id for s in user_sources]
-
-    # Step 1+2: two-step gap query (aggregates + citing paper_ids separately)
-    raw_gaps, citing_by_hash = paper_store.get_reference_gaps(
-        paper_ids=user_paper_ids,
+    scored_gaps = compute_scored_gaps(
+        paper_store=paper_store,
+        library=library,
+        project_store=project_store,
         user_id=user.user_id,
         limit=200,
     )
-
-    if not raw_gaps:
+    if not scored_gaps:
         return ReferenceGapsResponse(gaps=[], total=0)
 
-    # Build paper_id → citekey map for translation to section assignments
-    all_user_paper_id_to_citekey: dict[str, str] = library.get_citekey_map(
-        user_paper_ids, user.user_id
-    )
-
-    # All citing paper_ids (union across all gaps)
-    all_citing_ids = list({pid for pids in citing_by_hash.values() for pid in pids})
-
-    # Citing paper citekeys (subset of user papers)
-    all_citing_citekeys = [
-        all_user_paper_id_to_citekey[pid]
-        for pid in all_citing_ids
-        if pid in all_user_paper_id_to_citekey
-    ]
-
-    # Section assignments for citing papers
-    citekey_sections: dict[str, set[str]] = project_store.get_source_sections_bulk(
-        all_citing_citekeys, user.user_id
-    )
-
-    # sections_by_citing_paper: {paper_id: {section, ...}}
-    sections_by_citing_paper: dict[str, set[str]] = {
-        pid: citekey_sections.get(all_user_paper_id_to_citekey[pid], set())
-        for pid in all_citing_ids
-        if pid in all_user_paper_id_to_citekey
-    }
-
-    # Embeddings for citing papers (for semantic factor)
-    citing_embeddings: dict[str, list[float]] = paper_store.get_paper_embeddings_batch(
-        all_citing_ids
-    )
-
-    # Section centroids from ALL user papers (for semantic penalty)
-    # Note: quality_score in user_sources is always NULL until a rating feature is added;
-    # avg_quality defaults to 3.0 (COALESCE) for all papers until then.
-    section_centroids: dict[str, list[float]] = {}
-    all_user_embeddings = paper_store.get_paper_embeddings_batch(user_paper_ids)
-    if all_user_embeddings:
-        section_centroids = project_store.get_section_centroids(
-            user.user_id,
-            all_user_embeddings,
-            all_user_paper_id_to_citekey,
-        )
-
-    # Score gaps with the full formula
-    scored_gaps = score_gaps(
-        raw_gaps,
-        citing_by_hash,
-        citing_embeddings,
-        section_centroids,
-        sections_by_citing_paper,
-    )
-
-    # Recency filter: skip old papers unless high-citation classics
-    current_year = date.today().year
-    max_age_years = 10
-    classic_min_cited_by = 3
-
-    filtered = [
-        g for g in scored_gaps
-        if not (
-            g.get("year")
-            and isinstance(g["year"], int)
-            and (current_year - g["year"]) > max_age_years
-            and g.get("cited_by_count", 0) < classic_min_cited_by
-        )
-    ]
-
+    filtered = apply_recency_filter(scored_gaps)
     gaps = filtered[:10]
 
     gap_responses = [
@@ -830,6 +786,247 @@ async def list_reference_gaps(
     ]
 
     return ReferenceGapsResponse(gaps=gap_responses, total=len(gap_responses))
+
+
+# ---------------------------------------------------------------------------
+# LLM-curated recommendations (#331)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/recommendations", response_model=RecommendationsResponse)
+async def list_recommendations(
+    project_id: str = Query(..., description="Project ID scoping the outline context"),
+    user: UserRecord = Depends(get_current_user),
+) -> RecommendationsResponse:
+    """LLM-curated top-10 library recommendations with rationales.
+
+    Reuses the ``/library/gaps`` scoring pool (`compute_scored_gaps`, top-50,
+    pre-recency), then asks an LLM to pick 10 recommendations with 1–2
+    sentence rationale each, grounded in the project outline and 3–5 loaded
+    source abstracts. Cached by
+    ``(user_id, project_id, library_state_hash, outline_hash, model)``.
+
+    On LLM error, falls back to recency-filtered top-10 with empty rationales
+    and ``detail = "AI недоступен — базовая сортировка"`` (HTTP 200).
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from jinja2.sandbox import SandboxedEnvironment
+
+    from ..recommendations import (
+        CANDIDATE_LIMIT,
+        LOADED_SOURCES_LIMIT,
+        apply_recency_filter,
+        build_prompt_inputs,
+        compute_library_state_hash,
+        compute_outline_hash,
+        compute_scored_gaps,
+        detect_rationale_language,
+        parse_llm_output,
+        select_loaded_sources,
+    )
+    from ..tasks import _create_ai_provider
+
+    paper_store = get_paper_store()
+    library = get_user_library()
+    project_store = get_project_store()
+    user_store = get_user_store()
+
+    # Ownership check
+    project = user_store.get_project_by_id(project_id)
+    if not project or project["user_id"] != user.user_id:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+
+    user_sources = library.get_all_sources(user_id=user.user_id)
+    if len(user_sources) < 3:
+        return RecommendationsResponse(
+            recommendations=[],
+            total=0,
+            detail="Загрузите больше источников (минимум 3) для рекомендаций",
+        )
+
+    outline = project.get("outline") or []
+    project_name = project.get("name", "") or ""
+
+    # Cache probe (resolve active model first — cache key includes it)
+    try:
+        ai, ai_cfg = _create_ai_provider()
+    except Exception as exc:
+        logger.warning("AI provider unavailable for recommendations: %s", exc)
+        ai, ai_cfg = None, None
+    model = getattr(ai_cfg, "model", "") if ai_cfg else ""
+
+    library_state_hash = compute_library_state_hash(user_sources)
+    outline_hash = compute_outline_hash(outline)
+
+    warning: str | None = None
+    if not outline:
+        warning = "Задайте outline проекта для более точных рекомендаций"
+
+    if ai is not None and model:
+        cached = paper_store.get_cached_recommendations(
+            user_id=user.user_id,
+            project_id=project_id,
+            library_state_hash=library_state_hash,
+            outline_hash=outline_hash,
+            model=model,
+        )
+        if cached is not None:
+            try:
+                items = json.loads(cached["json_result"])
+            except json.JSONDecodeError:
+                items = []
+            return RecommendationsResponse(
+                recommendations=[RecommendationItem(**it) for it in items],
+                total=len(items),
+                model=cached["model"],
+                generated_at=cached["created_at"],
+                cached=True,
+                warning=warning,
+            )
+
+    # Build candidate pool (scored, without recency filter)
+    candidates = compute_scored_gaps(
+        paper_store=paper_store,
+        library=library,
+        project_store=project_store,
+        user_id=user.user_id,
+        limit=CANDIDATE_LIMIT,
+    )
+    if not candidates:
+        return RecommendationsResponse(
+            recommendations=[],
+            total=0,
+            detail="Пока нет кандидатов — обработайте больше источников",
+            warning=warning,
+        )
+
+    loaded_sources = select_loaded_sources(
+        paper_store=paper_store,
+        library=library,
+        user_id=user.user_id,
+        max_items=LOADED_SOURCES_LIMIT,
+    )
+    if len(loaded_sources) < 3 and warning is None:
+        warning = "Для лучшего wow-эффекта обработайте больше источников"
+
+    rationale_language = detect_rationale_language(project_name)
+    ctx = build_prompt_inputs(
+        project_name=project_name,
+        outline=outline,
+        loaded_sources=loaded_sources,
+        candidates=candidates,
+        rationale_language=rationale_language,
+    )
+
+    # Fallback branch — no AI: return recency-filtered top-10 with empty rationale
+    if ai is None:
+        filtered = apply_recency_filter(candidates)[:10]
+        items = [
+            {
+                "title": g.get("title", ""),
+                "authors": g.get("authors") or "",
+                "year": g.get("year"),
+                "doi": g.get("doi"),
+                "rationale": "",
+                "score": min(10.0, max(1.0, float(g.get("score", 5.0)))),
+            }
+            for g in filtered
+        ]
+        return RecommendationsResponse(
+            recommendations=[RecommendationItem(**it) for it in items],
+            total=len(items),
+            model="",
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            cached=False,
+            detail="AI недоступен — базовая сортировка",
+            warning=warning,
+        )
+
+    # LLM call
+    env = SandboxedEnvironment()
+    from klemma.config import _SHIPPED_PROMPTS_DIR
+    prompts_dir = _SHIPPED_PROMPTS_DIR
+    try:
+        system_raw = (prompts_dir / "library_recommendations_system.md").read_text(
+            encoding="utf-8"
+        )
+        user_raw = (prompts_dir / "library_recommendations_user.md").read_text(
+            encoding="utf-8"
+        )
+    except FileNotFoundError as exc:
+        logger.error("Recommendation prompt missing: %s", exc)
+        return RecommendationsResponse(
+            recommendations=[],
+            total=0,
+            detail="Шаблон промпта не найден",
+            warning=warning,
+        )
+    system_prompt = env.from_string(system_raw).render(**ctx)
+    user_prompt = env.from_string(user_raw).render(**ctx)
+
+    llm_out = None
+    try:
+        llm_out = ai.call_json(
+            system=system_prompt,
+            user=user_prompt,
+            max_tokens=2048,
+            temperature=0.3,
+            timeout=30,
+        )
+    except Exception as exc:
+        logger.warning("Recommendations LLM call failed: %s", exc)
+
+    parsed = parse_llm_output(llm_out)
+    generated_at = datetime.now(timezone.utc).isoformat()
+
+    if not parsed:
+        filtered = apply_recency_filter(candidates)[:10]
+        items = [
+            {
+                "title": g.get("title", ""),
+                "authors": g.get("authors") or "",
+                "year": g.get("year"),
+                "doi": g.get("doi"),
+                "rationale": "",
+                "score": min(10.0, max(1.0, float(g.get("score", 5.0)))),
+            }
+            for g in filtered
+        ]
+        return RecommendationsResponse(
+            recommendations=[RecommendationItem(**it) for it in items],
+            total=len(items),
+            model=model,
+            generated_at=generated_at,
+            cached=False,
+            detail="AI вернул пустой результат — базовая сортировка",
+            warning=warning,
+        )
+
+    # Cap at 10 per spec
+    items = parsed[:10]
+
+    try:
+        paper_store.save_cached_recommendations(
+            user_id=user.user_id,
+            project_id=project_id,
+            library_state_hash=library_state_hash,
+            outline_hash=outline_hash,
+            model=model,
+            json_result=json.dumps(items, ensure_ascii=False),
+        )
+    except Exception as exc:  # pragma: no cover — non-fatal
+        logger.warning("Recommendations cache write failed: %s", exc)
+
+    return RecommendationsResponse(
+        recommendations=[RecommendationItem(**it) for it in items],
+        total=len(items),
+        model=model,
+        generated_at=generated_at,
+        cached=False,
+        warning=warning,
+    )
 
 
 def _enqueue_processing(paper_id: str, citekey: str, user_id: str, project_id: str | None = None) -> str | None:
@@ -907,3 +1104,11 @@ def _citekey_from_filename(filename: str) -> str:
     if slug:
         key += f"_{slug}"
     return key or "unknown"
+
+
+def _invalidate_user_recommendations(paper_store, user_id: str) -> None:
+    """Fire-and-forget cache invalidation on library mutation. Never raises."""
+    try:
+        paper_store.invalidate_recommendations_cache(user_id)
+    except Exception as exc:  # pragma: no cover — non-fatal
+        logger.debug("Recommendation cache invalidation failed for %s: %s", user_id, exc)

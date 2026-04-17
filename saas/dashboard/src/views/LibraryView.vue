@@ -50,6 +50,22 @@ interface Gap {
 const gaps = ref<Gap[]>([])
 const gapsDetail = ref('')
 
+// LLM-curated recommendations (#332)
+interface Recommendation {
+  title: string
+  authors: string
+  year: number | null
+  doi: string | null
+  rationale: string
+  score: number
+}
+const recommendations = ref<Recommendation[]>([])
+const recommendationsDetail = ref('')
+const recommendationsWarning = ref('')
+const recommendationsModel = ref('')
+const recommendationsGeneratedAt = ref('')
+const recommendationsLoading = ref(false)
+
 // Briefing
 const briefing = ref<Awaited<ReturnType<typeof analyze.briefing>> | null>(null)
 const briefingDismissed = ref(false)
@@ -147,6 +163,39 @@ async function loadGaps() {
     gapsDetail.value = data.detail ?? ''
   } catch {
     gaps.value = []
+  }
+}
+
+async function loadRecommendations() {
+  const pid = projectStore.activeProjectId
+  recommendations.value = []
+  recommendationsDetail.value = ''
+  recommendationsWarning.value = ''
+  recommendationsModel.value = ''
+  recommendationsGeneratedAt.value = ''
+  if (!pid) return
+  recommendationsLoading.value = true
+  try {
+    const data = await library.recommendations(pid)
+    recommendations.value = data.recommendations
+    recommendationsDetail.value = data.detail ?? ''
+    recommendationsWarning.value = data.warning ?? ''
+    recommendationsModel.value = data.model ?? ''
+    recommendationsGeneratedAt.value = data.generated_at ?? ''
+  } catch {
+    // silently fall back to the raw gaps list below
+  } finally {
+    recommendationsLoading.value = false
+  }
+}
+
+function formatGeneratedAt(iso: string): string {
+  if (!iso) return ''
+  try {
+    const d = new Date(iso)
+    return d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+  } catch {
+    return iso
   }
 }
 
@@ -335,6 +384,7 @@ async function loadBriefing() {
 async function loadAll() {
   await loadSources()
   loadGaps()
+  loadRecommendations()
   loadCurationStats()
   loadBriefing()
 }
@@ -517,10 +567,73 @@ watch(sources, () => { loadFragmentCounts() })
       </template>
     </div>
 
-    <!-- Reference gaps -->
+    <!-- LLM-curated recommendations (#332) -->
+    <div
+      v-if="recommendations.length > 0 && sources.length > 0"
+      class="mt-8 animate-in animate-in-delay-3"
+    >
+      <div class="flex items-baseline justify-between mb-2.5">
+        <div class="text-base font-semibold text-[var(--color-ink)] flex items-center gap-2">
+          Рекомендуемая литература
+          <span class="text-sm font-semibold text-[var(--color-ink-muted)] bg-[var(--color-rule-light)] px-2 py-0.5 rounded-full">{{ recommendations.length }}</span>
+        </div>
+        <div class="text-[12px] text-[var(--color-ink-muted)]" v-if="recommendationsModel">
+          Куратор: <code>{{ recommendationsModel }}</code>
+          <span v-if="recommendationsGeneratedAt"> · {{ formatGeneratedAt(recommendationsGeneratedAt) }}</span>
+        </div>
+      </div>
+
+      <div
+        v-if="recommendationsDetail"
+        class="mb-3 text-[13px] text-[var(--color-ink-muted)] bg-[var(--color-rule-light)] border-l-2 border-[var(--color-accent)] px-3 py-2 rounded-r"
+      >
+        {{ recommendationsDetail }}
+      </div>
+      <div
+        v-if="recommendationsWarning"
+        class="mb-3 text-[13px] text-[var(--color-ink-muted)]"
+      >
+        {{ recommendationsWarning }}
+      </div>
+
+      <ol class="rec-list">
+        <li v-for="(rec, i) in recommendations" :key="i" class="rec-item">
+          <div class="rec-head">
+            <span class="rec-rank">{{ i + 1 }}</span>
+            <div class="rec-meta">
+              <div class="rec-title">{{ rec.title }}</div>
+              <div class="rec-authors">
+                {{ shortAuthors(rec.authors || null) }}<span v-if="rec.year"> · {{ rec.year }}</span>
+                <a
+                  v-if="rec.doi"
+                  :href="`https://doi.org/${rec.doi}`"
+                  target="_blank"
+                  rel="noopener"
+                  class="rec-doi"
+                >DOI</a>
+              </div>
+            </div>
+            <span class="rec-score" :title="`Оценка релевантности: ${rec.score}/10`">
+              {{ rec.score.toFixed(1) }}
+            </span>
+          </div>
+          <p v-if="rec.rationale" class="rec-rationale">{{ rec.rationale }}</p>
+        </li>
+      </ol>
+    </div>
+
+    <!-- AI-недоступен / нет outline — показываем как info-блок вне списка -->
+    <div
+      v-else-if="(recommendationsDetail || recommendationsWarning) && sources.length >= 3"
+      class="mt-8 text-[13px] text-[var(--color-ink-muted)]"
+    >
+      {{ recommendationsDetail || recommendationsWarning }}
+    </div>
+
+    <!-- Raw gap table: expert view / fallback -->
     <div v-if="gaps.length > 0 && sources.length > 0" class="mt-8 animate-in animate-in-delay-3">
       <div class="text-base font-semibold text-[var(--color-ink)] mb-2.5 flex items-center gap-2">
-        Рекомендуемая литература <span class="text-sm font-semibold text-[var(--color-ink-muted)] bg-[var(--color-rule-light)] px-2 py-0.5 rounded-full">{{ gaps.length }}</span>
+        Подробный анализ ссылок <span class="text-sm font-semibold text-[var(--color-ink-muted)] bg-[var(--color-rule-light)] px-2 py-0.5 rounded-full">{{ gaps.length }}</span>
       </div>
       <table class="gaps-table">
         <thead>
@@ -645,6 +758,63 @@ watch(sources, () => { loadFragmentCounts() })
 .curation-done { background: var(--color-ok-bg); color: var(--color-ok); border: 1px solid #a7f3d0; }
 .curation-partial { background: var(--color-warn-bg); color: var(--color-warn); border: 1px solid #fcd34d; }
 .curation-none { background: var(--color-rule-light); color: var(--color-ink-muted); border: 1px solid var(--color-rule); }
+
+/* LLM-curated recommendations */
+.rec-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.rec-item {
+  border: 1px solid var(--color-rule);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--color-surface, #fff);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.rec-item:hover {
+  border-color: var(--color-accent);
+  box-shadow: 0 1px 6px -3px var(--color-accent);
+}
+.rec-head { display: flex; align-items: baseline; gap: 12px; }
+.rec-rank {
+  flex: 0 0 auto;
+  font-family: monospace;
+  font-size: 13px;
+  color: var(--color-ink-muted);
+  min-width: 24px;
+}
+.rec-meta { flex: 1 1 auto; min-width: 0; }
+.rec-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-ink);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.rec-authors {
+  font-size: 13px;
+  color: var(--color-ink-muted);
+  margin-top: 2px;
+}
+.rec-doi {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--color-accent);
+  text-decoration: none;
+}
+.rec-doi:hover { text-decoration: underline; }
+.rec-score {
+  flex: 0 0 auto;
+  font-family: monospace;
+  font-size: 13px;
+  color: var(--color-ink-muted);
+  padding: 2px 8px;
+  background: var(--color-rule-light);
+  border-radius: 12px;
+}
+.rec-rationale {
+  margin: 8px 0 0 36px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-ink-2);
+}
 
 /* Gaps table */
 .gaps-table { width: 100%; border-collapse: collapse; }

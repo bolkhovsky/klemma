@@ -106,6 +106,19 @@ CREATE TABLE IF NOT EXISTS citation_graph (
     UNIQUE(citing_paper_id, cited_title_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_citations_citing ON citation_graph(citing_paper_id);
+
+CREATE TABLE IF NOT EXISTS recommendations_cache (
+    user_id             TEXT NOT NULL,
+    project_id          TEXT NOT NULL,
+    library_state_hash  TEXT NOT NULL,
+    outline_hash        TEXT NOT NULL,
+    model               TEXT NOT NULL,
+    json_result         TEXT NOT NULL,
+    created_at          TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, project_id, library_state_hash, outline_hash, model)
+);
+CREATE INDEX IF NOT EXISTS idx_rec_cache_user_project
+    ON recommendations_cache(user_id, project_id);
 """
 
 
@@ -165,6 +178,27 @@ class LocalPaperStore:
             conn.execute(
                 "ALTER TABLE fragments ADD COLUMN verbatim INTEGER NOT NULL DEFAULT 0"
             )
+
+        existing_tables = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "recommendations_cache" not in existing_tables:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS recommendations_cache (
+                    user_id             TEXT NOT NULL,
+                    project_id          TEXT NOT NULL,
+                    library_state_hash  TEXT NOT NULL,
+                    outline_hash        TEXT NOT NULL,
+                    model               TEXT NOT NULL,
+                    json_result         TEXT NOT NULL,
+                    created_at          TEXT DEFAULT (datetime('now')),
+                    PRIMARY KEY (user_id, project_id, library_state_hash, outline_hash, model)
+                );
+                CREATE INDEX IF NOT EXISTS idx_rec_cache_user_project
+                    ON recommendations_cache(user_id, project_id);
+            """)
 
     # ------------------------------------------------------------------ #
     # Paper registry                                                       #
@@ -810,6 +844,78 @@ class LocalPaperStore:
             }
             for row in rows
         ]
+
+    # ---------------------------------------------------------------- #
+    # Recommendations cache (LLM-curated library recommendations)       #
+    # ---------------------------------------------------------------- #
+
+    def get_cached_recommendations(
+        self,
+        *,
+        user_id: str,
+        project_id: str,
+        library_state_hash: str,
+        outline_hash: str,
+        model: str,
+    ) -> Optional[dict]:
+        """Return the cached recommendations payload or None on miss.
+
+        Payload shape: {"json_result": str, "created_at": str, "model": str}.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT json_result, created_at, model
+                   FROM recommendations_cache
+                   WHERE user_id = ? AND project_id = ?
+                     AND library_state_hash = ? AND outline_hash = ?
+                     AND model = ?""",
+                (user_id, project_id, library_state_hash, outline_hash, model),
+            ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def save_cached_recommendations(
+        self,
+        *,
+        user_id: str,
+        project_id: str,
+        library_state_hash: str,
+        outline_hash: str,
+        model: str,
+        json_result: str,
+    ) -> None:
+        """Upsert a cached recommendations entry."""
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO recommendations_cache
+                   (user_id, project_id, library_state_hash, outline_hash,
+                    model, json_result, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+                (user_id, project_id, library_state_hash, outline_hash,
+                 model, json_result),
+            )
+
+    def invalidate_recommendations_cache(
+        self, user_id: str, project_id: Optional[str] = None
+    ) -> int:
+        """Drop cached recommendations for a user (optionally scoped by project).
+
+        Called when the library changes (upload/delete) or when a project's
+        outline changes. Returns the number of rows removed.
+        """
+        with self._conn() as conn:
+            if project_id is None:
+                cur = conn.execute(
+                    "DELETE FROM recommendations_cache WHERE user_id = ?",
+                    (user_id,),
+                )
+            else:
+                cur = conn.execute(
+                    "DELETE FROM recommendations_cache WHERE user_id = ? AND project_id = ?",
+                    (user_id, project_id),
+                )
+        return cur.rowcount
 
 
 # ------------------------------------------------------------------ #
