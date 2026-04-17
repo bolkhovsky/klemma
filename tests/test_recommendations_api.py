@@ -77,31 +77,46 @@ def _create_project(client, token, name="Sea-ice ML") -> str:
     return r.json()["project_id"]
 
 
-def _seed_three_sources(client, token, stores):
-    """Add 3 completed sources with bibliographies for gap analysis."""
+def _seed_three_sources(client, token, stores, project_id=None,
+                         citekey_prefix="src", references=None):
+    """Add 3 completed sources with bibliographies for gap analysis.
+
+    If ``project_id`` is provided, sources are attached to that project so
+    recommendations queries can be project-scoped.
+    ``references`` defaults to a sea-ice-forecasting reference set; pass a
+    list to seed a different topic (used for project-isolation tests).
+    """
     _, paper_store, user_library, _, _ = stores
 
     # Get user_id from token
     me = client.get("/auth/me", headers=_headers(token))
     user_id = me.json()["user_id"]
 
-    for i in range(1, 4):
-        citekey = f"src{i}"
-        paper_id = paper_store.register_paper(
-            title=f"Paper {i}", authors=f"Author {i}", year=2023,
-            abstract=f"Abstract for paper {i} on sea-ice ML forecasting.",
-            pdf_hash=f"hash{i}",
-        )
-        user_library.add_source(paper_id, citekey, status="completed", user_id=user_id)
+    default_refs = [
+        {"title": "U-Net: convolutional networks", "authors": "Ronneberger",
+         "year": 2015, "citation_intent": "method"},
+        {"title": "ERA5 reanalysis", "authors": "Hersbach", "year": 2020,
+         "citation_intent": "uses_data"},
+    ]
+    refs = references if references is not None else default_refs
 
-        # Seed citation_graph with cross-cited gaps
+    for i in range(1, 4):
+        citekey = f"{citekey_prefix}{i}"
+        paper_id = paper_store.register_paper(
+            title=f"Paper {citekey_prefix} {i}", authors=f"Author {i}", year=2023,
+            abstract=f"Abstract for {citekey_prefix} {i}.",
+            pdf_hash=f"hash_{citekey_prefix}_{i}",
+        )
+        user_library.add_source(
+            paper_id, citekey, status="completed",
+            user_id=user_id, project_id=project_id,
+        )
+
+        # Per-paper cross-cited reference + the unique one
         paper_store.save_citation_links(paper_id, [
-            {"title": "U-Net: convolutional networks", "authors": "Ronneberger",
-             "year": 2015, "citation_intent": "method"},
-            {"title": "ERA5 reanalysis", "authors": "Hersbach", "year": 2020,
-             "citation_intent": "uses_data"},
-            {"title": f"Unique ref for paper {i}", "authors": "X", "year": 2022,
-             "citation_intent": "background"},
+            *refs,
+            {"title": f"Unique ref for {citekey_prefix} paper {i}",
+             "authors": "X", "year": 2022, "citation_intent": "background"},
         ])
 
     return user_id
@@ -149,6 +164,59 @@ def test_recommendations_requires_three_sources(client, stores):
     data = resp.json()
     assert data["recommendations"] == []
     assert "минимум 3" in data["detail"]
+
+
+def test_recommendations_project_scoping_isolates_sources(client, stores):
+    """Regression (PR #334 review): recommendations must be project-scoped.
+
+    If a user has two projects, sources attached to project B must NOT
+    influence recommendations for project A. Without the project_id filter
+    on ``library.get_all_sources``, this would fail silently.
+    """
+    token = _register(client)
+    pid_a = _create_project(client, token, name="Project A — sea-ice")
+    pid_b = _create_project(client, token, name="Project B — CRISPR")
+
+    # Project A: sea-ice references cross-cited 3 times → strong A-specific gaps
+    _seed_three_sources(
+        client, token, stores, project_id=pid_a, citekey_prefix="iceA",
+        references=[
+            {"title": "U-Net: convolutional networks", "authors": "Ronneberger",
+             "year": 2015, "citation_intent": "method"},
+        ],
+    )
+    # Project B: biology references — should never appear in A's recommendations
+    _seed_three_sources(
+        client, token, stores, project_id=pid_b, citekey_prefix="bioB",
+        references=[
+            {"title": "CRISPR genome editing review", "authors": "Doudna",
+             "year": 2014, "citation_intent": "method"},
+        ],
+    )
+
+    # Capture what the LLM sees for project A
+    captured_a: dict = {}
+    class _CaptureAI:
+        def call_json(self, system, user, **_kw):
+            captured_a["user_prompt"] = user
+            return {"recommendations": [
+                {"title": "U-Net: convolutional networks", "rationale": "r", "score": 9},
+            ]}
+
+    with patch("klemma.api.tasks._create_ai_provider",
+               return_value=(_CaptureAI(), SimpleNamespace(model="stub"))):
+        resp = client.get(
+            f"/library/recommendations?project_id={pid_a}",
+            headers=_headers(token),
+        )
+    assert resp.status_code == 200
+    assert captured_a["user_prompt"]
+    # Project A prompt must NOT mention project B's sources or their references
+    assert "bioB" not in captured_a["user_prompt"]
+    assert "CRISPR" not in captured_a["user_prompt"]
+    # And must include at least one of A's sources/references
+    assert ("iceA" in captured_a["user_prompt"]
+            or "U-Net" in captured_a["user_prompt"])
 
 
 def test_recommendations_requires_project_ownership(client, stores):

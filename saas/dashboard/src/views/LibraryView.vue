@@ -268,6 +268,9 @@ async function deleteSource(citekey: string) {
     await library.remove(citekey)
     deleteConfirm.value = null
     await loadSources()
+    // Library mutation invalidates the recommendations cache server-side;
+    // refresh the curated list so the user sees the new state immediately.
+    loadRecommendations()
   } catch {
     // silently fail
   }
@@ -296,6 +299,10 @@ async function pollJob(citekey: string, jobId: string) {
         await loadSources()
         briefingDismissed.value = false
         loadBriefing()
+        // Processing populates citation_graph + embeddings — refresh
+        // recommendations so the user sees the wow list without a
+        // manual page reload.
+        loadRecommendations()
       }
     } catch {
       clearInterval(interval)
@@ -345,6 +352,9 @@ async function handleUpload(files: FileList | null) {
   if (uploaded > 0) {
     uploadSuccess.value = uploadSuccess.value || `Загружено: ${uploaded} файл(ов)`
     await loadSources()
+    // Upload invalidates the recommendations cache; refresh immediately
+    // so the 3+ sources threshold triggers the curated list.
+    loadRecommendations()
     if (fileArray.length === 1 && lastUploadedCitekey && route.params.projectId) {
       // Pass job_id so SourceView can resume polling without a manual click
       const query = lastJobId ? { job_id: lastJobId } : {}

@@ -54,6 +54,7 @@ def compute_scored_gaps(
     library,
     project_store,
     user_id: str,
+    project_id: Optional[str] = None,
     limit: int = CANDIDATE_LIMIT,
 ) -> list[dict]:
     """Score reference gaps for a user without applying the recency filter.
@@ -62,9 +63,16 @@ def compute_scored_gaps(
     stops before recency filtering so two different endpoints can consume the
     same scored pool with their own downstream policy.
 
+    When ``project_id`` is provided, scopes the source pool to that project
+    (plus unassigned sources, per ``LocalUserLibrary.get_all_sources``
+    semantics). ``project_id=None`` preserves the old user-wide behaviour
+    for ``GET /library/gaps``.
+
     Returns an empty list if the user has no sources or no gaps are found.
     """
-    user_sources = library.get_all_sources(user_id=user_id)
+    user_sources = library.get_all_sources(
+        user_id=user_id, project_id=project_id
+    )
     if not user_sources:
         return []
 
@@ -152,9 +160,13 @@ def select_loaded_sources(
     paper_store,
     library,
     user_id: str,
+    project_id: Optional[str] = None,
     max_items: int = LOADED_SOURCES_LIMIT,
 ) -> list[dict]:
     """Pick up to ``max_items`` completed sources for the LLM prompt context.
+
+    When ``project_id`` is provided, only sources attached to that project
+    (plus unassigned sources) are considered.
 
     Strategy:
     1. ``completed`` status only
@@ -167,7 +179,9 @@ def select_loaded_sources(
     6. return first ``max_items``
     """
     try:
-        all_sources = library.get_all_sources(user_id=user_id)
+        all_sources = library.get_all_sources(
+            user_id=user_id, project_id=project_id
+        )
     except Exception as exc:  # pragma: no cover — defensive
         logger.warning("select_loaded_sources: library.get_all_sources failed: %s", exc)
         return []

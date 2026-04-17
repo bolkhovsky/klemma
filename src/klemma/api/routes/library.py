@@ -839,7 +839,13 @@ async def list_recommendations(
     if not project or project["user_id"] != user.user_id:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
 
-    user_sources = library.get_all_sources(user_id=user.user_id)
+    # Project-scoped source set (attached to this project OR unassigned).
+    # Matches LocalUserLibrary.get_all_sources() project_id semantics so that
+    # users with multiple projects don't see project A's sources influence
+    # project B's recommendations.
+    user_sources = library.get_all_sources(
+        user_id=user.user_id, project_id=project_id
+    )
     if len(user_sources) < 3:
         return RecommendationsResponse(
             recommendations=[],
@@ -887,12 +893,13 @@ async def list_recommendations(
                 warning=warning,
             )
 
-    # Build candidate pool (scored, without recency filter)
+    # Build candidate pool (scored, without recency filter), scoped by project
     candidates = compute_scored_gaps(
         paper_store=paper_store,
         library=library,
         project_store=project_store,
         user_id=user.user_id,
+        project_id=project_id,
         limit=CANDIDATE_LIMIT,
     )
     if not candidates:
@@ -907,6 +914,7 @@ async def list_recommendations(
         paper_store=paper_store,
         library=library,
         user_id=user.user_id,
+        project_id=project_id,
         max_items=LOADED_SOURCES_LIMIT,
     )
     if len(loaded_sources) < 3 and warning is None:

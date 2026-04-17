@@ -394,6 +394,45 @@ def test_compute_scored_gaps_empty_user_sources_returns_empty():
     paper_store.get_reference_gaps.assert_not_called()
 
 
+def test_compute_scored_gaps_forwards_project_id_to_library():
+    """Regression: project scoping must reach library.get_all_sources.
+
+    Without this, recommendations for project A would include sources
+    attached to project B, breaking the per-project curated contract.
+    """
+    paper_store = MagicMock()
+    paper_store.get_reference_gaps.return_value = ([], {})
+    paper_store.get_paper_embeddings_batch.return_value = {}
+
+    library = MagicMock()
+    library.get_all_sources.return_value = []
+    library.get_citekey_map.return_value = {}
+
+    project_store = MagicMock()
+
+    compute_scored_gaps(
+        paper_store=paper_store, library=library, project_store=project_store,
+        user_id="u1", project_id="PROJECT-A", limit=50,
+    )
+    library.get_all_sources.assert_called_once_with(
+        user_id="u1", project_id="PROJECT-A"
+    )
+
+
+def test_select_loaded_sources_forwards_project_id_to_library():
+    paper_store = MagicMock()
+    library = MagicMock()
+    library.get_all_sources.return_value = []
+
+    select_loaded_sources(
+        paper_store=paper_store, library=library,
+        user_id="u1", project_id="PROJECT-A", max_items=5,
+    )
+    library.get_all_sources.assert_called_once_with(
+        user_id="u1", project_id="PROJECT-A"
+    )
+
+
 def test_compute_scored_gaps_empty_raw_gaps_returns_empty():
     paper_store = MagicMock()
     paper_store.get_reference_gaps.return_value = ([], {})
