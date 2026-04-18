@@ -364,6 +364,60 @@ def test_recommendations_fallback_on_ai_error(client, stores):
         assert item["rationale"] == ""
 
 
+def test_recommendations_429_when_token_quota_exhausted(client, stores):
+    """Token gate: depleted users must not reach the LLM."""
+    user_store, _, _, _, _ = stores
+    token = _register(client)
+    pid = _create_project(client, token)
+    _seed_three_sources(client, token, stores)
+
+    me = client.get("/auth/me", headers=_headers(token))
+    user_id = me.json()["user_id"]
+    # New users auto-grant KLEMMA_INITIAL_TOKEN_GRANT (1M default). Force-deplete
+    # by recording a matching usage event so remaining = 0.
+    balance = user_store.get_token_balance(user_id)
+    user_store.record_usage(
+        user_id=user_id, operation="test_drain", model="test",
+        input_tokens=balance["remaining"], output_tokens=0,
+    )
+
+    # Even with AI stubbed to succeed, the endpoint must 429 before calling it
+    ai_should_not_be_called = MagicMock()
+    with patch("klemma.api.tasks._create_ai_provider",
+               return_value=(ai_should_not_be_called, SimpleNamespace(model="stub"))):
+        resp = client.get(
+            f"/library/recommendations?project_id={pid}", headers=_headers(token)
+        )
+
+    assert resp.status_code == 429
+    ai_should_not_be_called.call_json.assert_not_called()
+
+
+def test_recommendations_records_usage_on_success(client, stores):
+    """Happy-path call must record token usage so the quota decrements."""
+    user_store, _, _, _, _ = stores
+    token = _register(client)
+    pid = _create_project(client, token)
+    _seed_three_sources(client, token, stores)
+
+    me = client.get("/auth/me", headers=_headers(token))
+    user_id = me.json()["user_id"]
+    before = user_store.get_token_balance(user_id)["total_used"]
+
+    payload = {"recommendations": [
+        {"title": "U-Net", "authors": "Ronneberger", "rationale": "r", "score": 8},
+    ]}
+    with patch("klemma.api.tasks._create_ai_provider",
+               return_value=_stub_provider(payload)):
+        resp = client.get(
+            f"/library/recommendations?project_id={pid}", headers=_headers(token)
+        )
+
+    assert resp.status_code == 200
+    after = user_store.get_token_balance(user_id)["total_used"]
+    assert after > before, "record_usage should have incremented total_used"
+
+
 def test_recommendations_fallback_on_invalid_json(client, stores):
     token = _register(client)
     pid = _create_project(client, token)

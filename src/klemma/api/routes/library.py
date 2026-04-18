@@ -839,6 +839,16 @@ async def list_recommendations(
     if not project or project["user_id"] != user.user_id:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
 
+    # Token quota gate — same guard `process_source` uses. Without this,
+    # a user can call /library/recommendations repeatedly to deplete the
+    # Anthropic bill while bypassing the per-user KLEMMA_INITIAL_TOKEN_GRANT
+    # budget that upload/draft paths respect.
+    if not user_store.check_token_limit(user.user_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Лимит токенов исчерпан — обратитесь к администратору",
+        )
+
     # Project-scoped source set (attached to this project OR unassigned).
     # Matches LocalUserLibrary.get_all_sources() project_id semantics so that
     # users with multiple projects don't see project A's sources influence
@@ -992,6 +1002,26 @@ async def list_recommendations(
 
     parsed = parse_llm_output(llm_out)
     generated_at = datetime.now(timezone.utc).isoformat()
+
+    # Token usage bookkeeping. `call_json` does not return per-call token
+    # counts, so we approximate from string lengths (~4 chars/token for
+    # English+Russian mix). Only recorded on a successful parse — empty /
+    # errored calls don't charge the user. Accuracy ±20% is good enough
+    # for a 1M-token budget. Precise metering is a follow-up (#M2 refactor
+    # of ai_litellm.call_json to return AICallResult).
+    if parsed and llm_out is not None:
+        try:
+            approx_input = (len(system_prompt) + len(user_prompt)) // 4
+            approx_output = len(json.dumps(llm_out, ensure_ascii=False)) // 4
+            user_store.record_usage(
+                user_id=user.user_id,
+                operation="library_recommendations",
+                model=model,
+                input_tokens=approx_input,
+                output_tokens=approx_output,
+            )
+        except Exception as exc:  # pragma: no cover — non-fatal
+            logger.warning("record_usage failed for recommendations: %s", exc)
 
     if not parsed:
         filtered = apply_recency_filter(candidates)[:10]
