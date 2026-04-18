@@ -393,7 +393,6 @@ async function loadBriefing() {
 
 async function loadAll() {
   await loadSources()
-  loadGaps()
   loadRecommendations()
   loadCurationStats()
   loadBriefing()
@@ -640,83 +639,11 @@ watch(sources, () => { loadFragmentCounts() })
       {{ recommendationsDetail || recommendationsWarning }}
     </div>
 
-    <!-- Raw gap table: expert view / fallback -->
-    <div v-if="gaps.length > 0 && sources.length > 0" class="mt-8 animate-in animate-in-delay-3">
-      <div class="text-base font-semibold text-[var(--color-ink)] mb-2.5 flex items-center gap-2">
-        Подробный анализ ссылок <span class="text-sm font-semibold text-[var(--color-ink-muted)] bg-[var(--color-rule-light)] px-2 py-0.5 rounded-full">{{ gaps.length }}</span>
-      </div>
-      <table class="gaps-table">
-        <thead>
-          <tr>
-            <th>Название</th>
-            <th>Авторы</th>
-            <th>Год</th>
-            <th>DOI</th>
-            <th>Роль</th>
-            <th>Для разделов</th>
-            <th style="text-align: right">Важность</th>
-            <th style="text-align: center">Ссылок</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="(gap, i) in gaps"
-            :key="i"
-            :class="{ 'gap-row-muted': gap.semantic_factor != null && gap.semantic_factor < 0.7 }"
-          >
-            <td><span class="gap-title">{{ gap.title }}</span></td>
-            <td class="text-[13px] text-[var(--color-ink-muted)]">{{ shortAuthors(gap.authors) }}</td>
-            <td class="font-mono text-[14px]">{{ gap.year || '—' }}</td>
-            <td>
-              <a
-                v-if="gap.doi"
-                :href="`https://doi.org/${gap.doi}`"
-                target="_blank"
-                rel="noopener"
-                class="gap-doi"
-                :title="gap.doi"
-              >{{ gap.doi.length > 20 ? gap.doi.slice(0, 18) + '...' : gap.doi }}</a>
-              <span v-else class="text-[var(--color-ink-muted)]">—</span>
-            </td>
-            <td>
-              <div class="flex flex-wrap gap-1">
-                <span
-                  v-if="gap.top_intent"
-                  class="intent-chip"
-                  :class="intentColor(gap.top_intent)"
-                  :title="gap.intents?.length ? 'Намерения: ' + gap.intents.join(', ') : gap.top_intent"
-                >{{ intentLabel(gap.top_intent) }}</span>
-                <span v-else class="text-[var(--color-ink-muted)]">—</span>
-              </div>
-            </td>
-            <td>
-              <div v-if="gap.sections_served && gap.sections_served.length" class="flex flex-wrap gap-1">
-                <span
-                  v-for="s in gap.sections_served.slice(0, 3)"
-                  :key="s.section"
-                  class="section-chip"
-                  :title="gap.sections_served.map(x => x.section + ' (' + x.count + ')').join(', ')"
-                >{{ s.section }} · {{ s.count }}</span>
-                <span
-                  v-if="gap.sections_served.length > 3"
-                  class="text-[var(--color-ink-muted)] text-[12px]"
-                  :title="gap.sections_served.slice(3).map(x => x.section + ' (' + x.count + ')').join(', ')"
-                >+{{ gap.sections_served.length - 3 }}</span>
-              </div>
-              <span v-else class="text-[var(--color-ink-muted)]">—</span>
-            </td>
-            <td class="gap-score" :title="formatScoreTooltip(gap)">
-              {{ formatScore(gap) }}
-            </td>
-            <td class="gap-refs">{{ gap.cited_by_count }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div v-else-if="gapsDetail" class="mt-8">
-      <p class="text-sm text-[var(--color-ink-muted)]">{{ gapsDetail }}</p>
-    </div>
+    <!-- Raw `/library/gaps` table removed (#334 follow-up, 2026-04-18):
+         was duplicating the curated list above, especially visible in the
+         AI-unavailable fallback where rationale is empty and the two
+         blocks showed identical content. The endpoint still exists for
+         expert/debug consumers. -->
   </AppLayout>
 </template>
 
