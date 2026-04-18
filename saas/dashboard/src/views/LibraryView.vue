@@ -4,6 +4,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { library, process, curation, analyze, ApiError } from '@/api/client'
 import AppLayout from '@/components/AppLayout.vue'
 import { useProjectStore } from '@/stores/project'
+import { humanizeModel } from '@/utils/model'
 
 const route = useRoute()
 const router = useRouter()
@@ -587,7 +588,7 @@ watch(sources, () => { loadFragmentCounts() })
           <span class="text-sm font-semibold text-[var(--color-ink-muted)] bg-[var(--color-rule-light)] px-2 py-0.5 rounded-full">{{ recommendations.length }}</span>
         </div>
         <div class="text-[12px] text-[var(--color-ink-muted)]" v-if="recommendationsModel">
-          Куратор: <code>{{ recommendationsModel }}</code>
+          Куратор: <code :title="recommendationsModel">{{ humanizeModel(recommendationsModel) }}</code>
           <span v-if="recommendationsGeneratedAt"> · {{ formatGeneratedAt(recommendationsGeneratedAt) }}</span>
         </div>
       </div>
