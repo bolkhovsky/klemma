@@ -171,16 +171,24 @@ def _extract_abstract_from_text(text: str) -> str:
     return ""
 
 
-def _extract_doi_from_text(text: str) -> str:
-    """Extract the first DOI from PDF text (first 3000 chars).
+def _extract_doi_from_text(text: str, max_chars: Optional[int] = 3000) -> str:
+    """Extract the first DOI from PDF text.
+
+    By default searches the first 3000 chars (cheap, matches the window
+    used by ``metadata-preview`` endpoint where PDF text is already
+    truncated). Callers that have the full raw_text (e.g. ``process_source``
+    after extraction) can pass ``max_chars=None`` to search the entire
+    document — MDPI/Elsevier/Nature PDFs often put the DOI in a page footer
+    beyond the first 3000 chars.
 
     Filters obvious sentinel values (10.0000/*, 10.1000/*).
     Returns empty string for empty input — never raises.
     """
     if not text:
         return ""
+    search_text = text if max_chars is None else text[:max_chars]
     try:
-        m = re.search(r"\b(10\.\d{4,9}/[-._;()/:\w]+)\b", text[:3000])
+        m = re.search(r"\b(10\.\d{4,9}/[-._;()/:\w]+)\b", search_text)
         if m:
             doi = m.group(1).rstrip(".")
             # Reject known sentinel patterns

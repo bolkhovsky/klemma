@@ -444,6 +444,29 @@ class TestExtractDoiFromText:
 
         assert _extract_doi_from_text("This text has no DOI at all.") == ""
 
+    def test_default_max_chars_limits_search_window(self):
+        """Default max_chars=3000 — DOI past that window is not found."""
+        from klemma.literature.metadata import _extract_doi_from_text
+
+        text = "prefix " * 1000 + " DOI: 10.3390/rs9121305 footer"
+        assert len(text) > 3000
+        assert _extract_doi_from_text(text) == ""
+
+    def test_max_chars_none_searches_full_text(self):
+        """max_chars=None — search entire document, finds DOI in page-2 footer."""
+        from klemma.literature.metadata import _extract_doi_from_text
+
+        text = "prefix " * 1000 + " DOI: 10.3390/rs9121305 footer"
+        assert len(text) > 3000
+        assert _extract_doi_from_text(text, max_chars=None) == "10.3390/rs9121305"
+
+    def test_explicit_max_chars_expands_window(self):
+        """Passing larger max_chars also works without unlimiting."""
+        from klemma.literature.metadata import _extract_doi_from_text
+
+        text = "prefix " * 1000 + " DOI: 10.3390/rs9121305 footer"
+        assert _extract_doi_from_text(text, max_chars=10000) == "10.3390/rs9121305"
+
 
 # ---------------------------------------------------------------------------
 # lookup_crossref_by_doi

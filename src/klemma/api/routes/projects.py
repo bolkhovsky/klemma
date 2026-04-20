@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from klemma.models import UserRecord
 
 from ..auth.deps import get_current_user, get_user_store
-from ..deps import get_project_store, get_user_library
+from ..deps import get_paper_store, get_project_store, get_user_library
 
 try:
     from redis import Redis
@@ -192,6 +192,8 @@ async def update_project_outline(
     sections = [{"id": s.id, "name": s.name} for s in body.sections]
     store.update_project_outline(project_id, sections)
     project["outline"] = sections
+    from ..recommendations import invalidate_for_user
+    invalidate_for_user(get_paper_store(), user.user_id, project_id)
     return ProjectResponse(**project)
 
 

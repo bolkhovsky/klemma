@@ -11,6 +11,12 @@ services:
       - KLEMMA_JWT_SECRET=${KLEMMA_JWT_SECRET}
       - KLEMMA_CORS_ORIGINS=${KLEMMA_CORS_ORIGINS:-}
       - REDIS_URL=redis://redis:6379
+      # AI credentials — api process makes LLM calls directly in the
+      # GET /library/recommendations path (curated ranker). Was previously
+      # worker-only when all AI work ran as rq jobs (#332).
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - KLEMMA_AI_MODEL=${KLEMMA_AI_MODEL:-anthropic/claude-sonnet-4-20250514}
       # Embeddings — validated at startup by _validate_embeddings_config().
       # API process doesn't embed directly but must pass the same config check
       # as the worker so misconfigurations are caught before any job runs.

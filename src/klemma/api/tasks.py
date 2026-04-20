@@ -264,8 +264,6 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         return {"status": "error", "detail": f"PDF extraction failed: {exc}"}
 
     # Extract abstract directly from PDF text (no network call).
-    # CrossRef enrichment (authors/year/doi) is now an explicit user action
-    # on the SourceView page — it's no longer in the critical upload path.
     try:
         from klemma.literature.metadata import _extract_abstract_from_text
 
@@ -275,6 +273,34 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             logger.info("Extracted abstract from PDF text for %s (%d chars)", citekey, len(abstract))
     except Exception as exc:
         logger.warning("Abstract extraction failed for %s (non-fatal): %s", citekey, exc)
+
+    # Auto-enrich metadata (title/authors/year/doi) via DOI lookup on CrossRef.
+    # Searches the full raw_text (not the 3000-char window used by the
+    # metadata-preview endpoint) so that MDPI/Elsevier/Nature PDFs with the
+    # DOI in a page-2 footer still resolve. Non-fatal: if CrossRef is slow or
+    # unreachable, the paper stays with filename-based title and the user can
+    # still enrich manually via MetadataEnrichDialog.
+    try:
+        from klemma.literature.metadata import (
+            _extract_doi_from_text,
+            lookup_crossref_by_doi,
+        )
+        doi = _extract_doi_from_text(pdf_text, max_chars=None)
+        if doi:
+            meta = lookup_crossref_by_doi(doi, timeout=5)
+            if meta:
+                update_kwargs = {
+                    k: meta[k] for k in ("title", "authors", "year", "doi")
+                    if meta.get(k)
+                }
+                if update_kwargs:
+                    paper_store.update_paper_metadata(paper_id, **update_kwargs)
+                    logger.info(
+                        "CrossRef-enriched metadata for %s via %s: %s",
+                        citekey, doi, list(update_kwargs.keys()),
+                    )
+    except Exception as exc:
+        logger.warning("Auto-metadata enrichment failed for %s (non-fatal): %s", citekey, exc)
 
     # Check AI config
     if not os.getenv("ANTHROPIC_API_KEY") and not os.getenv("OPENAI_API_KEY"):

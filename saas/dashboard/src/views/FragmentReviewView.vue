@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { curation, library, process, userProjects, type OutlineSection } from '../api/client'
+import { humanizeModel } from '../utils/model'
 
 const route = useRoute()
 const router = useRouter()
@@ -634,7 +635,7 @@ onUnmounted(() => {
                     @blur="saveSuggested(f.fragment_id)"
                   />
                   <div class="flex items-center gap-2 mt-1 text-[12px] text-[#6b6b8a]">
-                    <span v-if="sentenceModels[f.fragment_id]">модель: {{ sentenceModels[f.fragment_id] }}</span>
+                    <span v-if="sentenceModels[f.fragment_id]" :title="sentenceModels[f.fragment_id]">модель: {{ humanizeModel(sentenceModels[f.fragment_id]) }}</span>
                     <button
                       v-if="failedIds.has(f.fragment_id)"
                       class="text-[#c62828] cursor-pointer border-none bg-transparent hover:underline"
