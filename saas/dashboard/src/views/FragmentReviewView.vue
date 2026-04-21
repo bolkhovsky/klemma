@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { curation, library, process, userProjects, type OutlineSection } from '../api/client'
+import { humanizeModel } from '../utils/model'
 
 const route = useRoute()
 const router = useRouter()
@@ -47,8 +48,11 @@ const notes = ref<Record<string, string>>({})
 const editingNote = ref<Record<string, boolean>>({})
 const openNotes = ref<Record<string, boolean>>({})
 
-// Hide reasons (client-side only for now; backend stores verdict=rejected without reason)
+// Hide reasons — persisted by appending a `[причина: X]` suffix to the existing
+// `note` field. No backend change needed; on load the suffix is stripped back
+// into hideReasons so the user-written note stays clean in the UI.
 const hideReasons = ref<Record<string, string>>({})
+const HIDE_REASON_RE = /\s*\[причина:\s*([^\]]+)\]\s*$/
 
 // Suggested sentences (editable per-fragment)
 const suggestedTexts = ref<Record<string, string>>({})
@@ -220,20 +224,6 @@ function formatParaphrase(text: string): string {
   })
 }
 
-// Shorten model ID for display. "anthropic/claude-sonnet-4-20250514" → "Sonnet 4".
-function shortModelName(full: string): string {
-  if (!full) return ''
-  const claude = full.match(/claude-([a-z]+)-(\d+(?:\.\d+)?)/i)
-  if (claude) {
-    const family = claude[1]!.charAt(0).toUpperCase() + claude[1]!.slice(1)
-    return `${family} ${claude[2]}`
-  }
-  const gpt = full.match(/gpt-([\w.-]+?)(?:-\d{4,})?$/i)
-  if (gpt) return `GPT-${gpt[1]}`
-  // Fallback: strip vendor prefix, take the model name
-  return full.split('/').pop() || full
-}
-
 const sourceDisplay = computed(() => {
   const a = sourceAuthors.value
   const y = sourceYear.value
@@ -329,8 +319,18 @@ async function loadData() {
         }
         if (c.assigned_section) assignedSections.value[c.fragment_id] = c.assigned_section
         if (c.note) {
-          notes.value[c.fragment_id] = c.note
-          openNotes.value[c.fragment_id] = true
+          const m = c.note.match(HIDE_REASON_RE)
+          if (m && c.verdict === 'rejected') {
+            hideReasons.value[c.fragment_id] = m[1]!.trim()
+            const clean = c.note.replace(HIDE_REASON_RE, '').trim()
+            if (clean) {
+              notes.value[c.fragment_id] = clean
+              openNotes.value[c.fragment_id] = true
+            }
+          } else {
+            notes.value[c.fragment_id] = c.note
+            openNotes.value[c.fragment_id] = true
+          }
         }
         if (c.suggested_text) {
           suggestedTexts.value[c.fragment_id] = c.suggested_text
@@ -433,6 +433,12 @@ async function pickFragment(fragmentId: string) {
 async function hideFragment(fragmentId: string, reason: string) {
   hideReasons.value[fragmentId] = reason
   openCardMenu.value = null
+  // Pipe the reason into the `note` field so it survives reload via existing
+  // curation plumbing. Preserve any user-written note that was already there.
+  const existing = (notes.value[fragmentId] || '').replace(HIDE_REASON_RE, '').trim()
+  notes.value[fragmentId] = existing
+    ? `${existing}\n[причина: ${reason}]`
+    : `[причина: ${reason}]`
   await setVerdict(fragmentId, 'rejected')
 }
 
@@ -905,7 +911,7 @@ onUnmounted(() => {
                     <div
                       v-if="sentenceModels[f.fragment_id] && !failedIds.has(f.fragment_id)"
                       class="mt-1 text-[12px] text-[#9ca3af] inline-flex items-center gap-1 font-mono"
-                    ><span class="text-[10px] opacity-70">✨</span>{{ shortModelName(sentenceModels[f.fragment_id] || '') }}</div>
+                    ><span class="text-[10px] opacity-70">✨</span>{{ humanizeModel(sentenceModels[f.fragment_id] || '') }}</div>
                   </div>
 
                   <!-- Original -->
