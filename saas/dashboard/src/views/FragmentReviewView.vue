@@ -408,6 +408,18 @@ function stopPolling() {
   }
 }
 
+function composeNoteForSend(fragmentId: string, verdict: 'accepted' | 'rejected'): string | undefined {
+  // notes[] always holds the user's clean note (never the [причина: …] marker).
+  // The marker is only appended at send time when verdict === 'rejected' and
+  // hideReasons has an entry — so an in-session undo doesn't leak the marker.
+  const userNote = (notes.value[fragmentId] || '').replace(HIDE_REASON_RE, '').trim()
+  const hr = hideReasons.value[fragmentId]
+  if (verdict === 'rejected' && hr) {
+    return userNote ? `${userNote}\n[причина: ${hr}]` : `[причина: ${hr}]`
+  }
+  return userNote || undefined
+}
+
 async function setVerdict(fragmentId: string, verdict: 'accepted' | 'rejected') {
   verdicts.value[fragmentId] = verdict
   const frag = allFragments.value.find(f => f.fragment_id === fragmentId)
@@ -419,7 +431,7 @@ async function setVerdict(fragmentId: string, verdict: 'accepted' | 'rejected') 
     citekey: frag.citekey,
     verdict,
     assigned_section: assignedSections.value[fragmentId] || undefined,
-    note: notes.value[fragmentId] || undefined,
+    note: composeNoteForSend(fragmentId, verdict),
     suggested_text: sentence || undefined,
     sentence_model: sentence && model ? model : undefined,
   }])
@@ -433,12 +445,6 @@ async function pickFragment(fragmentId: string) {
 async function hideFragment(fragmentId: string, reason: string) {
   hideReasons.value[fragmentId] = reason
   openCardMenu.value = null
-  // Pipe the reason into the `note` field so it survives reload via existing
-  // curation plumbing. Preserve any user-written note that was already there.
-  const existing = (notes.value[fragmentId] || '').replace(HIDE_REASON_RE, '').trim()
-  notes.value[fragmentId] = existing
-    ? `${existing}\n[причина: ${reason}]`
-    : `[причина: ${reason}]`
   await setVerdict(fragmentId, 'rejected')
 }
 
@@ -448,18 +454,20 @@ function onSuggestedInput(fragmentId: string, value: string) {
 
 async function saveSuggested(fragmentId: string) {
   const sentence = (suggestedTexts.value[fragmentId] || '').trim()
-  if (!sentence) return
   const model = sentenceModels.value[fragmentId]
   const hasRow = !!verdicts.value[fragmentId] || suggestedIds.value.has(fragmentId)
   if (hasRow) {
+    // Persist even an empty string — lets the user clear an existing paraphrase.
+    // Backend PATCH uses `is not None` so "" overwrites the stored text.
     await curation.update(projectId.value, fragmentId, {
       suggested_text: sentence,
       sentence_model: sentence && model ? model : undefined,
     })
     return
   }
-  // No curation row yet — create one with verdict='suggested' so the edited
-  // paraphrase survives reload without forcing the user to pick the fragment.
+  // No curation row yet. Empty input: nothing to persist.
+  if (!sentence) return
+  // Otherwise create a suggested row so the edit survives reload.
   const frag = allFragments.value.find(f => f.fragment_id === fragmentId)
   if (!frag) return
   await curation.curate(projectId.value, [{
