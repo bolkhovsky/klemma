@@ -340,3 +340,79 @@ def test_semantic_rerank_changes_order():
     h1 = next(g for g in result_with_emb if g["cited_title_hash"] == "h1")
     h2 = next(g for g in result_with_emb if g["cited_title_hash"] == "h2")
     assert h1["score"] > h2["score"]
+
+
+# ---------------------------------------------------------------------------
+# Embedding-model migration — dimension mismatch must not produce bogus 0.5
+# ---------------------------------------------------------------------------
+
+
+def test_semantic_factor_centroid_dim_mismatch_is_neutral():
+    """After model migration: if all centroids have a different dimension than
+    the citing embeddings, factor must be 1.0 (neutral), not 0.5 (bogus penalty).
+    """
+    # Citing papers embedded with new model (4-dim)
+    embeddings = {"p1": [1.0, 0.0, 0.0, 0.0], "p2": [0.8, 0.2, 0.0, 0.0]}
+    # Section centroid built from old model (2-dim)
+    centroids = {"s1": [1.0, 0.0]}
+    factor = _compute_semantic_factor(["p1", "p2"], embeddings, centroids)
+    assert factor == 1.0, (
+        "Dimension mismatch should return neutral 1.0, not 0.5 bogus penalty"
+    )
+
+
+def test_semantic_factor_partial_centroid_dim_mismatch():
+    """Only centroids whose dimension matches the citing vectors are used.
+    Mismatched centroids are silently skipped — they must not pull the score
+    down toward 0.5.
+    """
+    embeddings = {"p1": [1.0, 0.0], "p2": [1.0, 0.0]}  # 2-dim (new model)
+    # s1 matches dimension, s2 does not
+    centroids = {
+        "s1": [1.0, 0.0],  # 2-dim, aligned → cosine ≈ 1.0
+        "s2": [1.0, 0.0, 0.0, 0.0],  # 4-dim — stale model, must be skipped
+    }
+    factor = _compute_semantic_factor(["p1", "p2"], embeddings, centroids)
+    # s1 is compatible and fully aligned → factor ≈ 1.0 (not dragged down by s2)
+    assert factor > 0.9
+
+
+def test_semantic_factor_citing_vecs_dim_filtered_and_centroid_mismatches():
+    """Citing vectors are filtered to dominant dim; if remaining vecs <2, neutral."""
+    # One paper with 2-dim (old), one with 4-dim (new) — only 1 new-dim vec
+    embeddings = {
+        "p1": [1.0, 0.0],        # old model
+        "p2": [1.0, 0.0, 0.0, 0.0],  # new model
+    }
+    # Centroid built from new model (4-dim) — but only p2 matches and <2 vecs
+    centroids = {"s1": [1.0, 0.0, 0.0, 0.0]}
+    factor = _compute_semantic_factor(["p1", "p2"], embeddings, centroids)
+    # vecs filtered to dim=2 (first): p1 only → <2 vecs → neutral
+    assert factor == 1.0
+
+
+def test_score_gaps_no_bogus_penalty_on_model_migration():
+    """Regression: after embedding model migration, gaps must not be penalised
+    by a spurious semantic_factor=0.5 caused by cross-dimension cosine=0.0.
+    With dimension-mismatched centroids the factor should be neutral (1.0).
+    """
+    gaps = [make_gap(hash="h1", count=2, intents="background", avg_quality=3.0)]
+    # Citing embeddings: new 4-dim model
+    embeddings = {"p1": [0.5, 0.5, 0.0, 0.0], "p2": [0.4, 0.6, 0.0, 0.0]}
+    # Section centroid: stale 2-dim model (not yet re-embedded after migration)
+    centroids = {"s1": [1.0, 0.0]}
+
+    result = score_gaps(
+        gaps,
+        citing_paper_ids_by_gap={"h1": ["p1", "p2"]},
+        citing_embeddings=embeddings,
+        section_centroids=centroids,
+        sections_by_citing_paper={},
+    )
+    g = result[0]
+    assert g["semantic_factor"] == 1.0, (
+        f"Mismatched-dim centroid must yield neutral 1.0, got {g['semantic_factor']}"
+    )
+    # score = count × avg_quality × intent_weight × semantic_factor
+    # = 2 × 3.0 × 1.0 × 1.0 = 6.0
+    assert abs(g["score"] - 6.0) < 0.01

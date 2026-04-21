@@ -47,14 +47,44 @@ TARGET_USER_ID="${1:?Usage: backfill_gap_intents.sh [--dry-run] <target_user_id>
 BATCH_SIZE="${2:-20}"
 
 # ---------------------------------------------------------------------------
-# Login
+# Auth helpers — access tokens expire after KLEMMA_ACCESS_TOKEN_EXPIRE_MINUTES
+# (default 15 min).  A large backfill spans many batches and will outlive a
+# single token.  _login() captures the refresh token so _refresh_token() can
+# rotate both tokens cheaply before every batch without a full re-login.
 # ---------------------------------------------------------------------------
 
+ADMIN_TOKEN=""
+REFRESH_TOKEN=""
+
+_login() {
+  local resp
+  resp=$(curl -sf -X POST "$API/auth/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\": \"$ADMIN_EMAIL\", \"password\": \"$ADMIN_PASS\"}") || {
+      echo "ERROR: Login failed"
+      exit 1
+    }
+  ADMIN_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+  REFRESH_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['refresh_token'])")
+}
+
+# Rotate both tokens via the refresh endpoint; falls back to full re-login if
+# the refresh token itself has expired (30-day default).
+_refresh_token() {
+  local resp
+  if resp=$(curl -sf -X POST "$API/auth/refresh" \
+    -H "Content-Type: application/json" \
+    -d "{\"refresh_token\": \"$REFRESH_TOKEN\"}" 2>/dev/null); then
+    ADMIN_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+    REFRESH_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['refresh_token'])")
+  else
+    echo "==> Token refresh failed — re-logging in ..."
+    _login
+  fi
+}
+
 echo "==> Logging in as admin ($ADMIN_EMAIL) ..."
-ADMIN_TOKEN=$(curl -sf -X POST "$API/auth/login" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\": \"$ADMIN_EMAIL\", \"password\": \"$ADMIN_PASS\"}" \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+_login
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "==> DRY-RUN mode — running first batch only, not looping"
@@ -85,6 +115,10 @@ while true; do
   if [ "$DRY_RUN" -eq 1 ]; then
     QS="${QS}&dry_run=true"
   fi
+
+  # Rotate the access token before each batch — ensures we never hit a
+  # mid-loop 401 caused by the 15-min default expiry.
+  _refresh_token
 
   echo -n "Batch $BATCH ... "
 
