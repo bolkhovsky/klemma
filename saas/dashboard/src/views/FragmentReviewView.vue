@@ -447,13 +447,29 @@ function onSuggestedInput(fragmentId: string, value: string) {
 }
 
 async function saveSuggested(fragmentId: string) {
-  if (!verdicts.value[fragmentId] && !suggestedIds.value.has(fragmentId)) return
   const sentence = (suggestedTexts.value[fragmentId] || '').trim()
+  if (!sentence) return
   const model = sentenceModels.value[fragmentId]
-  await curation.update(projectId.value, fragmentId, {
+  const hasRow = !!verdicts.value[fragmentId] || suggestedIds.value.has(fragmentId)
+  if (hasRow) {
+    await curation.update(projectId.value, fragmentId, {
+      suggested_text: sentence,
+      sentence_model: sentence && model ? model : undefined,
+    })
+    return
+  }
+  // No curation row yet — create one with verdict='suggested' so the edited
+  // paraphrase survives reload without forcing the user to pick the fragment.
+  const frag = allFragments.value.find(f => f.fragment_id === fragmentId)
+  if (!frag) return
+  await curation.curate(projectId.value, [{
+    fragment_id: fragmentId,
+    citekey: frag.citekey,
+    verdict: 'suggested',
     suggested_text: sentence,
     sentence_model: sentence && model ? model : undefined,
-  })
+  }])
+  suggestedIds.value.add(fragmentId)
 }
 
 async function generateSentences(mode: 'missing' | 'force') {
