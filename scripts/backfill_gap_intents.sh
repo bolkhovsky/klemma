@@ -56,7 +56,6 @@ BATCH_SIZE="${2:-20}"
 # ---------------------------------------------------------------------------
 
 ADMIN_TOKEN=""
-REFRESH_TOKEN=""
 TOKEN_ISSUED_AT=0
 # Refresh 3 minutes before the default 15-minute expiry.
 TOKEN_TTL_SECS="${KLEMMA_TOKEN_TTL_SECS:-720}"
@@ -70,32 +69,19 @@ _login() {
       exit 1
     }
   ADMIN_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-  REFRESH_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['refresh_token'])")
   TOKEN_ISSUED_AT=$SECONDS
 }
 
-# Rotate both tokens via the refresh endpoint; falls back to full re-login if
-# the refresh token itself has expired (30-day default).
-_do_refresh() {
-  local resp
-  if resp=$(curl -sf -X POST "$API/auth/refresh" \
-    -H "Content-Type: application/json" \
-    -d "{\"refresh_token\": \"$REFRESH_TOKEN\"}" 2>/dev/null); then
-    ADMIN_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-    REFRESH_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['refresh_token'])")
-    TOKEN_ISSUED_AT=$SECONDS
-  else
-    echo "==> Token refresh failed — re-logging in ..."
-    _login
-  fi
-}
-
-# Call before each batch: refreshes only when the token is approaching expiry.
-# This avoids hammering the rate-limited /auth/refresh endpoint and prevents
-# unnecessary token rotation that would invalidate other admin sessions.
+# Call before each batch: re-authenticates only when the access token is
+# approaching expiry.  We deliberately re-login rather than calling
+# /auth/refresh — the refresh endpoint revokes all refresh tokens for the
+# user (store.revoke_refresh_tokens), which would silently log out every
+# other admin session.  /auth/login adds a new token without revoking
+# existing ones, so concurrent sessions are unaffected.
 _maybe_refresh_token() {
   if [ $((SECONDS - TOKEN_ISSUED_AT)) -ge "$TOKEN_TTL_SECS" ]; then
-    _do_refresh
+    echo "==> Re-authenticating (access token approaching expiry) ..."
+    _login
   fi
 }
 

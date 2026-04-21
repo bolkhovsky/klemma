@@ -116,14 +116,11 @@ def compute_scored_gaps(
         # of a different dimension.  Mixing dimensions causes cosine similarity
         # to return 0.0 (length mismatch guard), which collapses
         # semantic_factor to 0.5 and penalises every gap uniformly.  Pin
-        # everything to the majority dimension (= the most-recently embedded
-        # model) so that centroids and citing vectors are always compatible.
-        dim_counts: dict[int, int] = {}
-        for v in all_user_embeddings.values():
-            d = len(v)
-            dim_counts[d] = dim_counts.get(d, 0) + 1
-        dominant_dim = max(dim_counts, key=dim_counts.__getitem__)
-        if len(dim_counts) > 1:
+        # everything to the current model's dimension — identified as the
+        # dimension of the most-recently inserted embedding (ORDER BY rowid
+        # DESC LIMIT 1), which is deterministic even during a 50/50 migration.
+        dominant_dim = paper_store.get_latest_embedding_dim(user_paper_ids)
+        if dominant_dim is not None:
             all_user_embeddings = {
                 pid: v
                 for pid, v in all_user_embeddings.items()
