@@ -49,12 +49,17 @@ BATCH_SIZE="${2:-20}"
 # ---------------------------------------------------------------------------
 # Auth helpers — access tokens expire after KLEMMA_ACCESS_TOKEN_EXPIRE_MINUTES
 # (default 15 min).  A large backfill spans many batches and will outlive a
-# single token.  _login() captures the refresh token so _refresh_token() can
-# rotate both tokens cheaply before every batch without a full re-login.
+# single token.  We refresh lazily: _maybe_refresh_token() only calls the
+# refresh endpoint when the token is within TOKEN_REFRESH_BUFFER_SECS of
+# expiry — not on every batch — to avoid hitting the 10/min rate limit and
+# invalidating other sessions via token rotation.
 # ---------------------------------------------------------------------------
 
 ADMIN_TOKEN=""
 REFRESH_TOKEN=""
+TOKEN_ISSUED_AT=0
+# Refresh 3 minutes before the default 15-minute expiry.
+TOKEN_TTL_SECS="${KLEMMA_TOKEN_TTL_SECS:-720}"
 
 _login() {
   local resp
@@ -66,20 +71,31 @@ _login() {
     }
   ADMIN_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
   REFRESH_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['refresh_token'])")
+  TOKEN_ISSUED_AT=$SECONDS
 }
 
 # Rotate both tokens via the refresh endpoint; falls back to full re-login if
 # the refresh token itself has expired (30-day default).
-_refresh_token() {
+_do_refresh() {
   local resp
   if resp=$(curl -sf -X POST "$API/auth/refresh" \
     -H "Content-Type: application/json" \
     -d "{\"refresh_token\": \"$REFRESH_TOKEN\"}" 2>/dev/null); then
     ADMIN_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
     REFRESH_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['refresh_token'])")
+    TOKEN_ISSUED_AT=$SECONDS
   else
     echo "==> Token refresh failed — re-logging in ..."
     _login
+  fi
+}
+
+# Call before each batch: refreshes only when the token is approaching expiry.
+# This avoids hammering the rate-limited /auth/refresh endpoint and prevents
+# unnecessary token rotation that would invalidate other admin sessions.
+_maybe_refresh_token() {
+  if [ $((SECONDS - TOKEN_ISSUED_AT)) -ge "$TOKEN_TTL_SECS" ]; then
+    _do_refresh
   fi
 }
 
@@ -116,9 +132,8 @@ while true; do
     QS="${QS}&dry_run=true"
   fi
 
-  # Rotate the access token before each batch — ensures we never hit a
-  # mid-loop 401 caused by the 15-min default expiry.
-  _refresh_token
+  # Refresh the access token only when it is approaching expiry.
+  _maybe_refresh_token
 
   echo -n "Batch $BATCH ... "
 
