@@ -1,11 +1,13 @@
 """Tests for LocalPaperStore (ADR-014 Phase 1B)."""
 
+import hashlib
 import sqlite3
 
 import pytest
 
 from klemma.models import FragmentRecord
 from klemma.stores import LocalPaperStore
+from klemma.stores.user_library import LocalUserLibrary
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -285,3 +287,55 @@ def test_dual_write_cache_hit(tmp_path):
     cached = store.get_fragments(pid)
     assert len(cached) == 2
     assert {f.fragment_text for f in cached} == {"Finding A", "Finding B"}
+
+
+# ---------------------------------------------------------------------------
+# get_reference_gaps — user-scoped NOT EXISTS filter
+# ---------------------------------------------------------------------------
+
+
+def _title_hash(title: str) -> str:
+    return hashlib.md5(title.lower().encode()).hexdigest()
+
+
+def test_reference_gaps_excludes_only_current_user_papers(tmp_path):
+    """NOT EXISTS filter must be scoped to the current user's library.
+
+    If user B has uploaded a paper whose title matches a gap for user A,
+    that gap must still appear in user A's recommendations.
+    Before the fix, the global papers table was queried without user_id
+    filtering — any user's upload would suppress gaps for all other users.
+    """
+    db_path = tmp_path / "library.db"
+    store = LocalPaperStore(db_path)
+    library = LocalUserLibrary(db_path)  # initializes user_sources table in same DB
+
+    user_a = "user-a"
+    user_b = "user-b"
+
+    # User A has one paper that cites "Gap Paper"
+    pid_a = store.register_paper(title="User A Paper", pdf_hash="hasha")
+    store.save_citation_links(pid_a, [
+        {"title": "Gap Paper", "authors": "X", "year": 2020}
+    ])
+    library.add_source(pid_a, "user_a_paper", status="completed", user_id=user_a)
+
+    # User B has ALSO uploaded "Gap Paper" — it's in the global papers table
+    pid_gap = store.register_paper(title="Gap Paper", pdf_hash="hashgap")
+    library.add_source(pid_gap, "gap_paper", status="completed", user_id=user_b)
+
+    # User A's gaps should still include "Gap Paper" — user B's ownership is irrelevant
+    gaps, _ = store.get_reference_gaps(paper_ids=[pid_a], user_id=user_a, limit=50)
+    gap_titles = [g["title"] for g in gaps]
+    assert "Gap Paper" in gap_titles, (
+        "Gap Paper should appear for user A even though user B uploaded it"
+    )
+
+    # If user A also uploads "Gap Paper", it should disappear from gaps
+    library.add_source(pid_gap, "gap_paper_a", status="completed", user_id=user_a)
+
+    gaps2, _ = store.get_reference_gaps(paper_ids=[pid_a], user_id=user_a, limit=50)
+    gap_titles2 = [g["title"] for g in gaps2]
+    assert "Gap Paper" not in gap_titles2, (
+        "Gap Paper should NOT appear once user A has it in their own library"
+    )

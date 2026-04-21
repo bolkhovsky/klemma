@@ -522,12 +522,14 @@ class LocalPaperStore:
                    WHERE cg.citing_paper_id IN ({placeholders})
                      AND NOT EXISTS (
                        SELECT 1 FROM papers p
+                       INNER JOIN user_sources us_own
+                         ON us_own.paper_id = p.paper_id AND us_own.user_id = ?
                        WHERE LOWER(TRIM(p.title)) = LOWER(TRIM(cg.cited_title))
                      )
                    GROUP BY cg.cited_title_hash
                    ORDER BY count DESC
                    LIMIT ?""",
-                (user_id, *paper_ids, limit),
+                (user_id, *paper_ids, user_id, limit),
             ).fetchall()
 
             gaps = [dict(r) for r in rows]
