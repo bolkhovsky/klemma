@@ -23,10 +23,13 @@ saas/dashboard/
 │   │   ├── LibraryView    — source table + PDF upload + reference gaps
 │   │   ├── SourceView     — source detail: fragments, section assignment, processing + "Отобрать цитаты" CTA
 │   │   ├── FragmentReviewView — /:projectId/library/:citekey/review — citation curation cards
-│   │   │     standalone layout, accept/reject per fragment, intent color badges, section dropdown,
-│   │   │     notes, progress bar, batch accept, undo support, suggested-sentence textarea per card (ADR-017,
-│   │   │     teal primary + italic grey provenance), sentence-generation job polling, partial-failure retry,
-│   │   │     "Accept all as-is" bulk button when every fragment has a sentence
+│   │   │     design-system layout (Literata 34px title, JetBrains Mono metadata, max-width 960px),
+│   │   │     decision-state tally (в работе / в пуле / скрыто) instead of progress bar,
+│   │   │     ochre "picked" cards with 3px left bar + tint and no footer ("убрать" moves to
+│   │   │     overflow menu), pool cards place "+ В работу" in meta row, intent chips on one oklch
+│   │   │     family, Source Serif 4 italic provenance with "✓ совпадает с источником" trust badge,
+│   │   │     accept/reject per fragment, notes, undo support, suggested-sentence textarea per card
+│   │   │     (ADR-017), sentence-generation job polling, partial-failure retry
 │   │   ├── MapView        — /:projectId/map — curated citation bank grouped by outline sections
 │   │   │     AppLayout, accepted fragments per section, suggest popup, move/exclude actions
 │   │   ├── SectionEditorView — /:projectId/write — section-card write paradigm (Phase 5A, #273)

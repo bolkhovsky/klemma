@@ -5,7 +5,10 @@
   --color-ink: #1a1a2e;
   --color-ink-light: #3d3d5c;
   --color-ink-muted: #6b6b8a;
+  --color-ink-faint: #9a9388;
   --color-paper: #faf9f7;
+  --color-paper-2: #f3f1ec;
+  --color-paper-3: #e8e5de;
   --color-paper-warm: #f5f3ef;
   --color-paper-white: #ffffff;
 
@@ -13,6 +16,8 @@
   --color-accent: #0d7377;
   --color-accent-light: #14919b;
   --color-accent-pale: #e0f4f4;
+  --color-accent-tint: oklch(96% 0.015 190);
+  --color-accent-rule: oklch(85% 0.03 190);
   --color-accent-deep: #065a5e;
 
   /* Amber accent — warm ochre complement */
@@ -20,6 +25,11 @@
   --color-amber-light: #c99a48;
   --color-amber-pale: #faf0dc;
   --color-amber-deep: #7d5518;
+
+  /* Picked — muted ochre, editorial/archival (replaces plum for "in-work" state) */
+  --color-picked: oklch(52% 0.11 65);
+  --color-picked-tint: oklch(96% 0.025 75);
+  --color-picked-rule: oklch(80% 0.05 70);
 
   /* Violet accent — muted academic secondary */
   --color-violet: #6b5f8a;
@@ -44,9 +54,25 @@
   --color-rule: #e8e5df;
   --color-rule-light: #f0ede8;
 
+  /* Intent colors — one oklch family (L=40 ink / L=96 bg, varying hue) */
+  --color-intent-bg-ink: oklch(40% 0.09 265);
+  --color-intent-bg-bg: oklch(96% 0.028 265);
+  --color-intent-method-ink: oklch(40% 0.09 310);
+  --color-intent-method-bg: oklch(96% 0.028 310);
+  --color-intent-result-ink: oklch(40% 0.09 155);
+  --color-intent-result-bg: oklch(96% 0.028 155);
+  --color-intent-ext-ink: oklch(40% 0.09 200);
+  --color-intent-ext-bg: oklch(96% 0.028 200);
+  --color-intent-contrast-ink: oklch(40% 0.09 40);
+  --color-intent-contrast-bg: oklch(96% 0.028 40);
+  --color-intent-data-ink: oklch(40% 0.09 90);
+  --color-intent-data-bg: oklch(96% 0.028 90);
+
   /* Fonts */
   --font-display: 'Literata', 'Georgia', serif;
   --font-body: 'Source Sans 3', 'Segoe UI', sans-serif;
+  --font-body-serif: 'Source Serif 4', 'Georgia', serif;
+  --font-ui: 'Inter', 'Source Sans 3', 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
