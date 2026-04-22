@@ -203,6 +203,41 @@ class EnrichResponse(BaseModel):
     embedding_status: str  # "pending" | "skipped"
 
 
+class BbtMatch(BaseModel):
+    """One successfully-matched BBT entry linked to an existing library source."""
+
+    citekey: str                # internal library citekey
+    external_citekey: str       # BBT-emitted citekey (now stored as external override)
+    strategy: str               # "doi" | "fuzzy"
+    title: str = ""
+
+
+class BbtUnmatched(BaseModel):
+    """One BBT entry that did not match any library source."""
+
+    bbt_citekey: str
+    title: str = ""
+    first_author_lastname: str = ""
+    year: int | None = None
+    doi: str | None = None
+
+
+class BbtAmbiguous(BaseModel):
+    """One BBT entry that matched more than one library source (first-hit avoided)."""
+
+    bbt_citekey: str
+    title: str = ""
+    candidates: list[str] = []  # internal citekeys that all matched
+
+
+class ImportBbtResponse(BaseModel):
+    """Result of POST /library/import-bbt."""
+
+    matched: list[BbtMatch]
+    unmatched: list[BbtUnmatched]
+    ambiguous: list[BbtAmbiguous]
+
+
 # In-memory rate limiter for enrich-metadata: 10 req/min per user
 _enrich_rate_limit_store: dict[str, list[float]] = {}
 
@@ -409,6 +444,148 @@ async def add_source(
         doi=body.doi,
         abstract=body.abstract,
     )
+
+
+def _normalize_title_prefix(title: str, n: int = 40) -> str:
+    """Lowercase, strip punctuation + whitespace, take first ``n`` chars."""
+    if not title:
+        return ""
+    stripped = re.sub(r"[^a-zа-яё0-9]+", "", title.lower())
+    return stripped[:n]
+
+
+def _match_bbt_to_library(
+    entries: list, paper_store, library, user_id: str
+) -> ImportBbtResponse:
+    """Match BBT entries to the user's library, set external_citekey for
+    single hits, return structured report. Never touches citekey.
+
+    Matching order per entry (first hit wins):
+        1. DOI exact (normalized both sides)
+        2. Fuzzy: normalized title prefix (40 chars) + latinized first-author
+           lastname + year. Multi-hit → ambiguous (no external_citekey set).
+    """
+    from klemma.utils.translit import transliterate_ru
+
+    # Build once: all user sources → (citekey, paper_record, normalized keys)
+    all_sources = library.get_all_sources(user_id=user_id)
+    # paper_id → PaperRecord (batched single-fetch would be nicer; this is
+    # a one-shot admin-ish endpoint so N+1 is acceptable for first cut)
+    indexed: list[tuple[str, object, str, str, int | None]] = []
+    for src in all_sources:
+        paper = paper_store.get_paper_by_id(src.paper_id)
+        if paper is None:
+            continue
+        title_prefix = _normalize_title_prefix(paper.title or "")
+        # Local normalize: take first token (surname), transliterate + lowercase + [a-z0-9]
+        first_author_raw = (paper.authors or "").split(",")[0].strip().split()[0] if (paper.authors or "").strip() else ""
+        author_norm = re.sub(r"[^a-z0-9]", "", transliterate_ru(first_author_raw).lower())
+        indexed.append((src.citekey, paper, title_prefix, author_norm, paper.year))
+
+    matched: list[BbtMatch] = []
+    unmatched: list[BbtUnmatched] = []
+    ambiguous: list[BbtAmbiguous] = []
+
+    for entry in entries:
+        # 1. DOI exact
+        if entry.doi:
+            doi_hits = [ck for ck, paper, _, _, _ in indexed if (paper.doi or "").lower() == entry.doi]
+            if len(doi_hits) == 1:
+                library.set_external_citekey(doi_hits[0], entry.citekey, user_id=user_id)
+                matched.append(BbtMatch(
+                    citekey=doi_hits[0], external_citekey=entry.citekey,
+                    strategy="doi", title=entry.title,
+                ))
+                continue
+            if len(doi_hits) > 1:
+                ambiguous.append(BbtAmbiguous(
+                    bbt_citekey=entry.citekey, title=entry.title, candidates=doi_hits,
+                ))
+                continue
+
+        # 2. Fuzzy: title prefix + author + year
+        entry_title_prefix = _normalize_title_prefix(entry.title)
+        entry_author_norm = re.sub(
+            r"[^a-z0-9]",
+            "",
+            transliterate_ru(entry.first_author_lastname).lower(),
+        )
+        if not (entry_title_prefix and entry_author_norm and entry.year is not None):
+            # Not enough signal to fuzzy-match
+            unmatched.append(BbtUnmatched(
+                bbt_citekey=entry.citekey, title=entry.title,
+                first_author_lastname=entry.first_author_lastname,
+                year=entry.year, doi=entry.doi,
+            ))
+            continue
+
+        fuzzy_hits = [
+            ck for ck, _, title_pfx, author_norm, year in indexed
+            if title_pfx and title_pfx == entry_title_prefix
+            and author_norm == entry_author_norm
+            and year == entry.year
+        ]
+        if len(fuzzy_hits) == 1:
+            library.set_external_citekey(fuzzy_hits[0], entry.citekey, user_id=user_id)
+            matched.append(BbtMatch(
+                citekey=fuzzy_hits[0], external_citekey=entry.citekey,
+                strategy="fuzzy", title=entry.title,
+            ))
+        elif len(fuzzy_hits) > 1:
+            ambiguous.append(BbtAmbiguous(
+                bbt_citekey=entry.citekey, title=entry.title, candidates=fuzzy_hits,
+            ))
+        else:
+            unmatched.append(BbtUnmatched(
+                bbt_citekey=entry.citekey, title=entry.title,
+                first_author_lastname=entry.first_author_lastname,
+                year=entry.year, doi=entry.doi,
+            ))
+
+    return ImportBbtResponse(matched=matched, unmatched=unmatched, ambiguous=ambiguous)
+
+
+@router.post("/import-bbt", response_model=ImportBbtResponse)
+async def import_bbt(
+    file: UploadFile,
+    user: UserRecord = Depends(get_current_user),
+) -> ImportBbtResponse:
+    """Import a BetterBibTeX JSON export and attach BBT citekeys as
+    ``external_citekey`` overrides on matched library sources.
+
+    Matching strategy per entry (exactly-one-or-unmatched):
+      1. DOI exact match against ``papers.doi``.
+      2. Fuzzy: normalized title prefix (40 chars) + latinized first-author
+         lastname + year.
+
+    Entries matching >1 library source are returned under ``ambiguous`` —
+    their ``external_citekey`` is NOT set, so the user can decide manually.
+    Entries matching 0 are returned under ``unmatched`` — no phantom rows
+    are created.
+
+    Re-running this endpoint is idempotent: the same match reassigns the
+    same ``external_citekey`` on the same ``citekey``.
+    """
+    from klemma.literature.bbt_upload import parse_bbt_upload
+
+    if not file.filename or not file.filename.lower().endswith(".json"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected a .json file (BetterBibTeX export).",
+        )
+
+    data = await file.read()
+    try:
+        entries = parse_bbt_upload(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    if not entries:
+        return ImportBbtResponse(matched=[], unmatched=[], ambiguous=[])
+
+    paper_store = get_paper_store()
+    library = get_user_library()
+    return _match_bbt_to_library(entries, paper_store, library, user.user_id)
 
 
 @router.delete("/sources/{citekey}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)

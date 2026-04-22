@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Generator, Optional
 if TYPE_CHECKING:
     from ..models import UserSource
 
-_SCHEMA_VERSION = 5  # v5: composite PK (user_id, citekey) for multi-user isolation
+_SCHEMA_VERSION = 6  # v6: external_citekey column for BBT display override
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS user_sources (
@@ -167,6 +167,19 @@ class LocalUserLibrary:
                     PRIMARY KEY (user_id, citekey, section)
                 );
             """)
+        if version < 6:
+            # v6: external_citekey — optional BBT-imported display label.
+            # When set, the cloud emits this (not citekey) into generated text
+            # and echoes it in API responses, so [@key] references in drafts
+            # match the user's local .bib file. citekey itself stays immutable
+            # (stability invariant, issue #268).
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(user_sources)").fetchall()}
+            if "external_citekey" not in cols:
+                conn.execute("ALTER TABLE user_sources ADD COLUMN external_citekey TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_sources_external_ck"
+                " ON user_sources(user_id, external_citekey)"
+            )
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -282,6 +295,7 @@ class LocalUserLibrary:
             quality_score=row["quality_score"],
             chapters=chapters,
             sections=sections,
+            external_citekey=_safe_ext_ck(row),
         )
 
     def resolve_paper_id(
@@ -360,6 +374,7 @@ class LocalUserLibrary:
             quality_score=row["quality_score"],
             chapters=chapters,
             sections=sections,
+            external_citekey=_safe_ext_ck(row),
         )
 
     # ------------------------------------------------------------------ #
@@ -511,3 +526,105 @@ class LocalUserLibrary:
                     paper_ids,
                 ).fetchall()
         return {row["paper_id"]: row["citekey"] for row in rows}
+
+    # ------------------------------------------------------------------ #
+    # External citekey (BBT import) support                               #
+    # ------------------------------------------------------------------ #
+
+    def set_external_citekey(
+        self,
+        citekey: str,
+        external_citekey: Optional[str],
+        user_id: Optional[str] = None,
+    ) -> bool:
+        """Set or clear the BBT-imported display override for a source.
+
+        ``citekey`` is the internal immutable key used as PK. Pass
+        ``external_citekey=None`` to clear a previous import. Returns True
+        if the row existed and was updated.
+        """
+        uid = self._uid(user_id)
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE user_sources SET external_citekey = ?, updated_at = datetime('now')"
+                " WHERE citekey = ? AND user_id = ?",
+                (external_citekey, citekey, uid),
+            )
+        return cursor.rowcount > 0
+
+    def get_source_by_any_key(
+        self, key: str, user_id: Optional[str] = None
+    ) -> Optional["UserSource"]:
+        """Resolve a user-submitted key to a UserSource by either citekey
+        or external_citekey.
+
+        Order of resolution:
+            1. exact citekey match (immutable, stability invariant)
+            2. external_citekey match (BBT display override)
+
+        Returns ``None`` if neither column matches. Used by read-path routes
+        that accept a user-submitted key in URL or query. All write paths
+        must use the returned ``source.citekey`` (internal).
+        """
+        # Step 1: try citekey (common case — internal or already-migrated draft)
+        src = self.get_source_by_citekey(key, user_id=user_id)
+        if src is not None:
+            return src
+        # Step 2: fall back to external_citekey
+        uid = self._uid(user_id)
+        with self._conn() as conn:
+            if user_id is not None:
+                row = conn.execute(
+                    "SELECT citekey FROM user_sources"
+                    " WHERE external_citekey = ? AND user_id = ?",
+                    (key, uid),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT citekey FROM user_sources WHERE external_citekey = ?",
+                    (key,),
+                ).fetchone()
+        if not row:
+            return None
+        # Delegate to primary lookup so chapters/sections are loaded consistently
+        return self.get_source_by_citekey(row["citekey"], user_id=user_id)
+
+    def get_display_citekeys(
+        self, citekeys: list[str], user_id: Optional[str] = None
+    ) -> dict[str, str]:
+        """Batch-resolve {internal citekey → display citekey}.
+
+        Display = ``external_citekey`` if set, else the internal citekey
+        itself. Used by worker tasks (generate_sentences, generate_draft)
+        and by routes that echo display keys in list responses. Citekeys
+        not found in the library are absent from the returned dict.
+        """
+        if not citekeys:
+            return {}
+        uid = self._uid(user_id)
+        placeholders = ",".join("?" for _ in citekeys)
+        with self._conn() as conn:
+            if user_id is not None:
+                rows = conn.execute(
+                    f"SELECT citekey, external_citekey FROM user_sources"
+                    f" WHERE citekey IN ({placeholders}) AND user_id = ?",
+                    (*citekeys, uid),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"SELECT citekey, external_citekey FROM user_sources"
+                    f" WHERE citekey IN ({placeholders})",
+                    citekeys,
+                ).fetchall()
+        return {
+            r["citekey"]: (r["external_citekey"] or r["citekey"])
+            for r in rows
+        }
+
+
+def _safe_ext_ck(row: sqlite3.Row) -> Optional[str]:
+    """Read external_citekey from a row, tolerating pre-v6 schemas in tests."""
+    try:
+        return row["external_citekey"]
+    except (IndexError, KeyError):
+        return None
