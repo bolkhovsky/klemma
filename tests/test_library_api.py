@@ -228,6 +228,41 @@ def test_upload_dedup(client):
     assert r2.json()["deduplicated"] is True
 
 
+def test_upload_citekey_collision_uses_bbt_suffix(client):
+    """Same-author/same-year uploads from different PDFs must get a/b/c
+    suffixes (BBT-compatible), not `_{hash[:6]}`.
+
+    Example: two different Smith-2023 papers upload in sequence:
+        1st → smith2023
+        2nd → smith2023a
+        3rd → smith2023b
+    """
+    token = _register_and_get_token(client)
+    r1 = client.post(
+        "/library/upload",
+        files={"file": ("Smith - 2023 - Paper One.pdf", _fake_pdf(2048), "application/pdf")},
+        headers=_auth_headers(token),
+    )
+    r2 = client.post(
+        "/library/upload",
+        files={"file": ("Smith - 2023 - Paper Two.pdf", _fake_pdf(3072), "application/pdf")},
+        headers=_auth_headers(token),
+    )
+    r3 = client.post(
+        "/library/upload",
+        files={"file": ("Smith - 2023 - Paper Three.pdf", _fake_pdf(4096), "application/pdf")},
+        headers=_auth_headers(token),
+    )
+    assert r1.status_code == 201
+    assert r2.status_code == 201
+    assert r3.status_code == 201
+    assert r1.json()["citekey"] == "smith2023"
+    assert r2.json()["citekey"] == "smith2023a"
+    assert r3.json()["citekey"] == "smith2023b"
+    # All three are distinct papers
+    assert r1.json()["paper_id"] != r2.json()["paper_id"] != r3.json()["paper_id"]
+
+
 def test_upload_dedup_same_user_preserves_citekey(client):
     """Re-uploading the same PDF by the same user returns the original citekey (issue #268)."""
     token = _register_and_get_token(client)

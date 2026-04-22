@@ -43,3 +43,32 @@ def test_mixed_script():
 def test_empty_and_none_safe():
     assert transliterate_ru("") == ""
     assert transliterate_ru(None) == ""  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Latin diacritics & ligatures
+# ---------------------------------------------------------------------------
+
+
+def test_western_european_diacritics():
+    """NFKD normalization strips combining marks, producing plain ASCII."""
+    assert transliterate_ru("Müller") == "muller"
+    assert transliterate_ru("Jiménez") == "jimenez"
+    assert transliterate_ru("Señor") == "senor"
+    assert transliterate_ru("Dvořák") == "dvorak"
+    assert transliterate_ru("Søren") == "soren"
+    assert transliterate_ru("Erdős") == "erdos"
+
+
+def test_latin_ligatures():
+    """Ligatures that don't decompose under NFKD get an explicit mapping."""
+    assert transliterate_ru("Straße") == "strasse"
+    assert transliterate_ru("Æsop") == "aesop"
+    assert transliterate_ru("Cœur") == "coeur"
+    assert transliterate_ru("Łukasiewicz") == "lukasiewicz"
+    assert transliterate_ru("Þórðarson") == "thordarson"
+
+
+def test_diacritic_next_to_cyrillic_mix():
+    # Unusual but shouldn't crash or cross-convert
+    assert transliterate_ru("Иван-Müller") == "ivan-muller"
