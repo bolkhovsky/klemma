@@ -55,7 +55,7 @@ BATCH_SIZE="${2:-20}"
 # ---------------------------------------------------------------------------
 
 ADMIN_TOKEN=""
-TOKEN_EXPIRES_AT=0  # Unix timestamp; populated by _login from JWT exp claim
+TOKEN_REFRESH_AFTER=0  # Unix timestamp: re-login when now >= this value
 
 # Decode the `exp` Unix timestamp from a JWT access token (base64url payload).
 # Prints 0 on any decode failure so _maybe_refresh_token still triggers a login.
@@ -74,7 +74,7 @@ PYEOF
 }
 
 _login() {
-  local resp
+  local resp issued exp lifetime
   resp=$(curl -sf -X POST "$API/auth/login" \
     -H "Content-Type: application/json" \
     -d "{\"email\": \"$ADMIN_EMAIL\", \"password\": \"$ADMIN_PASS\"}") || {
@@ -82,21 +82,32 @@ _login() {
       exit 1
     }
   ADMIN_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-  TOKEN_EXPIRES_AT=$(_get_token_exp "$ADMIN_TOKEN")
+  issued=$(date +%s)
+  exp=$(_get_token_exp "$ADMIN_TOKEN")
+  if [ "$exp" -le 0 ]; then
+    # Decode failed — set refresh point to now so the next batch triggers
+    # a fresh login (conservative; avoids a 401 mid-run).
+    TOKEN_REFRESH_AFTER=$issued
+  else
+    lifetime=$((exp - issued))
+    # Re-login at 90% of the actual token lifetime so the buffer is always
+    # proportional.  A fixed buffer (e.g. 60 s) breaks when the server is
+    # configured with a short TTL: a 1-min token is already inside a 60 s
+    # window the moment _login() returns, causing a login on every batch.
+    TOKEN_REFRESH_AFTER=$((issued + lifetime * 9 / 10))
+  fi
 }
 
-# Call before each batch: re-authenticates only when the access token is
-# within 60 s of expiry.  Uses the JWT exp claim rather than a fixed TTL so
-# the timing auto-adjusts to any KLEMMA_ACCESS_TOKEN_EXPIRE_MINUTES setting.
-# We deliberately re-login rather than calling /auth/refresh — the refresh
-# endpoint revokes all refresh tokens for the user, which would silently log
-# out every other admin session.  /auth/login adds a new token without
-# revoking existing ones, so concurrent sessions are unaffected.
+# Call before each batch: re-authenticates only when the token has consumed
+# 90% of its lifetime.  We deliberately re-login rather than calling
+# /auth/refresh — the refresh endpoint revokes all refresh tokens for the
+# user, which would silently log out every other admin session.
+# /auth/login adds a new token without revoking existing ones.
 _maybe_refresh_token() {
   local now
   now=$(date +%s)
-  if [ "$((TOKEN_EXPIRES_AT - now))" -le 60 ]; then
-    echo "==> Re-authenticating (access token expiring) ..."
+  if [ "$now" -ge "$TOKEN_REFRESH_AFTER" ]; then
+    echo "==> Re-authenticating (access token at 90% of lifetime) ..."
     _login
   fi
 }
