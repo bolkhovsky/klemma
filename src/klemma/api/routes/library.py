@@ -1088,13 +1088,36 @@ def _enqueue_processing(paper_id: str, citekey: str, user_id: str, project_id: s
         return None
 
 
+def _clean_author_slug(raw: str) -> str:
+    """Transliterate Cyrillic → Latin, lowercase, strip to ``[a-z0-9]``.
+
+    Used by ``_citekey_from_filename`` to produce a BBT-compatible author
+    surname slug. Returns empty string if nothing usable remains.
+    """
+    if not raw:
+        return ""
+    from klemma.utils.translit import transliterate_ru
+
+    transliterated = transliterate_ru(raw)
+    return re.sub(r"[^a-z0-9]", "", transliterated.lower())
+
+
 def _citekey_from_filename(filename: str) -> str:
-    """Generate a citekey from a PDF filename.
+    """Generate a BBT-style citekey from a PDF filename.
 
-    Matches CLI pattern (acquirer._generate_citekey): author+year+slug.
+    Format: ``{lastname_lat}{year}``. Cyrillic surnames are transliterated
+    via ``transliterate_ru``; the title is NOT included in the slug (BBT
+    default is short and deterministic; title slugs were the primary source
+    of the long Cyrillic keys seen in prod).
 
-    'Andersson et al. - 2021 - Seasonal Arctic sea ice.pdf' → 'andersson2021_seasonal_arctic_sea_ice'
-    'Smith_2020_Machine_Learning.pdf' → 'smith2020_machine_learning'
+    Collision handling lives at the caller (upload_pdf appends
+    ``_{pdf_hash[:6]}`` when the base is already taken).
+
+    Examples:
+        'Воронина - 2023 - Основные направления.pdf' → 'voronina2023'
+        'Andersson et al. - 2021 - Seasonal Arctic sea ice.pdf' → 'andersson2021'
+        'Smith_2020_Machine_Learning.pdf' → 'smith2020'
+        'Иванов 2019.pdf' → 'ivanov2019'
     """
     name = filename.rsplit(".", 1)[0]  # remove .pdf
 
@@ -1103,14 +1126,9 @@ def _citekey_from_filename(filename: str) -> str:
     if m:
         author_part = m.group(1).strip()
         year = m.group(2)
-        title_part = m.group(3).strip()
-        # First author's last name
-        first_author = re.split(r"[,\s]", author_part)[0]
-        first_author = re.sub(r"[^\w]", "", first_author).lower()
-        # Title slug: first ~30 chars, underscore-separated
-        slug = re.sub(r"[^\w\s]", "", title_part).strip()
-        slug = re.sub(r"\s+", "_", slug).lower()[:30].rstrip("_")
-        return f"{first_author}{year}_{slug}" if first_author else f"paper{year}_{slug}"
+        first_author_raw = re.split(r"[,\s]", author_part)[0]
+        first_author = _clean_author_slug(first_author_raw)
+        return f"{first_author}{year}" if first_author else f"paper{year}"
 
     # Fallback: split on separators, extract year if present
     parts = re.split(r"[_\-\s]+", name)
@@ -1118,31 +1136,16 @@ def _citekey_from_filename(filename: str) -> str:
     if not parts:
         return "unknown"
 
-    # Find year
     year = ""
-    year_idx = -1
-    for i, p in enumerate(parts):
+    for p in parts:
         if re.match(r"^\d{4}$", p):
             year = p
-            year_idx = i
             break
 
-    # First part before year = author, rest = title
-    first_author = parts[0].lower() if parts else "unknown"
-    first_author = re.sub(r"[^\w]", "", first_author)
+    first_author = _clean_author_slug(parts[0]) if parts else ""
+    # A digit-only "surname" means the filename started with the year — not a
+    # real author. Fall back to "paper" so we don't emit "20232023".
+    if not first_author or first_author.isdigit():
+        first_author = "paper"
 
-    if year_idx > 0:
-        # Title words after year
-        title_words = parts[year_idx + 1:]
-    elif year_idx == 0:
-        title_words = parts[1:]
-    else:
-        title_words = parts[1:]
-
-    slug = "_".join(w.lower() for w in title_words[:5])
-    slug = re.sub(r"[^\w_]", "", slug)[:30].rstrip("_")
-
-    key = f"{first_author}{year}"
-    if slug:
-        key += f"_{slug}"
-    return key or "unknown"
+    return f"{first_author}{year}" if year else first_author
