@@ -296,6 +296,7 @@ class LocalUserLibrary:
             chapters=chapters,
             sections=sections,
             external_citekey=_safe_ext_ck(row),
+            project_id=_safe_col(row, "project_id"),
         )
 
     def resolve_paper_id(
@@ -375,6 +376,7 @@ class LocalUserLibrary:
             chapters=chapters,
             sections=sections,
             external_citekey=_safe_ext_ck(row),
+            project_id=_safe_col(row, "project_id"),
         )
 
     # ------------------------------------------------------------------ #
@@ -626,5 +628,13 @@ def _safe_ext_ck(row: sqlite3.Row) -> Optional[str]:
     """Read external_citekey from a row, tolerating pre-v6 schemas in tests."""
     try:
         return row["external_citekey"]
+    except (IndexError, KeyError):
+        return None
+
+
+def _safe_col(row: sqlite3.Row, col: str) -> Optional[str]:
+    """Read a column from a sqlite3.Row, tolerating missing column in old schemas."""
+    try:
+        return row[col]
     except (IndexError, KeyError):
         return None

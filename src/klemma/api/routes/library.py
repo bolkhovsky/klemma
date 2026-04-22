@@ -732,6 +732,21 @@ async def upload_pdf(
             existing.paper_id, user_id=user.user_id
         )
         if existing_source:
+            # User already owns this PDF. If they're re-uploading into a
+            # different project (or into a project when the row had no
+            # project_id), repoint the row to the current project so the
+            # source actually appears in that project's library list.
+            # Without this, the upload silently "disappears" — the source
+            # stays attached to whichever project it was first uploaded
+            # into and the UI never shows it in the current view (#347).
+            if project_id and project_id != existing_source.project_id:
+                library.add_source(
+                    existing.paper_id,
+                    existing_source.citekey,
+                    status=existing_source.status,
+                    project_id=project_id,
+                    user_id=user.user_id,
+                )
             return UploadResponse(
                 citekey=existing_source.citekey,
                 paper_id=existing.paper_id,
