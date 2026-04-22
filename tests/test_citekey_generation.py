@@ -84,4 +84,14 @@ def test_empty_name():
 
 def test_special_chars_stripped():
     assert _citekey_from_filename("O'Brien - 2020 - Title.pdf") == "obrien2020"
-    assert _citekey_from_filename("Müller - 2018 - Paper.pdf") == "mller2018"
+
+
+def test_latin_diacritics_normalized():
+    """Latin with accents → plain ASCII (BBT-compatible). Regression: the
+    previous version stripped diacritics instead of normalizing, producing
+    `mller2018` and similar.
+    """
+    assert _citekey_from_filename("Müller - 2018 - Paper.pdf") == "muller2018"
+    assert _citekey_from_filename("Łukasiewicz - 2019 - X.pdf") == "lukasiewicz2019"
+    assert _citekey_from_filename("Jiménez - 2022 - Y.pdf") == "jimenez2022"
+    assert _citekey_from_filename("Straße - 2020 - Z.pdf") == "strasse2020"

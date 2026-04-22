@@ -515,9 +515,8 @@ async def upload_pdf(
                 already_owned=True,
             )
         # New user, same PDF — generate citekey from filename
-        citekey = _citekey_from_filename(file.filename)
-        if library.get_source_by_citekey(citekey, user_id=user.user_id):
-            citekey = f"{citekey}_{pdf_hash[:6]}"
+        base = _citekey_from_filename(file.filename)
+        citekey = _resolve_citekey_collision(library, base, user.user_id, pdf_hash)
 
         library.add_source(
             existing.paper_id, citekey,
@@ -536,9 +535,8 @@ async def upload_pdf(
 
     # New paper: register + store file
     try:
-        citekey = _citekey_from_filename(file.filename)
-        if library.get_source_by_citekey(citekey, user_id=user.user_id):
-            citekey = f"{citekey}_{pdf_hash[:6]}"
+        base = _citekey_from_filename(file.filename)
+        citekey = _resolve_citekey_collision(library, base, user.user_id, pdf_hash)
 
         paper_id = paper_store.register_paper(
             title=file.filename.rsplit(".", 1)[0],
@@ -1089,7 +1087,7 @@ def _enqueue_processing(paper_id: str, citekey: str, user_id: str, project_id: s
 
 
 def _clean_author_slug(raw: str) -> str:
-    """Transliterate Cyrillic → Latin, lowercase, strip to ``[a-z0-9]``.
+    """Transliterate Cyrillic/diacritics → Latin, lowercase, strip to ``[a-z0-9]``.
 
     Used by ``_citekey_from_filename`` to produce a BBT-compatible author
     surname slug. Returns empty string if nothing usable remains.
@@ -1100,6 +1098,24 @@ def _clean_author_slug(raw: str) -> str:
 
     transliterated = transliterate_ru(raw)
     return re.sub(r"[^a-z0-9]", "", transliterated.lower())
+
+
+def _resolve_citekey_collision(library, base: str, user_id: str, pdf_hash: str) -> str:
+    """Find an unused citekey given ``base`` (e.g. ``smith2023``) for the user.
+
+    BBT-style suffix sequence: ``base``, ``basea``, ``baseb`` … ``basez``.
+    If all 27 slots are taken (two authors + 26 disambiguators, which would
+    mean 27 papers by the same first author in the same year), falls back to
+    ``base_{pdf_hash[:6]}`` so we never loop forever and never clash.
+    """
+    if not library.get_source_by_citekey(base, user_id=user_id):
+        return base
+    for suffix in "abcdefghijklmnopqrstuvwxyz":
+        candidate = f"{base}{suffix}"
+        if not library.get_source_by_citekey(candidate, user_id=user_id):
+            return candidate
+    # Cosmic-ray territory — fall back to hash suffix for guaranteed uniqueness.
+    return f"{base}_{pdf_hash[:6]}"
 
 
 def _citekey_from_filename(filename: str) -> str:
