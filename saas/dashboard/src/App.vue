@@ -208,167 +208,145 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
   <!-- Public / standalone routes: no chrome -->
   <RouterView v-if="isPublicRoute || isStandaloneRoute" :key="routeKey" />
 
-  <!-- App shell -->
-  <div v-else class="flex flex-col h-screen" style="background: var(--color-paper-bg, #faf9f7)">
+  <!-- App shell — sidebar hosts brand / project / nav; main area is unwrapped content -->
+  <div v-else class="app-shell">
 
-    <!-- ── Topbar ─────────────────────────────────────────────────────── -->
-    <header class="h-12 flex-shrink-0 bg-white flex items-center gap-3 px-5 z-20" style="border-bottom: 1px solid var(--color-rule, #e8e5df)">
-      <RouterLink
-        :to="projectId ? `/${projectId}/library` : '/library'"
-        class="font-display font-bold tracking-[-0.4px] text-base no-underline"
-        style="color: var(--color-ink, #1a1a2e)"
-      >k<span style="color: var(--color-accent, #0d7377)">lemma</span></RouterLink>
+    <!-- ── Sidebar ──────────────────────────────────────────────────── -->
+    <aside class="app-sidebar">
 
-      <!-- Project switcher -->
-      <div class="relative" @click.stop>
+      <!-- Brand -->
+      <div class="sidebar-logo-row">
+        <RouterLink
+          :to="projectId ? `/${projectId}/library` : '/library'"
+          class="sidebar-logo"
+        >LitResearch</RouterLink>
+      </div>
+
+      <!-- Project switcher: labeled pill with mono uppercase label + current name + chevron -->
+      <div class="project-switch-wrap" @click.stop>
         <button
+          class="project-switch"
+          :class="{ open: showProjectDropdown }"
           @click="showProjectDropdown = !showProjectDropdown"
-          class="inline-flex items-center gap-1.5 text-sm font-medium rounded-md px-2.5 py-1 border-none bg-transparent cursor-pointer transition-colors"
-          style="color: var(--color-ink-2, #3d3d5c)"
         >
-          <span v-if="projectStore.loading && !projectName" class="inline-block h-3 w-16 rounded animate-pulse" style="background: var(--color-rule, #e8e5df)" />
-          <template v-else>{{ projectName || 'Проект' }}</template>
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="project-switch-inner">
+            <span class="project-switch-label">Проект</span>
+            <span class="project-switch-name">
+              <span v-if="projectStore.loading && !projectName" class="inline-block h-3 w-20 rounded animate-pulse" style="background: var(--color-rule)" />
+              <template v-else>{{ projectName || '—' }}</template>
+            </span>
+          </span>
+          <span class="project-switch-caret">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5l3 3 3-3"/></svg>
+          </span>
         </button>
-        <div
-          v-if="showProjectDropdown"
-          class="absolute top-full left-0 mt-1.5 rounded-[9px] p-[5px] z-50"
-          style="background: white; border: 1px solid var(--color-rule, #e8e5df); min-width: 200px; box-shadow: 0 8px 24px rgba(0,0,0,0.11)"
-        >
-          <div
-            v-for="project in projectStore.projects" :key="project.project_id"
+        <div v-if="showProjectDropdown" class="project-menu">
+          <div class="project-menu-head">Проекты</div>
+          <button
+            v-for="project in projectStore.projects"
+            :key="project.project_id"
+            class="project-menu-item"
+            :class="{ active: project.project_id === projectId }"
             @click="switchProject(project.project_id); showProjectDropdown = false"
-            class="flex items-center gap-2.5 px-2.5 py-[7px] rounded-md text-sm cursor-pointer transition-colors hover:bg-[var(--color-rule-light,#f0ede8)]"
-            :class="project.project_id === projectId ? 'font-medium' : ''"
-            :style="project.project_id === projectId ? 'color: var(--color-accent-deep, #065a5e)' : 'color: var(--color-ink-muted, #6b6b8a)'"
           >
-            <span class="w-[7px] h-[7px] rounded-full flex-shrink-0" :style="project.project_id === projectId ? 'background: var(--color-ok, #2d6a4f)' : 'background: var(--color-rule, #e8e5df)'" />
-            {{ project.name }}
-          </div>
-          <div style="border-top: 1px solid var(--color-rule-light, #f0ede8); margin-top: 4px; padding-top: 4px">
-            <div
-              @click="openWizard(); showProjectDropdown = false"
-              class="flex items-center gap-2 px-2.5 py-[7px] rounded-md text-sm cursor-pointer transition-colors hover:bg-[var(--color-rule-light,#f0ede8)]"
-              style="color: var(--color-ink-muted, #6b6b8a)"
-            >
-              <svg viewBox="0 0 16 16" fill="currentColor" class="w-3 h-3 flex-shrink-0"><path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z"/></svg>
-              Новый проект
-            </div>
-          </div>
+            <span class="project-menu-name">{{ project.name }}</span>
+          </button>
+          <div class="project-menu-divider"></div>
+          <button
+            class="project-menu-item new"
+            @click="openWizard(); showProjectDropdown = false"
+          >
+            <span class="project-menu-name">+ Новый проект</span>
+          </button>
         </div>
       </div>
 
-      <div class="flex-1" />
-
-      <!-- Bell -->
+      <!-- Nav -->
+      <div class="nav-label">Навигация</div>
+      <RouterLink
+        v-if="effectiveProjectId"
+        :to="`/${effectiveProjectId}/library`"
+        class="nav-item"
+        :class="{ active: route.name === 'library' || route.name === 'source' || route.name === 'fragment-review' }"
+      >
+        <span class="nav-icon">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 2h6l3 3v7a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M8 2v3h3" stroke-linejoin="round"/></svg>
+        </span>
+        <span>Библиотека</span>
+      </RouterLink>
+      <RouterLink
+        v-if="effectiveProjectId"
+        :to="`/${effectiveProjectId}/map`"
+        class="nav-item"
+        :class="{ active: route.name === 'map' }"
+      >
+        <span class="nav-icon">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1 3l4-1.5 4 1.5 4-1.5v9l-4 1.5-4-1.5-4 1.5z"/><path d="M5 1.5v9M9 3.5v9"/></svg>
+        </span>
+        <span>Карта</span>
+      </RouterLink>
       <RouterLink
         v-if="projectId"
         :to="`/${projectId}/feed`"
-        class="relative w-8 h-8 rounded-[7px] flex items-center justify-center border transition-colors no-underline"
-        style="border-color: var(--color-rule, #e8e5df); color: var(--color-ink-muted, #6b6b8a)"
-        title="Лента событий"
+        class="nav-item"
+        :class="{ active: route.name === 'feed' }"
       >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M8 1.5a5 5 0 0 1 5 5v2.5l1 2H2l1-2V6.5a5 5 0 0 1 5-5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-          <path d="M6.5 13.5a1.5 1.5 0 0 0 3 0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-        </svg>
+        <span class="nav-icon">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M7 1a4.5 4.5 0 0 1 4.5 4.5v2.25l1 1.75H1.5l1-1.75V5.5A4.5 4.5 0 0 1 7 1z"/><path d="M5.75 11.5a1.3 1.3 0 0 0 2.5 0" stroke-linecap="round"/></svg>
+        </span>
+        <span>Лента</span>
       </RouterLink>
-    </header>
 
-    <!-- ── Workspace ──────────────────────────────────────────────────── -->
-    <div class="flex flex-1 overflow-hidden">
-
-      <!-- ── Sidebar ──────────────────────────────────────────────────── -->
-      <nav class="flex-shrink-0 flex flex-col overflow-y-auto" style="width: 176px; background: white; border-right: 1px solid var(--color-rule, #e8e5df)">
-
-        <!-- Nav links -->
-        <div class="py-2">
-          <div class="px-3.5 py-1 text-[13px] font-semibold uppercase tracking-wide" style="color: var(--color-ink-muted, #6b6b8a)">Навигация</div>
-          <RouterLink
-            v-if="effectiveProjectId"
-            :to="`/${effectiveProjectId}/library`"
-            class="flex items-center gap-2 px-3.5 py-2 text-[14px] no-underline transition-colors rounded-md mx-1.5"
-            :class="route.name === 'library' || route.name === 'source' || route.name === 'fragment-review' ? 'font-semibold' : ''"
-            :style="route.name === 'library' || route.name === 'source' || route.name === 'fragment-review' ? 'color: var(--color-accent-deep, #065a5e); background: var(--color-accent-pale, #e6f3f3)' : 'color: var(--color-ink-2, #3d3d5c)'"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0" :style="route.name === 'library' || route.name === 'source' || route.name === 'fragment-review' ? 'color: var(--color-accent, #0d7377)' : 'color: var(--color-ink-muted, #9898b0)'">
-              <path d="M2 2h6l3 3v7a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3"/>
-              <path d="M8 2v3h3" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-            </svg>
-            Библиотека
-          </RouterLink>
-          <RouterLink
-            v-if="effectiveProjectId"
-            :to="`/${effectiveProjectId}/map`"
-            class="flex items-center gap-2 px-3.5 py-2 text-[14px] no-underline transition-colors rounded-md mx-1.5"
-            :class="route.name === 'map' ? 'font-semibold' : ''"
-            :style="route.name === 'map' ? 'color: var(--color-accent-deep, #065a5e); background: var(--color-accent-pale, #e6f3f3)' : 'color: var(--color-ink-2, #3d3d5c)'"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0" :style="route.name === 'map' ? 'color: var(--color-accent, #0d7377)' : 'color: var(--color-ink-muted, #9898b0)'">
-              <path d="M1 3l4-1.5 4 1.5 4-1.5v9l-4 1.5-4-1.5-4 1.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-              <path d="M5 1.5v9M9 3.5v9" stroke="currentColor" stroke-width="1.3"/>
-            </svg>
-            Карта
-          </RouterLink>
-          <div v-if="!effectiveProjectId" class="px-3.5 py-3 text-[13px] italic" style="color: var(--color-ink-muted, #6b6b8a)">
-            <div v-if="projectStore.loading">Загрузка…</div>
-            <div v-else>Выберите проект</div>
-          </div>
-        </div>
-
-        <div class="flex-1" />
-
-        <!-- User profile -->
-        <div style="border-top: 1px solid var(--color-rule, #e8e5df); padding: 10px 12px">
-          <!-- Skeleton while loading -->
-          <template v-if="!profileLoaded">
-            <div class="flex items-center gap-2 mb-2 px-[2px] py-1">
-              <div class="w-[30px] h-[30px] rounded-full flex-shrink-0 animate-pulse" style="background: var(--color-rule, #e8e5df)" />
-              <div class="flex-1 space-y-1.5">
-                <div class="h-3 w-20 rounded animate-pulse" style="background: var(--color-rule, #e8e5df)" />
-                <div class="h-3 w-10 rounded animate-pulse" style="background: var(--color-rule, #e8e5df)" />
-              </div>
-            </div>
-            <div class="h-1 rounded-full animate-pulse mb-1" style="background: var(--color-rule, #e8e5df)" />
-            <div class="h-2.5 w-16 rounded animate-pulse ml-auto" style="background: var(--color-rule, #e8e5df)" />
-          </template>
-          <!-- Loaded -->
-          <template v-else>
-            <div class="flex items-center gap-2 mb-2 rounded-lg px-[2px] py-1">
-              <div class="w-[30px] h-[30px] rounded-full flex-shrink-0 flex items-center justify-center text-[14px] font-bold text-white" style="background: linear-gradient(135deg, #6366f1 0%, #2563eb 100%)">{{ userInitials }}</div>
-              <div class="flex-1 min-w-0">
-                <div class="text-[14px] font-semibold truncate" style="color: var(--color-ink, #1a1a2e)">{{ userName || '…' }}</div>
-                <div class="inline-flex items-center gap-0.5 text-[12px] font-semibold rounded px-[5px] py-[1px] mt-0.5" style="color: #7c3aed; background: #f3e8ff; border: 1px solid #e9d5ff">
-                  <svg width="9" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
-                  Pro
-                </div>
-              </div>
-              <button @click="logout" title="Выйти" class="w-6 h-6 flex items-center justify-center rounded-md transition-colors hover:bg-[var(--color-err-bg,#fff0f0)] flex-shrink-0" style="color: var(--color-ink-muted, #6b6b8a)">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-              </button>
-            </div>
-            <template v-if="tokenBalance && tokenBalance.total_granted > 0">
-              <div class="flex justify-between items-center mb-1" style="font-size: 12px; color: var(--color-ink-muted, #6b6b8a)">
-                <span>Кредиты</span>
-                <strong style="font-family: var(--font-mono, monospace); color: var(--color-ink-2, #3d3d5c)">{{ tokenBalance.remaining.toLocaleString() }}</strong>
-              </div>
-              <div
-                class="rounded-full overflow-hidden cursor-help"
-                style="height: 4px; background: var(--color-rule, #e8e5df); margin-bottom: 3px"
-                :title="`${tokenBalance.remaining.toLocaleString()} из ${tokenBalance.total_granted.toLocaleString()} кредитов · ~${Math.floor(tokenBalance.remaining / 12000)} статей осталось · обновляются 1-го числа`"
-              >
-                <div class="h-full rounded-full transition-all" :style="{ width: `${100 - tokenPercent}%`, background: tokenBarLow ? 'linear-gradient(90deg, #f59e0b, #ef4444)' : 'linear-gradient(90deg, #6366f1, #2563eb)' }" />
-              </div>
-              <div class="text-right" style="font-size: 12px; color: var(--color-ink-muted, #6b6b8a)">из {{ tokenBalance.total_granted.toLocaleString() }} в месяц</div>
-            </template>
-          </template>
-        </div>
-      </nav>
-
-      <!-- ── Main content ─────────────────────────────────────────────── -->
-      <div class="flex-1 flex overflow-hidden">
-        <RouterView :key="routeKey" />
+      <div v-if="!effectiveProjectId" class="nav-empty">
+        <span v-if="projectStore.loading">Загрузка…</span>
+        <span v-else>Выберите проект</span>
       </div>
+
+      <div class="sidebar-spacer"></div>
+
+      <!-- Credits + user (pinned to bottom) -->
+      <div class="sidebar-bottom">
+        <template v-if="!profileLoaded">
+          <div class="flex items-center gap-2 mb-2 px-[2px] py-1">
+            <div class="w-[28px] h-[28px] rounded-full flex-shrink-0 animate-pulse" style="background: var(--color-rule)" />
+            <div class="flex-1 space-y-1.5">
+              <div class="h-3 w-20 rounded animate-pulse" style="background: var(--color-rule)" />
+              <div class="h-3 w-10 rounded animate-pulse" style="background: var(--color-rule)" />
+            </div>
+          </div>
+        </template>
+        <template v-else>
+          <div v-if="tokenBalance && tokenBalance.total_granted > 0" class="credits">
+            <div class="credits-row">
+              <span>Кредиты</span>
+              <span><span class="credits-num">{{ tokenBalance.remaining.toLocaleString() }}</span>
+                <span class="credits-total"> / {{ tokenBalance.total_granted.toLocaleString() }}</span></span>
+            </div>
+            <div
+              class="credits-bar"
+              :title="`${tokenBalance.remaining.toLocaleString()} из ${tokenBalance.total_granted.toLocaleString()} кредитов · обновляются 1-го числа`"
+            >
+              <div class="credits-bar-fill" :class="{ low: tokenBarLow }" :style="{ width: `${100 - tokenPercent}%` }" />
+            </div>
+            <div class="credits-sub">в месяц · обновится 1-го</div>
+          </div>
+          <div class="user-row">
+            <div class="user-avatar">{{ userInitials }}</div>
+            <div class="user-meta">
+              <span class="user-name">{{ userName || '…' }}</span>
+              <span class="pro-chip">Pro</span>
+            </div>
+            <button class="icon-btn" @click="logout" title="Выйти" aria-label="Выйти">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            </button>
+          </div>
+        </template>
+      </div>
+    </aside>
+
+    <!-- ── Main area ─────────────────────────────────────────────────── -->
+    <div class="app-main">
+      <RouterView :key="routeKey" />
     </div>
   </div>
 
@@ -485,3 +463,318 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+/* App shell — sidebar + content */
+.app-shell {
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  min-height: 100vh;
+  background: var(--color-paper);
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────── */
+.app-sidebar {
+  background: var(--color-paper-2);
+  border-right: 1px solid var(--color-rule);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 14px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.sidebar-logo-row {
+  padding: 4px 8px 28px;
+}
+.sidebar-logo {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
+  line-height: 1;
+  text-decoration: none;
+}
+.sidebar-logo:hover { color: var(--color-ink); }
+
+/* Project switcher: labeled pill */
+.project-switch-wrap { position: relative; margin: 0 0 22px 0; }
+.project-switch {
+  width: 100%;
+  padding: 7px 10px;
+  background: white;
+  border: 1px solid var(--color-rule);
+  border-radius: 4px;
+  color: var(--color-ink-light);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+.project-switch:hover { border-color: var(--color-accent-rule); }
+.project-switch.open {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-tint);
+}
+.project-switch-inner {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+.project-switch-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-ink-faint);
+}
+.project-switch-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-switch-caret {
+  color: var(--color-ink-muted);
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform .15s ease, color .15s ease;
+  flex-shrink: 0;
+}
+.project-switch:hover .project-switch-caret { color: var(--color-ink); }
+.project-switch.open .project-switch-caret {
+  transform: rotate(180deg);
+  color: var(--color-accent);
+}
+
+.project-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid var(--color-rule);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(30,27,24,.08), 0 2px 6px rgba(30,27,24,.04);
+  padding: 6px;
+  z-index: 40;
+}
+.project-menu-head {
+  padding: 6px 8px 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-ink-faint);
+}
+.project-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font: inherit;
+  color: var(--color-ink-light);
+  cursor: pointer;
+  text-align: left;
+}
+.project-menu-item:hover { background: var(--color-paper-2); }
+.project-menu-item.active {
+  background: var(--color-accent-tint);
+  color: var(--color-accent);
+}
+.project-menu-item.new {
+  color: var(--color-accent);
+  font-weight: 500;
+}
+.project-menu-name { font-size: 13px; font-weight: 500; }
+.project-menu-item.active .project-menu-name { color: var(--color-accent); }
+.project-menu-divider {
+  height: 1px;
+  background: var(--color-rule);
+  margin: 6px 4px;
+}
+
+/* Nav */
+.nav-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-ink-muted);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 12px 10px 6px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  font-size: 13px;
+  color: var(--color-ink-light);
+  cursor: pointer;
+  line-height: 1.4;
+  text-decoration: none;
+}
+.nav-item:hover { background: white; }
+.nav-item.active {
+  background: var(--color-accent-tint);
+  color: var(--color-accent);
+  font-weight: 500;
+}
+.nav-item .nav-icon {
+  width: 14px;
+  color: var(--color-ink-muted);
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.nav-item.active .nav-icon { color: var(--color-accent); }
+
+.nav-empty {
+  padding: 10px 12px;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--color-ink-muted);
+}
+
+.sidebar-spacer { flex: 1; }
+
+/* Bottom: credits + user */
+.sidebar-bottom {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-rule);
+}
+.credits {
+  padding: 10px 8px 4px;
+  font-size: 11px;
+  color: var(--color-ink-muted);
+}
+.credits-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.credits-num {
+  font-family: var(--font-mono);
+  color: var(--color-ink-light);
+  font-weight: 500;
+}
+.credits-total { color: var(--color-ink-faint); }
+.credits-bar {
+  height: 3px;
+  background: var(--color-paper-3);
+  border-radius: 2px;
+  overflow: hidden;
+  cursor: help;
+}
+.credits-bar-fill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width .2s ease;
+}
+.credits-bar-fill.low {
+  background: linear-gradient(90deg, #f59e0b, #ef4444);
+}
+.credits-sub {
+  font-size: 10px;
+  color: var(--color-ink-faint);
+  margin-top: 4px;
+}
+
+.user-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 8px 4px;
+}
+.user-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--color-accent-tint);
+  color: var(--color-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.user-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.user-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pro-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--color-picked-tint);
+  color: var(--color-picked);
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.icon-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-ink-muted);
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.icon-btn:hover {
+  background: var(--color-paper-3);
+  color: var(--color-ink-light);
+}
+
+/* Main area */
+.app-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 100vh;
+}
+
+/* Responsive: collapse sidebar on narrow screens */
+@media (max-width: 860px) {
+  .app-shell { grid-template-columns: 1fr; }
+  .app-sidebar {
+    position: static;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--color-rule);
+  }
+}
+</style>
