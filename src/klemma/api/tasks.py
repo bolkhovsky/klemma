@@ -969,22 +969,31 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
         except Exception as exc:
             logger.warning("Failed to load project outline: %s", exc)
 
-    # Load section citekeys and build source_summaries + fragments
+    # Load section citekeys and build source_summaries + fragments. Everything
+    # the model sees (valid_citekeys, source_summaries[].citekey,
+    # fragments[].source, candidate_sentences[].citekey below) must live in the
+    # same citekey-space, otherwise the drafter's hallucination filter
+    # (drafter._filter_hallucinated_citations) will reject [@external] in
+    # output. Display map maps internal → external_citekey-if-set.
     source_summaries: list[dict] = []
     fragments: list[dict] = []
     valid_citekeys: set[str] = set()
 
     try:
         section_citekeys = project_store.get_sources_by_section(section, user_id=user_id or None)
+        display_map = user_library.get_display_citekeys(
+            list(section_citekeys), user_id=user_id or None,
+        )
         for citekey in section_citekeys:
-            valid_citekeys.add(citekey)
+            display_ck = display_map.get(citekey, citekey)
+            valid_citekeys.add(display_ck)
             src = user_library.get_source_by_citekey(citekey, user_id=user_id or None)
             if not src:
                 continue
             paper = paper_store.get_paper_by_id(src.paper_id)
             if paper:
                 source_summaries.append({
-                    "citekey": citekey,
+                    "citekey": display_ck,
                     "quality": "?",
                     "priority": "medium",
                     "summary": (paper.abstract or "")[:300],
@@ -992,7 +1001,7 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
             paper_fragments = paper_store.get_fragments(src.paper_id)
             for f in paper_fragments:
                 fragments.append({
-                    "source": citekey,
+                    "source": display_ck,
                     "type": f.fragment_type or "key_idea",
                     "relevance": 3,
                     "text": f.fragment_text,
@@ -1019,11 +1028,18 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
             accepted_rows = user_store.get_curated(
                 project_id, verdict="accepted", section=section
             )
+            # Resolve display for all candidate citekeys in one batch (may
+            # extend display_map with citekeys that belong to other sections).
+            candidate_cks = list({row["citekey"] for row in accepted_rows})
+            candidate_display_map = user_library.get_display_citekeys(
+                candidate_cks, user_id=user_id or None,
+            )
             for row in accepted_rows:
                 sentence = (row.get("suggested_text") or "").strip()
                 if sentence:
+                    internal_ck = row["citekey"]
                     candidate_sentences.append({
-                        "citekey": row["citekey"],
+                        "citekey": candidate_display_map.get(internal_ck, internal_ck),
                         "sentence": sentence,
                     })
         except Exception as exc:
@@ -1173,6 +1189,10 @@ def generate_sentences_task(
 
     language = os.getenv("KLEMMA_SENTENCE_LANGUAGE", "Russian")
 
+    # Use display citekey (external_citekey if set via BBT import) in the
+    # generated sentence text. Internal citekey stays for DB writes below.
+    display_ck = src.external_citekey or src.citekey
+
     try:
         ai, ai_config = _create_ai_provider()
         from klemma.config import _SHIPPED_PROMPTS_DIR
@@ -1182,7 +1202,7 @@ def generate_sentences_task(
 
         result = generate_sentences(
             fragments_payload,
-            citekey=citekey,
+            citekey=display_ck,
             authors=(paper.authors if paper else "") or "",
             year=(paper.year if paper else None),
             outline=outline_payload,
