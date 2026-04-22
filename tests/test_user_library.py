@@ -17,13 +17,13 @@ def lib(tmp_path) -> LocalUserLibrary:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_5(tmp_path):
+def test_schema_version_is_6(tmp_path):
     db_path = tmp_path / "library.db"
     LocalUserLibrary(db_path)
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 5
+    assert version == 6
 
 
 def test_tables_created(tmp_path):
@@ -57,7 +57,7 @@ def test_paper_store_schema_coexists(tmp_path):
         ).fetchall()
     }
     conn.close()
-    assert version == 5
+    assert version == 6
     # Both sets of tables present
     assert "papers" in tables
     assert "user_sources" in tables
