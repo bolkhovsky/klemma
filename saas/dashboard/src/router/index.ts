@@ -85,6 +85,12 @@ const router = createRouter({
       component: () => import('../views/SectionEditorView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/:projectId/settings',
+      name: 'project-settings',
+      component: () => import('../views/ProjectSettingsView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 

@@ -210,7 +210,7 @@ function pluralizeCitations(n: number): string {
 // When citekey matches the current source, use author+year; otherwise keep the key itself.
 function formatParaphrase(text: string): string {
   if (!text) return ''
-  return text.replace(/\[@([\w\d_-]+)\]/g, (_m, key) => {
+  return text.replace(/\[@([\w:.+\-]+)\]/g, (_m, key) => {
     if (key === citekey.value && sourceAuthors.value) {
       const a = sourceAuthors.value
       const short = a.includes(',') ? a.split(',')[0]!.trim() : a
