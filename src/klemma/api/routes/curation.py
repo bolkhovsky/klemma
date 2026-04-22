@@ -191,17 +191,21 @@ async def get_pending_fragments(
     user_store = get_user_store()
     outline = project.get("outline")
 
-    src = library.get_source_by_citekey(citekey, user_id=user.user_id)
+    # Dual-key: accept internal citekey or external_citekey override.
+    src = library.get_source_by_any_key(citekey, user_id=user.user_id)
     if not src:
         raise HTTPException(status_code=404, detail="Source not found")
+    internal_ck = src.citekey
+    display_ck = src.external_citekey or src.citekey
 
     all_fragments = paper_store.get_fragments(src.paper_id)
     curated_ids = user_store.get_curated_fragment_ids(project_id)
 
     # Existing curation rows for this source (needed for suggested_text lookup).
+    # DB stores the internal citekey regardless of what the client sent.
     curated_rows = {
         c["fragment_id"]: c
-        for c in user_store.get_curated(project_id, citekey=citekey)
+        for c in user_store.get_curated(project_id, citekey=internal_ck)
     }
 
     pending = []
@@ -214,7 +218,7 @@ async def get_pending_fragments(
                 citation_intent=f.citation_intent or "",
                 fragment_type=f.fragment_type or "",
                 page=f.page_number,
-                citekey=citekey,
+                citekey=display_ck,
                 suggested_section=auto_assign_section(f.citation_intent, outline),
                 verbatim=f.verbatim,
                 suggested_text=row.get("suggested_text"),
@@ -239,27 +243,31 @@ async def curate_fragments(
     user_store = get_user_store()
     outline = project.get("outline")
 
+    # Resolve each decision's citekey via dual-key so the UI can round-trip
+    # display citekeys through /suggest → /curate. DB writes always use the
+    # internal citekey.
+    library = get_user_library()
+    paper_store = get_paper_store()
+
     decisions = []
     accepted = 0
     rejected = 0
     for d in body.decisions:
+        src = library.get_source_by_any_key(d.citekey, user_id=user.user_id)
+        internal_ck = src.citekey if src else d.citekey
+
         section = d.assigned_section
-        if d.verdict == "accepted" and not section:
-            # Try auto-assignment via intent→section_type mapping
-            paper_store = get_paper_store()
-            library = get_user_library()
-            src = library.get_source_by_citekey(d.citekey, user_id=user.user_id)
+        if d.verdict == "accepted" and not section and src:
             intent = None
-            if src:
-                for f in paper_store.get_fragments(src.paper_id):
-                    if f.fragment_id == d.fragment_id:
-                        intent = f.citation_intent
-                        break
+            for f in paper_store.get_fragments(src.paper_id):
+                if f.fragment_id == d.fragment_id:
+                    intent = f.citation_intent
+                    break
             section = auto_assign_section(intent, outline)
 
         decisions.append({
             "fragment_id": d.fragment_id,
-            "citekey": d.citekey,
+            "citekey": internal_ck,
             "verdict": d.verdict,
             "assigned_section": section,
             "note": d.note,
@@ -283,17 +291,32 @@ async def get_curated_fragments(
     citekey: Optional[str] = None,
     user: UserRecord = Depends(get_current_user),
 ) -> CuratedBankResponse:
-    """Get curated fragments with optional filters."""
+    """Get curated fragments with optional filters.
+
+    ``citekey`` filter accepts either internal citekey or external_citekey
+    (BBT override); response echoes display citekey consistently.
+    """
     _get_project_or_404(project_id, user)
     user_store = get_user_store()
+    library = get_user_library()
+
+    # Resolve filter citekey → internal for DB query.
+    internal_citekey_filter: Optional[str] = None
+    if citekey:
+        src = library.get_source_by_any_key(citekey, user_id=user.user_id)
+        if src is None:
+            # Unknown key: return empty rather than leak all curated rows.
+            return CuratedBankResponse(fragments=[], total=0, by_section={})
+        internal_citekey_filter = src.citekey
 
     curated = user_store.get_curated(
-        project_id, verdict=verdict, section=section, citekey=citekey
+        project_id, verdict=verdict, section=section, citekey=internal_citekey_filter
     )
 
-    # Collect unique citekeys to fetch fragment text
+    # Collect unique citekeys to fetch fragment text + build display map.
     citekeys = {c["citekey"] for c in curated}
     text_map = _build_fragment_text_map(user.user_id, citekeys)
+    display_map = library.get_display_citekeys(list(citekeys), user_id=user.user_id)
 
     fragments = []
     by_section: dict[str, int] = {}
@@ -303,7 +326,7 @@ async def get_curated_fragments(
         by_section[sec] = by_section.get(sec, 0) + 1
         fragments.append(CuratedFragment(
             fragment_id=c["fragment_id"],
-            citekey=c["citekey"],
+            citekey=display_map.get(c["citekey"], c["citekey"]),
             text=frag_data.get("text", ""),
             citation_intent=frag_data.get("citation_intent", ""),
             assigned_section=c["assigned_section"],
@@ -377,6 +400,8 @@ async def suggest_fragments(
     all_sources = library.get_all_sources(user_id=user.user_id)
     known_citekeys = {s.citekey for s in all_sources}
     text_map = _build_fragment_text_map(user.user_id, known_citekeys)
+    # Batch-resolve display citekeys so UI sees external_citekey when set.
+    display_map = library.get_display_citekeys(list(known_citekeys), user_id=user.user_id)
 
     suggestions: list[SuggestFragment] = []
     seen_intents: set[str] = set()
@@ -408,12 +433,14 @@ async def suggest_fragments(
         if intent:
             seen_intents.add(intent)
 
+        internal_ck = frag_data.get("citekey", "")
+        display_ck = display_map.get(internal_ck, internal_ck)
         suggestions.append(SuggestFragment(
             fragment_id=frag_id,
             text=frag_data.get("text", ""),
             citation_intent=intent,
-            source=frag_data.get("citekey", ""),
-            citekey=frag_data.get("citekey", ""),
+            source=display_ck,
+            citekey=display_ck,
             match_reason=match_reason,
             score=score,
         ))
@@ -521,11 +548,16 @@ async def generate_sentences_endpoint(
     mode = body.mode if body.mode in ("missing", "force") else "missing"
 
     library = get_user_library()
-    if not library.get_source_by_citekey(body.citekey, user_id=user.user_id):
+    # Dual-key: accept either internal citekey or external_citekey.
+    src = library.get_source_by_any_key(body.citekey, user_id=user.user_id)
+    if src is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source '{body.citekey}' not found in library",
         )
+    # Worker reads source by the citekey the client sent; it will re-resolve
+    # and pick up external_citekey for display. No internal rewrite needed
+    # here because the task looks up the source fresh by the submitted key.
 
     from ..tasks import generate_sentences_task
 

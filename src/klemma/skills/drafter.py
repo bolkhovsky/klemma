@@ -27,7 +27,7 @@ class DraftResult:
 
 def _extract_citations(text: str) -> list[str]:
     """Extract all [@citekey] references from text."""
-    return re.findall(r"\[@([\w\-]+)\]", text)
+    return re.findall(r"\[@([\w:.+\-]+)\]", text)
 
 
 def _filter_hallucinated_citations(
@@ -47,7 +47,7 @@ def _filter_hallucinated_citations(
         removed.append(citekey)
         return ""
 
-    cleaned = re.sub(r"\[@([\w\-]+)\]", _replace, text)
+    cleaned = re.sub(r"\[@([\w:.+\-]+)\]", _replace, text)
     # Clean up double spaces left by removals
     cleaned = re.sub(r"  +", " ", cleaned)
     return cleaned, sorted(set(removed))
@@ -157,7 +157,7 @@ def generate_draft(
         )
 
     # Convert [@citekey] → [[@citekey]] for Obsidian wikilinks
-    text = re.sub(r"\[@([\w\-]+)\]", r"[[@\1]]", text)
+    text = re.sub(r"\[@([\w:.+\-]+)\]", r"[[@\1]]", text)
 
     word_count = len(text.split())
 

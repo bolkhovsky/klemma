@@ -290,17 +290,22 @@ async def list_sources(
         paper = paper_store.get_paper_by_id(src.paper_id)
         title = paper.title if paper else ""
         authors = paper.authors if paper else ""
+        display_ck = src.external_citekey or src.citekey
+        # q matches both internal citekey and external_citekey, so searching
+        # for "voronina2023" finds a source with internal "воронина2023_ugly"
+        # and external_citekey "voronina2023".
         if q_lower and not (
             q_lower in title.lower()
             or q_lower in authors.lower()
             or q_lower in src.citekey.lower()
+            or (src.external_citekey and q_lower in src.external_citekey.lower())
         ):
             continue
         project_sections = project_store.get_source_sections(src.citekey, user_id=user.user_id)
         sections = project_sections if project_sections else src.sections
         results.append(
             SourceResponse(
-                citekey=src.citekey,
+                citekey=display_ck,
                 paper_id=src.paper_id,
                 status=src.status,
                 title=title,
@@ -335,10 +340,14 @@ async def search_fragments(
         return FragmentSearchResponse(results=[], total=0, query=q)
 
     raw = paper_store.search_fragments_for_user(user.user_id, q, limit)
+    # Batch-resolve display citekeys so results echo external_citekey when set.
+    library = get_user_library()
+    internal_cks = list({r["citekey"] for r in raw})
+    display_map = library.get_display_citekeys(internal_cks, user_id=user.user_id)
     results = [
         FragmentSearchResult(
             fragment_id=r["fragment_id"],
-            citekey=r["citekey"],
+            citekey=display_map.get(r["citekey"], r["citekey"]),
             title=r["title"],
             authors=r["authors"],
             year=r["year"],
@@ -355,11 +364,16 @@ async def get_source(
     citekey: str,
     user: UserRecord = Depends(get_current_user),
 ) -> SourceDetailResponse:
-    """Get a source with its fragments. Only accessible if owned by the authenticated user."""
+    """Get a source with its fragments. Only accessible if owned by the authenticated user.
+
+    Accepts either the internal citekey or the external_citekey (BBT
+    display override); response echoes display citekey so the UI stays
+    in one namespace.
+    """
     library = get_user_library()
     paper_store = get_paper_store()
 
-    src = library.get_source_by_citekey(citekey, user_id=user.user_id)
+    src = library.get_source_by_any_key(citekey, user_id=user.user_id)
     if src is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -368,9 +382,10 @@ async def get_source(
 
     paper = paper_store.get_paper_by_id(src.paper_id)
     fragments = paper_store.get_fragments(src.paper_id)
+    display_ck = src.external_citekey or src.citekey
 
     return SourceDetailResponse(
-        citekey=src.citekey,
+        citekey=display_ck,
         paper_id=src.paper_id,
         status=src.status,
         title=paper.title if paper else "",
@@ -649,14 +664,15 @@ async def delete_source(
     """
     library = get_user_library()
 
-    src = library.get_source_by_citekey(citekey, user_id=user.user_id)
+    src = library.get_source_by_any_key(citekey, user_id=user.user_id)
     if src is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source '{citekey}' not found",
         )
 
-    library.remove_source(citekey, user_id=user.user_id)
+    # Delete by internal citekey — external_citekey is not a PK.
+    library.remove_source(src.citekey, user_id=user.user_id)
     invalidate_for_user(get_paper_store(), user.user_id)
 
 
@@ -829,10 +845,11 @@ async def metadata_preview(
     paper_store = get_paper_store()
     file_store = get_file_store()
 
-    # Ownership check
-    paper_id = library.resolve_paper_id(citekey, user_id=user.user_id)
-    if not paper_id:
+    # Ownership check (dual-key — accepts internal or external citekey)
+    src = library.get_source_by_any_key(citekey, user_id=user.user_id)
+    if src is None:
         raise HTTPException(status_code=404, detail=f"Source '{citekey}' not found")
+    paper_id = src.paper_id
 
     paper = paper_store.get_paper_by_id(paper_id)
     current = MetadataCurrentFields.from_paper(paper)
@@ -874,10 +891,13 @@ async def enrich_metadata(
     library = get_user_library()
     paper_store = get_paper_store()
 
-    # Ownership check
-    paper_id = library.resolve_paper_id(citekey, user_id=user.user_id)
-    if not paper_id:
+    # Ownership check (dual-key — accepts internal or external citekey)
+    src = library.get_source_by_any_key(citekey, user_id=user.user_id)
+    if src is None:
         raise HTTPException(status_code=404, detail=f"Source '{citekey}' not found")
+    paper_id = src.paper_id
+    # Rewrite the caller's view to the internal citekey for downstream writes.
+    citekey = src.citekey
 
     paper = paper_store.get_paper_by_id(paper_id)
     if not paper:

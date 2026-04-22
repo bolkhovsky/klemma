@@ -944,6 +944,45 @@ def test_import_bbt_fuzzy_matches_given_family_format(client, stores):
     assert data["matched"][0]["external_citekey"] == "smith2022"
 
 
+def test_get_source_accepts_external_citekey(client, stores):
+    """GET /library/sources/{ck} must resolve either internal or external
+    citekey (dual-key) and echo display in the response.
+    """
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(title="X", pdf_hash="h_dk")
+    user_library.add_source(pid, "internal_ugly", status="completed", user_id=user_id)
+    user_library.set_external_citekey("internal_ugly", "smith2023", user_id=user_id)
+
+    # By internal — response echoes display
+    r1 = client.get("/library/sources/internal_ugly", headers=_auth_headers(token))
+    assert r1.status_code == 200
+    assert r1.json()["citekey"] == "smith2023"
+
+    # By external — same result
+    r2 = client.get("/library/sources/smith2023", headers=_auth_headers(token))
+    assert r2.status_code == 200
+    assert r2.json()["citekey"] == "smith2023"
+
+
+def test_list_sources_q_searches_external_citekey(client, stores):
+    """?q=<external> finds source whose internal citekey doesn't match q."""
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(title="Some Title", pdf_hash="h_qlist")
+    user_library.add_source(pid, "internal_xyz", status="completed", user_id=user_id)
+    user_library.set_external_citekey("internal_xyz", "voronina2023", user_id=user_id)
+
+    resp = client.get("/library/sources?q=voronina2023", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    citekeys = [s["citekey"] for s in resp.json()["sources"]]
+    assert "voronina2023" in citekeys
+
+
 def test_import_bbt_doi_matches_url_wrapped_stored_doi(client, stores):
     """Paper DOI stored with URL prefix (e.g. ``https://doi.org/10.x``) must
     normalize-match a bare DOI in the BBT entry. Regression: Codex P2 on #346.
