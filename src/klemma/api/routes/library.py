@@ -454,6 +454,50 @@ def _normalize_title_prefix(title: str, n: int = 40) -> str:
     return stripped[:n]
 
 
+_INITIAL_RE = re.compile(r"^[A-ZА-ЯЁ]\.?([A-ZА-ЯЁ]\.?)*$")
+
+
+def _looks_like_initial(token: str) -> bool:
+    """Heuristic: is this token a name initial (``"K"``, ``"J.D."``, ``"A.B."``)?
+
+    Matches a sequence of 1-2 uppercase letters, each optionally followed by
+    a dot. Doesn't match surnames like ``"Ng"`` (short but lowercase follow-ups)
+    — the all-upper pattern is the distinguishing signal for initials.
+    """
+    return bool(_INITIAL_RE.match(token)) and len(token.replace(".", "")) <= 3
+
+
+def _first_author_surname(authors: str) -> str:
+    """Extract the first author's surname from a free-form authors string.
+
+    Handles the three common forms:
+      - ``"Smith, J."``       (BibTeX/Zotero canonical, Last-first)
+      - ``"John Smith"``      (CrossRef/Semantic Scholar extended, Given-Family)
+      - ``"Smith J."``        (CrossRef/Semantic Scholar compressed, Last-initial)
+
+    Rules (in order):
+      1. Take the first chunk split on ``;`` (multi-author separator).
+      2. Comma present → BibTeX form → surname is before the comma.
+      3. Otherwise: strip trailing tokens that look like initials (``"K"``,
+         ``"J.D."``), then the last remaining token is the surname.
+      4. Single-token name → return as-is.
+    """
+    if not authors:
+        return ""
+    chunk = authors.split(";", 1)[0].strip()
+    if "," in chunk:
+        return chunk.split(",", 1)[0].strip()
+    tokens = chunk.split()
+    # Strip trailing initials so "Andersson K" and "Smith J.D." collapse to
+    # the surname. If the leading tokens ARE initials (Given-Family with
+    # "J. Smith"), they stay — the last non-initial is still the surname.
+    while len(tokens) > 1 and _looks_like_initial(tokens[-1]):
+        tokens.pop()
+    if not tokens:
+        return ""
+    return tokens[-1] if len(tokens) > 1 else tokens[0]
+
+
 def _match_bbt_to_library(
     entries: list, paper_store, library, user_id: str
 ) -> ImportBbtResponse:
@@ -465,22 +509,27 @@ def _match_bbt_to_library(
         2. Fuzzy: normalized title prefix (40 chars) + latinized first-author
            lastname + year. Multi-hit → ambiguous (no external_citekey set).
     """
+    from klemma.literature.bbt_upload import normalize_doi
     from klemma.utils.translit import transliterate_ru
 
     # Build once: all user sources → (citekey, paper_record, normalized keys)
     all_sources = library.get_all_sources(user_id=user_id)
     # paper_id → PaperRecord (batched single-fetch would be nicer; this is
     # a one-shot admin-ish endpoint so N+1 is acceptable for first cut)
-    indexed: list[tuple[str, object, str, str, int | None]] = []
+    indexed: list[tuple[str, object, str, str, int | None, str | None]] = []
     for src in all_sources:
         paper = paper_store.get_paper_by_id(src.paper_id)
         if paper is None:
             continue
         title_prefix = _normalize_title_prefix(paper.title or "")
-        # Local normalize: take first token (surname), transliterate + lowercase + [a-z0-9]
-        first_author_raw = (paper.authors or "").split(",")[0].strip().split()[0] if (paper.authors or "").strip() else ""
+        # Extract surname via shared helper (handles "Last, First", "Given Family",
+        # and single-token names — matches the BBT parser's lastName output).
+        first_author_raw = _first_author_surname(paper.authors or "")
         author_norm = re.sub(r"[^a-z0-9]", "", transliterate_ru(first_author_raw).lower())
-        indexed.append((src.citekey, paper, title_prefix, author_norm, paper.year))
+        # Normalize stored DOI on both sides — papers can be created from raw
+        # CrossRef JSON or user input containing https://doi.org/... wrappers.
+        doi_norm = normalize_doi(paper.doi)
+        indexed.append((src.citekey, paper, title_prefix, author_norm, paper.year, doi_norm))
 
     matched: list[BbtMatch] = []
     unmatched: list[BbtUnmatched] = []
@@ -489,7 +538,7 @@ def _match_bbt_to_library(
     for entry in entries:
         # 1. DOI exact
         if entry.doi:
-            doi_hits = [ck for ck, paper, _, _, _ in indexed if (paper.doi or "").lower() == entry.doi]
+            doi_hits = [ck for ck, _paper, _, _, _, doi in indexed if doi == entry.doi]
             if len(doi_hits) == 1:
                 library.set_external_citekey(doi_hits[0], entry.citekey, user_id=user_id)
                 matched.append(BbtMatch(
@@ -520,7 +569,7 @@ def _match_bbt_to_library(
             continue
 
         fuzzy_hits = [
-            ck for ck, _, title_pfx, author_norm, year in indexed
+            ck for ck, _paper, title_pfx, author_norm, year, _doi in indexed
             if title_pfx and title_pfx == entry_title_prefix
             and author_norm == entry_author_norm
             and year == entry.year

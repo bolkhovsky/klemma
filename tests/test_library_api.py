@@ -863,6 +863,66 @@ def test_import_bbt_requires_auth(client):
     assert resp.status_code == 403
 
 
+def test_import_bbt_fuzzy_matches_given_family_format(client, stores):
+    """Authors stored as 'John Smith' (CrossRef/Semantic Scholar compressed
+    form) should fuzzy-match BBT entries by the last token, not the first.
+    Regression: Codex P1 finding on #346.
+    """
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(title="Deep Learning for Sea Ice", pdf_hash="h1")
+    # CrossRef-style: "Given Family" (not "Family, Given")
+    paper_store.update_paper_metadata(pid, authors="John Smith", year=2022)
+    user_library.add_source(pid, "internal_ck", status="completed", user_id=user_id)
+
+    bbt = _make_bbt([
+        {"itemType": "journalArticle", "citationKey": "smith2022",
+         "title": "Deep Learning for Sea Ice",
+         "creators": [{"creatorType": "author", "lastName": "Smith"}],
+         "date": "2022"},
+    ])
+    resp = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", bbt, "application/json")},
+        headers=_auth_headers(token),
+    )
+    data = resp.json()
+    assert len(data["matched"]) == 1, f"Expected 1 match; got {data}"
+    assert data["matched"][0]["external_citekey"] == "smith2022"
+
+
+def test_import_bbt_doi_matches_url_wrapped_stored_doi(client, stores):
+    """Paper DOI stored with URL prefix (e.g. ``https://doi.org/10.x``) must
+    normalize-match a bare DOI in the BBT entry. Regression: Codex P2 on #346.
+    """
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(
+        title="X", pdf_hash="h_doi_url", doi="https://doi.org/10.1234/WrAp",
+    )
+    user_library.add_source(pid, "internal_ck2", status="completed", user_id=user_id)
+
+    bbt = _make_bbt([
+        {"itemType": "journalArticle", "citationKey": "new_ck",
+         "title": "X", "DOI": "10.1234/wrap",
+         "creators": [{"creatorType": "author", "lastName": "Y"}],
+         "date": "2020"},
+    ])
+    resp = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", bbt, "application/json")},
+        headers=_auth_headers(token),
+    )
+    data = resp.json()
+    assert len(data["matched"]) == 1
+    assert data["matched"][0]["strategy"] == "doi"
+    assert data["matched"][0]["external_citekey"] == "new_ck"
+
+
 # ---------------------------------------------------------------------------
 # Gap recency filter (existing)
 # ---------------------------------------------------------------------------

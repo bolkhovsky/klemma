@@ -62,8 +62,13 @@ def parse_bbt_upload(data: bytes) -> list[BbtEntry]:
     return out
 
 
-def _normalize_doi(raw: object) -> Optional[str]:
-    """Strip URL prefix and lowercase. Returns None for empty/invalid input."""
+def normalize_doi(raw: object) -> Optional[str]:
+    """Strip URL prefix and lowercase. Returns None for empty/invalid input.
+
+    Public so other modules (e.g. ``api/routes/library.py`` when comparing
+    against ``paper.doi``) can apply the same normalization on both sides
+    of an equality check.
+    """
     if not isinstance(raw, str):
         return None
     s = raw.strip().lower()
@@ -73,6 +78,10 @@ def _normalize_doi(raw: object) -> Optional[str]:
     s = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", s)
     s = s.lstrip("/")
     return s or None
+
+
+# Backwards-compatible alias for internal callers.
+_normalize_doi = normalize_doi
 
 
 def _first_author_lastname(creators: object) -> str:
