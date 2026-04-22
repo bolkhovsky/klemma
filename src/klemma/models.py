@@ -81,3 +81,4 @@ class UserSource:
     chapters: list[int] = field(default_factory=list)
     sections: list[str] = field(default_factory=list)
     external_citekey: str | None = None
+    project_id: str | None = None

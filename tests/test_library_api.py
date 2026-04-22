@@ -263,6 +263,57 @@ def test_upload_citekey_collision_uses_bbt_suffix(client):
     assert r1.json()["paper_id"] != r2.json()["paper_id"] != r3.json()["paper_id"]
 
 
+def test_upload_dedup_moves_source_to_current_project(client, stores):
+    """Re-uploading an already-owned PDF into a different project should move
+    the source to the new project. Before #347 the source stayed attached to
+    the original project and silently disappeared from the current library view.
+    """
+    user_store, _, user_library, _, _ = stores
+    token = _register_and_get_token(client)
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    proj_a = user_store.create_project(user_id=user_id, name="Project A")
+    proj_b = user_store.create_project(user_id=user_id, name="Project B")
+
+    pdf = _fake_pdf()
+
+    r1 = client.post(
+        "/library/upload",
+        files={"file": ("paper.pdf", pdf, "application/pdf")},
+        data={"project_id": proj_a["project_id"]},
+        headers=_auth_headers(token),
+    )
+    assert r1.status_code == 201, r1.json()
+    citekey = r1.json()["citekey"]
+
+    # Confirm initial project attachment
+    src = user_library.get_source_by_citekey(citekey, user_id=user_id)
+    assert src.project_id == proj_a["project_id"]
+
+    # Second upload of same PDF into a different project
+    r2 = client.post(
+        "/library/upload",
+        files={"file": ("paper.pdf", pdf, "application/pdf")},
+        data={"project_id": proj_b["project_id"]},
+        headers=_auth_headers(token),
+    )
+    assert r2.status_code == 201
+    assert r2.json()["already_owned"] is True
+    assert r2.json()["citekey"] == citekey
+
+    # Source now belongs to project B
+    src = user_library.get_source_by_citekey(citekey, user_id=user_id)
+    assert src.project_id == proj_b["project_id"]
+
+    # Library list of project B shows it
+    resp = client.get(
+        f"/library/sources?project_id={proj_b['project_id']}",
+        headers=_auth_headers(token),
+    )
+    citekeys_b = {s["citekey"] for s in resp.json()["sources"]}
+    assert citekey in citekeys_b
+
+
 def test_upload_dedup_same_user_preserves_citekey(client):
     """Re-uploading the same PDF by the same user returns the original citekey (issue #268)."""
     token = _register_and_get_token(client)
