@@ -87,6 +87,14 @@ class PaperStore(Protocol):
         """Flip a fragment's verbatim flag; True if a row was updated."""
         ...
 
+    def get_latest_embedding_dim(self, paper_ids: list[str]) -> int | None:
+        """Return the vector dimension of the most recently inserted embedding
+        for any of the given papers, or None if no embeddings exist.
+
+        Used to pin scoring to the current model's dimension after a migration.
+        """
+        ...
+
 
 @runtime_checkable
 class UserLibrary(Protocol):

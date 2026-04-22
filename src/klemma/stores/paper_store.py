@@ -688,6 +688,26 @@ class LocalPaperStore:
                 pass
         return result
 
+    def get_latest_embedding_dim(self, paper_ids: list[str]) -> Optional[int]:
+        """Return the vector dimension of the most recently inserted embedding
+        for any of the given papers.
+
+        Used by the scoring pipeline to pin all vectors to the current active
+        model's dimension after a migration — deterministic regardless of how
+        many papers still carry stale embeddings of a different size.
+        """
+        if not paper_ids:
+            return None
+        placeholders = ",".join("?" for _ in paper_ids)
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT dimensions FROM paper_embeddings"
+                f" WHERE paper_id IN ({placeholders})"
+                f" ORDER BY rowid DESC LIMIT 1",
+                paper_ids,
+            ).fetchone()
+        return row["dimensions"] if row else None
+
     def update_citation_intents(self, paper_id: str, refs: list[dict]) -> int:
         """Update citation_intent for existing citation_graph entries (backfill).
 

@@ -112,6 +112,26 @@ def compute_scored_gaps(
     section_centroids: dict[str, list[float]] = {}
     all_user_embeddings = paper_store.get_paper_embeddings_batch(user_paper_ids)
     if all_user_embeddings:
+        # After an embedding-model migration some papers carry stale vectors
+        # of a different dimension.  Mixing dimensions causes cosine similarity
+        # to return 0.0 (length mismatch guard), which collapses
+        # semantic_factor to 0.5 and penalises every gap uniformly.  Pin
+        # everything to the current model's dimension — identified as the
+        # dimension of the most-recently inserted embedding (ORDER BY rowid
+        # DESC LIMIT 1), which is deterministic even during a 50/50 migration.
+        get_dim = getattr(paper_store, "get_latest_embedding_dim", None)
+        dominant_dim = get_dim(user_paper_ids) if get_dim is not None else None
+        if dominant_dim is not None:
+            all_user_embeddings = {
+                pid: v
+                for pid, v in all_user_embeddings.items()
+                if len(v) == dominant_dim
+            }
+            citing_embeddings = {
+                pid: v
+                for pid, v in citing_embeddings.items()
+                if len(v) == dominant_dim
+            }
         section_centroids = project_store.get_section_centroids(
             user_id, all_user_embeddings, all_user_paper_id_to_citekey
         )
