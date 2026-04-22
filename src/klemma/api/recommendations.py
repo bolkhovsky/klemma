@@ -119,7 +119,8 @@ def compute_scored_gaps(
         # everything to the current model's dimension — identified as the
         # dimension of the most-recently inserted embedding (ORDER BY rowid
         # DESC LIMIT 1), which is deterministic even during a 50/50 migration.
-        dominant_dim = paper_store.get_latest_embedding_dim(user_paper_ids)
+        get_dim = getattr(paper_store, "get_latest_embedding_dim", None)
+        dominant_dim = get_dim(user_paper_ids) if get_dim is not None else None
         if dominant_dim is not None:
             all_user_embeddings = {
                 pid: v

@@ -240,6 +240,27 @@ def test_paper_embedding_upsert(store):
     assert result[0] > 5.0  # new values persisted
 
 
+def test_get_latest_embedding_dim_returns_most_recent(store):
+    """get_latest_embedding_dim returns the dim of the last-inserted embedding."""
+    p1 = store.register_paper(title="Old Model", pdf_hash="old1")
+    p2 = store.register_paper(title="New Model", pdf_hash="new1")
+    # Embed p1 with old 2-dim model first, then p2 with new 4-dim model
+    store.save_paper_embedding(p1, [0.1, 0.2], model="specter-v1")
+    store.save_paper_embedding(p2, [0.1, 0.2, 0.3, 0.4], model="bge-m3")
+    dim = store.get_latest_embedding_dim([p1, p2])
+    # p2 was inserted after p1 → highest rowid → 4-dim wins
+    assert dim == 4
+
+
+def test_get_latest_embedding_dim_empty_returns_none(store):
+    assert store.get_latest_embedding_dim([]) is None
+
+
+def test_get_latest_embedding_dim_no_embeddings_returns_none(store):
+    pid = store.register_paper(title="No Embedding", pdf_hash="noembhash")
+    assert store.get_latest_embedding_dim([pid]) is None
+
+
 # ---------------------------------------------------------------------------
 # Fragment-level embeddings
 # ---------------------------------------------------------------------------

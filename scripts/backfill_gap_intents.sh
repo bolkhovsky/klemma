@@ -49,16 +49,29 @@ BATCH_SIZE="${2:-20}"
 # ---------------------------------------------------------------------------
 # Auth helpers — access tokens expire after KLEMMA_ACCESS_TOKEN_EXPIRE_MINUTES
 # (default 15 min).  A large backfill spans many batches and will outlive a
-# single token.  We refresh lazily: _maybe_refresh_token() only calls the
-# refresh endpoint when the token is within TOKEN_REFRESH_BUFFER_SECS of
-# expiry — not on every batch — to avoid hitting the 10/min rate limit and
-# invalidating other sessions via token rotation.
+# single token.  We decode the JWT exp claim after each login so re-auth
+# timing tracks the server's actual TTL — not a hardcoded local constant
+# that can drift from KLEMMA_ACCESS_TOKEN_EXPIRE_MINUTES.
 # ---------------------------------------------------------------------------
 
 ADMIN_TOKEN=""
-TOKEN_ISSUED_AT=0
-# Refresh 3 minutes before the default 15-minute expiry.
-TOKEN_TTL_SECS="${KLEMMA_TOKEN_TTL_SECS:-720}"
+TOKEN_EXPIRES_AT=0  # Unix timestamp; populated by _login from JWT exp claim
+
+# Decode the `exp` Unix timestamp from a JWT access token (base64url payload).
+# Prints 0 on any decode failure so _maybe_refresh_token still triggers a login.
+_get_token_exp() {
+  local payload
+  payload=$(echo "$1" | cut -d. -f2)
+  python3 - "$payload" 2>/dev/null <<'PYEOF' || echo 0
+import sys, json, base64
+p = sys.argv[1]
+p += '=' * ((4 - len(p) % 4) % 4)
+try:
+    print(json.loads(base64.b64decode(p.replace('-','+').replace('_','/')))['exp'])
+except Exception:
+    print(0)
+PYEOF
+}
 
 _login() {
   local resp
@@ -69,18 +82,21 @@ _login() {
       exit 1
     }
   ADMIN_TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-  TOKEN_ISSUED_AT=$SECONDS
+  TOKEN_EXPIRES_AT=$(_get_token_exp "$ADMIN_TOKEN")
 }
 
 # Call before each batch: re-authenticates only when the access token is
-# approaching expiry.  We deliberately re-login rather than calling
-# /auth/refresh — the refresh endpoint revokes all refresh tokens for the
-# user (store.revoke_refresh_tokens), which would silently log out every
-# other admin session.  /auth/login adds a new token without revoking
-# existing ones, so concurrent sessions are unaffected.
+# within 60 s of expiry.  Uses the JWT exp claim rather than a fixed TTL so
+# the timing auto-adjusts to any KLEMMA_ACCESS_TOKEN_EXPIRE_MINUTES setting.
+# We deliberately re-login rather than calling /auth/refresh — the refresh
+# endpoint revokes all refresh tokens for the user, which would silently log
+# out every other admin session.  /auth/login adds a new token without
+# revoking existing ones, so concurrent sessions are unaffected.
 _maybe_refresh_token() {
-  if [ $((SECONDS - TOKEN_ISSUED_AT)) -ge "$TOKEN_TTL_SECS" ]; then
-    echo "==> Re-authenticating (access token approaching expiry) ..."
+  local now
+  now=$(date +%s)
+  if [ "$((TOKEN_EXPIRES_AT - now))" -le 60 ]; then
+    echo "==> Re-authenticating (access token expiring) ..."
     _login
   fi
 }
