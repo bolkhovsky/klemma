@@ -17,13 +17,13 @@ def lib(tmp_path) -> LocalUserLibrary:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_6(tmp_path):
+def test_schema_version_is_7(tmp_path):
     db_path = tmp_path / "library.db"
     LocalUserLibrary(db_path)
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 6
+    assert version == 7
 
 
 def test_tables_created(tmp_path):
@@ -37,7 +37,12 @@ def test_tables_created(tmp_path):
         ).fetchall()
     }
     conn.close()
-    assert {"user_sources", "user_source_chapters", "user_source_sections"} <= tables
+    assert {
+        "user_sources",
+        "user_source_chapters",
+        "user_source_sections",
+        "user_source_projects",
+    } <= tables
 
 
 def test_paper_store_schema_coexists(tmp_path):
@@ -57,7 +62,7 @@ def test_paper_store_schema_coexists(tmp_path):
         ).fetchall()
     }
     conn.close()
-    assert version == 6
+    assert version == 7
     # Both sets of tables present
     assert "papers" in tables
     assert "user_sources" in tables
@@ -199,12 +204,84 @@ def test_project_id_filter(lib):
     assert len(all_sources) == 3
 
 
+def test_source_can_belong_to_multiple_projects(lib):
+    lib.add_source(
+        "pid1",
+        "src_multi",
+        project_id="proj1",
+        status="completed",
+        pdf_path="/tmp/src_multi.pdf",
+        note_path="/tmp/src_multi.md",
+        quality_score=4,
+    )
+    lib.add_source("pid1", "src_multi", project_id="proj2", status="completed")
+
+    src = lib.get_source_by_citekey("src_multi")
+    assert src.project_ids == ["proj1", "proj2"]
+    assert src.project_id == "proj1"
+    assert src.pdf_path == "/tmp/src_multi.pdf"
+    assert src.note_path == "/tmp/src_multi.md"
+    assert src.quality_score == 4
+    assert lib.get_project_citekeys("proj1") == {"src_multi"}
+    assert lib.get_project_citekeys("proj2") == {"src_multi"}
+
+
 def test_project_id_preserved_on_status_upsert(lib):
     """project_id is not overwritten when updating status without project_id."""
     lib.add_source("pid1", "src_x", project_id="proj1")
     lib.add_source("pid1", "src_x", status="completed")  # no project_id
     src = lib.get_source_by_citekey("src_x")
     assert src.status == "completed"
+    assert src.project_ids == ["proj1"]
+    assert src.project_id == "proj1"
+
+
+def test_migration_backfills_project_links_from_legacy_project_id(tmp_path):
+    db_path = tmp_path / "library.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript("""
+        CREATE TABLE user_sources (
+            citekey     TEXT NOT NULL,
+            paper_id    TEXT NOT NULL,
+            status      TEXT DEFAULT 'pending',
+            pdf_path    TEXT,
+            note_path   TEXT,
+            quality_score INTEGER,
+            added_at    TEXT DEFAULT (datetime('now')),
+            updated_at  TEXT DEFAULT (datetime('now')),
+            project_id  TEXT,
+            user_id     TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (user_id, citekey)
+        );
+        CREATE TABLE user_source_chapters (
+            citekey TEXT NOT NULL,
+            chapter INTEGER NOT NULL,
+            user_id TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (user_id, citekey, chapter)
+        );
+        CREATE TABLE user_source_sections (
+            citekey TEXT NOT NULL,
+            section TEXT NOT NULL,
+            user_id TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (user_id, citekey, section)
+        );
+    """)
+    conn.execute(
+        """INSERT INTO user_sources
+           (citekey, paper_id, status, project_id, user_id)
+           VALUES (?, ?, ?, ?, ?)""",
+        ("legacy_src", "pid-legacy", "completed", "proj-legacy", "alice"),
+    )
+    conn.execute("PRAGMA user_version = 6")
+    conn.commit()
+    conn.close()
+
+    lib = LocalUserLibrary(db_path)
+    src = lib.get_source_by_citekey("legacy_src", user_id="alice")
+    assert src is not None
+    assert src.project_id == "proj-legacy"
+    assert src.project_ids == ["proj-legacy"]
+    assert lib.get_project_citekeys("proj-legacy", user_id="alice") == {"legacy_src"}
 
 
 def test_get_all_sources_since_future_returns_empty(lib):
