@@ -1162,8 +1162,12 @@ async def list_recommendations(
                 warning=warning,
             )
 
-    # Build candidate pool (scored, without recency filter), scoped by project
-    candidates = compute_scored_gaps(
+    # Build candidate pool (scored), then apply recency filter BEFORE
+    # passing to the LLM. Without this the LLM freely picks seminal
+    # classics from 20-30 years ago because the prompt has no recency
+    # guidance — the user-facing rule "не старше 10 лет" was only being
+    # enforced on the AI-down fallback branch.
+    raw_candidates = compute_scored_gaps(
         paper_store=paper_store,
         library=library,
         project_store=project_store,
@@ -1171,6 +1175,7 @@ async def list_recommendations(
         project_id=project_id,
         limit=CANDIDATE_LIMIT,
     )
+    candidates = apply_recency_filter(raw_candidates)
     if not candidates:
         return RecommendationsResponse(
             recommendations=[],
