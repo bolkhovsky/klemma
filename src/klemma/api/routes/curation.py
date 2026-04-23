@@ -555,9 +555,12 @@ async def generate_sentences_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source '{body.citekey}' not found in library",
         )
-    # Worker reads source by the citekey the client sent; it will re-resolve
-    # and pick up external_citekey for display. No internal rewrite needed
-    # here because the task looks up the source fresh by the submitted key.
+    # Pass the INTERNAL citekey to the worker — generate_sentences_task looks
+    # up the source via get_source_by_citekey (not dual-key), so it would
+    # async-fail with "Source not found" if the client sent an external key.
+    # Echo the client's submitted citekey back in the response so the UI
+    # keeps its existing round-trip semantics.
+    internal_citekey = src.citekey
 
     from ..tasks import generate_sentences_task
 
@@ -571,7 +574,7 @@ async def generate_sentences_endpoint(
             job = q.enqueue(
                 generate_sentences_task,
                 project_id,
-                body.citekey,
+                internal_citekey,
                 data_dir,
                 user.user_id,
                 mode,
@@ -594,7 +597,7 @@ async def generate_sentences_endpoint(
             job_id,
             generate_sentences_task,
             project_id,
-            body.citekey,
+            internal_citekey,
             data_dir,
             user.user_id,
             mode,

@@ -1074,8 +1074,11 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
         if not result.text:
             return {"status": "error", "detail": "AI returned no draft text"}
 
-        # Convert Obsidian wikilinks [[@citekey]] → [@citekey] for SaaS output
-        text = re.sub(r"\[\[@([\w\-]+)\]\]", r"[@\1]", result.text)
+        # Convert Obsidian wikilinks [[@citekey]] → [@citekey] for SaaS output.
+        # Charset must match drafter._extract_citations (Biber/BibTeX valid:
+        # word + : . + -) — otherwise BBT keys with "." / ":" / "+" leak
+        # through as raw [[@key]] wikilinks in API draft output.
+        text = re.sub(r"\[\[@([\w:.+\-]+)\]\]", r"[@\1]", result.text)
 
         if user_id:
             user_store.record_usage(
