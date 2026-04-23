@@ -570,6 +570,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
 
         # ── Auto-suggest: enqueue as post-hook job (non-blocking) ────────
         auto_suggest_job_id: str | None = None
+        auto_sentences_job_id: str | None = None
         if project_id and user_id:
             auto_suggest_job_id = _enqueue_auto_suggest(
                 paper_id=paper_id,
@@ -579,6 +580,18 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 fragment_ids=[f.fragment_id for f in fragments],
                 citation_intents={f.fragment_id: f.citation_intent for f in fragments},
                 fragment_ai_sections=fragment_ai_sections,
+                data_dir=data_dir,
+            )
+            # ── Auto-generate sentences (ADR-017): ready-to-cite academic
+            # paraphrase per fragment, triggered immediately so the user
+            # doesn't have to press "Сгенерировать предложения" manually in
+            # FragmentReviewView. Runs in parallel with auto-suggest — the
+            # curate_fragments upsert uses COALESCE on suggested_text so
+            # whichever finishes second won't wipe the other's work.
+            auto_sentences_job_id = _enqueue_auto_sentences(
+                project_id=project_id,
+                citekey=citekey,
+                user_id=user_id,
                 data_dir=data_dir,
             )
 
@@ -593,6 +606,8 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         }
         if auto_suggest_job_id:
             result_dict["auto_suggest_job_id"] = auto_suggest_job_id
+        if auto_sentences_job_id:
+            result_dict["auto_sentences_job_id"] = auto_sentences_job_id
         return result_dict
 
     except Exception as exc:
@@ -688,6 +703,45 @@ def _enqueue_auto_suggest(
             paper_id, citekey, user_id, project_id,
             fragment_ids, citation_intents, fragment_ai_sections, data_dir,
         )
+        return None
+
+
+def _enqueue_auto_sentences(
+    project_id: str,
+    citekey: str,
+    user_id: str,
+    data_dir: str,
+) -> str | None:
+    """Enqueue generate_sentences_task in mode='missing' for a just-processed
+    source, so the user doesn't have to press "Сгенерировать предложения"
+    manually. Returns rq job_id, or None if Redis is unavailable (in which
+    case the task runs synchronously — slower but still completes).
+
+    Idempotent: mode='missing' only fills fragments that don't already have
+    a suggested_text. Re-running is a no-op.
+    """
+    try:
+        from redis import Redis
+        from rq import Queue
+
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        q = Queue(connection=Redis.from_url(redis_url))
+        job = q.enqueue(
+            generate_sentences_task,
+            project_id, citekey, data_dir, user_id, "missing",
+            job_timeout=300,
+        )
+        logger.info("Enqueued auto-sentences job %s for %s", job.id, citekey)
+        return job.id
+    except Exception as exc:
+        logger.warning(
+            "Auto-sentences enqueue failed for %s, running synchronously: %s",
+            citekey, exc,
+        )
+        try:
+            generate_sentences_task(project_id, citekey, data_dir, user_id, "missing")
+        except Exception as sync_exc:
+            logger.warning("Auto-sentences sync fallback failed for %s: %s", citekey, sync_exc)
         return None
 
 
