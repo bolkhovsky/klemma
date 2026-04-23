@@ -113,7 +113,7 @@ function onFileInput(e: Event) {
               Совпало ({{ report.matched.length }})
             </summary>
             <ul class="px-3 py-2 text-[13px] space-y-1 max-h-[220px] overflow-auto">
-              <li v-for="m in report.matched" :key="m.citekey" class="flex justify-between gap-3">
+              <li v-for="(m, i) in report.matched" :key="`${m.citekey}|${m.external_citekey}|${i}`" class="flex justify-between gap-3">
                 <span class="truncate">{{ m.title || m.citekey }}</span>
                 <span class="text-[12px] text-[#6b6b8a] shrink-0">
                   <span class="font-mono">{{ m.citekey }}</span>
@@ -130,7 +130,7 @@ function onFileInput(e: Event) {
               Неоднозначно ({{ report.ambiguous.length }})
             </summary>
             <ul class="px-3 py-2 text-[13px] space-y-2 max-h-[220px] overflow-auto">
-              <li v-for="a in report.ambiguous" :key="a.bbt_citekey">
+              <li v-for="(a, i) in report.ambiguous" :key="`${a.bbt_citekey}|${i}`">
                 <span class="font-mono text-[12px]">{{ a.bbt_citekey }}</span>
                 — «{{ a.title }}»
                 <div class="text-[12px] text-[#6b6b8a] ml-4">
@@ -145,7 +145,7 @@ function onFileInput(e: Event) {
               Не найдено ({{ report.unmatched.length }})
             </summary>
             <ul class="px-3 py-2 text-[13px] space-y-1 max-h-[220px] overflow-auto">
-              <li v-for="u in report.unmatched" :key="u.bbt_citekey" class="flex justify-between gap-3">
+              <li v-for="(u, i) in report.unmatched" :key="`${u.bbt_citekey}|${i}`" class="flex justify-between gap-3">
                 <span class="truncate">
                   {{ u.title || '(без заголовка)' }}
                   <span class="text-[12px] text-[#6b6b8a]">
