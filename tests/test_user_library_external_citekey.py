@@ -15,15 +15,15 @@ def lib(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Schema v6 migration
+# Schema v7 migration
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_6(lib, tmp_path):
+def test_schema_version_is_7(lib, tmp_path):
     conn = sqlite3.connect(str(tmp_path / "library.db"))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 6
+    assert version == 7
 
 
 def test_external_citekey_column_exists(lib, tmp_path):
@@ -33,7 +33,7 @@ def test_external_citekey_column_exists(lib, tmp_path):
     assert "external_citekey" in cols
 
 
-def test_v6_migration_idempotent(tmp_path):
+def test_v7_migration_idempotent(tmp_path):
     db = tmp_path / "library.db"
     LocalUserLibrary(db)
     # Second init must not raise or duplicate the column

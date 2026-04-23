@@ -59,6 +59,7 @@ class TestUserSource:
         assert s.quality_score is None
         assert s.chapters == []
         assert s.sections == []
+        assert s.project_ids == []
 
     def test_all_fields(self):
         s = UserSource(
@@ -69,9 +70,11 @@ class TestUserSource:
             quality_score=4,
             chapters=[1, 2],
             sections=["1.1", "2.3"],
+            project_ids=["proj-a", "proj-b"],
         )
         assert s.quality_score == 4
         assert len(s.chapters) == 2
+        assert s.project_ids == ["proj-a", "proj-b"]
 
 
 class TestProtocolsAreRuntimeCheckable:

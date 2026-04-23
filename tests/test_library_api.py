@@ -263,10 +263,9 @@ def test_upload_citekey_collision_uses_bbt_suffix(client):
     assert r1.json()["paper_id"] != r2.json()["paper_id"] != r3.json()["paper_id"]
 
 
-def test_upload_dedup_moves_source_to_current_project(client, stores):
-    """Re-uploading an already-owned PDF into a different project should move
-    the source to the new project. Before #347 the source stayed attached to
-    the original project and silently disappeared from the current library view.
+def test_upload_dedup_attaches_source_to_current_project(client, stores):
+    """Re-uploading an already-owned PDF into a different project should
+    attach the source to the new project without removing it from the old one.
     """
     user_store, _, user_library, _, _ = stores
     token = _register_and_get_token(client)
@@ -289,6 +288,7 @@ def test_upload_dedup_moves_source_to_current_project(client, stores):
     # Confirm initial project attachment
     src = user_library.get_source_by_citekey(citekey, user_id=user_id)
     assert src.project_id == proj_a["project_id"]
+    assert src.project_ids == [proj_a["project_id"]]
 
     # Second upload of same PDF into a different project
     r2 = client.post(
@@ -301,16 +301,22 @@ def test_upload_dedup_moves_source_to_current_project(client, stores):
     assert r2.json()["already_owned"] is True
     assert r2.json()["citekey"] == citekey
 
-    # Source now belongs to project B
+    # Source remains attached to A and is now also attached to B
     src = user_library.get_source_by_citekey(citekey, user_id=user_id)
-    assert src.project_id == proj_b["project_id"]
+    assert src.project_id == proj_a["project_id"]
+    assert set(src.project_ids) == {proj_a["project_id"], proj_b["project_id"]}
 
-    # Library list of project B shows it
-    resp = client.get(
+    resp_a = client.get(
+        f"/library/sources?project_id={proj_a['project_id']}",
+        headers=_auth_headers(token),
+    )
+    resp_b = client.get(
         f"/library/sources?project_id={proj_b['project_id']}",
         headers=_auth_headers(token),
     )
-    citekeys_b = {s["citekey"] for s in resp.json()["sources"]}
+    citekeys_a = {s["citekey"] for s in resp_a.json()["sources"]}
+    citekeys_b = {s["citekey"] for s in resp_b.json()["sources"]}
+    assert citekey in citekeys_a
     assert citekey in citekeys_b
 
 
