@@ -1018,6 +1018,74 @@ def test_import_bbt_doi_matches_url_wrapped_stored_doi(client, stores):
 # ---------------------------------------------------------------------------
 
 
+def test_draft_wikilink_conversion_handles_extended_charset():
+    """tasks.py post-processes [[@key]] → [@key] after drafter output.
+    The regex charset must match drafter._extract_citations (word + : . + -)
+    or BBT keys with those characters leak as raw Obsidian wikilinks in
+    API draft text. Regression: Codex P2 on #349.
+    """
+    import re
+    # This is the exact regex used in api/tasks.py::generate_draft
+    pattern = r"\[\[@([\w:.+\-]+)\]\]"
+
+    cases = [
+        ("[[@smith2020]]", "[@smith2020]"),
+        ("[[@smith-2020]]", "[@smith-2020]"),
+        ("[[@doe.2019]]", "[@doe.2019]"),
+        ("[[@brown:v2]]", "[@brown:v2]"),
+        ("[[@a+b]]", "[@a+b]"),
+        ("See [[@smith:2023]] and [[@jones.2020]].",
+         "See [@smith:2023] and [@jones.2020]."),
+    ]
+    for inp, expected in cases:
+        assert re.sub(pattern, r"[@\1]", inp) == expected, f"failed for {inp!r}"
+
+
+def test_generate_sentences_rewrites_external_to_internal(client, stores, monkeypatch):
+    """generate_sentences_task looks up sources via get_source_by_citekey
+    (not dual-key). The route must therefore rewrite body.citekey to the
+    internal key before enqueue, otherwise external-key submissions fail
+    async with "Source not found". Regression: Codex P1 on #349.
+    """
+    user_store, paper_store, user_library, _, _ = stores
+    token = _register_and_get_token(client)
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(title="X", pdf_hash="hgs")
+    user_library.add_source(pid, "internal_key", status="completed", user_id=user_id)
+    user_library.set_external_citekey("internal_key", "ext2023", user_id=user_id)
+
+    project = user_store.create_project(user_id=user_id, name="Proj")
+    project_id = project["project_id"]
+
+    enqueued: dict = {}
+
+    async def fake_run_local_job(job_id, func, *args):
+        enqueued["args"] = args
+
+    monkeypatch.setattr(
+        "klemma.api.routes.process._run_local_job", fake_run_local_job
+    )
+
+    resp = client.post(
+        f"/projects/{project_id}/fragments/generate-sentences",
+        json={"citekey": "ext2023", "mode": "missing"},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 202, resp.json()
+    assert resp.json()["citekey"] == "ext2023"  # echoed
+
+    import time as _time
+    for _ in range(50):
+        if enqueued.get("args"):
+            break
+        _time.sleep(0.02)
+    assert enqueued.get("args"), "task was not enqueued"
+    assert enqueued["args"][0] == project_id
+    # Internal citekey, not the external one the client submitted
+    assert enqueued["args"][1] == "internal_key"
+
+
 def test_gaps_recency_filter(client, stores):
     """Papers older than 10 years with cited_by_count<3 are filtered out."""
     user_store, paper_store, user_library, _, _ = stores
