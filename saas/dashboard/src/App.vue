@@ -296,6 +296,17 @@ const routeKey = computed(() => (route.params.projectId as string) ?? route.path
         </span>
         <span>Лента</span>
       </RouterLink>
+      <RouterLink
+        v-if="effectiveProjectId"
+        :to="`/${effectiveProjectId}/settings`"
+        class="nav-item"
+        :class="{ active: route.name === 'project-settings' }"
+      >
+        <span class="nav-icon">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><circle cx="7" cy="7" r="2"/><path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.8 2.8l1.4 1.4M9.8 9.8l1.4 1.4M2.8 11.2l1.4-1.4M9.8 4.2l1.4-1.4"/></svg>
+        </span>
+        <span>Настройки</span>
+      </RouterLink>
 
       <div v-if="!effectiveProjectId" class="nav-empty">
         <span v-if="projectStore.loading">Загрузка…</span>

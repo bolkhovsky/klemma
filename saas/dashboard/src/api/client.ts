@@ -162,6 +162,26 @@ export const library = {
     }>
   },
 
+  importBbt: async (file: File) => {
+    const token = localStorage.getItem('access_token')
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await fetch(`${API_BASE}/library/import-bbt`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new ApiError(res.status, body.detail || res.statusText || `Ошибка сервера (${res.status})`)
+    }
+    return res.json() as Promise<{
+      matched: { citekey: string; external_citekey: string; strategy: string; title: string }[]
+      unmatched: { bbt_citekey: string; title: string; first_author_lastname: string; year: number | null; doi: string | null }[]
+      ambiguous: { bbt_citekey: string; title: string; candidates: string[] }[]
+    }>
+  },
+
   gaps: () =>
     request<{
       gaps: {

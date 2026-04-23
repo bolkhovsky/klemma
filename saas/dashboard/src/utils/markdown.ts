@@ -12,9 +12,10 @@ export function formatMarkdown(text: string, projectId: string = 'demo'): string
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    // [@citekey] — clickable link to source page (bold variant too)
+    // [@citekey] — clickable link to source page (bold variant too).
+    // Charset matches Biber/BibTeX valid citekey chars: word + : . + -
     .replace(
-      /\*?\*?\[(@([\w]+))\]\*?\*?/g,
+      /\*?\*?\[(@([\w:.+\-]+))\]\*?\*?/g,
       `<a href="/${projectId}/library/$2" class="citekey-link">$1</a>`,
     )
     // **bold**
@@ -31,7 +32,7 @@ export function formatMarkdown(text: string, projectId: string = 'demo'): string
 export function renderDraft(text: string): string {
   // Pre-process [@citekey] before marked (marked would escape the brackets)
   const withCitekeys = text.replace(
-    /\[(@[\w]+)\]/g,
+    /\[(@[\w:.+\-]+)\]/g,
     '<span class="citekey-ref">$1</span>',
   )
   return marked.parse(withCitekeys) as string
