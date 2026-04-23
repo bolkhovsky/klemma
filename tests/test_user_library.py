@@ -224,6 +224,8 @@ def test_source_can_belong_to_multiple_projects(lib):
     assert src.quality_score == 4
     assert lib.get_project_citekeys("proj1") == {"src_multi"}
     assert lib.get_project_citekeys("proj2") == {"src_multi"}
+    assert {s.citekey for s in lib.get_all_sources(project_id="proj1")} >= {"src_multi"}
+    assert {s.citekey for s in lib.get_all_sources(project_id="proj2")} >= {"src_multi"}
 
 
 def test_project_id_preserved_on_status_upsert(lib):
