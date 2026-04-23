@@ -196,9 +196,9 @@ def test_job_status_not_found(client, monkeypatch):
 
 def test_process_requires_auth(client):
     resp = client.post("/process/sources/anything")
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 def test_job_status_requires_auth(client):
     resp = client.get("/process/jobs/anything")
-    assert resp.status_code == 403
+    assert resp.status_code == 401

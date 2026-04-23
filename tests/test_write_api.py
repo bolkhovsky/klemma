@@ -120,9 +120,9 @@ def test_submit_draft_job(client, monkeypatch):
 
 def test_research_requires_auth(client):
     resp = client.post("/write/research", json={"section": "1.1"})
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 def test_draft_requires_auth(client):
     resp = client.post("/write/draft", json={"section": "1.1"})
-    assert resp.status_code == 403
+    assert resp.status_code == 401

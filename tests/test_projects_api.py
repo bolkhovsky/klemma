@@ -176,4 +176,4 @@ def test_get_source_sections_unassigned(client):
 
 def test_coverage_requires_auth(client):
     resp = client.get("/projects/coverage")
-    assert resp.status_code == 403
+    assert resp.status_code == 401

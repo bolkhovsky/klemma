@@ -68,7 +68,7 @@ def test_list_sources_empty(client):
 
 def test_list_sources_requires_auth(client):
     resp = client.get("/library/sources")
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +369,7 @@ def test_upload_requires_auth(client):
         "/library/upload",
         files={"file": ("test.pdf", _fake_pdf(), "application/pdf")},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -917,7 +917,7 @@ def test_import_bbt_requires_auth(client):
         "/library/import-bbt",
         files={"file": ("refs.json", b'{"items":[]}', "application/json")},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 def test_import_bbt_fuzzy_matches_given_family_format(client, stores):

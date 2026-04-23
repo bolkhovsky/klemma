@@ -73,7 +73,7 @@ def test_usage_me_empty(client):
 
 def test_usage_me_requires_auth(client):
     resp = client.get("/usage/me")
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +120,7 @@ def test_grant_tokens_non_admin_forbidden(client):
         json={"user_id": user_id, "amount": 1000},
         headers=_auth_headers(user_token),
     )
+    # 403 — authenticated as non-admin, admin-only endpoint forbids.
     assert resp.status_code == 403
 
 
