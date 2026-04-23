@@ -102,7 +102,7 @@ def test_status_with_coverage(client):
 
 def test_status_requires_auth(client):
     resp = client.get("/analyze/status")
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -191,4 +191,4 @@ def test_health_well_covered(client, stores):
 
 def test_health_requires_auth(client):
     resp = client.get("/analyze/health")
-    assert resp.status_code == 403
+    assert resp.status_code == 401

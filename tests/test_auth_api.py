@@ -196,7 +196,7 @@ def test_me_authenticated(client):
 
 def test_me_no_token(client):
     resp = client.get("/auth/me")
-    assert resp.status_code == 403  # HTTPBearer returns 403 when no credentials
+    assert resp.status_code == 401  # HTTPBearer returns 403 when no credentials
 
 
 def test_me_invalid_token(client):
