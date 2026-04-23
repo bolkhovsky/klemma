@@ -468,3 +468,61 @@ def test_gaps_endpoint_three_sources_threshold(client, stores):
     resp = client.get("/library/gaps", headers=_headers(token))
     assert resp.status_code == 200
     assert resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Recency filter — applied BEFORE the LLM so the user's 10-year rule is
+# enforced even when AI is available, not only on the fallback path.
+# ---------------------------------------------------------------------------
+
+
+def test_recommendations_recency_filter_applied_before_llm(client, stores):
+    """Candidates older than 10 years without enough citations (<3 in the
+    user's library) must be dropped BEFORE the LLM call. Previously the
+    filter only fired on the AI-down fallback — the LLM was free to
+    return 20-year-old classics from the full 50-candidate pool.
+    Regression for user-reported recency rule violation.
+    """
+    from datetime import date
+    _, paper_store, user_library, _, _ = stores
+    token = _register(client)
+    pid = _create_project(client, token)
+
+    me = client.get("/auth/me", headers=_headers(token))
+    user_id = me.json()["user_id"]
+    today = date.today().year
+
+    # 3 sources. "Recent Work" cited by all 3 (passes). "Very Old Singleton"
+    # cited by 1 (old + cited_by_count=1 < classic_min_cited_by=3 → filtered).
+    for i in range(1, 4):
+        ck = f"src{i}"
+        p_id = paper_store.register_paper(
+            title=f"Src {i}", authors="A", year=2023,
+            abstract="x", pdf_hash=f"hh{i}",
+        )
+        user_library.add_source(
+            p_id, ck, status="completed",
+            user_id=user_id, project_id=pid,
+        )
+        refs = [{"title": "Recent Work", "authors": "Hersbach",
+                 "year": today - 3, "citation_intent": "uses_data"}]
+        if i == 1:
+            refs.append({"title": "Very Old Singleton", "authors": "Oldman",
+                          "year": today - 30, "citation_intent": "background"})
+        paper_store.save_citation_links(p_id, refs)
+
+    payload = {"recommendations": [
+        {"title": "Recent Work", "authors": "Hersbach", "year": today - 3,
+         "rationale": "recent", "score": 8},
+    ]}
+    ai, cfg = _stub_provider(payload)
+    with patch("klemma.api.tasks._create_ai_provider", return_value=(ai, cfg)):
+        resp = client.get(
+            f"/library/recommendations?project_id={pid}", headers=_headers(token)
+        )
+
+    assert resp.status_code == 200
+    assert len(ai.calls) == 1
+    user_prompt_sent = ai.calls[0]["user"]
+    assert "Very Old Singleton" not in user_prompt_sent
+    assert "Recent Work" in user_prompt_sent

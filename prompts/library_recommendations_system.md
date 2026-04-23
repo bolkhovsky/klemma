@@ -21,6 +21,11 @@ Respond entirely in {{ rationale_language }}.
    methods just because their mechanical score is high.
 5. **Fewer strong picks beat padded lists.** If only 6 candidates are clearly
    relevant, return 6. Do not stretch weak candidates into the top list.
+6. **Prefer recent work.** The candidate list has already been filtered to
+   papers no older than 10 years (or widely-cited classics from the user's
+   own library). Within this pool, still prefer newer work when topical fit
+   is comparable — the researcher wants the current state of the field, not
+   seminal papers they've already read.
 
 ## Evaluation Criteria
 
