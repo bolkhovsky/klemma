@@ -1,6 +1,7 @@
 """Tests for LocalPaperStore (ADR-014 Phase 1B)."""
 
 import hashlib
+import importlib.util
 import sqlite3
 
 import pytest
@@ -360,3 +361,166 @@ def test_reference_gaps_excludes_only_current_user_papers(tmp_path):
     assert "Gap Paper" not in gap_titles2, (
         "Gap Paper should NOT appear once user A has it in their own library"
     )
+
+
+# ---------------------------------------------------------------------------
+# M1: sqlite-vec KNN index
+# ---------------------------------------------------------------------------
+
+_VEC_AVAILABLE = importlib.util.find_spec("sqlite_vec") is not None
+
+_skip_no_vec = pytest.mark.skipif(not _VEC_AVAILABLE, reason="sqlite-vec not installed")
+
+
+_VEC_DIM = 1024  # must match vec table dimension (FLOAT[1024] default)
+
+
+def _unit_vec(hot_index: int, dim: int = _VEC_DIM) -> list[float]:
+    """Return a unit vector with 1.0 at hot_index and 0.0 elsewhere."""
+    v = [0.0] * dim
+    v[hot_index] = 1.0
+    return v
+
+
+def _make_vec_db(tmp_path, user_id: str):
+    """Return (store, library, paper_id, fragment_id) with seeded vec entries."""
+    import os
+    os.environ["KLEMMA_EMBEDDINGS_MODEL"] = "test-model"
+    db_path = tmp_path / "library.db"
+    store = LocalPaperStore(db_path)
+    library = LocalUserLibrary(db_path)
+
+    paper_id = store.register_paper(title="Test Paper", pdf_hash="hash1")
+    library.add_source(paper_id, "paper1", status="completed", user_id=user_id)
+
+    frag = _make_fragment(paper_id, "Fragment text about ice edge metrics", page=1)
+    store.save_fragments(paper_id, [frag], prompt_hash="p", ai_model="m")
+
+    store.save_fragment_embedding(frag.fragment_id, _unit_vec(0), "test-model")
+
+    return store, library, paper_id, frag.fragment_id
+
+
+@_skip_no_vec
+def test_find_similar_fragments_returns_result(tmp_path):
+    store, _, paper_id, frag_id = _make_vec_db(tmp_path, "user-a")
+    results = store.find_similar_fragments(_unit_vec(0), user_id="user-a", limit=5)
+    assert len(results) == 1
+    assert results[0]["fragment_id"] == frag_id
+    assert results[0]["similarity"] > 0.99
+
+
+@_skip_no_vec
+def test_find_similar_fragments_user_isolation(tmp_path):
+    import os
+    os.environ["KLEMMA_EMBEDDINGS_MODEL"] = "test-model"
+    db_path = tmp_path / "library.db"
+    store = LocalPaperStore(db_path)
+    library = LocalUserLibrary(db_path)
+
+    pid_a = store.register_paper(title="Paper A", pdf_hash="hasha")
+    library.add_source(pid_a, "paper_a", status="completed", user_id="user-a")
+    frag_a = _make_fragment(pid_a, "Fragment for user A")
+    store.save_fragments(pid_a, [frag_a], prompt_hash="p", ai_model="m")
+    store.save_fragment_embedding(frag_a.fragment_id, _unit_vec(0), "test-model")
+
+    pid_b = store.register_paper(title="Paper B", pdf_hash="hashb")
+    library.add_source(pid_b, "paper_b", status="completed", user_id="user-b")
+    frag_b = _make_fragment(pid_b, "Fragment for user B")
+    store.save_fragments(pid_b, [frag_b], prompt_hash="p", ai_model="m")
+    store.save_fragment_embedding(frag_b.fragment_id, _unit_vec(1), "test-model")
+
+    results_a = store.find_similar_fragments(_unit_vec(0), user_id="user-a", limit=10)
+    ids_a = {r["fragment_id"] for r in results_a}
+    assert frag_a.fragment_id in ids_a
+    assert frag_b.fragment_id not in ids_a
+
+    results_b = store.find_similar_fragments(_unit_vec(1), user_id="user-b", limit=10)
+    ids_b = {r["fragment_id"] for r in results_b}
+    assert frag_b.fragment_id in ids_b
+    assert frag_a.fragment_id not in ids_b
+
+
+@_skip_no_vec
+def test_find_similar_fragments_citekey_filter(tmp_path):
+    import os
+    os.environ["KLEMMA_EMBEDDINGS_MODEL"] = "test-model"
+    db_path = tmp_path / "library.db"
+    store = LocalPaperStore(db_path)
+    library = LocalUserLibrary(db_path)
+
+    pid1 = store.register_paper(title="Paper 1", pdf_hash="h1")
+    library.add_source(pid1, "paper1", status="completed", user_id="user-x")
+    frag1 = _make_fragment(pid1, "Fragment one")
+    store.save_fragments(pid1, [frag1], prompt_hash="p", ai_model="m")
+    store.save_fragment_embedding(frag1.fragment_id, _unit_vec(0), "test-model")
+
+    pid2 = store.register_paper(title="Paper 2", pdf_hash="h2")
+    library.add_source(pid2, "paper2", status="completed", user_id="user-x")
+    frag2 = _make_fragment(pid2, "Fragment two")
+    store.save_fragments(pid2, [frag2], prompt_hash="p", ai_model="m")
+    store.save_fragment_embedding(frag2.fragment_id, _unit_vec(0), "test-model")
+
+    results = store.find_similar_fragments(_unit_vec(0), user_id="user-x", limit=10, citekey_filter="paper1")
+    assert all(r["citekey"] == "paper1" for r in results)
+    assert any(r["fragment_id"] == frag1.fragment_id for r in results)
+    assert all(r["fragment_id"] != frag2.fragment_id for r in results)
+
+
+@_skip_no_vec
+def test_find_similar_fragments_unknown_citekey_filter(tmp_path):
+    store, _, _, _ = _make_vec_db(tmp_path, "user-a")
+    results = store.find_similar_fragments(_unit_vec(0), user_id="user-a", limit=5, citekey_filter="nonexistent")
+    assert results == []
+
+
+def test_find_similar_fragments_no_vec_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr("klemma.stores.paper_store._SQLITE_VEC_INSTALLED", False)
+    store = LocalPaperStore(tmp_path / "library.db")
+    results = store.find_similar_fragments(_unit_vec(0), user_id="user-a", limit=5)
+    assert results == []
+
+
+@_skip_no_vec
+def test_ensure_vec_entries_for_user_paper(tmp_path):
+    """Attaching an already-processed paper to a new user creates vec rows immediately."""
+    import os
+    os.environ["KLEMMA_EMBEDDINGS_MODEL"] = "test-model"
+    db_path = tmp_path / "library.db"
+    store = LocalPaperStore(db_path)
+    library = LocalUserLibrary(db_path)
+
+    # Process paper under user-a
+    paper_id = store.register_paper(title="Shared Paper", pdf_hash="shared_hash")
+    library.add_source(paper_id, "shared_paper", status="completed", user_id="user-a")
+    frag = _make_fragment(paper_id, "Shared fragment")
+    store.save_fragments(paper_id, [frag], prompt_hash="p", ai_model="m")
+    store.save_fragment_embedding(frag.fragment_id, _unit_vec(0), "test-model")
+
+    # Attach same paper to user-b WITHOUT re-embedding
+    library.add_source(paper_id, "shared_paper_b", status="completed", user_id="user-b")
+    created = store.ensure_vec_entries_for_user_paper("user-b", paper_id)
+    assert created >= 1
+
+    results = store.find_similar_fragments(_unit_vec(0), user_id="user-b", limit=5)
+    assert any(r["fragment_id"] == frag.fragment_id for r in results)
+
+
+@_skip_no_vec
+def test_delete_fragments_cleans_vec_entries(tmp_path):
+    """delete_fragments() must clean vec index before deleting from fragments (FK order)."""
+    import os
+    os.environ["KLEMMA_EMBEDDINGS_MODEL"] = "test-model"
+    store, _, paper_id, frag_id = _make_vec_db(tmp_path, "user-a")
+
+    # Sanity: fragment is findable
+    results_before = store.find_similar_fragments(_unit_vec(0), user_id="user-a", limit=5)
+    assert any(r["fragment_id"] == frag_id for r in results_before)
+
+    # Delete should not raise FK error
+    deleted = store.delete_fragments(paper_id)
+    assert deleted >= 1
+
+    # Fragment should no longer appear in vec search
+    results_after = store.find_similar_fragments(_unit_vec(0), user_id="user-a", limit=5)
+    assert all(r["fragment_id"] != frag_id for r in results_after)

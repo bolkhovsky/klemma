@@ -12,6 +12,7 @@ need citekey-based lookup use find_paper(pdf_hash=...) or find_paper(doi=...).
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import struct
 import uuid
@@ -27,6 +28,43 @@ if TYPE_CHECKING:
 _VALID_CITATION_INTENTS = frozenset({
     "background", "method", "result_comparison", "extends", "contrasts", "uses_data"
 })
+
+# ------------------------------------------------------------------ #
+# sqlite-vec optional extension                                        #
+# ------------------------------------------------------------------ #
+
+try:
+    import sqlite_vec as _sqlite_vec  # type: ignore[import]
+    _SQLITE_VEC_INSTALLED = True
+except ImportError:
+    _sqlite_vec = None  # type: ignore[assignment]
+    _SQLITE_VEC_INSTALLED = False
+
+
+def _check_vec_available() -> bool:
+    """Return True if sqlite-vec loads successfully in a test in-memory DB."""
+    if not _SQLITE_VEC_INSTALLED:
+        return False
+    try:
+        test = sqlite3.connect(":memory:")
+        test.enable_load_extension(True)
+        _sqlite_vec.load(test)
+        test.enable_load_extension(False)
+        test.execute("SELECT vec_version()").fetchone()
+        test.close()
+        return True
+    except Exception:
+        return False
+
+
+def _get_active_embedding_model() -> str:
+    """Return active embedding model from env (set by SaaS worker), or empty string."""
+    return os.environ.get("KLEMMA_EMBEDDINGS_MODEL", "")
+
+
+# ------------------------------------------------------------------ #
+# Schema                                                              #
+# ------------------------------------------------------------------ #
 
 # NOTE: library.db's user_version is co-owned with LocalUserLibrary (same file).
 # LocalUserLibrary's migration chain gates `CREATE TABLE` on `version < 2` and
@@ -125,8 +163,11 @@ CREATE INDEX IF NOT EXISTS idx_rec_cache_user_project
 class LocalPaperStore:
     """SQLite-backed PaperStore at ~/.klemma/library.db.
 
-    Content-addressable: same PDF → same paper_id → same fragments (dedup).
+    Content-addressable: same PDF → same paper_id → same fragments (global dedup).
     Implements the PaperStore protocol from protocols.py.
+
+    M1 addition: optional sqlite-vec KNN index (fragments_vec_user) for semantic
+    fragment retrieval.  Falls back silently when the extension is unavailable.
 
     Usage::
 
@@ -138,8 +179,16 @@ class LocalPaperStore:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._vec_enabled: bool = _check_vec_available()
+        if _SQLITE_VEC_INSTALLED and not self._vec_enabled:
+            logger.warning(
+                "sqlite-vec installed but extension failed to load; semantic search disabled"
+            )
         with self._conn() as conn:
             self._migrate_schema(conn)
+        if self._vec_enabled:
+            with self._conn() as conn:
+                self._maybe_rebuild_vec_index(conn)
 
     @contextmanager
     def _conn(self) -> Generator[sqlite3.Connection, None, None]:
@@ -147,6 +196,14 @@ class LocalPaperStore:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
+        if self._vec_enabled:
+            try:
+                conn.enable_load_extension(True)
+                _sqlite_vec.load(conn)
+                conn.enable_load_extension(False)
+            except Exception as exc:
+                logger.warning("sqlite-vec load failed on connection: %s; disabling", exc)
+                self._vec_enabled = False
         try:
             yield conn
             conn.commit()
@@ -199,6 +256,171 @@ class LocalPaperStore:
                 CREATE INDEX IF NOT EXISTS idx_rec_cache_user_project
                     ON recommendations_cache(user_id, project_id);
             """)
+
+        # ── vec index tables (M1) ─────────────────────────────────────────
+        # Created only when sqlite-vec is available. All three tables must be
+        # present together; we check for fragments_vec_user_map (regular table)
+        # as the canonical sentinel since virtual tables need the extension to
+        # show up correctly.
+        if self._vec_enabled and "fragments_vec_user_map" not in existing_tables:
+            try:
+                dim_row = conn.execute(
+                    "SELECT dimensions FROM fragment_embeddings ORDER BY rowid DESC LIMIT 1"
+                ).fetchone()
+                dim = int(dim_row["dimensions"]) if dim_row else 1024
+                conn.execute(f"""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS fragments_vec_user USING vec0(
+                        user_id     TEXT partition key,
+                        paper_id    TEXT,
+                        fragment_id TEXT,
+                        embedding   FLOAT[{dim}] distance_metric=cosine
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS fragments_vec_user_map (
+                        user_id     TEXT NOT NULL,
+                        fragment_id TEXT NOT NULL,
+                        model_name  TEXT NOT NULL,
+                        vec_rowid   INTEGER NOT NULL UNIQUE,
+                        PRIMARY KEY (user_id, fragment_id, model_name)
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS fragments_vec_state (
+                        state_key   TEXT PRIMARY KEY,
+                        state_value TEXT NOT NULL
+                    )
+                """)
+                conn.execute(
+                    "INSERT OR IGNORE INTO fragments_vec_state(state_key, state_value) VALUES (?, ?)",
+                    ("dimensions", str(dim)),
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO fragments_vec_state(state_key, state_value) VALUES (?, ?)",
+                    ("active_model", ""),
+                )
+                logger.info("Vec index tables created (dim=%d)", dim)
+            except Exception as exc:
+                logger.warning("Failed to create vec index tables: %s; disabling vec", exc)
+                self._vec_enabled = False
+
+    # ------------------------------------------------------------------ #
+    # Vec index — rebuild / backfill                                       #
+    # ------------------------------------------------------------------ #
+
+    def _maybe_rebuild_vec_index(self, conn: sqlite3.Connection) -> None:
+        """Rebuild the KNN vec index if it's empty or the active model changed."""
+        has_state = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='fragments_vec_state'"
+        ).fetchone()
+        if not has_state:
+            return
+
+        state = {
+            r["state_key"]: r["state_value"]
+            for r in conn.execute("SELECT state_key, state_value FROM fragments_vec_state").fetchall()
+        }
+        stored_model = state.get("active_model", "")
+        stored_dim = int(state.get("dimensions", "1024"))
+        active_model = _get_active_embedding_model()
+
+        vec_count = conn.execute("SELECT COUNT(*) FROM fragments_vec_user").fetchone()[0]
+        emb_count = 0
+        if active_model:
+            emb_count = conn.execute(
+                "SELECT COUNT(DISTINCT fe.fragment_id) FROM fragment_embeddings fe "
+                "WHERE fe.model_name = ? AND fe.dimensions = ?",
+                (active_model, stored_dim),
+            ).fetchone()[0]
+
+        needs_rebuild = (
+            (active_model and active_model != stored_model) or
+            (vec_count == 0 and emb_count > 0)
+        )
+        if not needs_rebuild:
+            return
+
+        logger.info(
+            "Vec index rebuild: model=%r (stored=%r), vec_rows=%d, available_embs=%d",
+            active_model, stored_model, vec_count, emb_count,
+        )
+
+        # Drop + recreate virtual table (cleanest way to clear all vec rows)
+        conn.executescript(f"""
+            DROP TABLE IF EXISTS fragments_vec_user;
+            DELETE FROM fragments_vec_user_map;
+            CREATE VIRTUAL TABLE fragments_vec_user USING vec0(
+                user_id     TEXT partition key,
+                paper_id    TEXT,
+                fragment_id TEXT,
+                embedding   FLOAT[{stored_dim}] distance_metric=cosine
+            );
+        """)
+
+        inserted = 0
+        if active_model and emb_count > 0:
+            rows = conn.execute(
+                """SELECT fe.fragment_id, fe.vector,
+                          f.paper_id,
+                          us.user_id
+                   FROM fragment_embeddings fe
+                   JOIN fragments f     ON f.fragment_id = fe.fragment_id
+                   JOIN user_sources us ON us.paper_id = f.paper_id
+                   WHERE fe.model_name = ? AND fe.dimensions = ?""",
+                (active_model, stored_dim),
+            ).fetchall()
+            for row in rows:
+                try:
+                    cur = conn.execute(
+                        "INSERT INTO fragments_vec_user(user_id, paper_id, fragment_id, embedding) "
+                        "VALUES (?, ?, ?, ?)",
+                        (row["user_id"], row["paper_id"], row["fragment_id"], row["vector"]),
+                    )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO fragments_vec_user_map"
+                        "(user_id, fragment_id, model_name, vec_rowid) VALUES (?, ?, ?, ?)",
+                        (row["user_id"], row["fragment_id"], active_model, cur.lastrowid),
+                    )
+                    inserted += 1
+                except Exception as exc:
+                    logger.warning("Vec backfill row failed: %s", exc)
+
+        conn.execute(
+            "INSERT OR REPLACE INTO fragments_vec_state(state_key, state_value) VALUES (?, ?)",
+            ("active_model", active_model),
+        )
+        logger.info("Vec index rebuilt: %d rows inserted", inserted)
+
+    def _replace_vec_row_for_owner(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        paper_id: str,
+        fragment_id: str,
+        vector_blob: bytes,
+        model_name: str,
+    ) -> None:
+        """Upsert one (user_id, fragment_id) pair in the vec index via companion map."""
+        existing = conn.execute(
+            "SELECT vec_rowid FROM fragments_vec_user_map "
+            "WHERE user_id=? AND fragment_id=? AND model_name=?",
+            (user_id, fragment_id, model_name),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "DELETE FROM fragments_vec_user WHERE rowid = ?",
+                (existing["vec_rowid"],),
+            )
+        cur = conn.execute(
+            "INSERT INTO fragments_vec_user(user_id, paper_id, fragment_id, embedding) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, paper_id, fragment_id, vector_blob),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO fragments_vec_user_map"
+            "(user_id, fragment_id, model_name, vec_rowid) VALUES (?, ?, ?, ?)",
+            (user_id, fragment_id, model_name, cur.lastrowid),
+        )
 
     # ------------------------------------------------------------------ #
     # Paper registry                                                       #
@@ -360,11 +582,47 @@ class LocalPaperStore:
             return cur.rowcount > 0
 
     def delete_fragments(self, paper_id: str) -> int:
-        """Delete all fragments and extractions for paper_id. Returns count deleted."""
+        """Delete all fragments and extractions for paper_id. Returns count deleted.
+
+        Deletion order: vec index → vec map → fragment_embeddings → fragments → extractions.
+        This satisfies FK constraints (fragment_embeddings references fragments).
+        """
         with self._conn() as conn:
             count = conn.execute(
                 "SELECT COUNT(*) FROM fragments WHERE paper_id = ?", (paper_id,)
             ).fetchone()[0]
+            frag_ids = [
+                r[0] for r in conn.execute(
+                    "SELECT fragment_id FROM fragments WHERE paper_id = ?", (paper_id,)
+                ).fetchall()
+            ]
+            if frag_ids:
+                placeholders = ",".join("?" * len(frag_ids))
+                # Clean vec index entries (vec_rowids → virtual table rows → map rows)
+                if self._vec_enabled:
+                    try:
+                        vec_rows = conn.execute(
+                            f"SELECT vec_rowid FROM fragments_vec_user_map "
+                            f"WHERE fragment_id IN ({placeholders})",
+                            frag_ids,
+                        ).fetchall()
+                        if vec_rows:
+                            conn.executemany(
+                                "DELETE FROM fragments_vec_user WHERE rowid = ?",
+                                [(r["vec_rowid"],) for r in vec_rows],
+                            )
+                        conn.execute(
+                            f"DELETE FROM fragments_vec_user_map "
+                            f"WHERE fragment_id IN ({placeholders})",
+                            frag_ids,
+                        )
+                    except Exception as exc:
+                        logger.warning("Vec cleanup in delete_fragments failed: %s", exc)
+                # FK order: fragment_embeddings before fragments
+                conn.execute(
+                    f"DELETE FROM fragment_embeddings WHERE fragment_id IN ({placeholders})",
+                    frag_ids,
+                )
             conn.execute("DELETE FROM fragments WHERE paper_id = ?", (paper_id,))
             conn.execute("DELETE FROM extractions WHERE paper_id = ?", (paper_id,))
         return count
@@ -642,7 +900,7 @@ class LocalPaperStore:
     def save_fragment_embedding(
         self, fragment_id: str, vector: list[float], model: str
     ) -> None:
-        """Upsert a fragment-level embedding."""
+        """Upsert a fragment-level embedding, with dual-write to vec index."""
         blob = struct.pack(f"{len(vector)}f", *vector)
         with self._conn() as conn:
             conn.execute(
@@ -651,6 +909,27 @@ class LocalPaperStore:
                    VALUES (?, ?, ?, ?)""",
                 (fragment_id, model, blob, len(vector)),
             )
+            # Dual-write to vec index when this is the active embedding model
+            if self._vec_enabled and model == _get_active_embedding_model():
+                owners = conn.execute(
+                    """SELECT DISTINCT us.user_id, f.paper_id
+                       FROM fragments f
+                       JOIN user_sources us ON us.paper_id = f.paper_id
+                       WHERE f.fragment_id = ?""",
+                    (fragment_id,),
+                ).fetchall()
+                for owner in owners:
+                    try:
+                        self._replace_vec_row_for_owner(
+                            conn,
+                            user_id=owner["user_id"],
+                            paper_id=owner["paper_id"],
+                            fragment_id=fragment_id,
+                            vector_blob=blob,
+                            model_name=model,
+                        )
+                    except Exception as exc:
+                        logger.warning("Vec dual-write failed for %s: %s", fragment_id, exc)
 
     def get_paper_embeddings_batch(
         self, paper_ids: list[str], model: Optional[str] = None
@@ -707,6 +986,138 @@ class LocalPaperStore:
                 paper_ids,
             ).fetchone()
         return row["dimensions"] if row else None
+
+    # ------------------------------------------------------------------ #
+    # Semantic fragment search (M1)                                        #
+    # ------------------------------------------------------------------ #
+
+    def find_similar_fragments(
+        self,
+        query_vector: list[float],
+        user_id: str,
+        limit: int = 20,
+        citekey_filter: Optional[str] = None,
+    ) -> list[dict]:
+        """KNN search for fragments semantically closest to query_vector.
+
+        Searches only within the given user's library using the per-user vec index.
+        Returns list of dicts: {fragment_id, fragment_text, paper_id, citekey, similarity}.
+        Returns [] when vec index is unavailable — callers must handle gracefully.
+        """
+        if not self._vec_enabled:
+            return []
+
+        query_blob = struct.pack(f"{len(query_vector)}f", *query_vector)
+        try:
+            with self._conn() as conn:
+                if citekey_filter:
+                    paper_row = conn.execute(
+                        "SELECT paper_id FROM user_sources WHERE citekey = ? AND user_id = ?",
+                        (citekey_filter, user_id),
+                    ).fetchone()
+                    if not paper_row:
+                        return []
+                    paper_id_filter = paper_row["paper_id"]
+                    rows = conn.execute(
+                        """SELECT fv.fragment_id,
+                                  fv.distance,
+                                  f.fragment_text,
+                                  f.paper_id,
+                                  us.citekey
+                           FROM fragments_vec_user fv
+                           JOIN fragments f     ON fv.fragment_id = f.fragment_id
+                           JOIN user_sources us ON f.paper_id = us.paper_id AND us.user_id = ?
+                           WHERE fv.embedding MATCH ?
+                             AND k = ?
+                             AND fv.user_id = ?
+                             AND fv.paper_id = ?""",
+                        (user_id, query_blob, limit, user_id, paper_id_filter),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """SELECT fv.fragment_id,
+                                  fv.distance,
+                                  f.fragment_text,
+                                  f.paper_id,
+                                  us.citekey
+                           FROM fragments_vec_user fv
+                           JOIN fragments f     ON fv.fragment_id = f.fragment_id
+                           JOIN user_sources us ON f.paper_id = us.paper_id AND us.user_id = ?
+                           WHERE fv.embedding MATCH ?
+                             AND k = ?
+                             AND fv.user_id = ?""",
+                        (user_id, query_blob, limit, user_id),
+                    ).fetchall()
+        except Exception as exc:
+            logger.warning("Semantic fragment search failed: %s", exc)
+            return []
+
+        return [
+            {
+                "fragment_id": row["fragment_id"],
+                "fragment_text": row["fragment_text"],
+                "paper_id": row["paper_id"],
+                "citekey": row["citekey"],
+                "similarity": max(0.0, 1.0 - row["distance"]),
+            }
+            for row in rows
+        ]
+
+    def ensure_vec_entries_for_user_paper(self, user_id: str, paper_id: str) -> int:
+        """Populate vec index for a user–paper pair that already has embeddings.
+
+        Called when a user adds an already-processed paper (dedup / attach path)
+        so semantic search works immediately without waiting for a global rebuild.
+        Returns number of vec rows created.
+        """
+        if not self._vec_enabled:
+            return 0
+        active_model = _get_active_embedding_model()
+        if not active_model:
+            return 0
+
+        with self._conn() as conn:
+            dim_row = conn.execute(
+                "SELECT state_value FROM fragments_vec_state WHERE state_key = 'dimensions'"
+            ).fetchone()
+            stored_dim = int(dim_row["state_value"]) if dim_row else 1024
+
+            rows = conn.execute(
+                """SELECT fe.fragment_id, fe.vector
+                   FROM fragment_embeddings fe
+                   JOIN fragments f ON f.fragment_id = fe.fragment_id
+                   WHERE f.paper_id = ? AND fe.model_name = ? AND fe.dimensions = ?""",
+                (paper_id, active_model, stored_dim),
+            ).fetchall()
+
+            created = 0
+            for row in rows:
+                try:
+                    self._replace_vec_row_for_owner(
+                        conn,
+                        user_id=user_id,
+                        paper_id=paper_id,
+                        fragment_id=row["fragment_id"],
+                        vector_blob=row["vector"],
+                        model_name=active_model,
+                    )
+                    created += 1
+                except Exception as exc:
+                    logger.warning(
+                        "ensure_vec_entries: failed for %s/%s: %s",
+                        paper_id, row["fragment_id"], exc,
+                    )
+
+        if created:
+            logger.info(
+                "ensure_vec_entries: %d rows added for paper %s user %s",
+                created, paper_id, user_id,
+            )
+        return created
+
+    # ------------------------------------------------------------------ #
+    # Citation graph — backfill                                            #
+    # ------------------------------------------------------------------ #
 
     def update_citation_intents(self, paper_id: str, refs: list[dict]) -> int:
         """Update citation_intent for existing citation_graph entries (backfill).
@@ -820,7 +1231,7 @@ class LocalPaperStore:
         return row[0] if row else 0
 
     # ---------------------------------------------------------------- #
-    # Fragment search (SaaS — searches across a user's library)         #
+    # Fragment search (keyword — SaaS)                                  #
     # ---------------------------------------------------------------- #
 
     def search_fragments_for_user(
@@ -829,16 +1240,12 @@ class LocalPaperStore:
         query: str,
         limit: int = 10,
     ) -> list[dict]:
-        """Full-text search over fragments belonging to a user's library.
+        """Full-text keyword search over fragments belonging to a user's library.
 
         Joins ``fragments`` → ``papers`` → ``user_sources`` (all in the same
         library.db).  Filters by ``user_id`` and ``fragment_text LIKE %query%``.
         Returns up to *limit* rows ordered by fragment length ascending
         (shorter fragments tend to be more focused / higher quality).
-
-        TODO(#212-followup): add a second-query branch over ``papers.raw_text``
-        so verbatim phrases present in the source but absent from summary
-        fragments are still recallable. Deferred to follow-up PR.
         """
         like = f"%{query}%"
         with self._conn() as conn:
@@ -880,10 +1287,7 @@ class LocalPaperStore:
         outline_hash: str,
         model: str,
     ) -> Optional[dict]:
-        """Return the cached recommendations payload or None on miss.
-
-        Payload shape: {"json_result": str, "created_at": str, "model": str}.
-        """
+        """Return the cached recommendations payload or None on miss."""
         with self._conn() as conn:
             row = conn.execute(
                 """SELECT json_result, created_at, model

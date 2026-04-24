@@ -344,6 +344,52 @@ def test_upload_dedup_same_user_preserves_citekey(client):
     assert r2.json()["deduplicated"] is True
 
 
+def test_upload_dedup_same_user_attaches_source_to_multiple_projects(client, stores):
+    """Re-uploading the same PDF into another project should attach, not move."""
+    token = _register_and_get_token(client)
+    user_store, _, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+    proj_a = user_store.create_project(user_id=user_id, name="Project A")
+    proj_b = user_store.create_project(user_id=user_id, name="Project B")
+    pdf = _fake_pdf()
+
+    r1 = client.post(
+        "/library/upload",
+        files={"file": ("smith2020.pdf", pdf, "application/pdf")},
+        data={"project_id": proj_a["project_id"]},
+        headers=_auth_headers(token),
+    )
+    assert r1.status_code == 201
+    citekey = r1.json()["citekey"]
+
+    r2 = client.post(
+        "/library/upload",
+        files={"file": ("smith2020.pdf", pdf, "application/pdf")},
+        data={"project_id": proj_b["project_id"]},
+        headers=_auth_headers(token),
+    )
+    assert r2.status_code == 201
+    assert r2.json()["already_owned"] is True
+    assert r2.json()["citekey"] == citekey
+
+    src = user_library.get_source_by_citekey(citekey, user_id=user_id)
+    assert src is not None
+    assert set(src.project_ids) == {proj_a["project_id"], proj_b["project_id"]}
+    assert user_library.get_project_citekeys(proj_a["project_id"], user_id=user_id) == {citekey}
+    assert user_library.get_project_citekeys(proj_b["project_id"], user_id=user_id) == {citekey}
+
+    resp_a = client.get(
+        f"/library/sources?project_id={proj_a['project_id']}",
+        headers=_auth_headers(token),
+    )
+    resp_b = client.get(
+        f"/library/sources?project_id={proj_b['project_id']}",
+        headers=_auth_headers(token),
+    )
+    assert citekey in {s["citekey"] for s in resp_a.json()["sources"]}
+    assert citekey in {s["citekey"] for s in resp_b.json()["sources"]}
+
+
 def test_upload_rejects_non_pdf(client):
     token = _register_and_get_token(client)
     resp = client.post(
