@@ -48,6 +48,7 @@ api = [
     "python-multipart>=0.0.9",
     "redis>=5.0",
     "rq>=2.0",
+    "sqlite-vec>=0.1.9,<0.2",
 ]
 recommended = ["litellm>=1.40"]
 all-ai = ["openai>=1.0", "litellm>=1.40"]

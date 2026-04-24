@@ -934,10 +934,10 @@ onUnmounted(() => {
                           оригинал<template v-if="f.page"> · стр. {{ f.page }}</template>
                         </span>
                         <span
-                          v-if="sentenceModels[f.fragment_id]"
+                          v-if="f.verbatim && sentenceModels[f.fragment_id]"
                           class="trust-badge"
-                          :title="`Парафраз сверен с оригиналом · ${humanizeModel(sentenceModels[f.fragment_id] || '')}`"
-                        >✓ совпадает с источником · {{ humanizeModel(sentenceModels[f.fragment_id] || '') }}</span>
+                          title="Дословная цитата — парафраз основан на верифицированном тексте источника"
+                        >✓ совпадает с источником</span>
                       </div>
                       <div class="frag-orig-text">«{{ f.text }}»</div>
                     </div>

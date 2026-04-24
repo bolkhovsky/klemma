@@ -102,3 +102,24 @@ class TestProtocolsAreRuntimeCheckable:
         assert not isinstance(Empty(), PaperStore)
         assert not isinstance(Empty(), UserLibrary)
         assert not isinstance(Empty(), ProjectStore)
+
+
+class TestLocalPaperStoreProtocolConformance:
+    """Verify LocalPaperStore satisfies PaperStore including find_similar_fragments."""
+
+    def test_local_paper_store_satisfies_protocol(self, tmp_path):
+        from klemma.stores import LocalPaperStore
+        store = LocalPaperStore(tmp_path / "library.db")
+        assert isinstance(store, PaperStore)
+
+    def test_find_similar_fragments_exists(self, tmp_path):
+        from klemma.stores import LocalPaperStore
+        store = LocalPaperStore(tmp_path / "library.db")
+        assert hasattr(store, "find_similar_fragments")
+        assert callable(store.find_similar_fragments)
+
+    def test_find_similar_fragments_returns_list(self, tmp_path):
+        from klemma.stores import LocalPaperStore
+        store = LocalPaperStore(tmp_path / "library.db")
+        result = store.find_similar_fragments([0.0] * 1024, user_id="u", limit=5)
+        assert isinstance(result, list)

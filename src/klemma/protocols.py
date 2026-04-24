@@ -95,6 +95,20 @@ class PaperStore(Protocol):
         """
         ...
 
+    def find_similar_fragments(
+        self,
+        query_vector: list[float],
+        user_id: str,
+        limit: int = 20,
+        citekey_filter: str | None = None,
+    ) -> list[dict]:
+        """Return top-K fragments semantically closest to query_vector for the user.
+
+        Implementations without KNN support must return []. Never raises.
+        Each dict contains: fragment_id, fragment_text, paper_id, citekey, similarity.
+        """
+        ...
+
 
 @runtime_checkable
 class UserLibrary(Protocol):

@@ -782,6 +782,7 @@ async def upload_pdf(
             user_id=user.user_id,
         )
         invalidate_for_user(paper_store, user.user_id)
+        paper_store.ensure_vec_entries_for_user_paper(user.user_id, existing.paper_id)
         return UploadResponse(
             citekey=citekey,
             paper_id=existing.paper_id,
