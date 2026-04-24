@@ -397,15 +397,11 @@ async def semantic_search_fragments(
     cross-lingual citation verification where the citing paper and the cited
     paper share no token overlap.
     """
-    from klemma.stores.paper_store import LocalPaperStore
-
     from ..tasks import _create_embeddings_provider
 
     limit = max(1, min(body.limit, 50))
 
     paper_store = get_paper_store()
-    if not isinstance(paper_store, LocalPaperStore):
-        return SemanticSearchResponse(results=[], total=0, query=body.query)
 
     try:
         emb_provider = _create_embeddings_provider()
@@ -447,11 +443,10 @@ async def semantic_search_fragments(
     display_map = library.get_display_citekeys(internal_cks, user_id=user.user_id)
 
     # Enrich with paper metadata in one pass
-    paper_store_local = paper_store
     paper_ids = list({r["paper_id"] for r in raw})
     papers: dict[str, object] = {}
     for pid in paper_ids:
-        p = paper_store_local.get_paper_by_id(pid)
+        p = paper_store.get_paper_by_id(pid)
         if p:
             papers[pid] = p
 
