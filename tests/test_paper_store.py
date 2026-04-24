@@ -524,3 +524,56 @@ def test_delete_fragments_cleans_vec_entries(tmp_path):
     # Fragment should no longer appear in vec search
     results_after = store.find_similar_fragments(_unit_vec(0), user_id="user-a", limit=5)
     assert all(r["fragment_id"] != frag_id for r in results_after)
+
+
+@_skip_no_vec
+def test_rebuild_updates_dimensions_state(tmp_path):
+    """Switching embedding model to a different dimension must update stored dimensions."""
+    import os
+    import sqlite3
+
+    os.environ["KLEMMA_EMBEDDINGS_MODEL"] = "model-a"
+    db_path = tmp_path / "library.db"
+    store = LocalPaperStore(db_path)
+    library = LocalUserLibrary(db_path)
+
+    paper_id = store.register_paper(title="Dim Paper", pdf_hash="dim_hash")
+    library.add_source(paper_id, "dim_paper", status="completed", user_id="user-a")
+    frag = _make_fragment(paper_id, "Dimension test fragment")
+    store.save_fragments(paper_id, [frag], prompt_hash="p", ai_model="m")
+    store.save_fragment_embedding(frag.fragment_id, _unit_vec(0), "model-a")
+
+    conn = sqlite3.connect(str(db_path))
+    dim_before = conn.execute(
+        "SELECT state_value FROM fragments_vec_state WHERE state_key='dimensions'"
+    ).fetchone()[0]
+    conn.close()
+    assert dim_before == str(_VEC_DIM)
+
+    # Simulate model switch to a different model stored with 512-dim vectors
+    # by writing a fake embedding with dim=512, then triggering rebuild
+    short_vec = [1.0] + [0.0] * 511
+    short_blob = __import__("struct").pack(f"{512}f", *short_vec)
+    raw_conn = sqlite3.connect(str(db_path))
+    raw_conn.execute(
+        "INSERT OR IGNORE INTO fragment_embeddings(fragment_id, model_name, vector, dimensions)"
+        " VALUES (?, ?, ?, ?)",
+        (frag.fragment_id, "model-b", short_blob, 512),
+    )
+    raw_conn.commit()
+    raw_conn.close()
+
+    os.environ["KLEMMA_EMBEDDINGS_MODEL"] = "model-b"
+    store2 = LocalPaperStore(db_path)
+
+    conn2 = sqlite3.connect(str(db_path))
+    dim_after = conn2.execute(
+        "SELECT state_value FROM fragments_vec_state WHERE state_key='dimensions'"
+    ).fetchone()[0]
+    model_after = conn2.execute(
+        "SELECT state_value FROM fragments_vec_state WHERE state_key='active_model'"
+    ).fetchone()[0]
+    conn2.close()
+
+    assert dim_after == "512", f"dimensions state must be updated to 512, got {dim_after}"
+    assert model_after == "model-b"

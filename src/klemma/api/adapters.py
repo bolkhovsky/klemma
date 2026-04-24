@@ -165,9 +165,24 @@ class _SaaSStateAdapter:
     def retrieve_similar_fragments(
         self, query_embedding: list[float], top_k: int = 10, model: str | None = None
     ) -> list[dict]:
-        return self._paper.find_similar_fragments(
+        raw = self._paper.find_similar_fragments(
             query_embedding, self._user_id or "", limit=top_k
         )
+        return [
+            {
+                "id": r["fragment_id"],
+                "source_id": r["citekey"],
+                "citekey": r["citekey"],
+                "fragment_text": r["fragment_text"],
+                "fragment_type": "key_idea",
+                "page_number": None,
+                "citation_intent": None,
+                "section": "",
+                "relevance_score": 3,
+                "usage_hint": "",
+            }
+            for r in raw
+        ]
 
     # ── coverage / gaps ───────────────────────────────────────────────
 

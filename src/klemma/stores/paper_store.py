@@ -340,9 +340,21 @@ class LocalPaperStore:
         if not needs_rebuild:
             return
 
+        # Determine actual dimension for the new active model from fragment_embeddings.
+        # Do NOT reuse stored_dim — a model change may carry a different dimension (e.g.
+        # switching from BGE-M3 1024 to text-embedding-3-small 1536 would corrupt inserts).
+        new_dim = stored_dim
+        if active_model:
+            dim_row = conn.execute(
+                "SELECT dimensions FROM fragment_embeddings WHERE model_name = ? LIMIT 1",
+                (active_model,),
+            ).fetchone()
+            if dim_row:
+                new_dim = int(dim_row["dimensions"])
+
         logger.info(
-            "Vec index rebuild: model=%r (stored=%r), vec_rows=%d, available_embs=%d",
-            active_model, stored_model, vec_count, emb_count,
+            "Vec index rebuild: model=%r (stored=%r), dim=%d, vec_rows=%d, available_embs=%d",
+            active_model, stored_model, new_dim, vec_count, emb_count,
         )
 
         # Drop + recreate virtual table (cleanest way to clear all vec rows)
@@ -353,7 +365,7 @@ class LocalPaperStore:
                 user_id     TEXT partition key,
                 paper_id    TEXT,
                 fragment_id TEXT,
-                embedding   FLOAT[{stored_dim}] distance_metric=cosine
+                embedding   FLOAT[{new_dim}] distance_metric=cosine
             );
         """)
 
@@ -367,7 +379,7 @@ class LocalPaperStore:
                    JOIN fragments f     ON f.fragment_id = fe.fragment_id
                    JOIN user_sources us ON us.paper_id = f.paper_id
                    WHERE fe.model_name = ? AND fe.dimensions = ?""",
-                (active_model, stored_dim),
+                (active_model, new_dim),
             ).fetchall()
             for row in rows:
                 try:
@@ -389,7 +401,11 @@ class LocalPaperStore:
             "INSERT OR REPLACE INTO fragments_vec_state(state_key, state_value) VALUES (?, ?)",
             ("active_model", active_model),
         )
-        logger.info("Vec index rebuilt: %d rows inserted", inserted)
+        conn.execute(
+            "INSERT OR REPLACE INTO fragments_vec_state(state_key, state_value) VALUES (?, ?)",
+            ("dimensions", str(new_dim)),
+        )
+        logger.info("Vec index rebuilt: %d rows inserted (dim=%d)", inserted, new_dim)
 
     def _replace_vec_row_for_owner(
         self,
