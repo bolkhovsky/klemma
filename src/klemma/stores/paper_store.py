@@ -1138,6 +1138,7 @@ class LocalPaperStore:
                                   fv.distance,
                                   f.fragment_text,
                                   f.paper_id,
+                                  f.page_number,
                                   us.citekey
                            FROM fragments_vec_user fv
                            JOIN fragments f     ON fv.fragment_id = f.fragment_id
@@ -1154,6 +1155,7 @@ class LocalPaperStore:
                                   fv.distance,
                                   f.fragment_text,
                                   f.paper_id,
+                                  f.page_number,
                                   us.citekey
                            FROM fragments_vec_user fv
                            JOIN fragments f     ON fv.fragment_id = f.fragment_id
@@ -1173,6 +1175,7 @@ class LocalPaperStore:
                 "fragment_text": row["fragment_text"],
                 "paper_id": row["paper_id"],
                 "citekey": row["citekey"],
+                "page_number": row["page_number"],
                 "similarity": max(0.0, 1.0 - row["distance"]),
             }
             for row in rows
