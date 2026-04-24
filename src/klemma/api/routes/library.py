@@ -106,6 +106,29 @@ class FragmentSearchResponse(BaseModel):
     query: str
 
 
+class SemanticSearchRequest(BaseModel):
+    query: str
+    limit: int = 20
+    citekey: str | None = None
+
+
+class SemanticSearchResult(BaseModel):
+    fragment_id: str
+    citekey: str
+    title: str = ""
+    authors: str = ""
+    year: int | None = None
+    text: str
+    similarity: float
+    page_number: int | None = None
+
+
+class SemanticSearchResponse(BaseModel):
+    results: list[SemanticSearchResult]
+    total: int
+    query: str
+
+
 class SectionServed(BaseModel):
     section: str
     count: int
@@ -357,6 +380,90 @@ async def search_fragments(
         for r in raw
     ]
     return FragmentSearchResponse(results=results, total=len(results), query=q)
+
+
+@router.post("/fragments/semantic-search", response_model=SemanticSearchResponse)
+async def semantic_search_fragments(
+    body: SemanticSearchRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> SemanticSearchResponse:
+    """Semantic (vector) search over citation fragments in the user's library.
+
+    Embeds *query* via the active embedding provider, then runs KNN against
+    the sqlite-vec index.  When the vec extension is unavailable the endpoint
+    returns an empty result set rather than raising.
+
+    Optional *citekey* restricts the search to a single source — useful for
+    cross-lingual citation verification where the citing paper and the cited
+    paper share no token overlap.
+    """
+    from ..tasks import _create_embeddings_provider
+
+    limit = max(1, min(body.limit, 50))
+
+    paper_store = get_paper_store()
+
+    try:
+        emb_provider = _create_embeddings_provider()
+    except Exception as exc:
+        logger.warning("Embedding provider unavailable for semantic search: %s", exc)
+        return SemanticSearchResponse(results=[], total=0, query=body.query)
+
+    try:
+        vector = emb_provider.embed(body.query, "")
+    except Exception as exc:
+        logger.warning("Failed to embed semantic search query: %s", exc)
+        return SemanticSearchResponse(results=[], total=0, query=body.query)
+
+    if not vector:
+        return SemanticSearchResponse(results=[], total=0, query=body.query)
+
+    # Resolve citekey filter to internal key when caller used external_citekey
+    internal_citekey: str | None = None
+    if body.citekey:
+        library = get_user_library()
+        src = library.get_source_by_any_key(body.citekey, user_id=user.user_id)
+        if src is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Source '{body.citekey}' not found",
+            )
+        internal_citekey = src.citekey
+
+    raw = paper_store.find_similar_fragments(
+        vector, user.user_id, limit=limit, citekey_filter=internal_citekey
+    )
+
+    if not raw:
+        return SemanticSearchResponse(results=[], total=0, query=body.query)
+
+    # Batch-resolve display citekeys
+    library = get_user_library()
+    internal_cks = list({r["citekey"] for r in raw})
+    display_map = library.get_display_citekeys(internal_cks, user_id=user.user_id)
+
+    # Enrich with paper metadata in one pass
+    paper_ids = list({r["paper_id"] for r in raw})
+    papers: dict[str, object] = {}
+    for pid in paper_ids:
+        p = paper_store.get_paper_by_id(pid)
+        if p:
+            papers[pid] = p
+
+    results = [
+        SemanticSearchResult(
+            fragment_id=r["fragment_id"],
+            citekey=display_map.get(r["citekey"], r["citekey"]),
+            title=getattr(papers.get(r["paper_id"]), "title", "") or "",
+            authors=getattr(papers.get(r["paper_id"]), "authors", "") or "",
+            year=getattr(papers.get(r["paper_id"]), "year", None),
+            text=r["fragment_text"],
+            similarity=r["similarity"],
+            page_number=r.get("page_number"),
+        )
+        for r in raw
+    ]
+    return SemanticSearchResponse(results=results, total=len(results), query=body.query)
 
 
 @router.get("/sources/{citekey}", response_model=SourceDetailResponse)
