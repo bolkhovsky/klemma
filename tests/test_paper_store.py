@@ -564,7 +564,7 @@ def test_rebuild_updates_dimensions_state(tmp_path):
     raw_conn.close()
 
     os.environ["KLEMMA_EMBEDDINGS_MODEL"] = "model-b"
-    store2 = LocalPaperStore(db_path)
+    LocalPaperStore(db_path)  # triggers _maybe_rebuild_vec_index with placeholder dim
 
     conn2 = sqlite3.connect(str(db_path))
     dim_after = conn2.execute(
@@ -577,3 +577,56 @@ def test_rebuild_updates_dimensions_state(tmp_path):
 
     assert dim_after == "512", f"dimensions state must be updated to 512, got {dim_after}"
     assert model_after == "model-b"
+
+
+@_skip_no_vec
+def test_dim_mismatch_inline_rebuild(tmp_path):
+    """First write with a new-dim vector triggers inline rebuild when model switches
+    before any embeddings for the new model exist at rebuild time.
+
+    Scenario:
+    1. Model A writes 1024-dim embeddings → vec table = FLOAT[1024].
+    2. Model B is set as active; no model-B embeddings exist yet → rebuild uses stored
+       placeholder dim (1024), actual_dim_known=False.
+    3. First save_fragment_embedding() with model B's 512-dim vector hits dimension
+       mismatch → _rebuild_vec_table_with_dim() called inline.
+    4. After rebuild, vec table is FLOAT[512] and find_similar_fragments() works.
+    """
+    import os
+    import sqlite3 as _sqlite3
+
+    os.environ["KLEMMA_EMBEDDINGS_MODEL"] = "model-a"
+    db_path = tmp_path / "library.db"
+    store = LocalPaperStore(db_path)
+    library = LocalUserLibrary(db_path)
+
+    paper_id = store.register_paper(title="Mismatch Paper", pdf_hash="mm_hash")
+    library.add_source(paper_id, "mm_paper", status="completed", user_id="user-mm")
+    frag = _make_fragment(paper_id, "Inline rebuild test fragment")
+    store.save_fragments(paper_id, [frag], prompt_hash="p", ai_model="m")
+
+    # Write model-A embedding (1024-dim) so vec table is FLOAT[1024]
+    store.save_fragment_embedding(frag.fragment_id, _unit_vec(0, _VEC_DIM), "model-a")
+
+    # Switch to model-B with a DIFFERENT dimension (512) with NO model-B embeddings yet
+    os.environ["KLEMMA_EMBEDDINGS_MODEL"] = "model-b"
+    # Instantiate new store → _maybe_rebuild_vec_index fires, but actual_dim_known=False
+    # because no model-b rows exist → table stays/recreated at stored_dim=1024 (placeholder)
+    store2 = LocalPaperStore(db_path)
+
+    # First write with model-B's actual dim (512) should trigger inline dim-fix rebuild
+    short_vec = [1.0] + [0.0] * 511  # 512-dim
+    store2.save_fragment_embedding(frag.fragment_id, short_vec, "model-b")
+
+    # Verify state updated to 512
+    raw = _sqlite3.connect(str(db_path))
+    dim_state = raw.execute(
+        "SELECT state_value FROM fragments_vec_state WHERE state_key='dimensions'"
+    ).fetchone()[0]
+    raw.close()
+    assert dim_state == "512", f"expected dim=512 in state after inline rebuild, got {dim_state}"
+
+    # Verify find_similar_fragments works with a 512-dim query
+    results = store2.find_similar_fragments(short_vec, user_id="user-mm", limit=5)
+    assert len(results) == 1, f"expected 1 result after inline rebuild, got {len(results)}"
+    assert results[0]["fragment_id"] == frag.fragment_id

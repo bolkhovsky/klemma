@@ -325,12 +325,28 @@ class LocalPaperStore:
         active_model = _get_active_embedding_model()
 
         vec_count = conn.execute("SELECT COUNT(*) FROM fragments_vec_user").fetchone()[0]
-        emb_count = 0
+
+        # Determine the actual dimension for the new active model FIRST, so emb_count
+        # uses the correct dimension filter. Computing emb_count with stored_dim would
+        # return 0 when the new model has a different dimension, causing backfill to be
+        # skipped even though embeddings exist.
+        new_dim = stored_dim
+        actual_dim_known = False
         if active_model:
+            dim_row = conn.execute(
+                "SELECT dimensions FROM fragment_embeddings WHERE model_name = ? LIMIT 1",
+                (active_model,),
+            ).fetchone()
+            if dim_row:
+                new_dim = int(dim_row["dimensions"])
+                actual_dim_known = True
+
+        emb_count = 0
+        if active_model and actual_dim_known:
             emb_count = conn.execute(
                 "SELECT COUNT(DISTINCT fe.fragment_id) FROM fragment_embeddings fe "
                 "WHERE fe.model_name = ? AND fe.dimensions = ?",
-                (active_model, stored_dim),
+                (active_model, new_dim),
             ).fetchone()[0]
 
         needs_rebuild = (
@@ -340,24 +356,15 @@ class LocalPaperStore:
         if not needs_rebuild:
             return
 
-        # Determine actual dimension for the new active model from fragment_embeddings.
-        # Do NOT reuse stored_dim — a model change may carry a different dimension (e.g.
-        # switching from BGE-M3 1024 to text-embedding-3-small 1536 would corrupt inserts).
-        new_dim = stored_dim
-        if active_model:
-            dim_row = conn.execute(
-                "SELECT dimensions FROM fragment_embeddings WHERE model_name = ? LIMIT 1",
-                (active_model,),
-            ).fetchone()
-            if dim_row:
-                new_dim = int(dim_row["dimensions"])
-
         logger.info(
-            "Vec index rebuild: model=%r (stored=%r), dim=%d, vec_rows=%d, available_embs=%d",
-            active_model, stored_model, new_dim, vec_count, emb_count,
+            "Vec index rebuild: model=%r (stored=%r), dim=%d (known=%s), vec_rows=%d, embs=%d",
+            active_model, stored_model, new_dim, actual_dim_known, vec_count, emb_count,
         )
 
-        # Drop + recreate virtual table (cleanest way to clear all vec rows)
+        # Drop + recreate virtual table (cleanest way to clear all vec rows).
+        # If the true dim is not yet known (no embeddings for new model), use stored_dim
+        # as placeholder. The first write via save_fragment_embedding() will detect the
+        # mismatch and call _rebuild_vec_table_with_dim() to correct it.
         conn.executescript(f"""
             DROP TABLE IF EXISTS fragments_vec_user;
             DELETE FROM fragments_vec_user_map;
@@ -401,11 +408,18 @@ class LocalPaperStore:
             "INSERT OR REPLACE INTO fragments_vec_state(state_key, state_value) VALUES (?, ?)",
             ("active_model", active_model),
         )
-        conn.execute(
-            "INSERT OR REPLACE INTO fragments_vec_state(state_key, state_value) VALUES (?, ?)",
-            ("dimensions", str(new_dim)),
+        # Only commit dimensions to state when we have confirmed them from actual data.
+        # When dim is unknown (no embeddings yet for new model), leave stored_dim as
+        # placeholder so _rebuild_vec_table_with_dim() can correct it on first write.
+        if actual_dim_known:
+            conn.execute(
+                "INSERT OR REPLACE INTO fragments_vec_state(state_key, state_value) VALUES (?, ?)",
+                ("dimensions", str(new_dim)),
+            )
+        logger.info(
+            "Vec index rebuilt: %d rows inserted (dim=%d, dim_confirmed=%s)",
+            inserted, new_dim, actual_dim_known,
         )
-        logger.info("Vec index rebuilt: %d rows inserted (dim=%d)", inserted, new_dim)
 
     def _replace_vec_row_for_owner(
         self,
@@ -436,6 +450,63 @@ class LocalPaperStore:
             "INSERT OR REPLACE INTO fragments_vec_user_map"
             "(user_id, fragment_id, model_name, vec_rowid) VALUES (?, ?, ?, ?)",
             (user_id, fragment_id, model_name, cur.lastrowid),
+        )
+
+    def _rebuild_vec_table_with_dim(
+        self,
+        conn: sqlite3.Connection,
+        new_dim: int,
+        model_name: str,
+    ) -> None:
+        """Drop and recreate fragments_vec_user with the correct dimension, then backfill.
+
+        Called when a model switch happens before any embeddings for the new model existed
+        at rebuild time, leaving the table with a placeholder dimension.  The first actual
+        write (save_fragment_embedding) detects the mismatch and calls this method.
+        executescript() issues an implicit COMMIT first, so the caller's pending writes
+        are committed before the table is recreated — this is intentional.
+        """
+        conn.executescript(f"""
+            DROP TABLE IF EXISTS fragments_vec_user;
+            DELETE FROM fragments_vec_user_map;
+            CREATE VIRTUAL TABLE fragments_vec_user USING vec0(
+                user_id     TEXT partition key,
+                paper_id    TEXT,
+                fragment_id TEXT,
+                embedding   FLOAT[{new_dim}] distance_metric=cosine
+            );
+        """)
+        conn.execute(
+            "INSERT OR REPLACE INTO fragments_vec_state(state_key, state_value) VALUES (?, ?)",
+            ("dimensions", str(new_dim)),
+        )
+        rows = conn.execute(
+            """SELECT fe.fragment_id, fe.vector, f.paper_id, us.user_id
+               FROM fragment_embeddings fe
+               JOIN fragments f     ON f.fragment_id = fe.fragment_id
+               JOIN user_sources us ON us.paper_id = f.paper_id
+               WHERE fe.model_name = ? AND fe.dimensions = ?""",
+            (model_name, new_dim),
+        ).fetchall()
+        inserted = 0
+        for row in rows:
+            try:
+                cur = conn.execute(
+                    "INSERT INTO fragments_vec_user(user_id, paper_id, fragment_id, embedding) "
+                    "VALUES (?, ?, ?, ?)",
+                    (row["user_id"], row["paper_id"], row["fragment_id"], row["vector"]),
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO fragments_vec_user_map"
+                    "(user_id, fragment_id, model_name, vec_rowid) VALUES (?, ?, ?, ?)",
+                    (row["user_id"], row["fragment_id"], model_name, cur.lastrowid),
+                )
+                inserted += 1
+            except Exception as exc:
+                logger.warning("Vec backfill row failed during dim-fix rebuild: %s", exc)
+        logger.info(
+            "Vec table rebuilt with correct dim=%d, model=%r, %d rows",
+            new_dim, model_name, inserted,
         )
 
     # ------------------------------------------------------------------ #
@@ -934,6 +1005,7 @@ class LocalPaperStore:
                        WHERE f.fragment_id = ?""",
                     (fragment_id,),
                 ).fetchall()
+                _dim_rebuilt = False
                 for owner in owners:
                     try:
                         self._replace_vec_row_for_owner(
@@ -945,7 +1017,34 @@ class LocalPaperStore:
                             model_name=model,
                         )
                     except Exception as exc:
-                        logger.warning("Vec dual-write failed for %s: %s", fragment_id, exc)
+                        exc_msg = str(exc).lower()
+                        if not _dim_rebuilt and ("dimension" in exc_msg or "mismatch" in exc_msg):
+                            # Vec table was created with a placeholder dimension (model
+                            # switch before any embeddings for the new model existed).
+                            # Rebuild once with the actual dimension and retry all owners.
+                            actual_dim = len(vector)
+                            logger.info(
+                                "Vec dim mismatch on first write (dim=%d, model=%r); rebuilding",
+                                actual_dim, model,
+                            )
+                            try:
+                                self._rebuild_vec_table_with_dim(conn, actual_dim, model)
+                                _dim_rebuilt = True
+                                self._replace_vec_row_for_owner(
+                                    conn,
+                                    user_id=owner["user_id"],
+                                    paper_id=owner["paper_id"],
+                                    fragment_id=fragment_id,
+                                    vector_blob=blob,
+                                    model_name=model,
+                                )
+                            except Exception as rebuild_exc:
+                                logger.warning(
+                                    "Vec rebuild-and-retry failed for %s: %s",
+                                    fragment_id, rebuild_exc,
+                                )
+                        else:
+                            logger.warning("Vec dual-write failed for %s: %s", fragment_id, exc)
 
     def get_paper_embeddings_batch(
         self, paper_ids: list[str], model: Optional[str] = None
