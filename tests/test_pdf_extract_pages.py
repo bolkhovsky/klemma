@@ -179,7 +179,7 @@ def test_build_chunks_page_range_valid():
 
 
 def test_dedup_by_prefix_removes_near_duplicates():
-    from klemma.api.tasks import _dedup_fragments_by_prefix
+    from klemma.api.tasks import dedup_fragments_by_prefix as _dedup_fragments_by_prefix
     from klemma.models import FragmentRecord
 
     def _frag(fid: str, text: str) -> FragmentRecord:
@@ -203,7 +203,7 @@ def test_dedup_by_prefix_removes_near_duplicates():
 
 
 def test_dedup_keeps_short_fragments():
-    from klemma.api.tasks import _dedup_fragments_by_prefix
+    from klemma.api.tasks import dedup_fragments_by_prefix as _dedup_fragments_by_prefix
     from klemma.models import FragmentRecord
 
     short = FragmentRecord(

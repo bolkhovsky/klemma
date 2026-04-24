@@ -116,6 +116,178 @@ def _create_embeddings_provider():
     return create_embeddings(config)
 
 
+def _run_chunked_extraction(
+    ai,
+    ai_config,
+    entry,
+    chunks,
+    paper_id: str,
+    source_label: str,
+    prompt_path,
+    *,
+    dissertation_context: str = "",
+    available_tags: str = "",
+    user_store=None,
+    user_id: str = "",
+) -> dict | None:
+    """Run chunked AI extraction over a list of ChunkRecords.
+
+    Renders the extraction prompt once per chunk, calls the AI, validates verbatim
+    claims per-chunk, and accumulates fragments across all chunks.
+
+    Args:
+        ai: AI provider instance (must implement render_prompt + call_with_meta).
+        ai_config: AIConfig — used for model name when recording token usage.
+        entry: ZoteroEntry built from the paper metadata.
+        chunks: list[ChunkRecord] — pre-built overlapping chunks from build_chunks_from_pages.
+        paper_id: Global paper id (used as prefix for content hash).
+        source_label: Citekey or paper_id — used only in log messages.
+        prompt_path: Path to the extract.md prompt template.
+        dissertation_context: Section list rendered for the AI (empty if no project).
+        available_tags: Comma-separated section ids (empty if no project).
+        user_store: LocalUserStore instance for recording per-chunk token usage, or None.
+        user_id: User id string for token recording (ignored when user_store is None).
+
+    Returns:
+        dict with keys: fragments, key_refs, fragment_ai_sections, predicted_sections,
+        predicted_chapters, chunks_processed, downgrade_stats
+        — or None if every chunk produced zero fragments.
+    """
+    from klemma.ai import extract_json
+    from klemma.hashing import compute_content_hash
+    from klemma.literature.models import Fragment
+    from klemma.models import FragmentRecord
+    from klemma.skills.extractor import validate_verbatim_fragments
+
+    system = (
+        "You are a research assistant extracting citation-worthy fragments from scientific papers. "
+        "Output only valid JSON with fragments array and key_references array."
+    )
+
+    fragments: list[FragmentRecord] = []
+    fragment_ai_sections: dict[str, str | None] = {}
+    predicted_sections: set[str] = set()
+    predicted_chapters: set[int] = set()
+    all_key_refs: list[dict] = []
+    downgrade_stats_totals = {"verbatim_claimed": 0, "verbatim_confirmed": 0,
+                              "fuzzy_rescued": 0, "downgraded": 0}
+    chunk_total = len(chunks)
+
+    for chunk in chunks:
+        user_prompt = ai.render_prompt(
+            prompt_path,
+            title=entry.title or "Unknown",
+            authors=entry.authors_str,
+            year=entry.year or "Unknown",
+            journal=entry.container_title or "N/A",
+            doi=entry.DOI or "N/A",
+            abstract=entry.abstract or "Not available",
+            pdf_text=chunk.text,
+            chunk_index=chunk.index,
+            chunk_total=chunk_total,
+            char_start=chunk.char_start,
+            char_end=chunk.char_end,
+            dissertation_context=dissertation_context,
+            available_tags=available_tags,
+            language="ru",
+            project_type="research",
+        )
+        chunk_chars = len(chunk.text)
+        adaptive_max_tokens = max(2048, min(8192, chunk_chars // 4))
+        chunk_result = ai.call_with_meta(system, user_prompt, max_tokens=adaptive_max_tokens)
+
+        if not chunk_result or not chunk_result.text:
+            logger.warning(
+                "Chunk %d/%d returned no AI response for %s — skipping",
+                chunk.index + 1, chunk_total, source_label,
+            )
+            continue
+
+        # Record token usage per chunk
+        if user_store and user_id:
+            user_store.record_usage(
+                user_id=user_id,
+                operation="process_source",
+                model=ai_config.model,
+                input_tokens=chunk_result.input_tokens or 0,
+                output_tokens=chunk_result.output_tokens or 0,
+                citekey=source_label,
+            )
+
+        data = extract_json(chunk_result.text)
+        if not data:
+            logger.warning(
+                "Chunk %d/%d: failed to parse AI JSON for %s — skipping",
+                chunk.index + 1, chunk_total, source_label,
+            )
+            continue
+
+        # Collect key_references (bibliography; last chunk usually has the most)
+        all_key_refs.extend(data.get("key_references", []))
+
+        # Parse fragments from this chunk; validate verbatim per-chunk
+        chunk_records: list[FragmentRecord] = []
+        chunk_pydantic: list[Fragment] = []
+        for f_data in data.get("fragments", []):
+            text = f_data.get("text", "").strip()
+            if not text:
+                continue
+            fragment_id = compute_content_hash(paper_id, text, f_data.get("page"))
+            claimed_verbatim = bool(f_data.get("verbatim", False))
+            chunk_pydantic.append(Fragment(text=text, verbatim=claimed_verbatim))
+            chunk_records.append(FragmentRecord(
+                fragment_id=fragment_id,
+                paper_id=paper_id,
+                fragment_text=text,
+                fragment_type=f_data.get("type", "key_idea"),
+                page_number=f_data.get("page"),
+                citation_intent=f_data.get("citation_intent"),
+                verbatim=claimed_verbatim,
+                content_hash=fragment_id,
+            ))
+            sec = str(f_data.get("section", "")).strip()
+            fragment_ai_sections[fragment_id] = sec or None
+            if sec:
+                predicted_sections.add(sec)
+            chap = f_data.get("chapter")
+            if isinstance(chap, int):
+                predicted_chapters.add(chap)
+
+        # Per-chunk verbatim validation (fragments validated against their source chunk)
+        if chunk_pydantic:
+            chunk_stats = validate_verbatim_fragments(chunk_pydantic, chunk.text, source_label)
+            for record, pyd in zip(chunk_records, chunk_pydantic):
+                record.verbatim = pyd.verbatim
+            for k in downgrade_stats_totals:
+                downgrade_stats_totals[k] += getattr(chunk_stats, k)
+            if chunk_stats.downgraded:
+                logger.warning(
+                    "verbatim validator (%s chunk %d/%d): %d/%d downgraded",
+                    source_label, chunk.index + 1, chunk_total,
+                    chunk_stats.downgraded, chunk_stats.verbatim_claimed,
+                )
+
+        fragments.extend(chunk_records)
+
+    if not fragments:
+        return None
+
+    fragments = dedup_fragments_by_prefix(fragments, min_prefix=100)
+
+    from klemma.literature.models import DowngradeStats
+    downgrade_stats = DowngradeStats(**downgrade_stats_totals)
+
+    return {
+        "fragments": fragments,
+        "key_refs": all_key_refs,
+        "fragment_ai_sections": fragment_ai_sections,
+        "predicted_sections": predicted_sections,
+        "predicted_chapters": predicted_chapters,
+        "chunks_processed": chunk_total,
+        "downgrade_stats": downgrade_stats,
+    }
+
+
 def _mirror_research_report(data_path: Path, project_id: str, section: str, text: str, model: str) -> None:
     """Write research report to MD file for klemma-cli sync pull.
 
@@ -329,9 +501,9 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
     try:
         ai, ai_config = _create_ai_provider()
 
-        from klemma.hashing import compute_content_hash
+        from klemma.ai import extract_json
+        from klemma.config import _SHIPPED_PROMPTS_DIR
         from klemma.literature.models import ZoteroEntry
-        from klemma.models import FragmentRecord
 
         # Build minimal entry from paper metadata
         entry = ZoteroEntry(
@@ -343,131 +515,28 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             abstract=paper.abstract or "",
         )
 
-        # Render extraction prompt — uses _SHIPPED_PROMPTS_DIR (respects KLEMMA_PROMPTS_DIR env)
-        from klemma.ai import extract_json
-        from klemma.config import _SHIPPED_PROMPTS_DIR
-        from klemma.literature.models import Fragment
-        from klemma.skills.extractor import validate_verbatim_fragments
-
         prompt_path = _SHIPPED_PROMPTS_DIR / "extract.md"
-        system = (
-            "You are a research assistant extracting citation-worthy fragments from scientific papers. "
-            "Output only valid JSON with fragments array and key_references array."
+
+        # --- Per-chunk extraction via shared helper ---
+        extraction = _run_chunked_extraction(
+            ai, ai_config, entry, chunks, paper_id, citekey, prompt_path,
+            dissertation_context=dissertation_context,
+            available_tags=available_tags,
+            user_store=user_store,
+            user_id=user_id,
         )
 
-        # --- Per-chunk extraction (removes 50K truncation and 3-10 fragment cap) ---
-        fragments: list[FragmentRecord] = []
-        fragment_ai_sections: dict[str, str | None] = {}
-        predicted_sections: set[str] = set()
-        predicted_chapters: set[int] = set()
-        all_key_refs: list[dict] = []
-        downgrade_stats_totals = {"verbatim_claimed": 0, "verbatim_confirmed": 0,
-                                  "fuzzy_rescued": 0, "downgraded": 0}
-        chunk_total = len(chunks)
-
-        for chunk in chunks:
-            user_prompt = ai.render_prompt(
-                prompt_path,
-                title=entry.title or "Unknown",
-                authors=entry.authors_str,
-                year=entry.year or "Unknown",
-                journal=entry.container_title or "N/A",
-                doi=entry.DOI or "N/A",
-                abstract=entry.abstract or "Not available",
-                pdf_text=chunk.text,
-                chunk_index=chunk.index,
-                chunk_total=chunk_total,
-                char_start=chunk.char_start,
-                char_end=chunk.char_end,
-                dissertation_context=dissertation_context,
-                available_tags=available_tags,
-                language="ru",
-                project_type="research",
-            )
-            chunk_chars = len(chunk.text)
-            adaptive_max_tokens = max(2048, min(8192, chunk_chars // 4))
-            chunk_result = ai.call_with_meta(system, user_prompt, max_tokens=adaptive_max_tokens)
-
-            if not chunk_result or not chunk_result.text:
-                logger.warning("Chunk %d/%d returned no AI response for %s — skipping",
-                               chunk.index + 1, chunk_total, citekey)
-                continue
-
-            # Record token usage per chunk
-            if user_store and user_id:
-                user_store.record_usage(
-                    user_id=user_id,
-                    operation="process_source",
-                    model=ai_config.model,
-                    input_tokens=chunk_result.input_tokens or 0,
-                    output_tokens=chunk_result.output_tokens or 0,
-                    citekey=citekey,
-                )
-
-            data = extract_json(chunk_result.text)
-            if not data:
-                logger.warning("Chunk %d/%d: failed to parse AI JSON for %s — skipping",
-                               chunk.index + 1, chunk_total, citekey)
-                continue
-
-            # Collect key_references (bibliography only needs to be found once, last chunk usually)
-            all_key_refs.extend(data.get("key_references", []))
-
-            # Parse fragments from this chunk; validate verbatim per-chunk
-            chunk_records: list[FragmentRecord] = []
-            chunk_pydantic: list[Fragment] = []
-            for f_data in data.get("fragments", []):
-                text = f_data.get("text", "").strip()
-                if not text:
-                    continue
-                fragment_id = compute_content_hash(paper_id, text, f_data.get("page"))
-                claimed_verbatim = bool(f_data.get("verbatim", False))
-                chunk_pydantic.append(Fragment(text=text, verbatim=claimed_verbatim))
-                chunk_records.append(FragmentRecord(
-                    fragment_id=fragment_id,
-                    paper_id=paper_id,
-                    fragment_text=text,
-                    fragment_type=f_data.get("type", "key_idea"),
-                    page_number=f_data.get("page"),
-                    citation_intent=f_data.get("citation_intent"),
-                    verbatim=claimed_verbatim,
-                    content_hash=fragment_id,
-                ))
-                sec = str(f_data.get("section", "")).strip()
-                fragment_ai_sections[fragment_id] = sec or None
-                if sec:
-                    predicted_sections.add(sec)
-                chap = f_data.get("chapter")
-                if isinstance(chap, int):
-                    predicted_chapters.add(chap)
-
-            # Per-chunk verbatim validation (fragment validated against its source chunk)
-            if chunk_pydantic:
-                chunk_stats = validate_verbatim_fragments(chunk_pydantic, chunk.text, citekey)
-                for record, pyd in zip(chunk_records, chunk_pydantic):
-                    record.verbatim = pyd.verbatim
-                for k in downgrade_stats_totals:
-                    downgrade_stats_totals[k] += getattr(chunk_stats, k)
-                if chunk_stats.downgraded:
-                    logger.warning(
-                        "verbatim validator (%s chunk %d/%d): %d/%d downgraded",
-                        citekey, chunk.index + 1, chunk_total,
-                        chunk_stats.downgraded, chunk_stats.verbatim_claimed,
-                    )
-
-            fragments.extend(chunk_records)
-
-        if not fragments:
+        if extraction is None:
             user_library.update_status(citekey, "failed", user_id=user_id or None)
             return {"status": "error", "detail": "No fragments extracted from PDF"}
 
-        # Overlap dedup: content_hash handles identical texts across chunks;
-        # prefix dedup removes fragments that share a 100-char prefix (overlap boundary artefacts)
-        fragments = _dedup_fragments_by_prefix(fragments, min_prefix=100)
+        fragments = extraction["fragments"]
+        fragment_ai_sections = extraction["fragment_ai_sections"]
+        predicted_sections = extraction["predicted_sections"]
+        predicted_chapters = extraction["predicted_chapters"]
+        all_key_refs = extraction["key_refs"]
+        downgrade_stats = extraction["downgrade_stats"]
 
-        # Wrap totals into a DowngradeStats-compatible dict for the result
-        from klemma.literature.models import DowngradeStats
-        downgrade_stats = DowngradeStats(**downgrade_stats_totals)
         if downgrade_stats.downgraded:
             logger.warning(
                 "verbatim validator (%s total): %d/%d claimed fragments downgraded "
@@ -621,7 +690,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         return {"status": "error", "detail": f"Extraction failed: {type(exc).__name__}: {exc}"}
 
 
-def _dedup_fragments_by_prefix(
+def dedup_fragments_by_prefix(
     fragments: list,
     min_prefix: int = 100,
 ) -> list:
@@ -654,9 +723,7 @@ def reprocess_paper(paper_id: str, data_dir: str) -> dict:
 
     Returns a dict with status, fragment counts, and chunk statistics.
     """
-    from klemma.hashing import compute_content_hash
     from klemma.literature.pdf import PDFExtractor, build_chunks_from_pages
-    from klemma.models import FragmentRecord
     from klemma.stores.file_store import LocalFileStore
     from klemma.stores.paper_store import LocalPaperStore
 
@@ -688,10 +755,8 @@ def reprocess_paper(paper_id: str, data_dir: str) -> dict:
         logger.info("reprocess_paper %s: %d page(s), %d chunk(s)", paper_id, len(pages), len(chunks))
 
         ai, ai_config = _create_ai_provider()
-        from klemma.ai import extract_json
         from klemma.config import _SHIPPED_PROMPTS_DIR
-        from klemma.literature.models import Fragment, ZoteroEntry
-        from klemma.skills.extractor import validate_verbatim_fragments
+        from klemma.literature.models import ZoteroEntry
 
         entry = ZoteroEntry(
             id=paper.paper_id,
@@ -703,76 +768,18 @@ def reprocess_paper(paper_id: str, data_dir: str) -> dict:
         )
 
         prompt_path = _SHIPPED_PROMPTS_DIR / "extract.md"
-        system = (
-            "You are a research assistant extracting citation-worthy fragments from scientific papers. "
-            "Output only valid JSON with fragments array and key_references array."
+
+        # --- Per-chunk extraction via shared helper ---
+        extraction = _run_chunked_extraction(
+            ai, ai_config, entry, chunks, paper.paper_id, paper_id, prompt_path,
         )
 
-        new_fragments: list[FragmentRecord] = []
-        all_key_refs: list[dict] = []
-        chunk_total = len(chunks)
-
-        for chunk in chunks:
-            user_prompt = ai.render_prompt(
-                prompt_path,
-                title=entry.title or "Unknown",
-                authors=entry.authors_str,
-                year=entry.year or "Unknown",
-                journal=entry.container_title or "N/A",
-                doi=entry.DOI or "N/A",
-                abstract=entry.abstract or "Not available",
-                pdf_text=chunk.text,
-                chunk_index=chunk.index,
-                chunk_total=chunk_total,
-                char_start=chunk.char_start,
-                char_end=chunk.char_end,
-                dissertation_context="",
-                available_tags="",
-                language="ru",
-                project_type="research",
-            )
-            chunk_chars = len(chunk.text)
-            result = ai.call_with_meta(
-                system, user_prompt,
-                max_tokens=max(2048, min(8192, chunk_chars // 4)),
-            )
-            if not result or not result.text:
-                logger.warning("reprocess_paper %s chunk %d: no AI response", paper_id, chunk.index)
-                continue
-            data = extract_json(result.text)
-            if not data:
-                continue
-
-            all_key_refs.extend(data.get("key_references", []))
-            chunk_records: list[FragmentRecord] = []
-            chunk_pydantic: list[Fragment] = []
-            for f_data in data.get("fragments", []):
-                text = f_data.get("text", "").strip()
-                if not text:
-                    continue
-                fragment_id = compute_content_hash(paper.paper_id, text, f_data.get("page"))
-                claimed_verbatim = bool(f_data.get("verbatim", False))
-                chunk_pydantic.append(Fragment(text=text, verbatim=claimed_verbatim))
-                chunk_records.append(FragmentRecord(
-                    fragment_id=fragment_id,
-                    paper_id=paper.paper_id,
-                    fragment_text=text,
-                    fragment_type=f_data.get("type", "key_idea"),
-                    page_number=f_data.get("page"),
-                    citation_intent=f_data.get("citation_intent"),
-                    verbatim=claimed_verbatim,
-                    content_hash=fragment_id,
-                ))
-            if chunk_pydantic:
-                validate_verbatim_fragments(chunk_pydantic, chunk.text, paper.paper_id)
-                for record, pyd in zip(chunk_records, chunk_pydantic):
-                    record.verbatim = pyd.verbatim
-            new_fragments.extend(chunk_records)
-
-        if not new_fragments:
+        if extraction is None:
             return {"status": "error", "detail": "No fragments extracted"}
 
-        new_fragments = _dedup_fragments_by_prefix(new_fragments, min_prefix=100)
+        new_fragments = extraction["fragments"]
+        all_key_refs = extraction["key_refs"]
+        chunk_total = extraction["chunks_processed"]
 
         # Atomic swap: only delete old data after new extraction succeeded
         deleted = paper_store.delete_fragments(paper.paper_id)

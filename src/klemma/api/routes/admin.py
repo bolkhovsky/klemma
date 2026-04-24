@@ -61,6 +61,7 @@ class ReprocessAllRequest(BaseModel):
     user_id: str
     dry_run: bool = True
     min_fragments: int = 0
+    allow_inline: bool = False
 
 
 class ReprocessAllResponse(BaseModel):
@@ -138,9 +139,20 @@ async def backfill_reprocess_all(
 
     ``min_fragments``: skip papers that already have ≥ N fragments (0 = reprocess all).
 
+    ``allow_inline``: when Redis is unavailable, fall back to running
+    reprocess_paper() synchronously inside the ASGI handler.  Default ``false``
+    — when Redis is unavailable and allow_inline is not set, the endpoint
+    returns HTTP 503 so the caller is not silently blocked.  Only set
+    ``allow_inline=true`` for tiny sets (≤ 5 papers); the endpoint enforces
+    this cap automatically.
+
     Each enqueued job runs reprocess_paper() which atomically swaps old
     fragments with new chunked-extraction results.  Old data is preserved if
     extraction fails.
+
+    Note: running inline (allow_inline=True) blocks the ASGI worker for the
+    duration of all reprocess calls.  Use only for very small sets where Redis
+    is genuinely not available.
     """
     _require_admin(user)
 
@@ -169,8 +181,14 @@ async def backfill_reprocess_all(
                 continue
         candidate_ids.append(pid)
 
-    # Estimate chunks (heuristic: avg 4 chunks per paper at 25K chunk_size)
-    estimated_chunks = len(candidate_ids) * 4
+    # Compute estimated chunks from actual raw_text length where available.
+    # Each chunk is ~25K chars; fall back to 1 chunk per paper when raw_text is not cached.
+    import math
+    estimated_chunks = 0
+    for pid in candidate_ids:
+        raw = paper_store.get_raw_text(pid)
+        chars = len(raw) if raw else 25_000  # default 1 chunk if no raw_text cached
+        estimated_chunks += math.ceil(chars / 25_000)
 
     if body.dry_run:
         return ReprocessAllResponse(
@@ -180,7 +198,7 @@ async def backfill_reprocess_all(
             estimated_chunks=estimated_chunks,
         )
 
-    # Enqueue via rq when available, otherwise run synchronously (not recommended for large sets)
+    # Enqueue via rq when available, otherwise return 503 unless allow_inline is set.
     from ..tasks import reprocess_paper
 
     enqueued = 0
@@ -194,9 +212,21 @@ async def backfill_reprocess_all(
             q.enqueue(reprocess_paper, pid, data_dir)
             enqueued += 1
     except Exception:
-        # Redis unavailable — run inline (admin-only, blocking, use only for small sets)
-        logger.warning("Redis unavailable; running reprocess_paper inline for %d papers", len(candidate_ids))
-        for pid in candidate_ids:
+        # Redis unavailable — refuse unless allow_inline=True (blocking, small sets only)
+        if not body.allow_inline:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Redis is unavailable and allow_inline is false. "
+                    "Start Redis and retry, or set allow_inline=true (cap: 5 papers)."
+                ),
+            )
+        inline_ids = candidate_ids[:5]
+        logger.warning(
+            "Redis unavailable; running reprocess_paper inline for %d paper(s) (allow_inline=True, cap=5)",
+            len(inline_ids),
+        )
+        for pid in inline_ids:
             reprocess_paper(pid, data_dir)
             enqueued += 1
 
