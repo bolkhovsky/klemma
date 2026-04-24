@@ -57,6 +57,19 @@ class BackfillIntentsResponse(BaseModel):
     remaining: int
 
 
+class ReprocessAllRequest(BaseModel):
+    user_id: str
+    dry_run: bool = True
+    min_fragments: int = 0
+
+
+class ReprocessAllResponse(BaseModel):
+    papers: int
+    enqueued: int
+    dry_run: bool
+    estimated_chunks: int
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -107,3 +120,89 @@ async def backfill_citation_intents_route(
         )
 
     return BackfillIntentsResponse(**result)
+
+
+@router.post(
+    "/backfill/reprocess-all",
+    response_model=ReprocessAllResponse,
+    summary="Re-extract fragments for all completed papers (chunked extraction)",
+)
+async def backfill_reprocess_all(
+    body: ReprocessAllRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> ReprocessAllResponse:
+    """Enqueue reprocess_paper jobs for all completed sources of a user.
+
+    **dry_run=true** (default): returns paper count and estimated chunk count
+    without enqueueing any jobs.  Set ``dry_run=false`` to actually enqueue.
+
+    ``min_fragments``: skip papers that already have ≥ N fragments (0 = reprocess all).
+
+    Each enqueued job runs reprocess_paper() which atomically swaps old
+    fragments with new chunked-extraction results.  Old data is preserved if
+    extraction fails.
+    """
+    _require_admin(user)
+
+    data_dir = os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma"))
+    data_path = Path(data_dir)
+    library_db = data_path / "library.db"
+
+    from klemma.stores.paper_store import LocalPaperStore
+    from klemma.stores.user_library import LocalUserLibrary
+
+    paper_store = LocalPaperStore(library_db)
+    user_library = LocalUserLibrary(library_db)
+
+    # Collect distinct paper_ids for this user's completed sources
+    all_sources = user_library.get_all_sources(user_id=body.user_id)
+    completed_paper_ids = list({
+        s.paper_id for s in all_sources if s.status == "completed"
+    })
+
+    # Apply min_fragments filter
+    candidate_ids: list[str] = []
+    for pid in completed_paper_ids:
+        if body.min_fragments > 0:
+            frags = paper_store.get_fragments(pid)
+            if len(frags) >= body.min_fragments:
+                continue
+        candidate_ids.append(pid)
+
+    # Estimate chunks (heuristic: avg 4 chunks per paper at 25K chunk_size)
+    estimated_chunks = len(candidate_ids) * 4
+
+    if body.dry_run:
+        return ReprocessAllResponse(
+            papers=len(candidate_ids),
+            enqueued=0,
+            dry_run=True,
+            estimated_chunks=estimated_chunks,
+        )
+
+    # Enqueue via rq when available, otherwise run synchronously (not recommended for large sets)
+    from ..tasks import reprocess_paper
+
+    enqueued = 0
+    try:
+        from redis import Redis
+        from rq import Queue as RQueue
+
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        q = RQueue(connection=Redis.from_url(redis_url), default_timeout=1800)
+        for pid in candidate_ids:
+            q.enqueue(reprocess_paper, pid, data_dir)
+            enqueued += 1
+    except Exception:
+        # Redis unavailable — run inline (admin-only, blocking, use only for small sets)
+        logger.warning("Redis unavailable; running reprocess_paper inline for %d papers", len(candidate_ids))
+        for pid in candidate_ids:
+            reprocess_paper(pid, data_dir)
+            enqueued += 1
+
+    return ReprocessAllResponse(
+        papers=len(candidate_ids),
+        enqueued=enqueued,
+        dry_run=False,
+        estimated_chunks=estimated_chunks,
+    )

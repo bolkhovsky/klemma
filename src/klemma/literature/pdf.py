@@ -2,12 +2,121 @@
 
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import fitz
 
 from .models import Author, ZoteroEntry
+
+
+@dataclass
+class ChunkRecord:
+    """One overlapping text window produced by build_chunks_from_pages()."""
+
+    index: int
+    text: str        # ~chunk_size chars with [Page N] markers
+    page_start: int
+    page_end: int
+    char_start: int  # byte offset in the full concatenated text
+    char_end: int
+
+
+def _nearest_sentence_end(text: str, lo: int, hi: int) -> int:
+    """Return the position just after the last sentence-end in text[lo:hi].
+
+    Searches backward from hi so we get the latest clean break before the
+    hard boundary.  Falls back to hi (hard cut) when no boundary is found.
+    """
+    limit = min(hi, len(text))
+    for i in range(limit - 1, lo, -1):
+        if text[i] in ".!?" and (i + 1 >= len(text) or text[i + 1] in " \n\t"):
+            return i + 1
+    return hi
+
+
+def _page_nums_in(text: str) -> list[int]:
+    return [int(m.group(1)) for m in re.finditer(r"\[Page (\d+)\]", text)]
+
+
+def build_chunks_from_pages(
+    pages: list[str],
+    chunk_size: int = 25_000,
+    overlap: int = 2_000,
+) -> list[ChunkRecord]:
+    """Split extracted pages into overlapping ~chunk_size text windows.
+
+    Each window preserves ``[Page N]`` markers so the extraction prompt can
+    ground page numbers.  Consecutive windows overlap by *overlap* characters,
+    with the boundary snapped to the nearest sentence end within ±500 chars of
+    the nominal cut point.
+
+    Returns a single chunk when the full text fits within chunk_size.
+    Returns [] for empty input.
+    """
+    if not pages:
+        return []
+
+    blocks = [f"[Page {i + 1}]\n{text}" for i, text in enumerate(pages)]
+    full = "\n\n".join(blocks)
+    total = len(full)
+
+    if total == 0:
+        return []
+
+    n_pages = len(pages)
+
+    if total <= chunk_size:
+        return [
+            ChunkRecord(
+                index=0,
+                text=full,
+                page_start=1,
+                page_end=n_pages,
+                char_start=0,
+                char_end=total,
+            )
+        ]
+
+    chunks: list[ChunkRecord] = []
+    start = 0
+    idx = 0
+
+    while start < total:
+        hard_end = min(start + chunk_size, total)
+
+        if hard_end < total:
+            # Snap to nearest sentence boundary in a ±500-char search window
+            lo = max(start + 1, hard_end - 500)
+            hi = min(total, hard_end + 500)
+            end = _nearest_sentence_end(full, lo, hi)
+        else:
+            end = hard_end
+
+        chunk_text = full[start:end]
+        page_nums = _page_nums_in(chunk_text)
+        chunks.append(
+            ChunkRecord(
+                index=idx,
+                text=chunk_text,
+                page_start=min(page_nums) if page_nums else 1,
+                page_end=max(page_nums) if page_nums else n_pages,
+                char_start=start,
+                char_end=end,
+            )
+        )
+
+        if end >= total:
+            break  # Reached end of document — overlap would only create a markerless tail chunk
+
+        next_start = end - overlap
+        if next_start <= start:
+            next_start = start + max(1, chunk_size - overlap)
+        start = next_start
+        idx += 1
+
+    return chunks
 
 
 class PDFExtractor:
