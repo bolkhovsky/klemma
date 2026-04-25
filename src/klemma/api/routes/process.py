@@ -44,8 +44,13 @@ _local_jobs: dict[str, dict] = {}
 
 
 def _local_jobs_allowed() -> bool:
-    """True only when KLEMMA_ALLOW_LOCAL_JOBS=1 is explicitly set (dev mode)."""
-    return bool(os.environ.get("KLEMMA_ALLOW_LOCAL_JOBS"))
+    """True only when KLEMMA_ALLOW_LOCAL_JOBS=1 is explicitly set (dev mode).
+
+    Strict equality on "1" — `bool(os.environ.get(...))` would treat "0",
+    "false", "no" as truthy (any non-empty string), which would silently
+    re-enable the unsafe fallback in production.
+    """
+    return os.environ.get("KLEMMA_ALLOW_LOCAL_JOBS") == "1"
 
 
 async def _run_local_job(job_id: str, fn: Any, *args: Any) -> None:

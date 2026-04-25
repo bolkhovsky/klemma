@@ -96,6 +96,77 @@ def test_submit_process_enqueues_job(client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Local-fallback gate (#369): KLEMMA_ALLOW_LOCAL_JOBS must be exactly "1"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [
+        (None, False),       # unset → fallback disabled (production default)
+        ("", False),         # empty string → disabled
+        ("0", False),         # explicit-off, MUST NOT enable fallback
+        ("false", False),    # word-form-off, MUST NOT enable fallback
+        ("no", False),       # word-form-off, MUST NOT enable fallback
+        ("true", False),     # only "1" enables; word-form-on is rejected
+        ("1", True),         # documented opt-in
+    ],
+)
+def test_local_jobs_allowed_strict_equality(monkeypatch, env_value, expected):
+    """`bool(os.environ.get(...))` would treat "0"/"false"/"no" as truthy.
+
+    Regression for codex-rescue P1 on PR #377: ensure `_local_jobs_allowed()`
+    only honors the literal string "1" so an operator typing
+    `KLEMMA_ALLOW_LOCAL_JOBS=0` cannot accidentally re-enable the unsafe
+    per-process fallback in production.
+    """
+    from klemma.api.routes.process import _local_jobs_allowed
+
+    monkeypatch.delenv("KLEMMA_ALLOW_LOCAL_JOBS", raising=False)
+    if env_value is not None:
+        monkeypatch.setenv("KLEMMA_ALLOW_LOCAL_JOBS", env_value)
+    assert _local_jobs_allowed() is expected
+
+
+def test_submit_process_returns_503_when_redis_unavailable_and_fallback_off(
+    client, monkeypatch
+):
+    """No KLEMMA_ALLOW_LOCAL_JOBS=1 + Redis unavailable → 503, not silent local fallback."""
+    token = _auth_token(client)
+    _add_source(client, token)
+
+    monkeypatch.delenv("KLEMMA_ALLOW_LOCAL_JOBS", raising=False)
+
+    import klemma.api.routes.process as proc_mod
+
+    # Redis path disabled — would otherwise enqueue successfully
+    monkeypatch.setattr(proc_mod, "_RQ_AVAILABLE", False)
+
+    resp = client.post("/process/sources/smithML2020", headers=_headers(token))
+    assert resp.status_code == 503
+    assert "KLEMMA_ALLOW_LOCAL_JOBS" in resp.json()["detail"]
+
+
+def test_submit_process_returns_503_when_fallback_var_is_zero(client, monkeypatch):
+    """Regression: KLEMMA_ALLOW_LOCAL_JOBS=0 must NOT enable the fallback.
+
+    Prior to the PR #377 strict-equality fix, `bool("0")` evaluated to True
+    and silently allowed the unsafe per-process fallback in production.
+    """
+    token = _auth_token(client)
+    _add_source(client, token)
+
+    monkeypatch.setenv("KLEMMA_ALLOW_LOCAL_JOBS", "0")
+
+    import klemma.api.routes.process as proc_mod
+
+    monkeypatch.setattr(proc_mod, "_RQ_AVAILABLE", False)
+
+    resp = client.post("/process/sources/smithML2020", headers=_headers(token))
+    assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
 # Job status
 # ---------------------------------------------------------------------------
 
