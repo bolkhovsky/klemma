@@ -22,6 +22,9 @@ Ground rules — no exceptions.
 {{ abstract }}
 
 ## Full Text
+{% if chunk_total is defined and chunk_total > 1 %}
+*(Chunk {{ chunk_index + 1 }}/{{ chunk_total }}, characters {{ char_start }}–{{ char_end }} of document)*
+{% endif %}
 {{ pdf_text }}
 
 ---
@@ -122,7 +125,7 @@ Return a JSON object:
 ```
 
 Guidelines:
-1. Extract 3-10 fragments per paper, prioritizing high-relevance ones
+1. Extract 5-25 fragments from this chunk, proportional to content density. Prefer: numerical criteria, §-references, tabular values, specific claims. Avoid: generic definitions, meta-text, section headers.
 2. Every fragment must be `verbatim: true` with a character-identical substring of the paper; drop any claim you cannot express as a direct quotation
 3. Identify methodology descriptions that could be referenced
 4. Look for results/metrics that support or contrast with the project's approach
