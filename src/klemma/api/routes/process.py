@@ -28,12 +28,29 @@ except ImportError:
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# In-memory job store — Redis-free fallback for local development
+# In-memory job store — only active when KLEMMA_ALLOW_LOCAL_JOBS=1
 # ---------------------------------------------------------------------------
+# WARNING: _local_jobs is a per-process dict. With uvicorn --workers N > 1,
+# each worker process has its own copy. A job submitted through worker-0 will
+# appear missing when its status is polled through worker-1.
+#
+# This fallback is safe only for single-process local development.
+# In production (Docker Compose with workers=2), KLEMMA_ALLOW_LOCAL_JOBS must
+# NOT be set — Redis is the required job store.
 
 # Keyed by job_id → {"status": str, "result": dict | None}
 # Populated by _run_local_job(); checked by get_job_status() before Redis.
 _local_jobs: dict[str, dict] = {}
+
+
+def _local_jobs_allowed() -> bool:
+    """True only when KLEMMA_ALLOW_LOCAL_JOBS=1 is explicitly set (dev mode).
+
+    Strict equality on "1" — `bool(os.environ.get(...))` would treat "0",
+    "false", "no" as truthy (any non-empty string), which would silently
+    re-enable the unsafe fallback in production.
+    """
+    return os.environ.get("KLEMMA_ALLOW_LOCAL_JOBS") == "1"
 
 
 async def _run_local_job(job_id: str, fn: Any, *args: Any) -> None:
@@ -98,7 +115,8 @@ async def submit_process_job(
     """Enqueue a source for async extraction processing.
 
     Returns 202 with a job_id that can be polled via GET /process/jobs/{job_id}.
-    Falls back to in-process thread execution when Redis is unavailable.
+    Returns 503 if Redis is unavailable, unless KLEMMA_ALLOW_LOCAL_JOBS=1 is set
+    (single-worker dev mode only — the in-process fallback is not multi-worker safe).
     """
     library = get_user_library()
     # Dual-key: accept either internal citekey or external_citekey.
@@ -124,7 +142,7 @@ async def submit_process_job(
 
     data_dir = os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma"))
 
-    # Try Redis first; fall back to in-process thread when unavailable
+    # Try Redis first; fall back to in-process thread only when explicitly opted in
     if _RQ_AVAILABLE:
         try:
             redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -144,7 +162,12 @@ async def submit_process_job(
         except Exception:
             pass  # Redis unavailable — fall through to local execution
 
-    # Local fallback: run in asyncio thread pool, no external dependencies
+    # Local fallback: only allowed in single-worker dev mode
+    if not _local_jobs_allowed():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Redis unavailable. Set KLEMMA_ALLOW_LOCAL_JOBS=1 for local development without Redis.",
+        )
     job_id = str(uuid.uuid4())
     asyncio.create_task(
         _run_local_job(job_id, process_source, src.paper_id, citekey, data_dir, user.user_id, project_id, force)

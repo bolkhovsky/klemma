@@ -586,10 +586,13 @@ async def generate_sentences_endpoint(
         except Exception:
             pass  # Fall through to local execution
 
-    # Share process.py's in-memory registry so /process/jobs/{job_id}
-    # can poll results in the Redis-free fallback path.
-    from .process import _local_jobs, _run_local_job
+    from .process import _local_jobs, _local_jobs_allowed, _run_local_job
 
+    if not _local_jobs_allowed():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Redis unavailable. Set KLEMMA_ALLOW_LOCAL_JOBS=1 for local development without Redis.",
+        )
     job_id = str(uuid.uuid4())
     _local_jobs[job_id] = {"status": "queued", "result": None}
     asyncio.create_task(

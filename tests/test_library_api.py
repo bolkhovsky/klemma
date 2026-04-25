@@ -1099,6 +1099,7 @@ def test_generate_sentences_rewrites_external_to_internal(client, stores, monkey
     internal key before enqueue, otherwise external-key submissions fail
     async with "Source not found". Regression: Codex P1 on #349.
     """
+    monkeypatch.setenv("KLEMMA_ALLOW_LOCAL_JOBS", "1")
     user_store, paper_store, user_library, _, _ = stores
     token = _register_and_get_token(client)
     user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
