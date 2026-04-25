@@ -41,3 +41,18 @@ PROJECT_LOG.md
 secure-ai-assistant-roadmap.md
 saas/dashboard/node_modules/
 saas/dashboard/dist/
+
+# Private notes and personal drafts
+notes/
+
+# Visual brainstorming sessions
+.superpowers/
+
+# Claude agent worktrees and runtime files
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.claude/pr-notify.sh
+.claude/metadata-updater.sh
+
+# Local config examples with personal data
+agent-orchestrator.yaml
