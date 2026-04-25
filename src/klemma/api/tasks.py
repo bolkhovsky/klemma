@@ -150,7 +150,7 @@ def _run_chunked_extraction(
 
     Returns:
         dict with keys: fragments, key_refs, fragment_ai_sections, predicted_sections,
-        predicted_chapters, chunks_processed, downgrade_stats
+        predicted_chapters, chunks_processed, failed_chunks, downgrade_stats
         — or None if every chunk produced zero fragments.
     """
     from klemma.ai import extract_json
@@ -172,6 +172,7 @@ def _run_chunked_extraction(
     downgrade_stats_totals = {"verbatim_claimed": 0, "verbatim_confirmed": 0,
                               "fuzzy_rescued": 0, "downgraded": 0}
     chunk_total = len(chunks)
+    failed_chunks = 0
 
     for chunk in chunks:
         user_prompt = ai.render_prompt(
@@ -201,6 +202,7 @@ def _run_chunked_extraction(
                 "Chunk %d/%d returned no AI response for %s — skipping",
                 chunk.index + 1, chunk_total, source_label,
             )
+            failed_chunks += 1
             continue
 
         # Record token usage per chunk
@@ -220,6 +222,7 @@ def _run_chunked_extraction(
                 "Chunk %d/%d: failed to parse AI JSON for %s — skipping",
                 chunk.index + 1, chunk_total, source_label,
             )
+            failed_chunks += 1
             continue
 
         # Collect key_references (bibliography; last chunk usually has the most)
@@ -272,6 +275,12 @@ def _run_chunked_extraction(
     if not fragments:
         return None
 
+    if failed_chunks > 0:
+        logger.warning(
+            "%s: %d/%d chunk(s) failed AI extraction — result covers only part of the PDF",
+            source_label, failed_chunks, chunk_total,
+        )
+
     fragments = dedup_fragments_by_prefix(fragments, min_prefix=100)
 
     from klemma.literature.models import DowngradeStats
@@ -283,7 +292,8 @@ def _run_chunked_extraction(
         "fragment_ai_sections": fragment_ai_sections,
         "predicted_sections": predicted_sections,
         "predicted_chapters": predicted_chapters,
-        "chunks_processed": chunk_total,
+        "chunks_processed": chunk_total - failed_chunks,
+        "failed_chunks": failed_chunks,
         "downgrade_stats": downgrade_stats,
     }
 
@@ -536,6 +546,8 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         predicted_chapters = extraction["predicted_chapters"]
         all_key_refs = extraction["key_refs"]
         downgrade_stats = extraction["downgrade_stats"]
+        failed_chunks = extraction.get("failed_chunks", 0)
+        chunks_processed = extraction.get("chunks_processed", len(chunks))
 
         if downgrade_stats.downgraded:
             logger.warning(
@@ -669,15 +681,20 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 data_dir=data_dir,
             )
 
-        user_library.update_status(citekey, "completed", user_id=user_id or None)
-        logger.info("Extracted %d fragments for %s (%s)", saved, citekey, paper_id)
+        persist_status = "partial" if failed_chunks > 0 else "completed"
+        user_library.update_status(citekey, persist_status, user_id=user_id or None)
+        logger.info("Extracted %d fragments for %s (%s) [status=%s]", saved, citekey, paper_id, persist_status)
 
+        result_status = persist_status
         result_dict: dict = {
-            "status": "completed",
+            "status": result_status,
             "citekey": citekey,
             "fragment_count": saved,
+            "chunks_processed": chunks_processed,
             "downgrade_stats": downgrade_stats.as_dict(),
         }
+        if failed_chunks > 0:
+            result_dict["failed_chunks"] = failed_chunks
         if auto_suggest_job_id:
             result_dict["auto_suggest_job_id"] = auto_suggest_job_id
         if auto_sentences_job_id:
@@ -777,11 +794,31 @@ def reprocess_paper(paper_id: str, data_dir: str) -> dict:
         if extraction is None:
             return {"status": "error", "detail": "No fragments extracted"}
 
+        reprocess_failed_chunks = extraction.get("failed_chunks", 0)
+        reprocess_chunk_total = extraction.get("chunks_processed", 0) + reprocess_failed_chunks
+        if reprocess_failed_chunks > 0:
+            # Refuse to replace a complete corpus record with partial extraction data.
+            # Old fragments are preserved; caller can retry.
+            logger.error(
+                "reprocess_paper %s: %d/%d chunk(s) failed — aborting swap to preserve existing corpus",
+                paper_id, reprocess_failed_chunks, reprocess_chunk_total,
+            )
+            return {
+                "status": "partial",
+                "paper_id": paper_id,
+                "detail": (
+                    f"{reprocess_failed_chunks}/{reprocess_chunk_total} chunks failed AI extraction; "
+                    "existing fragments preserved"
+                ),
+                "chunks_processed": reprocess_chunk_total - reprocess_failed_chunks,
+                "failed_chunks": reprocess_failed_chunks,
+            }
+
         new_fragments = extraction["fragments"]
         all_key_refs = extraction["key_refs"]
         chunk_total = extraction["chunks_processed"]
 
-        # Atomic swap: only delete old data after new extraction succeeded
+        # Atomic swap: only delete old data after new extraction fully succeeded
         deleted = paper_store.delete_fragments(paper.paper_id)
         saved = paper_store.save_fragments(paper.paper_id, new_fragments, "", ai_config.model)
         paper_store.update_paper_raw_text(paper.paper_id, full_text)

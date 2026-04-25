@@ -173,6 +173,34 @@ def test_build_chunks_page_range_valid():
         assert c.page_start <= c.page_end <= len(pages)
 
 
+def test_build_chunks_mid_page_chunk_correct_page_attribution():
+    """When a single page exceeds chunk_size, the chunker prepends the active [Page N]
+    marker to mid-page chunks so the AI can always ground page numbers.
+    page_start must equal the active page at chunk start, not 1 or n_pages.
+    """
+    # Page 1: short; Page 2: very long (> chunk_size); Page 3: short
+    chunk_size = 5_000
+    page2_text = "B" * (chunk_size * 3)  # forces multiple mid-page chunks on page 2
+    pages = ["Short page 1 content.", page2_text, "Short page 3 content."]
+    chunks = build_chunks_from_pages(pages, chunk_size=chunk_size, overlap=500)
+
+    n_pages = len(pages)
+    mid_page_chunks_found = 0
+    for c in chunks:
+        assert 1 <= c.page_start <= n_pages, f"chunk {c.index} page_start out of range"
+        assert c.page_start <= c.page_end <= n_pages, f"chunk {c.index} page range invalid"
+        # Every chunk must have a [Page N] marker (prepended if mid-page)
+        assert "[Page " in c.text, f"chunk {c.index} has no page marker"
+        # Mid-page chunks on page 2 must attribute to page 2, not page 1 or n_pages
+        if c.text.startswith("[Page 2]") and "B" * 100 in c.text:
+            mid_page_chunks_found += 1
+            assert c.page_start == 2, (
+                f"mid-page chunk {c.index} should start on page 2, got {c.page_start}"
+            )
+
+    assert mid_page_chunks_found >= 2, "expected multiple mid-page chunks on page 2"
+
+
 # ---------------------------------------------------------------------------
 # Overlap dedup helper
 # ---------------------------------------------------------------------------

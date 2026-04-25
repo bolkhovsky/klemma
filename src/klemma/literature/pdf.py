@@ -79,6 +79,15 @@ def build_chunks_from_pages(
             )
         ]
 
+    # Precompute marker offsets so page attribution works even for mid-page chunks
+    # (chunks that start after the [Page N] marker of a long page have no marker in
+    # their text, making _page_nums_in(chunk_text) return [] and the old fallback
+    # wrong: page_start=1, page_end=n_pages).
+    marker_positions: list[tuple[int, int]] = [
+        (m.start(), int(m.group(1)))
+        for m in re.finditer(r"\[Page (\d+)\]", full)
+    ]
+
     chunks: list[ChunkRecord] = []
     start = 0
     idx = 0
@@ -95,13 +104,28 @@ def build_chunks_from_pages(
             end = hard_end
 
         chunk_text = full[start:end]
-        page_nums = _page_nums_in(chunk_text)
+
+        # Active page at 'start': last marker with offset <= start (inclusive handles the
+        # case where start falls exactly on a marker boundary).
+        prior_or_at = [pn for (off, pn) in marker_positions if off <= start]
+        active_page = prior_or_at[-1] if prior_or_at else 1
+
+        # Markers whose position falls strictly inside (start, end) — used only for pg_end.
+        markers_after_start = [pn for (off, pn) in marker_positions if start < off < end]
+        pg_start = active_page
+        pg_end = max(markers_after_start) if markers_after_start else active_page
+
+        # Prepend active page marker when chunk starts mid-page so the AI always has
+        # page grounding (verbatim validator and fragment page_number both rely on this).
+        if not chunk_text.startswith("[Page "):
+            chunk_text = f"[Page {active_page}]\n{chunk_text}"
+
         chunks.append(
             ChunkRecord(
                 index=idx,
                 text=chunk_text,
-                page_start=min(page_nums) if page_nums else 1,
-                page_end=max(page_nums) if page_nums else n_pages,
+                page_start=pg_start,
+                page_end=pg_end,
                 char_start=start,
                 char_end=end,
             )
