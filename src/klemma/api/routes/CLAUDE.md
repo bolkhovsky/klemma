@@ -81,7 +81,7 @@ Files stored at `KLEMMA_DATA_DIR/drafts/{project_id}/draft/` (ADR-016).
 Process endpoints — mounted with `prefix="/process"`. All require Bearer auth.
 - `POST /process/sources/{citekey}` → `JobSubmitResponse` (202) — enqueue async extraction job; validates `project_id` ownership before enqueueing (project_id is a write path for auto-suggestion)
 - `GET /process/jobs/{job_id}` → `JobStatusResponse` — poll job status (queued/started/finished/failed)
-- Requires Redis + rq; returns 503 if unavailable
+- Requires Redis + rq; returns 503 if unavailable. `KLEMMA_ALLOW_LOCAL_JOBS=1` enables a per-process asyncio fallback for single-worker dev only — never set in production (multi-worker uvicorn loses jobs across workers).
 - Worker entry point: `python -m klemma.api.worker`
 
 ### analyze.py (~190 lines)
@@ -120,7 +120,7 @@ Library-first pivot: users accept/reject fragments, assign them to outline secti
 - `PATCH /projects/{id}/fragments/curate/{fragment_id}` → partial update (verdict, section, note)
 - `GET /projects/{id}/fragments/suggest?section=X` → `SuggestFragmentsResponse` — smart suggestions: intent match + gap alerts for missing intents
 - `POST /projects/{id}/fragments/auto-suggest` → `{suggested: N}` — backfill `verdict='suggested'` entries for all uncurated fragments in a project; idempotent; uses `auto_assign_section()` from `klemma.section_types`
-- `POST /projects/{id}/fragments/generate-sentences` → `{job_id, status, citekey}` (202) — enqueue suggested-sentence generation job (ADR-017). Body: `{citekey, mode: "missing"|"force"}`. Uses Redis/rq when available, falls back to asyncio local job queue (shares `process.py`'s `_local_jobs` registry). Poll result via `GET /process/jobs/{job_id}` — final payload: `{status, generated, failed, failed_ids, sentences: {fragment_id: text}, model}`.
+- `POST /projects/{id}/fragments/generate-sentences` → `{job_id, status, citekey}` (202) — enqueue suggested-sentence generation job (ADR-017). Body: `{citekey, mode: "missing"|"force"}`. Uses Redis/rq when available; returns 503 if Redis is unavailable unless `KLEMMA_ALLOW_LOCAL_JOBS=1` is set (single-worker dev only — the asyncio fallback shares `process.py`'s per-process `_local_jobs` registry and is not multi-worker safe). Poll result via `GET /process/jobs/{job_id}` — final payload: `{status, generated, failed, failed_ids, sentences: {fragment_id: text}, model}`.
 - Uses `INTENT_TO_SECTION_TYPES` and `auto_assign_section()` from `klemma.section_types` for auto-assignment
 - Depends on: `user_store`, `paper_store`, `user_library` from `deps.py`
 - Schemas: `PendingFragmentsResponse`, `CurateRequest`, `CuratedBankResponse`, `CuratedFragmentResponse`, `SuggestFragmentsResponse`, `GenerateSentencesRequest`, `GenerateSentencesResponse`. `PendingFragment` / `CuratedFragmentResponse` include optional `suggested_text` + `sentence_model` (ADR-017).

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from klemma.models import UserRecord
 
 from ..auth.deps import get_current_user, get_user_store
-from .process import _run_local_job
+from .process import _local_jobs_allowed, _run_local_job
 
 try:
     from redis import Redis
@@ -108,7 +108,11 @@ async def _enqueue_write_task(
     task_name: str, section: str, project_id: str | None = None, user_id: str = "",
     word_target: int | None = None, instruction: str | None = None,
 ) -> WriteJobResponse:
-    """Enqueue a write task via rq, falling back to in-process thread when Redis is unavailable."""
+    """Enqueue a write task via rq.
+
+    Returns 503 if Redis is unavailable, unless KLEMMA_ALLOW_LOCAL_JOBS=1 is set
+    (single-worker dev mode only — the in-process fallback is not multi-worker safe).
+    """
     from ..tasks import generate_draft, generate_research
 
     data_dir = os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma"))
@@ -129,7 +133,11 @@ async def _enqueue_write_task(
         except Exception:
             pass  # Redis unavailable — fall through to local execution
 
-    # Local fallback: run in asyncio thread pool
+    if not _local_jobs_allowed():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Redis unavailable. Set KLEMMA_ALLOW_LOCAL_JOBS=1 for local development without Redis.",
+        )
     job_id = str(uuid.uuid4())
     asyncio.create_task(_run_local_job(job_id, fn, *args))
     return WriteJobResponse(job_id=job_id, status="queued", section=section, task_type=task_name)
