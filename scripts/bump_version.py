@@ -57,7 +57,8 @@ def main() -> None:
     replace_in_file(PYPROJECT, r'^(version = ")[^"]+"', rf'\g<1>{new}"')
     replace_in_file(INIT, r'^(__version__ = ")[^"]+"', rf'\g<1>{new}"')
 
-    print(f"{old} → {new}")
+    print(f"{old} → {new}", file=sys.stderr)
+    print(new)
 
 
 if __name__ == "__main__":
