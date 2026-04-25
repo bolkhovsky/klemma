@@ -391,6 +391,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             "citekey": citekey,
             "fragment_count": len(existing),
         }
+    _force_delete_pending = False
     if existing and force:
         # Safety: don't delete shared global fragments if other users reference this paper
         other_owners = paper_store.count_paper_owners(paper_id)
@@ -405,8 +406,10 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 "citekey": citekey,
                 "fragment_count": len(existing),
             }
-        deleted = paper_store.delete_fragments(paper_id)
-        logger.info("Force reprocess: deleted %d existing fragments for %s", deleted, citekey)
+        # Deletion deferred until after extraction succeeds — abort if any chunks fail
+        # to preserve the complete existing corpus record (mirrors reprocess_paper guard).
+        _force_delete_pending = True
+        logger.info("Force reprocess queued for %s — old fragments held until extraction completes", citekey)
 
     # Mark as processing
     user_library.update_status(citekey, "processing", user_id=user_id or None)
@@ -559,6 +562,28 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 downgrade_stats.fuzzy_rescued,
                 downgrade_stats.verbatim_confirmed,
             )
+
+        # Force-reprocess: abort if extraction was partial to preserve existing corpus.
+        # Only delete old fragments after confirming all chunks succeeded.
+        if _force_delete_pending:
+            if failed_chunks > 0:
+                user_library.update_status(citekey, "partial", user_id=user_id or None)
+                logger.error(
+                    "Force reprocess aborted for %s: %d/%d chunks failed — existing fragments preserved",
+                    citekey, failed_chunks, failed_chunks + chunks_processed,
+                )
+                return {
+                    "status": "partial",
+                    "citekey": citekey,
+                    "detail": (
+                        f"{failed_chunks}/{failed_chunks + chunks_processed} chunks failed; "
+                        "existing fragments preserved — retry without --force or fix the AI issue"
+                    ),
+                    "failed_chunks": failed_chunks,
+                    "chunks_processed": chunks_processed,
+                }
+            deleted = paper_store.delete_fragments(paper_id)
+            logger.info("Force reprocess: deleted %d existing fragments for %s", deleted, citekey)
 
         # Save to paper store
         prompt_hash = ""
