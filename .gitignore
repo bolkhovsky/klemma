@@ -45,6 +45,9 @@ saas/dashboard/dist/
 # Private notes and personal drafts
 notes/
 
+# Visual brainstorming sessions
+.superpowers/
+
 # Claude agent worktrees and runtime files
 .claude/worktrees/
 .claude/scheduled_tasks.lock
