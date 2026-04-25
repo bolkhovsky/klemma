@@ -540,6 +540,20 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         )
 
         if extraction is None:
+            if _force_delete_pending:
+                # All chunks failed but old fragments were never deleted — corpus is intact.
+                # Revert to "completed" so the source stays visible to downstream filters.
+                user_library.update_status(citekey, "completed", user_id=user_id or None)
+                logger.error(
+                    "Force reprocess failed for %s: all chunks produced zero fragments — "
+                    "existing fragments preserved, status reverted to completed",
+                    citekey,
+                )
+                return {
+                    "status": "error",
+                    "citekey": citekey,
+                    "detail": "All chunks failed AI extraction; existing fragments preserved",
+                }
             user_library.update_status(citekey, "failed", user_id=user_id or None)
             return {"status": "error", "detail": "No fragments extracted from PDF"}
 
