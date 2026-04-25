@@ -581,13 +581,14 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         # Only delete old fragments after confirming all chunks succeeded.
         if _force_delete_pending:
             if failed_chunks > 0:
-                user_library.update_status(citekey, "partial", user_id=user_id or None)
+                user_library.update_status(citekey, "completed", user_id=user_id or None)
                 logger.error(
-                    "Force reprocess aborted for %s: %d/%d chunks failed — existing fragments preserved",
+                    "Force reprocess aborted for %s: %d/%d chunks failed — "
+                    "existing fragments preserved, status reverted to completed",
                     citekey, failed_chunks, failed_chunks + chunks_processed,
                 )
                 return {
-                    "status": "partial",
+                    "status": "error",
                     "citekey": citekey,
                     "detail": (
                         f"{failed_chunks}/{failed_chunks + chunks_processed} chunks failed; "

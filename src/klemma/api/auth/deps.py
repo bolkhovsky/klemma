@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from klemma.models import UserRecord
     from klemma.protocols import UserStore
 
-_bearer_scheme = HTTPBearer()
+_bearer_scheme = HTTPBearer(auto_error=False)
 
 # Module-level store reference, set during app startup via set_user_store().
 _user_store: UserStore | None = None
@@ -33,9 +33,16 @@ def get_user_store() -> UserStore:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> UserRecord:
     """Extract and validate the current user from the Authorization header."""
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     payload = decode_token(credentials.credentials)
     if payload is None or payload.get("type") != "access":
         raise HTTPException(
