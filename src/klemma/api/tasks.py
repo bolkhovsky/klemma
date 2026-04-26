@@ -129,11 +129,13 @@ def _run_chunked_extraction(
     available_tags: str = "",
     user_store=None,
     user_id: str = "",
+    full_text: str = "",
 ) -> dict | None:
     """Run chunked AI extraction over a list of ChunkRecords.
 
-    Renders the extraction prompt once per chunk, calls the AI, validates verbatim
-    claims per-chunk, and accumulates fragments across all chunks.
+    Renders the extraction prompt once per chunk, calls the AI, accumulates
+    fragments across all chunks, then validates verbatim claims once against
+    the full document text (capped via VERBATIM_VALIDATION_CAP_*).
 
     Args:
         ai: AI provider instance (must implement render_prompt + call_with_meta).
@@ -147,6 +149,8 @@ def _run_chunked_extraction(
         available_tags: Comma-separated section ids (empty if no project).
         user_store: LocalUserStore instance for recording per-chunk token usage, or None.
         user_id: User id string for token recording (ignored when user_store is None).
+        full_text: Concatenated page text used for verbatim validation. Empty
+            string disables validation (older callers / tests).
 
     Returns:
         dict with keys: fragments, key_refs, fragment_ai_sections, predicted_sections,
@@ -155,9 +159,11 @@ def _run_chunked_extraction(
     """
     from klemma.ai import extract_json
     from klemma.hashing import compute_content_hash
-    from klemma.literature.models import Fragment
+    from klemma.literature.models import DowngradeStats, Fragment
     from klemma.models import FragmentRecord
     from klemma.skills.extractor import validate_verbatim_fragments
+
+    from .constants import VERBATIM_VALIDATION_CAP_LARGE, VERBATIM_VALIDATION_CAP_SMALL
 
     system = (
         "You are a research assistant extracting citation-worthy fragments from scientific papers. "
@@ -165,12 +171,11 @@ def _run_chunked_extraction(
     )
 
     fragments: list[FragmentRecord] = []
+    all_pydantic: list[Fragment] = []
     fragment_ai_sections: dict[str, str | None] = {}
     predicted_sections: set[str] = set()
     predicted_chapters: set[int] = set()
     all_key_refs: list[dict] = []
-    downgrade_stats_totals = {"verbatim_claimed": 0, "verbatim_confirmed": 0,
-                              "fuzzy_rescued": 0, "downgraded": 0}
     chunk_total = len(chunks)
     failed_chunks = 0
 
@@ -228,17 +233,17 @@ def _run_chunked_extraction(
         # Collect key_references (bibliography; last chunk usually has the most)
         all_key_refs.extend(data.get("key_references", []))
 
-        # Parse fragments from this chunk; validate verbatim per-chunk
-        chunk_records: list[FragmentRecord] = []
-        chunk_pydantic: list[Fragment] = []
+        # Parse fragments from this chunk into parallel record/pydantic arrays.
+        # Validation is deferred until after all chunks are processed so the
+        # validator can match against the full document text (#379).
         for f_data in data.get("fragments", []):
             text = f_data.get("text", "").strip()
             if not text:
                 continue
             fragment_id = compute_content_hash(paper_id, text, f_data.get("page"))
             claimed_verbatim = bool(f_data.get("verbatim", False))
-            chunk_pydantic.append(Fragment(text=text, verbatim=claimed_verbatim))
-            chunk_records.append(FragmentRecord(
+            all_pydantic.append(Fragment(text=text, verbatim=claimed_verbatim))
+            fragments.append(FragmentRecord(
                 fragment_id=fragment_id,
                 paper_id=paper_id,
                 fragment_text=text,
@@ -256,22 +261,6 @@ def _run_chunked_extraction(
             if isinstance(chap, int):
                 predicted_chapters.add(chap)
 
-        # Per-chunk verbatim validation (fragments validated against their source chunk)
-        if chunk_pydantic:
-            chunk_stats = validate_verbatim_fragments(chunk_pydantic, chunk.text, source_label)
-            for record, pyd in zip(chunk_records, chunk_pydantic):
-                record.verbatim = pyd.verbatim
-            for k in downgrade_stats_totals:
-                downgrade_stats_totals[k] += getattr(chunk_stats, k)
-            if chunk_stats.downgraded:
-                logger.warning(
-                    "verbatim validator (%s chunk %d/%d): %d/%d downgraded",
-                    source_label, chunk.index + 1, chunk_total,
-                    chunk_stats.downgraded, chunk_stats.verbatim_claimed,
-                )
-
-        fragments.extend(chunk_records)
-
     if not fragments:
         return None
 
@@ -281,10 +270,40 @@ def _run_chunked_extraction(
             source_label, failed_chunks, chunk_total,
         )
 
-    fragments = dedup_fragments_by_prefix(fragments, min_prefix=100)
+    # Single full-text verbatim validation (#379). Per-chunk slices cause
+    # false-negative downgrades when the AI quotes text from outside its
+    # own chunk window (boundary text, cross-chunk quotes, prompt context).
+    downgrade_stats = DowngradeStats()
+    if full_text and all_pydantic:
+        if len(full_text) >= VERBATIM_VALIDATION_CAP_SMALL:
+            validation_text = full_text[:VERBATIM_VALIDATION_CAP_LARGE]
+            if len(full_text) > VERBATIM_VALIDATION_CAP_LARGE:
+                logger.warning(
+                    "verbatim validator (%s): full_text %d chars truncated to %d for "
+                    "validation; fragments quoting beyond the cap may be downgraded",
+                    source_label, len(full_text), VERBATIM_VALIDATION_CAP_LARGE,
+                )
+        else:
+            validation_text = full_text
+        downgrade_stats = validate_verbatim_fragments(
+            all_pydantic, validation_text, source_label,
+        )
+        for record, pyd in zip(fragments, all_pydantic):
+            record.verbatim = pyd.verbatim
+        if downgrade_stats.downgraded:
+            logger.warning(
+                "verbatim validator (%s): %d/%d downgraded across %d chunk(s)",
+                source_label, downgrade_stats.downgraded,
+                downgrade_stats.verbatim_claimed, chunk_total,
+            )
+    elif all_pydantic:
+        # No full_text passed (legacy / test path) — leave verbatim flags as-is
+        # but seed downgrade_stats with the AI's claims so callers see counts.
+        downgrade_stats = DowngradeStats(
+            verbatim_claimed=sum(1 for p in all_pydantic if p.verbatim),
+        )
 
-    from klemma.literature.models import DowngradeStats
-    downgrade_stats = DowngradeStats(**downgrade_stats_totals)
+    fragments = dedup_fragments_by_prefix(fragments, min_prefix=100)
 
     return {
         "fragments": fragments,
@@ -537,6 +556,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             available_tags=available_tags,
             user_store=user_store,
             user_id=user_id,
+            full_text=full_text,
         )
 
         if extraction is None:
@@ -829,6 +849,7 @@ def reprocess_paper(paper_id: str, data_dir: str) -> dict:
         # --- Per-chunk extraction via shared helper ---
         extraction = _run_chunked_extraction(
             ai, ai_config, entry, chunks, paper.paper_id, paper_id, prompt_path,
+            full_text=full_text,
         )
 
         if extraction is None:

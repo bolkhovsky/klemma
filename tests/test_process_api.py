@@ -380,6 +380,127 @@ def test_chunked_extraction_accumulates_fragments_from_all_chunks(tmp_path):
     assert result["fragment_count"] == 10
 
 
+def test_verbatim_validation_uses_full_text_not_per_chunk(tmp_path):
+    """Regression for #379: fragment quoting text outside its own chunk must
+    not be falsely downgraded.
+
+    Setup forces the bug condition: AI for chunk 0 returns a verbatim=True
+    fragment whose text exists in the real PDF (page 2) but NOT in chunk 0's
+    mocked slice. Per-chunk validation (the old bug) would downgrade the
+    flag because chunk[0].text doesn't contain the marker. Full-text
+    validation (the fix) keeps verbatim=True because full_text — built by
+    process_source from extract_pages() — contains it.
+    """
+    import json
+    from unittest.mock import MagicMock, patch
+
+    import fitz
+
+    from klemma.api.tasks import process_source
+    from klemma.literature.pdf import ChunkRecord
+    from klemma.stores.file_store import LocalFileStore
+    from klemma.stores.paper_store import LocalPaperStore
+    from klemma.stores.user_library import LocalUserLibrary
+
+    marker = "ZETAmarker42 was observed in the experimental results."
+
+    data_dir = str(tmp_path)
+    library_db = tmp_path / "library.db"
+    paper_store = LocalPaperStore(library_db)
+    user_library = LocalUserLibrary(library_db)
+    file_store = LocalFileStore(tmp_path / "files")
+
+    paper_id = paper_store.register_paper(title="Test Paper", pdf_hash="zetahash")
+    user_library.add_source(paper_id, "zeta2026", status="pending")
+
+    # Real PDF: page 2 contains marker, others are filler.
+    paper_dir = file_store.get_paper_dir(paper_id)
+    paper_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = paper_dir / "test.pdf"
+    doc = fitz.open()
+    for i in range(3):
+        page = doc.new_page()
+        rect = fitz.Rect(50, 50, 550, 750)
+        if i == 1:
+            body = marker + "\n" + "\n".join(f"Filler {j}." for j in range(40))
+        else:
+            body = "\n".join(f"Page {i + 1} sentence {j}." for j in range(40))
+        page.insert_textbox(rect, body, fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    # Mocked chunks: NEITHER contains marker. Per-chunk validation against
+    # chunk[0].text would not find the marker text and would downgrade.
+    two_chunks = [
+        ChunkRecord(index=0, text="[Page 1]\n" + "A" * 1000,
+                    page_start=1, page_end=1, char_start=0, char_end=1009),
+        ChunkRecord(index=1, text="[Page 3]\n" + "C" * 1000,
+                    page_start=3, page_end=3, char_start=1009, char_end=2018),
+    ]
+
+    # AI mock: chunk 0 returns a verbatim=True fragment quoting marker.
+    def _make_ai_result(chunk_idx: int) -> MagicMock:
+        if chunk_idx == 0:
+            frags = [{
+                "text": marker,
+                "verbatim": True,
+                "type": "result",
+                "page": 2,
+                "citation_intent": "result_comparison",
+            }]
+        else:
+            frags = [{
+                "text": "Filler claim from chunk 1.",
+                "verbatim": False,
+                "type": "background",
+                "page": 3,
+                "citation_intent": "background",
+            }]
+        m = MagicMock()
+        m.text = json.dumps({
+            "fragments": frags,
+            # Non-empty key_references suppresses bibliography fallback AI call.
+            "key_references": [{"title": "Test ref", "authors": "A", "year": 2020}],
+        })
+        m.input_tokens = 100
+        m.output_tokens = 50
+        return m
+
+    call_count = [0]
+
+    def _mock_call_with_meta(*args, **kwargs):
+        idx = call_count[0]
+        call_count[0] += 1
+        return _make_ai_result(idx)
+
+    mock_ai = MagicMock()
+    mock_ai.call_with_meta.side_effect = _mock_call_with_meta
+    mock_ai.render_prompt.return_value = "mock prompt"
+    mock_ai_config = MagicMock()
+    mock_ai_config.model = "test-model"
+
+    with (
+        patch("klemma.api.tasks._create_ai_provider", return_value=(mock_ai, mock_ai_config)),
+        patch("klemma.api.tasks._create_embeddings_provider", return_value=None),
+        patch("klemma.literature.pdf.build_chunks_from_pages", return_value=two_chunks),
+        patch.dict("os.environ", {
+            "KLEMMA_DATA_DIR": data_dir,
+            "ANTHROPIC_API_KEY": "test-key",
+            "KLEMMA_EMBEDDINGS_ALLOW_REMOTE": "1",
+        }),
+    ):
+        result = process_source(paper_id, "zeta2026", data_dir)
+
+    assert result["status"] == "completed", result
+    saved = paper_store.get_fragments(paper_id)
+    zeta = next((f for f in saved if marker in f.fragment_text), None)
+    assert zeta is not None, "Marker fragment was not saved"
+    assert zeta.verbatim is True, (
+        "Fragment quoting full-document text was downgraded — validator is still "
+        "using per-chunk slice instead of full text (#379 regression)."
+    )
+
+
 def test_force_reprocess_partial_failure_preserves_completed_source(tmp_path):
     """force=True must not downgrade an intact old corpus when new chunks fail."""
     import json

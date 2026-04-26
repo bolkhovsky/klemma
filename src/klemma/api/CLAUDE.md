@@ -36,8 +36,8 @@ Async task definitions for rq worker. Tasks receive primitive args (worker runs 
 
 ### constants.py
 Shared numeric constants for the API layer.
-- `VERBATIM_VALIDATION_CAP_SMALL = 100_000` — PDFs below this threshold → validate against full text
-- `VERBATIM_VALIDATION_CAP_LARGE = 150_000` — cap applied for large PDFs (≥ SMALL threshold)
+- `VERBATIM_VALIDATION_CAP_SMALL = 100_000` — `full_text` shorter than this → validator sees the whole document
+- `VERBATIM_VALIDATION_CAP_LARGE = 150_000` — `full_text` ≥ SMALL is sliced to this length before validation. Applied at the post-loop validation site in `_run_chunked_extraction` (#379); fragments quoting text past the cap may downgrade.
 - `EMBEDDINGS_REQUIRED_BACKEND = "litellm"`, `EMBEDDINGS_REQUIRED_MODEL_PREFIX = "ollama/"` — enforcement values for `_validate_embeddings_config()`
 
 ### worker.py (~25 lines)
