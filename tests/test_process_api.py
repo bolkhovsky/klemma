@@ -501,6 +501,81 @@ def test_verbatim_validation_uses_full_text_not_per_chunk(tmp_path):
     )
 
 
+def test_run_chunked_extraction_falls_back_to_joined_chunk_text():
+    """Direct helper test: when full_text="" the validator must still run
+    (against the joined chunk text), not silently skip with stats-only seeding.
+
+    This protects helper-level tests and any future direct caller from
+    accidentally bypassing verbatim validation. Cross-chunk quotes are still
+    visible to the validator because the fallback joins ALL chunk texts.
+    """
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from klemma.api.tasks import _run_chunked_extraction
+    from klemma.literature.models import ZoteroEntry
+    from klemma.literature.pdf import ChunkRecord
+
+    chunks = [
+        ChunkRecord(index=0, text="[Page 1]\nIntro from chunk zero.",
+                    page_start=1, page_end=1, char_start=0, char_end=30),
+        ChunkRecord(index=1, text="[Page 2]\nResults from chunk one.",
+                    page_start=2, page_end=2, char_start=30, char_end=62),
+    ]
+
+    # AI returns one fragment per chunk: chunk 0 quotes its own text (true
+    # verbatim), chunk 1 fabricates text that's nowhere in the joined source
+    # (must downgrade).
+    def _ai_call(chunk_idx: int) -> MagicMock:
+        if chunk_idx == 0:
+            text = "Intro from chunk zero."
+            verbatim = True
+        else:
+            text = "Fabricated claim never appearing anywhere in the document."
+            verbatim = True
+        m = MagicMock()
+        m.text = json.dumps({
+            "fragments": [{
+                "text": text, "verbatim": verbatim, "type": "key_idea",
+                "page": chunk_idx + 1, "citation_intent": "background",
+            }],
+            "key_references": [{"title": "Ref", "authors": "A", "year": 2020}],
+        })
+        m.input_tokens = 50
+        m.output_tokens = 25
+        return m
+
+    counter = [0]
+
+    def _side_effect(*a, **kw):
+        idx = counter[0]
+        counter[0] += 1
+        return _ai_call(idx)
+
+    mock_ai = MagicMock()
+    mock_ai.call_with_meta.side_effect = _side_effect
+    mock_ai.render_prompt.return_value = "prompt"
+    mock_ai_config = MagicMock()
+    mock_ai_config.model = "test-model"
+
+    entry = ZoteroEntry(id="p1", title="Test")
+    with patch("klemma.api.tasks.dedup_fragments_by_prefix", side_effect=lambda x, **_: x):
+        result = _run_chunked_extraction(
+            mock_ai, mock_ai_config, entry, chunks, "p1", "testkey", "/dev/null",
+            # full_text="" intentionally — exercise the fallback path
+        )
+
+    assert result is not None
+    saved = result["fragments"]
+    intro = next(f for f in saved if "Intro" in f.fragment_text)
+    fab = next(f for f in saved if "Fabricated" in f.fragment_text)
+    # Real quote stays True because the joined chunk text contains it
+    assert intro.verbatim is True, "Real cross-chunk-visible quote should keep verbatim=True"
+    # Fabricated text is in NO chunk — must be downgraded
+    assert fab.verbatim is False, "Fabricated text not in any chunk should be downgraded"
+    assert result["downgrade_stats"].downgraded == 1
+
+
 def test_force_reprocess_partial_failure_preserves_completed_source(tmp_path):
     """force=True must not downgrade an intact old corpus when new chunks fail."""
     import json

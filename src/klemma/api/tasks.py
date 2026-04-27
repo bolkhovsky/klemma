@@ -274,17 +274,23 @@ def _run_chunked_extraction(
     # false-negative downgrades when the AI quotes text from outside its
     # own chunk window (boundary text, cross-chunk quotes, prompt context).
     downgrade_stats = DowngradeStats()
-    if full_text and all_pydantic:
-        if len(full_text) >= VERBATIM_VALIDATION_CAP_SMALL:
-            validation_text = full_text[:VERBATIM_VALIDATION_CAP_LARGE]
-            if len(full_text) > VERBATIM_VALIDATION_CAP_LARGE:
+    if all_pydantic:
+        # Production callers (process_source, reprocess_paper) pass the same
+        # full_text they cache in papers.raw_text. Direct callers (helper-level
+        # tests, future callers) that pass full_text="" fall back to the
+        # joined chunk text — broader than any single chunk, so cross-chunk
+        # quotes still validate cleanly even without an explicit full_text.
+        source_text = full_text or "\n\n".join(chunk.text for chunk in chunks)
+        if len(source_text) >= VERBATIM_VALIDATION_CAP_SMALL:
+            validation_text = source_text[:VERBATIM_VALIDATION_CAP_LARGE]
+            if len(source_text) > VERBATIM_VALIDATION_CAP_LARGE:
                 logger.warning(
-                    "verbatim validator (%s): full_text %d chars truncated to %d for "
+                    "verbatim validator (%s): source text %d chars truncated to %d for "
                     "validation; fragments quoting beyond the cap may be downgraded",
-                    source_label, len(full_text), VERBATIM_VALIDATION_CAP_LARGE,
+                    source_label, len(source_text), VERBATIM_VALIDATION_CAP_LARGE,
                 )
         else:
-            validation_text = full_text
+            validation_text = source_text
         downgrade_stats = validate_verbatim_fragments(
             all_pydantic, validation_text, source_label,
         )
@@ -296,12 +302,6 @@ def _run_chunked_extraction(
                 source_label, downgrade_stats.downgraded,
                 downgrade_stats.verbatim_claimed, chunk_total,
             )
-    elif all_pydantic:
-        # No full_text passed (legacy / test path) — leave verbatim flags as-is
-        # but seed downgrade_stats with the AI's claims so callers see counts.
-        downgrade_stats = DowngradeStats(
-            verbatim_claimed=sum(1 for p in all_pydantic if p.verbatim),
-        )
 
     fragments = dedup_fragments_by_prefix(fragments, min_prefix=100)
 
