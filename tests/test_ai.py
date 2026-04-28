@@ -109,6 +109,21 @@ def test_extract_json_does_not_silently_fix_unescaped_quote():
     assert extract_json(text) is None
 
 
+def test_extract_json_does_not_strip_commas_inside_string_literals():
+    """Regression for codex review on PR #383: a naive `,(\\s*[}\\]])` regex
+    would mangle ``", }`` or ``", ]`` sequences appearing INSIDE a quoted
+    string. Verbatim scientific quotes must round-trip unchanged even when
+    the JSON also has real trailing commas elsewhere.
+    """
+    # Real trailing commas in items[] and the outer object; the fragment
+    # text contains ", }" which must NOT be touched by the tolerant retry.
+    text = '{"text": "keep comma, } in quote", "items": [1,],}'
+    result = extract_json(text)
+    assert result is not None
+    assert result["text"] == "keep comma, } in quote"
+    assert result["items"] == [1]
+
+
 def test_extract_json_failure_logs_position_and_context(caplog):
     """JSONDecodeError logs include line/col + sanitized slice for #381 observability."""
     import logging

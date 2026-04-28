@@ -7,7 +7,6 @@ Optional backends: OpenAI-compatible API, LiteLLM.
 import json
 import logging
 import os
-import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -57,12 +56,49 @@ def _check_json_depth(obj: object, depth: int = 0) -> bool:
     return False
 
 
-_TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
-
-
 def _strip_trailing_commas(s: str) -> str:
-    """Remove trailing commas before } or ]. Narrow scope; safe."""
-    return _TRAILING_COMMA_RE.sub(r"\1", s)
+    """Remove trailing commas before } or ], skipping string literals.
+
+    String-aware walk: a naive regex like ``,(\\s*[}\\]])`` would also
+    rewrite ``", }`` or ``", ]`` *inside* a fragment quote, silently
+    corrupting scientific text. We track string context (and backslash
+    escapes inside strings) and only collapse the trailing comma in
+    structural positions.
+    """
+    out: list[str] = []
+    n = len(s)
+    i = 0
+    in_string = False
+    while i < n:
+        ch = s[i]
+        if in_string:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                # Preserve the escape byte exactly
+                out.append(s[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            i += 1
+            continue
+        # Outside any string literal:
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < n and s[j] in " \t\r\n":
+                j += 1
+            if j < n and s[j] in "}]":
+                # Drop the comma; whitespace + closer survive
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _escape_control_chars_in_strings(s: str) -> str:
