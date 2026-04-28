@@ -72,6 +72,59 @@ def test_extract_json_accepts_reasonable_size():
 
 
 # ---------------------------------------------------------------------------
+# Tolerant parser fallback (#381)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_json_tolerates_trailing_comma_in_object():
+    """Trailing comma before } recovered via tolerant retry."""
+    text = '{"a": 1, "b": 2,}'
+    assert extract_json(text) == {"a": 1, "b": 2}
+
+
+def test_extract_json_tolerates_trailing_comma_in_array():
+    """Trailing comma before ] recovered via tolerant retry."""
+    text = '{"items": [1, 2, 3,]}'
+    assert extract_json(text) == {"items": [1, 2, 3]}
+
+
+def test_extract_json_tolerates_literal_newline_in_string():
+    """AI sometimes returns a literal newline inside a fragment quote.
+
+    json.loads rejects this (control char in string); the tolerant retry
+    escapes it to \\n.
+    """
+    text = '{"text": "first line\nsecond line"}'
+    result = extract_json(text)
+    assert result is not None
+    assert result["text"] == "first line\nsecond line"
+
+
+def test_extract_json_does_not_silently_fix_unescaped_quote():
+    """Unescaped quote inside string is content-ambiguous; must NOT auto-fix.
+
+    Per #381 design: only LLM repair handles this case, not regex surgery.
+    """
+    text = '{"text": "he said "hi" loudly"}'
+    assert extract_json(text) is None
+
+
+def test_extract_json_failure_logs_position_and_context(caplog):
+    """JSONDecodeError logs include line/col + sanitized slice for #381 observability."""
+    import logging
+    text = '{"text": "broken \x00 control char"}'  # NUL inside string is invalid
+    # NUL is a control char inside a string; if tolerant fix-up doesn't
+    # recover, we still want the diagnostic. Force a failure with truly
+    # broken JSON instead.
+    text = '{"a": 1, "b" 2}'  # missing colon
+    with caplog.at_level(logging.ERROR, logger="klemma.ai"):
+        assert extract_json(text) is None
+    msgs = [r.message for r in caplog.records]
+    assert any("JSON parse error at line" in m for m in msgs), msgs
+    assert any("context:" in m for m in msgs), msgs
+
+
+# ---------------------------------------------------------------------------
 # AIProviderBase
 # ---------------------------------------------------------------------------
 

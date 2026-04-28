@@ -501,6 +501,219 @@ def test_verbatim_validation_uses_full_text_not_per_chunk(tmp_path):
     )
 
 
+def test_chunked_extraction_repair_retry_recovers_from_malformed_json(tmp_path):
+    """#381: when AI returns malformed JSON for a chunk, the repair retry
+    asks the model to fix its own output before declaring the chunk failed.
+
+    Chunk 0's first AI response is invalid JSON (missing comma — same
+    failure mode as a9f7779b/cd102e5b on prod). The repair call returns a
+    valid JSON. Chunk 1 returns valid JSON on first try.
+
+    Asserts: 2 fragments saved (one per chunk), 0 failed_chunks (because
+    repair recovered chunk 0), and the repair ran with json_mode-friendly
+    settings.
+    """
+    import json
+    from unittest.mock import MagicMock, patch
+
+    import fitz
+
+    from klemma.api.tasks import process_source
+    from klemma.literature.pdf import ChunkRecord
+    from klemma.stores.file_store import LocalFileStore
+    from klemma.stores.paper_store import LocalPaperStore
+    from klemma.stores.user_library import LocalUserLibrary
+
+    data_dir = str(tmp_path)
+    library_db = tmp_path / "library.db"
+    paper_store = LocalPaperStore(library_db)
+    user_library = LocalUserLibrary(library_db)
+    file_store = LocalFileStore(tmp_path / "files")
+
+    paper_id = paper_store.register_paper(title="Repair Test", pdf_hash="repairhash")
+    user_library.add_source(paper_id, "repair2026", status="pending")
+
+    paper_dir = file_store.get_paper_dir(paper_id)
+    paper_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = paper_dir / "test.pdf"
+    doc = fitz.open()
+    for i in range(2):
+        page = doc.new_page()
+        rect = fitz.Rect(50, 50, 550, 750)
+        body = "\n".join(f"Page {i + 1} sentence {j}." for j in range(40))
+        page.insert_textbox(rect, body, fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    two_chunks = [
+        ChunkRecord(index=0, text="[Page 1]\nA" * 500, page_start=1, page_end=1, char_start=0, char_end=500),
+        ChunkRecord(index=1, text="[Page 2]\nB" * 500, page_start=2, page_end=2, char_start=500, char_end=1000),
+    ]
+
+    valid_frag_for_chunk0 = {
+        "fragments": [{
+            "text": "Repaired chunk 0 fragment.",
+            "verbatim": False, "type": "key_idea",
+            "page": 1, "citation_intent": "background",
+        }],
+        "key_references": [{"title": "Ref", "authors": "A", "year": 2020}],
+    }
+    valid_frag_for_chunk1 = {
+        "fragments": [{
+            "text": "Chunk 1 fragment.",
+            "verbatim": False, "type": "key_idea",
+            "page": 2, "citation_intent": "background",
+        }],
+        "key_references": [{"title": "Ref", "authors": "A", "year": 2020}],
+    }
+
+    # AI call sequence:
+    #  1. chunk 0 → MALFORMED JSON (broken comma, missing colon)
+    #  2. repair retry on chunk 0 → VALID JSON
+    #  3. chunk 1 → VALID JSON
+    responses = [
+        '{"fragments": [{"text" "broken JSON"}], "key_references": []}',  # malformed
+        json.dumps(valid_frag_for_chunk0),                                  # repair output
+        json.dumps(valid_frag_for_chunk1),                                  # chunk 1
+    ]
+
+    call_log = []
+
+    def _mock_call_with_meta(system, user, **kwargs):
+        idx = len(call_log)
+        call_log.append((system[:80], user[:80]))
+        text = responses[idx]
+        m = MagicMock()
+        m.text = text
+        m.input_tokens = 100
+        m.output_tokens = 50
+        return m
+
+    mock_ai = MagicMock()
+    mock_ai.call_with_meta.side_effect = _mock_call_with_meta
+    mock_ai.render_prompt.return_value = "mock prompt"
+    mock_ai_config = MagicMock()
+    mock_ai_config.model = "test-model"
+
+    with (
+        patch("klemma.api.tasks._create_ai_provider", return_value=(mock_ai, mock_ai_config)),
+        patch("klemma.api.tasks._create_embeddings_provider", return_value=None),
+        patch("klemma.literature.pdf.build_chunks_from_pages", return_value=two_chunks),
+        patch.dict("os.environ", {
+            "KLEMMA_DATA_DIR": data_dir,
+            "ANTHROPIC_API_KEY": "test-key",
+            "KLEMMA_EMBEDDINGS_ALLOW_REMOTE": "1",
+        }),
+    ):
+        result = process_source(paper_id, "repair2026", data_dir)
+
+    assert result["status"] == "completed", result
+    # 3 AI calls: chunk-0 (failed parse) + repair (success) + chunk-1 (success)
+    assert len(call_log) == 3, call_log
+    # Repair call's system prompt mentions "malformed JSON"
+    repair_system = call_log[1][0]
+    assert "malformed JSON" in repair_system or "malformed" in repair_system, repair_system
+    # Both chunks contributed fragments — chunk-0 was recovered, chunk-1 succeeded
+    assert result["fragment_count"] == 2
+    saved = paper_store.get_fragments(paper_id)
+    texts = {f.fragment_text for f in saved}
+    assert "Repaired chunk 0 fragment." in texts
+    assert "Chunk 1 fragment." in texts
+
+
+def test_chunked_extraction_repair_retry_gives_up_after_second_failure(tmp_path):
+    """When even the repair AI call returns garbage, mark the chunk failed
+    (preserving M3 abort-swap behavior on partial extractions)."""
+    import json
+    from unittest.mock import MagicMock, patch
+
+    import fitz
+
+    from klemma.api.tasks import process_source
+    from klemma.literature.pdf import ChunkRecord
+    from klemma.stores.file_store import LocalFileStore
+    from klemma.stores.paper_store import LocalPaperStore
+    from klemma.stores.user_library import LocalUserLibrary
+
+    data_dir = str(tmp_path)
+    library_db = tmp_path / "library.db"
+    paper_store = LocalPaperStore(library_db)
+    user_library = LocalUserLibrary(library_db)
+    file_store = LocalFileStore(tmp_path / "files")
+
+    paper_id = paper_store.register_paper(title="Test", pdf_hash="hardfailhash")
+    user_library.add_source(paper_id, "hardfail2026", status="pending")
+
+    paper_dir = file_store.get_paper_dir(paper_id)
+    paper_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = paper_dir / "test.pdf"
+    doc = fitz.open()
+    for i in range(2):
+        page = doc.new_page()
+        rect = fitz.Rect(50, 50, 550, 750)
+        body = "\n".join(f"Page {i + 1} sentence {j}." for j in range(40))
+        page.insert_textbox(rect, body, fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    two_chunks = [
+        ChunkRecord(index=0, text="[Page 1]\nA" * 500, page_start=1, page_end=1, char_start=0, char_end=500),
+        ChunkRecord(index=1, text="[Page 2]\nB" * 500, page_start=2, page_end=2, char_start=500, char_end=1000),
+    ]
+
+    valid_chunk1 = {
+        "fragments": [{
+            "text": "Only chunk 1 survived.",
+            "verbatim": False, "type": "key_idea",
+            "page": 2, "citation_intent": "background",
+        }],
+        "key_references": [{"title": "Ref", "authors": "A", "year": 2020}],
+    }
+
+    responses = [
+        'garbage non-json',     # chunk 0 — broken
+        'still garbage',         # repair retry — also broken
+        json.dumps(valid_chunk1),  # chunk 1 — fine
+    ]
+
+    call_count = [0]
+
+    def _mock(*a, **kw):
+        idx = call_count[0]
+        call_count[0] += 1
+        m = MagicMock()
+        m.text = responses[idx]
+        m.input_tokens = 50
+        m.output_tokens = 25
+        return m
+
+    mock_ai = MagicMock()
+    mock_ai.call_with_meta.side_effect = _mock
+    mock_ai.render_prompt.return_value = "mock"
+    mock_ai_config = MagicMock()
+    mock_ai_config.model = "test-model"
+
+    with (
+        patch("klemma.api.tasks._create_ai_provider", return_value=(mock_ai, mock_ai_config)),
+        patch("klemma.api.tasks._create_embeddings_provider", return_value=None),
+        patch("klemma.literature.pdf.build_chunks_from_pages", return_value=two_chunks),
+        patch.dict("os.environ", {
+            "KLEMMA_DATA_DIR": data_dir,
+            "ANTHROPIC_API_KEY": "test-key",
+            "KLEMMA_EMBEDDINGS_ALLOW_REMOTE": "1",
+        }),
+    ):
+        result = process_source(paper_id, "hardfail2026", data_dir)
+
+    # process_source uses force=False by default; partial extraction is
+    # acceptable because no prior fragments exist. Chunk 1 succeeds, chunk 0
+    # remains failed even after repair → 1 of 2 chunks failed.
+    assert result["status"] in ("completed", "partial"), result
+    saved = paper_store.get_fragments(paper_id)
+    assert len(saved) == 1
+    assert saved[0].fragment_text == "Only chunk 1 survived."
+
+
 def test_run_chunked_extraction_falls_back_to_joined_chunk_text():
     """Direct helper test: when full_text="" the validator must still run
     (against the joined chunk text), not silently skip with stats-only seeding.
@@ -652,7 +865,10 @@ def test_force_reprocess_partial_failure_preserves_completed_source(tmp_path):
 
     mock_ai = MagicMock()
     mock_ai.render_prompt.return_value = "mock prompt"
-    mock_ai.call_with_meta.side_effect = [good_result, bad_result]
+    # Repair retry (#381) follows a failing chunk parse with another AI call.
+    # `bad_result` repeated lets repair fail too, preserving the original
+    # "1 chunk failed" assertion.
+    mock_ai.call_with_meta.side_effect = [good_result, bad_result, bad_result]
     mock_ai_config = MagicMock()
     mock_ai_config.model = "test-model"
 

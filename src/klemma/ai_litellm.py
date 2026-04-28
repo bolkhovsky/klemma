@@ -168,15 +168,24 @@ class LiteLLMClient(AIProviderBase):
         timeout: Optional[int] = None,
         model_override: Optional[str] = None,
     ) -> AICallResult:
-        """Call LiteLLM with structured error handling and token tracking."""
+        """Call LiteLLM with structured error handling and token tracking.
+
+        Honors ``self._json_mode``: when enabled, passes
+        ``response_format={"type": "json_object"}`` to LiteLLM so the model
+        produces strict JSON. Closes #381 — chunked extraction was hitting
+        ``call_with_meta`` (for token accounting) which previously ignored
+        ``_json_mode`` entirely.
+        """
         effective_model = model_override or self.model
 
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
+        response_format = {"type": "json_object"} if self._json_mode else None
         kwargs = self._build_kwargs(
             messages, max_tokens, temperature, timeout,
+            response_format=response_format,
             model_override=model_override,
         )
 
