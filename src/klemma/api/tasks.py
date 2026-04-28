@@ -15,11 +15,18 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-def _create_ai_provider():
+def _create_ai_provider(*, json_mode: bool = False):
     """Create an AI provider from environment variables.
 
     Supports: ANTHROPIC_API_KEY, OPENAI_API_KEY via litellm backend.
     Model: KLEMMA_AI_MODEL env var (default: anthropic/claude-sonnet-4-20250514).
+
+    Args:
+        json_mode: When True, enables structured JSON output via
+            ``response_format={"type": "json_object"}`` for LiteLLM. Use for
+            tasks that parse the response as JSON (chunked extraction,
+            curation, outline generation). Free-form text tasks (draft,
+            research) should keep the default False.
     """
     from klemma.ai import create_ai
     from klemma.config import AIConfig
@@ -31,7 +38,7 @@ def _create_ai_provider():
     if os.getenv("OPENAI_API_KEY"):
         api_keys["openai"] = os.environ["OPENAI_API_KEY"]
 
-    config = AIConfig(backend="litellm", model=model)
+    config = AIConfig(backend="litellm", model=model, json_mode=json_mode)
     config._resolved_api_keys = api_keys
     return create_ai(config), config
 
@@ -223,12 +230,42 @@ def _run_chunked_extraction(
 
         data = extract_json(chunk_result.text)
         if not data:
-            logger.warning(
-                "Chunk %d/%d: failed to parse AI JSON for %s — skipping",
-                chunk.index + 1, chunk_total, source_label,
+            # Repair retry (#381): ask the AI to repair its own malformed JSON.
+            # Tracks tokens separately as `process_source_repair` for visibility.
+            repair_system = (
+                "You receive malformed JSON. Output ONLY a valid JSON object that "
+                "preserves every field and value exactly. Do not add commentary, "
+                "do not change content, do not drop fragments. Fix only the syntax."
             )
-            failed_chunks += 1
-            continue
+            repair_user = f"Repair this malformed JSON:\n\n{chunk_result.text}"
+            repair_result = ai.call_with_meta(
+                repair_system, repair_user,
+                max_tokens=min(8192, adaptive_max_tokens * 2),
+            )
+            if repair_result and repair_result.text:
+                if user_store and user_id:
+                    user_store.record_usage(
+                        user_id=user_id,
+                        operation="process_source_repair",
+                        model=ai_config.model,
+                        input_tokens=repair_result.input_tokens or 0,
+                        output_tokens=repair_result.output_tokens or 0,
+                        citekey=source_label,
+                    )
+                data = extract_json(repair_result.text)
+                if data:
+                    logger.info(
+                        "Chunk %d/%d: AI repair retry recovered JSON for %s",
+                        chunk.index + 1, chunk_total, source_label,
+                    )
+            if not data:
+                logger.warning(
+                    "Chunk %d/%d: failed to parse AI JSON for %s "
+                    "(repair retry also failed) — skipping",
+                    chunk.index + 1, chunk_total, source_label,
+                )
+                failed_chunks += 1
+                continue
 
         # Collect key_references (bibliography; last chunk usually has the most)
         all_key_refs.extend(data.get("key_references", []))
@@ -529,9 +566,11 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         except Exception as _exc:
             logger.warning("Failed to load project outline for %s: %s", project_id, _exc)
 
-    # Create AI provider and extract fragments
+    # Create AI provider and extract fragments. json_mode=True forces
+    # response_format="json_object" so chunked extraction calls get strict
+    # JSON output instead of free-form text wrapped in JSON (#381).
     try:
-        ai, ai_config = _create_ai_provider()
+        ai, ai_config = _create_ai_provider(json_mode=True)
 
         from klemma.ai import extract_json
         from klemma.config import _SHIPPED_PROMPTS_DIR
@@ -831,7 +870,8 @@ def reprocess_paper(paper_id: str, data_dir: str) -> dict:
         chunks = build_chunks_from_pages(pages)
         logger.info("reprocess_paper %s: %d page(s), %d chunk(s)", paper_id, len(pages), len(chunks))
 
-        ai, ai_config = _create_ai_provider()
+        # json_mode=True for chunked extraction — see process_source for details (#381).
+        ai, ai_config = _create_ai_provider(json_mode=True)
         from klemma.config import _SHIPPED_PROMPTS_DIR
         from klemma.literature.models import ZoteroEntry
 

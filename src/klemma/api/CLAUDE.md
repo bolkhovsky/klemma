@@ -24,9 +24,9 @@ Shared FastAPI dependencies for data store access.
 ### tasks.py (~790 lines)
 Async task definitions for rq worker. Tasks receive primitive args (worker runs in separate process).
 - `_validate_embeddings_config()` — fail-fast guard: SaaS requires `KLEMMA_EMBEDDINGS_BACKEND=litellm` + `MODEL` starting with `ollama/` + non-empty `BASE_URL`. Called at FastAPI startup and as backstop in `_create_embeddings_provider()`. Bypass with `KLEMMA_EMBEDDINGS_ALLOW_REMOTE=1` (CI/test only — **never in prod**).
-- `_create_ai_provider()` — AI provider from env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, KLEMMA_AI_MODEL)
+- `_create_ai_provider(*, json_mode=False)` — AI provider from env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, KLEMMA_AI_MODEL). Pass `json_mode=True` for tasks that parse the response as JSON (chunked extraction, curation, outline) — enables `response_format={"type": "json_object"}` on LiteLLM. Free-form tasks (draft, research) default to False
 - `_create_embeddings_provider()` — embedding provider from env vars (KLEMMA_EMBEDDINGS_BACKEND/MODEL/BASE_URL); calls `_validate_embeddings_config()` as backstop
-- `process_source(paper_id, citekey, data_dir)` — full pipeline: PDF extract → abstract extraction from text → AI fragments → verbatim validation (full text for <100K PDFs, 150K cap for large) → auto-embed → section assign → citation links → async auto-suggest post-hook
+- `process_source(paper_id, citekey, data_dir)` — full pipeline: PDF extract → abstract extraction from text → AI fragments (chunked, json_mode + repair retry per #381) → verbatim validation (full text for <100K PDFs, 150K cap for large) → auto-embed → section assign → citation links → async auto-suggest post-hook. On chunk JSON parse failure, asks the AI to repair its own output before failing the chunk; repair tokens tracked under operation `process_source_repair`
 - `_run_auto_suggest(...)` — writes curation suggestions for all fragments; idempotent (INSERT OR REPLACE); runs as async rq job, errors are logged but never re-raised
 - `_enqueue_auto_suggest(...)` — enqueues `_run_auto_suggest`; falls back to synchronous execution if Redis unavailable
 - `re_embed_source_task(paper_id, citekey, data_dir)` — re-computes source embedding after metadata enrichment; called by `enrich-metadata` route

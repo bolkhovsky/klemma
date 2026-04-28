@@ -217,7 +217,7 @@ Klemma error taxonomy for AI backends.
 - `AIProvider.call()` / `call_json()` / `call_with_meta()` — main interface for AI calls
 - `call_with_meta()` — returns `AICallResult` with timing/tokens/error metadata; base wraps `call()`, backends override with structured error mapping
 - `AIProviderBase.render_prompt()` — Jinja2 template rendering
-- `extract_json()` — parses JSON from markdown code blocks and unstructured text
+- `extract_json()` — parses JSON from markdown code blocks and unstructured text. On `JSONDecodeError` logs a sanitized 300-char slice around `e.pos` and attempts a narrow tolerant retry (trailing commas, control chars in strings). Does NOT auto-fix unescaped quotes — those go through LLM repair (#381)
 - `ClaudeClient` — subprocess wrapper for `claude -p --model <model>` with structured error tracking (timeout, CLI error, FileNotFoundError)
 
 ### ai_openai.py (71 lines)
@@ -228,6 +228,7 @@ Klemma error taxonomy for AI backends.
 - `_build_kwargs()` — single helper for all completion kwargs (model, tokens, temperature, base_url, api_key, response_format)
 - `_is_reasoning_model` — detects o-series/gpt-5 models, switches to `max_completion_tokens`
 - `call_json()` — supports structured JSON mode (`response_format`) when `json_mode=True`
+- `call_with_meta()` — also honors `self._json_mode` (#381). Used by chunked extraction in `api/tasks.py` for token accounting; passing `json_mode=True` at provider creation forces strict JSON output
 - `call_with_meta()` — structured error mapping: `AuthenticationError` (fatal, no retry), `Timeout`/`RateLimitError` (retryable), token extraction from `response.usage`
 - `base_url` passthrough for custom endpoints (Ollama, vLLM, etc.)
 

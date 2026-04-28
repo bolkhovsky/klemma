@@ -56,11 +56,107 @@ def _check_json_depth(obj: object, depth: int = 0) -> bool:
     return False
 
 
+def _strip_trailing_commas(s: str) -> str:
+    """Remove trailing commas before } or ], skipping string literals.
+
+    String-aware walk: a naive regex like ``,(\\s*[}\\]])`` would also
+    rewrite ``", }`` or ``", ]`` *inside* a fragment quote, silently
+    corrupting scientific text. We track string context (and backslash
+    escapes inside strings) and only collapse the trailing comma in
+    structural positions.
+    """
+    out: list[str] = []
+    n = len(s)
+    i = 0
+    in_string = False
+    while i < n:
+        ch = s[i]
+        if in_string:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                # Preserve the escape byte exactly
+                out.append(s[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            i += 1
+            continue
+        # Outside any string literal:
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < n and s[j] in " \t\r\n":
+                j += 1
+            if j < n and s[j] in "}]":
+                # Drop the comma; whitespace + closer survive
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _escape_control_chars_in_strings(s: str) -> str:
+    """Escape literal control characters (0x00-0x1F) appearing inside JSON
+    string literals. Common AI failure: unescaped newline inside a multi-line
+    fragment quote. Walks the string tracking string-context so we don't
+    touch whitespace between tokens.
+
+    Does NOT touch unescaped quotes — those are content-ambiguous and need
+    LLM repair, not regex surgery.
+    """
+    out = []
+    in_string = False
+    escape_next = False
+    for ch in s:
+        if escape_next:
+            out.append(ch)
+            escape_next = False
+            continue
+        if ch == "\\":
+            out.append(ch)
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            out.append(ch)
+            continue
+        if in_string and ch in "\n\r\t\b\f":
+            out.append({"\n": "\\n", "\r": "\\r", "\t": "\\t", "\b": "\\b", "\f": "\\f"}[ch])
+            continue
+        if in_string and 0 <= ord(ch) < 0x20:
+            out.append(f"\\u{ord(ch):04x}")
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
+def _slice_around(s: str, pos: int, radius: int = 200) -> str:
+    """Return a sanitized slice of `s` centered on `pos`, with newlines escaped
+    so log lines stay readable. Capped at 2*radius chars."""
+    lo = max(0, pos - radius)
+    hi = min(len(s), pos + radius)
+    snippet = s[lo:hi].replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    prefix = "..." if lo > 0 else ""
+    suffix = "..." if hi < len(s) else ""
+    return f"{prefix}{snippet}{suffix}"
+
+
 def extract_json(text: str) -> Optional[dict]:
     """Extract a JSON object from an AI text response.
 
     Handles markdown code blocks and leading/trailing text around JSON.
     Rejects oversized (>512KB) or deeply nested (>20 levels) responses.
+
+    On JSON parse failure logs a sanitized slice around the error position
+    and attempts a narrow tolerant retry (trailing commas, control chars in
+    strings). Does NOT auto-fix unescaped quotes — those need LLM repair
+    (#381).
     """
     text = text.strip()
 
@@ -97,8 +193,25 @@ def extract_json(text: str) -> Optional[dict]:
     try:
         result = json.loads(json_str)
     except json.JSONDecodeError as e:
-        logger.error("JSON parse error: %s", e)
-        return None
+        logger.error(
+            "JSON parse error at line %d col %d (char %d): %s — context: %r",
+            e.lineno, e.colno, e.pos, e.msg,
+            _slice_around(json_str, e.pos, radius=150),
+        )
+        # Narrow tolerant retry: trailing commas + control chars in strings.
+        # Order matters — strip trailing commas first, then handle string escapes.
+        try:
+            patched = _escape_control_chars_in_strings(_strip_trailing_commas(json_str))
+            if patched != json_str:
+                result = json.loads(patched)
+                logger.info(
+                    "JSON parse recovered via tolerant fix-up (trailing commas / "
+                    "control chars in strings)",
+                )
+            else:
+                return None
+        except json.JSONDecodeError:
+            return None
 
     # Depth guard
     if _check_json_depth(result):

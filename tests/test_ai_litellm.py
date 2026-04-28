@@ -99,6 +99,40 @@ def test_litellm_call_json_without_json_mode():
     assert result == {"key": "val"}
 
 
+def test_litellm_call_with_meta_passes_response_format_when_json_mode():
+    """Regression for #381: call_with_meta() must honor self._json_mode.
+
+    Chunked extraction calls call_with_meta() (not call_json) for token
+    accounting. Before #381 that path silently dropped json_mode, leaving
+    the chunked extraction without structured-JSON enforcement.
+    """
+    config = AIConfig(backend="litellm", model="gpt-4.1", json_mode=True)
+    mock_litellm = MagicMock()
+    mock_litellm.completion.return_value = _make_mock_response('{"k": "v"}')
+
+    client, _ = _create_client_with_mock(config, mock_litellm)
+
+    result = client.call_with_meta("sys", "usr")
+    assert result.text == '{"k": "v"}'
+
+    call_kwargs = mock_litellm.completion.call_args.kwargs
+    assert call_kwargs["response_format"] == {"type": "json_object"}
+
+
+def test_litellm_call_with_meta_no_response_format_when_json_mode_off():
+    """Without json_mode, call_with_meta() must not pass response_format
+    (otherwise free-form draft/research generation breaks)."""
+    config = AIConfig(backend="litellm", model="gpt-4.1", json_mode=False)
+    mock_litellm = MagicMock()
+    mock_litellm.completion.return_value = _make_mock_response("free-form text")
+
+    client, _ = _create_client_with_mock(config, mock_litellm)
+
+    client.call_with_meta("sys", "usr")
+    call_kwargs = mock_litellm.completion.call_args.kwargs
+    assert "response_format" not in call_kwargs
+
+
 # ---------------------------------------------------------------------------
 # base_url passthrough
 # ---------------------------------------------------------------------------
