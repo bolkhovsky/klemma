@@ -26,7 +26,7 @@ Async task definitions for rq worker. Tasks receive primitive args (worker runs 
 - `_validate_embeddings_config()` — fail-fast guard: SaaS requires `KLEMMA_EMBEDDINGS_BACKEND=litellm` + `MODEL` starting with `ollama/` + non-empty `BASE_URL`. Called at FastAPI startup and as backstop in `_create_embeddings_provider()`. Bypass with `KLEMMA_EMBEDDINGS_ALLOW_REMOTE=1` (CI/test only — **never in prod**).
 - `_create_ai_provider(*, json_mode=False)` — AI provider from env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, KLEMMA_AI_MODEL). Pass `json_mode=True` for tasks that parse the response as JSON (chunked extraction, curation, outline) — enables `response_format={"type": "json_object"}` on LiteLLM. Free-form tasks (draft, research) default to False
 - `_create_embeddings_provider()` — embedding provider from env vars (KLEMMA_EMBEDDINGS_BACKEND/MODEL/BASE_URL); calls `_validate_embeddings_config()` as backstop
-- `process_source(paper_id, citekey, data_dir)` — full pipeline: PDF extract → abstract extraction from text → AI fragments (chunked, json_mode + repair retry per #381) → verbatim validation (full text for <100K PDFs, 150K cap for large) → auto-embed → section assign → citation links → async auto-suggest post-hook. On chunk JSON parse failure, asks the AI to repair its own output before failing the chunk; repair tokens tracked under operation `process_source_repair`
+- `process_source(paper_id, citekey, data_dir)` — full pipeline: PDF extract → abstract extraction from text → AI fragments (chunked, json_mode + repair retry per #381) → verbatim validation (full text for <100K PDFs, 1 MB cap for large per #382) → auto-embed → section assign → citation links → async auto-suggest post-hook. On chunk JSON parse failure, asks the AI to repair its own output before failing the chunk; repair tokens tracked under operation `process_source_repair`
 - `_run_auto_suggest(...)` — writes curation suggestions for all fragments; idempotent (INSERT OR REPLACE); runs as async rq job, errors are logged but never re-raised
 - `_enqueue_auto_suggest(...)` — enqueues `_run_auto_suggest`; falls back to synchronous execution if Redis unavailable
 - `re_embed_source_task(paper_id, citekey, data_dir)` — re-computes source embedding after metadata enrichment; called by `enrich-metadata` route
@@ -37,7 +37,7 @@ Async task definitions for rq worker. Tasks receive primitive args (worker runs 
 ### constants.py
 Shared numeric constants for the API layer.
 - `VERBATIM_VALIDATION_CAP_SMALL = 100_000` — `full_text` shorter than this → validator sees the whole document
-- `VERBATIM_VALIDATION_CAP_LARGE = 150_000` — `full_text` ≥ SMALL is sliced to this length before validation. Applied at the post-loop validation site in `_run_chunked_extraction` (#379); fragments quoting text past the cap may downgrade.
+- `VERBATIM_VALIDATION_CAP_LARGE = 1_000_000` — pathological-input backstop only (#382). Raised from 150K after measuring abuzyarov2011 (339K) had 62.8% downgrades caused entirely by the old cap. Covers academic papers + book-length normative documents; difflib's substring + Ratcliff-Obershelp fuzzy match keep RAM under ~50 MB on 1 MB text.
 - `EMBEDDINGS_REQUIRED_BACKEND = "litellm"`, `EMBEDDINGS_REQUIRED_MODEL_PREFIX = "ollama/"` — enforcement values for `_validate_embeddings_config()`
 
 ### worker.py (~25 lines)
