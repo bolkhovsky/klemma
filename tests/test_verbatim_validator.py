@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from klemma.literature.models import DowngradeStats, Fragment
 from klemma.skills.extractor import validate_verbatim_fragments
 
@@ -116,3 +118,80 @@ class TestEdgeCases:
         stats = validate_verbatim_fragments(frags, "real content here", "s1")
         assert frags[0].verbatim is False
         assert stats.downgraded == 1
+
+
+@pytest.mark.benchmark
+def test_validator_runtime_at_1mb_with_realistic_text() -> None:
+    """#382: ensure the 1 MB validation window stays within reasonable runtime
+    on representative academic text.
+
+    Synthetic 1 MB pdf_text built from a realistic vocabulary of ~200 unique
+    English/scientific words so difflib.SequenceMatcher's position-dict has
+    proper diversity (a tiny vocabulary turns SequenceMatcher into an
+    adversarial worst case — every char has thousands of positions).
+    100 fragments: 80 real (exact substring fast path), 20 fake (fuzzy
+    rescue path).
+
+    Skipped from default CI runs via the `benchmark` marker. Run via:
+        pytest tests/test_verbatim_validator.py -m benchmark
+    """
+    import random
+    import time
+
+    rng = random.Random(382)
+    # Realistic-ish vocabulary — 200+ words drawn from typical academic
+    # corpus topics. Enough lexical diversity that the position-dict
+    # behaves like a real PDF.
+    vocab = (
+        "model models modeling ice sea seasonal Antarctic Arctic Pacific "
+        "Atlantic data dataset results method methodology approach proposed "
+        "satellite SAR optical passive microwave radar altimeter forecast "
+        "ensemble validation evaluation experiment experiments anomaly "
+        "anomalies trend trends decade decades climate variability change "
+        "concentration extent area thickness drift motion deformation lead "
+        "ridge floe pack fast melt freeze pond snow albedo radiation flux "
+        "atmospheric oceanic boundary layer surface temperature pressure "
+        "wind salinity density transport import export advection convection "
+        "uncertainty error bias correlation regression coefficient parameter "
+        "neural network deep learning convolutional recurrent attention "
+        "transformer encoder decoder layer feature representation embedding "
+        "training inference prediction output input target loss gradient "
+        "optimizer Adam batch epoch validation cross fold split early "
+        "stopping regularization dropout normalization activation ReLU GELU "
+        "softmax sigmoid linear projection token sequence position embedding "
+        "Smith Lee Chen Wang Zhao Patel Anderson Korolev Goessling Lavergne"
+    ).split()
+
+    pdf_words: list[str] = []
+    total_len = 0
+    while total_len < 1_000_000:
+        w = rng.choice(vocab)
+        pdf_words.append(w)
+        total_len += len(w) + 1  # +1 for the space separator
+    pdf_text = " ".join(pdf_words)[:1_000_000]
+    assert len(pdf_text) == 1_000_000
+
+    # 80 real quotes (exact substring fast path)
+    real_quotes = []
+    for _ in range(80):
+        start = rng.randint(0, len(pdf_text) - 150)
+        real_quotes.append(pdf_text[start:start + rng.randint(40, 120)])
+    # 20 fabricated (fuzzy rescue path)
+    fakes = [
+        f"Fabricated quote {i} about an entirely unrelated topic with random tokens"
+        for i in range(20)
+    ]
+    fragments = [Fragment(text=q, verbatim=True) for q in real_quotes + fakes]
+
+    t0 = time.monotonic()
+    stats = validate_verbatim_fragments(fragments, pdf_text, "bench")
+    elapsed = time.monotonic() - t0
+
+    # Generous bound — real abuzyarov2011 (339K, 234 frags) validates in
+    # well under this on the prod worker. Anything close to the bound
+    # signals an algorithmic regression worth investigating.
+    assert elapsed < 60.0, f"Validator took {elapsed:.1f}s on 1 MB / 100 frags — exceeds budget"
+    # Real quotes confirmed; fakes downgraded
+    assert stats.verbatim_confirmed >= 70, stats
+    assert stats.downgraded >= 15, stats
+    assert stats.verbatim_claimed == 100

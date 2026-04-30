@@ -7,14 +7,20 @@ Centralised here so magic numbers in tasks.py are documented and testable.
 # The verbatim validator does offline substring matching — no LLM involved —
 # so it can safely work on a longer window than the AI extraction prompt.
 # For small PDFs (below VERBATIM_VALIDATION_CAP_SMALL) we validate against
-# the full text so fragments near the bibliography aren't falsely downgraded.
-# For large PDFs we cap at VERBATIM_VALIDATION_CAP_LARGE to keep peak RAM
-# predictable (substring search is O(n*m) in degenerate cases).
+# the full text. For large PDFs we cap at VERBATIM_VALIDATION_CAP_LARGE as a
+# pathological-input backstop only; the cap is intentionally generous.
 #
-# AI extraction still uses pdf_text[:50_000] — that cap is tied to LLM context
-# and must not be changed here.
-VERBATIM_VALIDATION_CAP_SMALL = 100_000   # full text used when pdf_text < this
-VERBATIM_VALIDATION_CAP_LARGE = 150_000   # cap applied when pdf_text >= SMALL
+# Cap rationale (#382): difflib.SequenceMatcher with autojunk=False uses
+# O(len(pdf_text)) memory for the position-lookup dict — a 1 MB text fits
+# in <50 MB RSS. The exact-substring fast path is CPython-optimized and
+# stays sub-second on 1 MB. 1_000_000 covers every academic paper plus
+# most book-length normative documents while still bounding RAM in case of
+# a misuploaded multi-MB scan or OCR dump.
+#
+# AI extraction is chunked separately via build_chunks_from_pages — that
+# limit is unrelated and lives in literature/pdf.py.
+VERBATIM_VALIDATION_CAP_SMALL = 100_000     # full text used when pdf_text < this
+VERBATIM_VALIDATION_CAP_LARGE = 1_000_000   # backstop for pathological inputs (#382)
 
 # ── Embeddings enforcement ──────────────────────────────────────────────────
 # SaaS must use local Ollama embeddings — no external API calls for embeddings.
