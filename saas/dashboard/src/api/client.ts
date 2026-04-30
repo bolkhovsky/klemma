@@ -71,7 +71,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     if (res.status === 401) {
       localStorage.removeItem('access_token')
       localStorage.removeItem('refresh_token')
-      window.location.href = '/login'
+      if (!['/login', '/register'].includes(window.location.pathname)) {
+        window.location.href = '/login'
+      }
       throw new ApiError(401, 'Session expired')
     }
   }

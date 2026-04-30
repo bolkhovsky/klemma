@@ -103,7 +103,9 @@ router.beforeEach(async (to) => {
       const data = await userProjects.list()
       const first = data.projects[0]
       if (first) return { path: `/${first.project_id}/library` }
-    } catch { /* fall through */ }
+    } catch {
+      if (!localStorage.getItem('access_token')) return
+    }
     return { path: '/library' }
   }
 })
