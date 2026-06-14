@@ -49,6 +49,7 @@ class FragmentPush(BaseModel):
     fragment_type: str = "key_idea"
     citation_intent: Optional[str] = None
     page: Optional[int] = None
+    verbatim: bool = False
 
 
 class LibraryPushRequest(BaseModel):
@@ -195,6 +196,7 @@ async def push_library(
             fragment_type=frag.fragment_type,
             page_number=frag.page,
             citation_intent=frag.citation_intent,
+            verbatim=frag.verbatim,
         )
         paper_store.save_fragments(
             resolved_paper_id, [record],

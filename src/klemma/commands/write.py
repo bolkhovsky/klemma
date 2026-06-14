@@ -231,6 +231,9 @@ def draft(ctx, section, model, no_save, output, no_rag, prompt):
                 "text": f.get("fragment_text", "")[:300],
                 "type": f.get("fragment_type", "?"),
                 "relevance": f.get("relevance_score", 3),
+                "page": f.get("page_number"),
+                "intent": f.get("citation_intent"),
+                "verbatim": bool(f.get("verbatim", 0)),
             }
         )
 

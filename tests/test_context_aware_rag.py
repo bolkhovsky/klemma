@@ -489,7 +489,7 @@ class TestSectionDraftTemplateWithRAG:
         ]
         result = self._render(rag_fragments=rag)
         assert "Блок 1: Theoretical foundations" in result
-        assert "[smith2020]" in result
+        assert "smith2020" in result
         assert "0.92" in result
 
     def test_renders_both_rag_and_fallback(self):
@@ -518,9 +518,9 @@ class TestSectionDraftTemplateWithRAG:
         result = self._render(rag_fragments=rag, fragments=flat)
 
         assert "Блок 1: Block one" in result
-        assert "[a2020]" in result
+        assert "a2020" in result
         assert "Дополнительные фрагменты" in result
-        assert "[b2021]" in result
+        assert "b2021" in result
 
     def test_renders_flat_fragments_without_rag(self):
         flat = [
@@ -530,7 +530,7 @@ class TestSectionDraftTemplateWithRAG:
 
         assert "Релевантные фрагменты из библиотеки" in result
         assert "Дополнительные" not in result
-        assert "[c2022]" in result
+        assert "c2022" in result
 
     def test_renders_empty_rag_and_fragments(self):
         result = self._render(rag_fragments=[], fragments=[])

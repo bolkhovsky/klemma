@@ -460,6 +460,9 @@ def retrieve_rag_fragments_per_block(
                     "type": f.get("fragment_type", "?"),
                     "relevance": f.get("relevance_score", 3),
                     "similarity": f.get("similarity", 0),
+                    "page": f.get("page_number"),
+                    "intent": f.get("citation_intent"),
+                    "verbatim": bool(f.get("verbatim", 0)),
                 }
             )
 

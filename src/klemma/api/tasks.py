@@ -1404,6 +1404,9 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
                     "type": f.fragment_type or "key_idea",
                     "relevance": 3,
                     "text": f.fragment_text,
+                    "page": f.page_number,
+                    "intent": f.citation_intent,
+                    "verbatim": f.verbatim,
                 })
     except Exception as exc:
         logger.warning("Failed to load section fragments: %s", exc)
