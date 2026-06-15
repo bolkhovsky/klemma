@@ -13,6 +13,7 @@ def _make_kctx(project_root: Path, klemma_home: Path | None = None):
     kctx = MagicMock()
     kctx.config = MagicMock()
     kctx.config.ai.citation_check_model = None
+    kctx.config.ai.verify_citations_inline = True
     kctx.config.ai.citation_check_timeout = 60
     kctx.config.ai.citation_check_retries = 0
     kctx.config.ai.citation_check_max_wall_clock = 120
@@ -35,7 +36,10 @@ def _make_kctx(project_root: Path, klemma_home: Path | None = None):
 
 
 def _invoke(args, kctx=None, tmp_path=None):
-    runner = CliRunner(mix_stderr=False)
+    try:
+        runner = CliRunner(mix_stderr=False)
+    except TypeError:
+        runner = CliRunner()
     tmp = tmp_path or Path("/tmp")
     ctx = kctx or _make_kctx(tmp)
 
