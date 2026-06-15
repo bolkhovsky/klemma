@@ -96,9 +96,15 @@ def read_local_fragments(project_root: Path) -> list[FragmentPayload]:
 
     fragments = []
     try:
+        cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(fragments)").fetchall()
+        }
+        has_verbatim = "verbatim" in cols
         rows = conn.execute(
-            """SELECT fragment_id, paper_id, fragment_text,
+            f"""SELECT fragment_id, paper_id, fragment_text,
                       fragment_type, citation_intent, page_number
+                      {", verbatim" if has_verbatim else ""}
                FROM fragments ORDER BY rowid"""
         ).fetchall()
 
@@ -110,6 +116,7 @@ def read_local_fragments(project_root: Path) -> list[FragmentPayload]:
                 fragment_type=row["fragment_type"] or "key_idea",
                 citation_intent=row["citation_intent"],
                 page=row["page_number"],
+                verbatim=bool(row["verbatim"]) if has_verbatim else False,
             ))
     except sqlite3.OperationalError:
         pass
@@ -375,8 +382,16 @@ def pull_library(client: KlemmaClient, project_root: Path, since: Optional[str] 
             "fragment_id TEXT PRIMARY KEY, paper_id TEXT NOT NULL,"
             "extraction_id TEXT, fragment_text TEXT NOT NULL,"
             "fragment_type TEXT, page_number INTEGER, citation_intent TEXT,"
+            "verbatim INTEGER NOT NULL DEFAULT 0,"
             "created_at TEXT)"
         )
+        frag_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(fragments)")
+        }
+        if "verbatim" not in frag_cols:
+            conn.execute(
+                "ALTER TABLE fragments ADD COLUMN verbatim INTEGER NOT NULL DEFAULT 0"
+            )
 
         for src in sources:
             conn.execute(
@@ -410,11 +425,12 @@ def pull_library(client: KlemmaClient, project_root: Path, since: Optional[str] 
             conn.execute(
                 """INSERT OR IGNORE INTO fragments
                    (fragment_id, paper_id, fragment_text, fragment_type,
-                    page_number, citation_intent)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                    page_number, citation_intent, verbatim)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (frag["fragment_id"], frag["paper_id"], frag["text"],
                  frag.get("fragment_type", "key_idea"),
-                 frag.get("page"), frag.get("citation_intent")),
+                 frag.get("page"), frag.get("citation_intent"),
+                 1 if frag.get("verbatim") else 0),
             )
             result["fragments"] += 1
 
