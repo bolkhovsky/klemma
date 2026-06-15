@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "cli" / "src"))
 
 from klemma_cli.sync import pull_library, read_local_fragments
 
