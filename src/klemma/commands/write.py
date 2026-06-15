@@ -67,8 +67,13 @@ def _resolve_output(
     default="",
     help="Custom directive for AI (e.g. 'rely on goessling2016 and previous_paper.md')",
 )
+@click.option(
+    "--verify-citations/--no-verify-citations",
+    default=None,
+    help="Run citation integrity check after draft (default: on per config)",
+)
 @click.pass_context
-def draft(ctx, section, model, no_save, output, no_rag, prompt):
+def draft(ctx, section, model, no_save, output, no_rag, prompt, verify_citations):
     """Generate dissertation section drafts.
 
     Standalone mode: klemma draft -s 1.3.2
@@ -291,14 +296,43 @@ def draft(ctx, section, model, no_save, output, no_rag, prompt):
         console.print("[red]AI returned empty result.[/red]")
         raise SystemExit(1)
 
+    # 7b. Citation integrity check (writer/verifier-split, ADR-018)
+    draft_to_save = result.text
+    _should_verify = verify_citations if verify_citations is not None else cfg.ai.verify_citations_inline
+    if _should_verify:
+        from ..skills.citation_checker import build_judge_provider, check_draft_inline
+        with console.status("Проверка цитирований...", spinner="dots"):
+            _judge = build_judge_provider(cfg)
+            draft_to_save, _report = check_draft_inline(
+                result.text,
+                formatted_fragments,
+                rag_fragments_for_prompt or [],
+                config=cfg,
+                judge_ai=_judge,
+                project_root=kctx.project_root or Path("."),
+                klemma_home=kctx.klemma_home,
+                project_chain=kctx.project_chain,
+                use_ai=_judge is not None,
+            )
+        warn_count = sum(
+            1 for v in _report.verdicts if v.severity in ("soft_warn", "hard_warn")
+        )
+        if warn_count:
+            console.print(
+                f"[yellow]Цитирования: {warn_count} потенциально необоснованных утверждений "
+                f"({_report.summary})[/yellow]"
+            )
+        if _report.status == "error":
+            console.print("[red]Верификатор цитирований завершился с ошибкой[/red]")
+
     # 8. Save draft
     out_path = _resolve_output(output, kctx.project_root, section, no_save)
     if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(result.text, encoding="utf-8")
+        out_path.write_text(draft_to_save, encoding="utf-8")
         console.print(f"[green]Saved to {out_path}[/green]")
     else:
-        console.print(result.text)
+        console.print(draft_to_save)
 
     # 9. Summary
     console.print(

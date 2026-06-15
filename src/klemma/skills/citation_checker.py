@@ -1025,3 +1025,258 @@ def check_citations_file(
         output_tokens=total_out,
         model=report_model,
     )
+
+
+# ---------------------------------------------------------------------------
+# Inline annotator
+# ---------------------------------------------------------------------------
+
+
+def _safe_comment_payload(s: str, max_len: int = 150) -> str:
+    """Sanitize a string for safe use inside an HTML comment.
+
+    HTML comments close on '-->' — we prevent that by:
+    - replacing '--' with '-' (eliminates the closing sequence)
+    - replacing '>' with ' ' (eliminates the closer char even if '--' slipped through)
+    - replacing newlines with spaces
+    Order matters: '--' first, then '>'.
+    """
+    s = s.replace("--", "-").replace(">", " ").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    return s[:max_len].strip()
+
+
+def _annotate_draft(draft_text: str, verdicts: list[CitationVerdict]) -> str:
+    """Insert <!-- klemma: ... --> annotations right-to-left into draft_text.
+
+    Annotates soft_warn AND hard_warn/error verdicts.
+    Deduplicates by (anchor.start_offset, anchor.end_offset, citekey).
+    Inserts at anchor.end_offset in descending order to preserve earlier offsets.
+    """
+    # Collect unique insertion points
+    seen: set[tuple[int, int, str]] = set()
+    to_insert: list[tuple[int, str]] = []  # (end_offset, comment)
+
+    for v in verdicts:
+        if v.severity not in ("soft_warn", "hard_warn", "error"):
+            continue
+        key = (v.anchor.start_offset, v.anchor.end_offset, v.citekey)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        safe_ck = _safe_comment_payload(v.citekey, max_len=80)
+        if v.severity == "soft_warn":
+            comment = f"<!-- klemma: проверь обоснование @{safe_ck} -->"
+        else:
+            safe_raw = _safe_comment_payload(v.anchor.raw, max_len=80)
+            comment = f"<!-- klemma: необоснованный глосс vs @{safe_ck}: {safe_raw} -->"
+
+        to_insert.append((v.anchor.end_offset, comment))
+
+    # Sort descending so right-most insertion doesn't shift earlier offsets
+    to_insert.sort(key=lambda x: x[0], reverse=True)
+
+    result = draft_text
+    for offset, comment in to_insert:
+        # Clamp to text bounds
+        offset = min(max(0, offset), len(result))
+        result = result[:offset] + comment + result[offset:]
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Inline orchestrator (writer/verifier-split, PR 3)
+# ---------------------------------------------------------------------------
+
+
+def check_draft_inline(
+    draft_text: str,
+    fragments: list[dict],
+    rag_fragments: list[dict],
+    *,
+    config: "KlemmaConfig",
+    judge_ai: Optional["AIProvider"],
+    project_root: Path,
+    klemma_home=None,
+    project_chain=None,
+    use_ai: bool = True,
+) -> "tuple[str, CitationCheckReport]":
+    """Verify citation integrity in an in-memory draft (writer/verifier-split, ADR-018).
+
+    Uses in-memory fragments (never re-reads DB/sidecars).
+    search_complete=False always — inline path gives soft advisory output.
+    Returns (annotated_draft_text, CitationCheckReport).
+    Draft text is ALWAYS returned even on engine error.
+    """
+    all_fragments = list(fragments) + list(rag_fragments)
+
+    try:
+        claims = _parse_claims(draft_text)
+    except Exception:
+        logger.exception("_parse_claims failed in check_draft_inline")
+        return draft_text, CitationCheckReport(
+            target="inline",
+            verdicts=[],
+            summary="parse error",
+            status="error",
+            errors=["_parse_claims raised an unexpected exception"],
+            input_tokens=0,
+            output_tokens=0,
+            model=None,
+        )
+
+    if not claims:
+        return draft_text, CitationCheckReport(
+            target="inline",
+            verdicts=[],
+            summary="no citation claims found",
+            status="ok",
+            errors=[],
+            input_tokens=0,
+            output_tokens=0,
+            model=None,
+        )
+
+    # Per-draft budget
+    ai_cfg = config.ai
+    deadline = _Deadline.from_secs(ai_cfg.citation_check_max_wall_clock)
+    ai_calls_remaining = ai_cfg.max_ai_calls_per_draft
+
+    # Resolve prompt path once
+    prompt_path: Optional[Path] = None
+    if use_ai and judge_ai is not None:
+        try:
+            from ..config import resolve_prompt
+            prompt_path = resolve_prompt(
+                "citation_check.md",
+                klemma_home or Path(""),
+                project_chain or [],
+            )
+        except Exception as exc:
+            logger.warning("could not resolve citation_check.md prompt: %s", exc)
+
+    # Build fragment lookup by citekey
+    frags_by_ck: dict[str, list[str]] = {}
+    for f in all_fragments:
+        ck = f.get("source") or f.get("citekey", "")
+        text = f.get("text", "") or f.get("fragment_text", "")
+        if ck and text:
+            frags_by_ck.setdefault(ck, []).append(text)
+
+    verdicts: list[CitationVerdict] = []
+    total_in = 0
+    total_out = 0
+    report_model: Optional[str] = None
+    errors: list[str] = []
+    status: Literal["ok", "degraded", "error"] = "ok"
+    if judge_ai is None and use_ai:
+        status = "degraded"
+
+    for claim in claims:
+        for anchor in claim.anchors:
+            try:
+                citekey = claim.citekey
+                passages = frags_by_ck.get(citekey, [])
+                source_available = bool(passages)
+
+                if not source_available:
+                    verdicts.append(CitationVerdict(
+                        citekey=citekey,
+                        claim_sentence=claim.sentence,
+                        location=claim.location,
+                        anchor=anchor,
+                        severity="unverifiable",
+                        reason="source fragments not in prompt context",
+                        offending_span="",
+                        ai_used=False,
+                    ))
+                    continue
+
+                # Combine passages into source_text for anchor search
+                source_text = "\n".join(passages)
+                norm_anchor = _normalize_text(anchor.raw)
+                norm_source = _normalize_text(source_text)
+                anchor_found = bool(norm_anchor and norm_anchor in norm_source)
+
+                bundle = EvidenceBundle(
+                    claim_sentence=claim.sentence,
+                    citekey=citekey,
+                    location=claim.location,
+                    anchor=anchor,
+                    passages=passages,
+                    source_available=True,
+                    search_complete=False,  # inline: never sidecar
+                    anchor_found=anchor_found,
+                )
+
+                needs_ai = _needs_ai_check(bundle) and use_ai and judge_ai is not None
+
+                if needs_ai:
+                    if ai_calls_remaining <= 0 or deadline.remaining() <= 0:
+                        verdicts.append(_make_unverifiable(
+                            bundle, "AI call budget/deadline exhausted"
+                        ))
+                        if status == "ok":
+                            status = "degraded"
+                        continue
+
+                    batch = verify_claim_batch(
+                        [bundle],
+                        judge_ai=judge_ai,
+                        deadline=deadline,
+                        cfg=config,
+                        prompt_path=prompt_path,
+                    )
+                    ai_calls_remaining -= 1
+                    total_in += batch.input_tokens
+                    total_out += batch.output_tokens
+                    if batch.model:
+                        report_model = batch.model
+                    errors.extend(batch.errors)
+                    verdicts.extend(batch.verdicts)
+                    if batch.errors and status == "ok":
+                        status = "degraded"
+
+                else:
+                    verdicts.append(verify_claim(bundle))
+
+            except Exception as exc:
+                logger.exception(
+                    "unexpected error verifying inline anchor %s for %s",
+                    anchor.anchor_id, claim.citekey,
+                )
+                errors.append(f"unexpected error: {exc}")
+                status = "error"
+
+    # Build summary
+    counts: dict[str, int] = {}
+    for v in verdicts:
+        counts[v.severity] = counts.get(v.severity, 0) + 1
+    parts = [
+        f"{counts[s]} {s}"
+        for s in ("hard_warn", "soft_warn", "unverifiable", "ok")
+        if counts.get(s, 0)
+    ]
+    summary = "; ".join(parts) if parts else "all claims ok"
+
+    report = CitationCheckReport(
+        target="inline",
+        verdicts=verdicts,
+        summary=summary,
+        status=status,
+        errors=errors,
+        input_tokens=total_in,
+        output_tokens=total_out,
+        model=report_model,
+    )
+
+    try:
+        annotated = _annotate_draft(draft_text, verdicts)
+    except Exception:
+        logger.exception("_annotate_draft failed; returning unannotated draft")
+        annotated = draft_text
+        report.status = "error"
+        report.errors.append("annotation step raised an unexpected exception")
+
+    return annotated, report

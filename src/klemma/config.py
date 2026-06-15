@@ -338,6 +338,7 @@ class AIConfig(BaseModel):
     citation_check_max_passages: int = 8
     citation_check_max_prompt_chars: int = 12000
     citation_check_max_output_tokens: int = 1024
+    verify_citations_inline: bool = True  # CLI default ON; SaaS gates via KLEMMA_VERIFY_CITATIONS_INLINE
 
     @property
     def api_key(self) -> Optional[str]:
