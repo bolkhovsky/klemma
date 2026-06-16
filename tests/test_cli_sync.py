@@ -150,3 +150,97 @@ def test_pull_library_persists_verbatim_and_migrates_legacy_table(tmp_path):
         conn.close()
 
     assert verbatim == 1
+
+
+def test_pull_library_updates_existing_fragment_fields(tmp_path):
+    db_path = tmp_path / ".klemma" / "data" / "library.db"
+    _init_library_db(db_path, with_verbatim=True)
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            """CREATE TABLE papers (
+                paper_id TEXT PRIMARY KEY,
+                pdf_hash TEXT,
+                doi TEXT,
+                s2_paper_id TEXT,
+                title TEXT NOT NULL DEFAULT '',
+                authors TEXT,
+                year INTEGER,
+                abstract TEXT,
+                created_at TEXT
+            )"""
+        )
+        conn.execute(
+            """CREATE TABLE user_sources (
+                citekey TEXT PRIMARY KEY,
+                paper_id TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                pdf_path TEXT,
+                note_path TEXT,
+                quality_score INTEGER,
+                added_at TEXT,
+                updated_at TEXT,
+                project_id TEXT,
+                user_id TEXT
+            )"""
+        )
+        conn.execute(
+            """CREATE TABLE user_source_sections (
+                citekey TEXT NOT NULL,
+                section TEXT NOT NULL,
+                PRIMARY KEY (citekey, section)
+            )"""
+        )
+        conn.execute(
+            """INSERT INTO fragments
+               (fragment_id, paper_id, fragment_text, fragment_type, page_number, citation_intent, verbatim)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            ("frag-1", "paper-1", "Old text", "key_idea", 1, "background", 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _FakeClient(
+        {
+            "sources": [
+                {
+                    "citekey": "smith2026",
+                    "paper_id": "paper-1",
+                    "title": "Test Paper",
+                    "authors": "Smith",
+                    "year": 2026,
+                    "doi": None,
+                    "abstract": "",
+                    "sections": [],
+                    "status": "completed",
+                }
+            ],
+            "fragments": [
+                {
+                    "fragment_id": "frag-1",
+                    "paper_id": "paper-1",
+                    "text": "New exact quote",
+                    "fragment_type": "quote",
+                    "citation_intent": "result",
+                    "page": 4,
+                    "verbatim": True,
+                }
+            ],
+        }
+    )
+
+    pull_library(client, tmp_path)
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            """SELECT fragment_text, fragment_type, page_number, citation_intent, verbatim
+               FROM fragments WHERE fragment_id = ?""",
+            ("frag-1",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row == ("New exact quote", "quote", 4, "result", 1)

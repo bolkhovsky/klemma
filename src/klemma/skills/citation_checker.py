@@ -147,7 +147,7 @@ _DEFINITIONAL_TRIGGERS = [
 ]
 
 _NUMERIC_RE = re.compile(
-    r"(?<![А-Яа-яA-Za-z])"
+    r"(?<![А-Яа-яA-Za-z\d])"
     r"([-−]?\d{1,6}(?:[.,]\d{1,4})?\s*(?:%|процент|°C|°K|кг|км|м\b|мм)?)"
     r"(?![А-Яа-яA-Za-z\d])",
 )
@@ -949,6 +949,8 @@ def check_citations_file(
     report_model: Optional[str] = None
     errors: list[str] = []
     status: Literal["ok", "degraded", "error"] = "ok"
+    if judge_ai is None and use_ai:
+        status = "degraded"
 
     for claim in claims:
         for anchor in claim.anchors:

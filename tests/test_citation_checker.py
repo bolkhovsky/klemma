@@ -47,6 +47,13 @@ def test_detect_numeric_anchor():
     assert "15.5" in numeric[0].raw
 
 
+def test_detect_numeric_anchor_ignores_citekey_digits():
+    sentence = "См. [@smith2020]."
+    anchors = detect_anchors(sentence)
+    numeric = [a for a in anchors if a.kind == "numeric"]
+    assert numeric == []
+
+
 def test_detect_definitional_anchor_ru():
     sentence = "Морской лёд — это плавучий лёд, образующийся из морской воды [@jones2019]."
     anchors = detect_anchors(sentence)
@@ -177,6 +184,12 @@ def test_parse_claims_offsets_in_range():
     for c in claims:
         assert 0 <= c.start_offset < len(SIMPLE_MD)
         assert c.start_offset < c.end_offset <= len(SIMPLE_MD)
+
+
+def test_parse_claims_plain_citation_has_no_false_numeric_anchor():
+    claims = _parse_claims("См. [@smith2020].\n")
+    assert len(claims) == 1
+    assert claims[0].anchors == []
 
 
 # ---------------------------------------------------------------------------

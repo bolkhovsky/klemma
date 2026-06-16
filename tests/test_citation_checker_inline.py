@@ -36,7 +36,15 @@ def _cfg(verify_inline: bool = True) -> KlemmaConfig:
     return cfg
 
 
-def _run(draft_text: str, fragments: list[dict], rag: list[dict] | None = None, *, cfg=None, judge_ai=None):
+def _run(
+    draft_text: str,
+    fragments: list[dict],
+    rag: list[dict] | None = None,
+    *,
+    cfg=None,
+    judge_ai=None,
+    use_ai=None,
+):
     cfg = cfg or _cfg()
     return check_draft_inline(
         draft_text,
@@ -47,7 +55,7 @@ def _run(draft_text: str, fragments: list[dict], rag: list[dict] | None = None, 
         project_root=Path("/tmp"),
         klemma_home=None,
         project_chain=[],
-        use_ai=judge_ai is not None,
+        use_ai=(judge_ai is not None) if use_ai is None else use_ai,
     )
 
 
@@ -385,10 +393,9 @@ class TestCheckDraftInlineWithAI:
     def test_no_ai_judge_status_degraded_when_use_ai_true(self):
         draft = "Метод является надёжным [@smith2020]."
         fragments = [{"source": "smith2020", "text": "текст"}]
-        # judge_ai=None but use_ai would default to judge_ai is not None = False
-        annotated, report = _run(draft, fragments, judge_ai=None)
-        # use_ai=False → definitional gets unverifiable but status is ok (deliberate no-AI)
-        assert report.status in ("ok", "degraded")
+        annotated, report = _run(draft, fragments, judge_ai=None, use_ai=True)
+        assert report.status == "degraded"
+        assert any(v.severity == "unverifiable" for v in report.verdicts)
 
     def test_ai_call_budget_exhausted(self):
         draft = "A является B [@k1]. C является D [@k2]. E является F [@k3]."

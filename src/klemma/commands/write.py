@@ -312,7 +312,7 @@ def draft(ctx, section, model, no_save, output, no_rag, prompt, verify_citations
                 project_root=kctx.project_root or Path("."),
                 klemma_home=kctx.klemma_home,
                 project_chain=kctx.project_chain,
-                use_ai=_judge is not None,
+                use_ai=True,
             )
         warn_count = sum(
             1 for v in _report.verdicts if v.severity in ("soft_warn", "hard_warn")
@@ -321,6 +321,11 @@ def draft(ctx, section, model, no_save, output, no_rag, prompt, verify_citations
             console.print(
                 f"[yellow]Цитирования: {warn_count} потенциально необоснованных утверждений "
                 f"({_report.summary})[/yellow]"
+            )
+        if _report.status == "degraded":
+            console.print(
+                "[yellow]Верификатор цитирований отработал в degraded-режиме; "
+                "AI-проверка числовых и дефинициональных утверждений недоступна[/yellow]"
             )
         if _report.status == "error":
             console.print("[red]Верификатор цитирований завершился с ошибкой[/red]")

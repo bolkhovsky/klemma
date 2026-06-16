@@ -423,10 +423,17 @@ def pull_library(client: KlemmaClient, project_root: Path, since: Optional[str] 
 
         for frag in fragments:
             conn.execute(
-                """INSERT OR IGNORE INTO fragments
+                """INSERT INTO fragments
                    (fragment_id, paper_id, fragment_text, fragment_type,
                     page_number, citation_intent, verbatim)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(fragment_id) DO UPDATE SET
+                       paper_id=excluded.paper_id,
+                       fragment_text=excluded.fragment_text,
+                       fragment_type=excluded.fragment_type,
+                       page_number=excluded.page_number,
+                       citation_intent=excluded.citation_intent,
+                       verbatim=excluded.verbatim""",
                 (frag["fragment_id"], frag["paper_id"], frag["text"],
                  frag.get("fragment_type", "key_idea"),
                  frag.get("page"), frag.get("citation_intent"),
