@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -51,6 +53,41 @@ class TestLibrarySync:
         assert resp.status_code == 200
         data = resp.json()
         assert data["sources_saved"] == 1
+
+    def test_push_and_pull_library_preserves_verbatim(self, client):
+        token = uuid4().hex
+        citekey = f"verbatim-{token}"
+        paper_id = f"local-paper-{token}"
+        fragment_id = f"frag-verbatim-{token}"
+        push_resp = client.post("/sync/push/library", json={
+            "sources": [
+                {
+                    "citekey": citekey,
+                    "paper_id": paper_id,
+                    "title": "Quoted Paper",
+                    "status": "completed",
+                }
+            ],
+            "fragments": [
+                {
+                    "fragment_id": fragment_id,
+                    "paper_id": paper_id,
+                    "text": "Exact quoted fragment.",
+                    "fragment_type": "quote",
+                    "citation_intent": "result",
+                    "page": 7,
+                    "verbatim": True,
+                }
+            ],
+        })
+        assert push_resp.status_code == 200
+        assert push_resp.json()["fragments_saved"] == 1
+
+        pull_resp = client.get("/sync/pull/library")
+        assert pull_resp.status_code == 200
+        fragments = pull_resp.json()["fragments"]
+        fragment = next(f for f in fragments if f["fragment_id"] == fragment_id)
+        assert fragment["verbatim"] is True
 
     def test_pull_library(self, client):
         # Push first

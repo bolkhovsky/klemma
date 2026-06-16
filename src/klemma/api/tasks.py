@@ -1404,6 +1404,9 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
                     "type": f.fragment_type or "key_idea",
                     "relevance": 3,
                     "text": f.fragment_text,
+                    "page": f.page_number,
+                    "intent": f.citation_intent,
+                    "verbatim": f.verbatim,
                 })
     except Exception as exc:
         logger.warning("Failed to load section fragments: %s", exc)
@@ -1489,6 +1492,70 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
                 section=section,
             )
 
+        # Citation integrity check — opt-in on SaaS (CTO RC4: default OFF).
+        # Enable by setting KLEMMA_VERIFY_CITATIONS_INLINE=1 after validating cost.
+        citation_findings: list[dict] = []
+        if os.getenv("KLEMMA_VERIFY_CITATIONS_INLINE", "").strip() in ("1", "true", "yes"):
+            try:
+                from klemma.skills.citation_checker import (
+                    build_judge_provider,
+                    check_draft_inline,
+                )
+
+                # Inject judge model from env (CTO RC3 + резолюция-8 №5).
+                # Use model_copy so we don't mutate the shared config object — same
+                # isolation pattern as build_judge_provider (ADR-018 judge clone).
+                check_model = os.getenv("KLEMMA_CITATION_CHECK_MODEL", "").strip()
+                judge_ai_config = ai_config.model_copy()
+                judge_ai_config._resolved_api_keys = dict(ai_config._resolved_api_keys)
+                if check_model:
+                    judge_ai_config.citation_check_model = check_model
+                cite_config = config.model_copy(deep=True)
+                cite_config.ai = judge_ai_config
+
+                judge_ai = build_judge_provider(cite_config)
+                annotated, cite_report = check_draft_inline(
+                    text,
+                    fragments,
+                    [],
+                    config=cite_config,
+                    judge_ai=judge_ai,
+                    project_root=klemma_home,
+                    klemma_home=klemma_home,
+                    project_chain=[],
+                    use_ai=judge_ai is not None,
+                )
+                text = annotated
+
+                # Conditional token tracking (резолюция-17 №3): skip when no
+                # AI calls were made (degraded/no-AI run produces no real usage).
+                if user_id and cite_report.model and cite_report.input_tokens > 0:
+                    user_store.record_usage(
+                        user_id=user_id,
+                        operation="citation_check",
+                        model=cite_report.model,
+                        input_tokens=cite_report.input_tokens,
+                        output_tokens=cite_report.output_tokens,
+                        section=section,
+                    )
+
+                citation_findings = [
+                    {
+                        "severity": v.severity,
+                        "citekey": v.citekey,
+                        "reason": v.reason,
+                        "anchor": v.anchor.raw,
+                    }
+                    for v in cite_report.verdicts
+                    if v.severity in ("soft_warn", "hard_warn")
+                ]
+                logger.info(
+                    "Citation check for section %s: %s (%d findings)",
+                    section, cite_report.summary, len(citation_findings),
+                )
+            except Exception:
+                logger.exception("Citation check failed for section %s; draft saved as-is", section)
+
         logger.info(
             "Draft generated for section %s: %d words, %d citations",
             section, result.word_count, len(result.citations_used),
@@ -1499,6 +1566,7 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
             "text": text,
             "word_count": result.word_count,
             "citations_used": result.citations_used,
+            **({"citation_findings": citation_findings} if citation_findings else {}),
         }
 
     except Exception as exc:

@@ -343,7 +343,8 @@ class FragmentRepository(BaseRepository):
             cur = conn.execute(
                 f"""SELECT f.id, f.source_id, f.fragment_text, f.fragment_type,
                            f.chapter, f.section, f.relevance_score, f.usage_hint,
-                           f.page_number, f.citation_intent, s.id as citekey
+                           f.page_number, f.citation_intent, f.verbatim,
+                           s.id as citekey
                     FROM fragments f
                     JOIN sources s ON f.source_id = s.id
                     WHERE f.id IN ({placeholders})""",

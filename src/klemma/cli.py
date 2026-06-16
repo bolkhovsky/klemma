@@ -1501,6 +1501,7 @@ def _process_single(
                                 "page": f.page_number,
                                 "citation_intent": f.citation_intent,
                                 "relevance": 3,
+                                "verbatim": f.verbatim,
                             }
                             for f in _fast_frags
                         ]
@@ -1569,6 +1570,7 @@ def _process_single(
                                 "page": f.page_number,
                                 "citation_intent": f.citation_intent,
                                 "relevance": 3,
+                                "verbatim": f.verbatim,
                             }
                             for f in lib_frags
                         ]
@@ -1725,6 +1727,7 @@ def _process_single(
                         fragment_type=f.type,
                         page_number=f.page,
                         citation_intent=f.citation_intent,
+                        verbatim=f.verbatim,
                         content_hash=compute_content_hash(_paper_id, f.text, f.page),
                     )
                     for f in result.fragments
