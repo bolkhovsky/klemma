@@ -26,6 +26,7 @@ class FragmentPayload(BaseModel):
     fragment_type: str = "key_idea"
     citation_intent: Optional[str] = None
     page: Optional[int] = None
+    verbatim: bool = False
 
 
 class EmbeddingPayload(BaseModel):

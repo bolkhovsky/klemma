@@ -22,6 +22,7 @@ Three format contracts that downstream consumers may rely on:
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping
@@ -66,6 +67,31 @@ def _render_body(pages: list[str]) -> str:
         chunks.append(f"<!-- Page {page_num} -->")
         chunks.append(page_text.rstrip())
     return "\n\n".join(chunks) + "\n"
+
+
+def read_pdf_sidecar(project_root: Path, citekey: str) -> str | None:
+    """Return the prose body of a PDF sidecar, stripped of frontmatter and page markers.
+
+    Applies ``_validate_citekey`` before building the path (anti-traversal).
+    Returns ``None`` when the citekey is invalid, the file does not exist,
+    or the body is empty after stripping.
+    """
+    try:
+        _validate_citekey(citekey)
+    except ValueError:
+        return None
+
+    path = Path(project_root) / ".klemma" / "pdfs" / f"{citekey}.md"
+    if not path.exists():
+        return None
+
+    text = path.read_text(encoding="utf-8")
+    # Strip the frontmatter header — everything up to the first "---" divider line
+    parts = text.split("\n---\n", 1)
+    body = parts[1] if len(parts) > 1 else text
+    # Remove page markers: "\n<!-- Page N -->\n"
+    body = re.sub(r"\n<!-- Page \d+ -->\n", "\n", body)
+    return body.strip() or None
 
 
 def write_pdf_sidecar(

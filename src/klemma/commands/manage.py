@@ -1373,49 +1373,71 @@ def import_vault(ctx, with_queue):
 @main.command(name="backfill-verbatim", hidden=True)
 @click.pass_context
 def backfill_verbatim(ctx):
-    """Re-validate the verbatim flag on stored fragments against cached raw_text.
+    """Re-validate the verbatim flag on stored fragments.
 
-    Flips ``verbatim`` to ``true`` for fragments whose text is confirmed (or
-    fuzzy-rescued) against the paper's cached ``raw_text``. Never downgrades.
+    Checks each fragment against the paper's sidecar prose (primary, full
+    text) or cached ``raw_text`` (fallback, 50K-truncated).  Flips
+    ``verbatim`` to ``true`` for confirmed matches; never downgrades.
     Hidden — discover via ``klemma --help`` or this docstring.
     """
     from ..literature.models import Fragment
+    from ..literature.sidecar import read_pdf_sidecar
     from ..skills.extractor import validate_verbatim_fragments
 
     kc = _get_context(ctx)
     paper_store = kc.paper_store
+    user_library = kc.user_library
+    project_root = kc.project_root
     if paper_store is None:
         console.print("[red]library.db unavailable — cannot backfill[/red]")
         raise click.Abort()
 
-    paper_ids = paper_store.get_paper_ids_with_raw_text()
-    if not paper_ids:
+    # Build dict[paper_id, list[citekey]] as the union of raw-text papers
+    # and all citekeys in the user library (covers sidecar-only papers).
+    mapping: dict[str, list[str]] = {}
+    for pid in paper_store.get_paper_ids_with_raw_text():
+        mapping.setdefault(pid, [])
+    if user_library is not None:
+        for ck in user_library.get_existing_citekeys():
+            pid = user_library.resolve_paper_id(ck)
+            if pid is None:
+                continue
+            mapping.setdefault(pid, []).append(ck)
+
+    if not mapping:
         console.print(
-            "[yellow]No papers with cached raw_text yet — "
-            "re-ingest at least one paper to populate the cache.[/yellow]"
+            "[yellow]No papers found — re-ingest at least one paper first.[/yellow]"
         )
         return
 
     console.print(
-        f"Backfilling verbatim flags across [cyan]{len(paper_ids)}[/cyan] papers…"
+        f"Backfilling verbatim flags across [cyan]{len(mapping)}[/cyan] papers…"
     )
     total_checked = 0
     total_flipped = 0
-    skipped_no_raw = 0
+    skipped_no_text = 0
 
-    for paper_id in paper_ids:
-        raw_text = paper_store.get_raw_text(paper_id)
-        if not raw_text:
-            skipped_no_raw += 1
+    for paper_id, citekeys in mapping.items():
+        # Sidecar-first: full untruncated text; raw_text is 50K-capped fallback.
+        source_text: str | None = None
+        if project_root and citekeys:
+            for ck in citekeys:
+                sidecar = read_pdf_sidecar(project_root, ck)
+                if sidecar:
+                    source_text = sidecar
+                    break
+        if source_text is None:
+            source_text = paper_store.get_raw_text(paper_id)
+        if not source_text:
+            skipped_no_text += 1
             continue
+
         records = paper_store.get_fragments(paper_id)
-        # Only candidates for promotion are fragments currently marked
-        # verbatim=False — promoting already-True ones is a no-op.
         candidates = [r for r in records if not r.verbatim]
         if not candidates:
             continue
         pydantic_frags = [Fragment(text=r.fragment_text, verbatim=True) for r in candidates]
-        validate_verbatim_fragments(pydantic_frags, raw_text, paper_id)
+        validate_verbatim_fragments(pydantic_frags, source_text, paper_id)
         paper_flipped = 0
         for record, pyd in zip(candidates, pydantic_frags):
             total_checked += 1
@@ -1424,8 +1446,9 @@ def backfill_verbatim(ctx):
                     total_flipped += 1
                     paper_flipped += 1
         if paper_flipped:
+            label = citekeys[0] if citekeys else paper_id
             console.print(
-                f"  [green]{paper_id}[/green]: flipped "
+                f"  [green]{label}[/green]: flipped "
                 f"{paper_flipped}/{len(candidates)} fragments"
             )
 
@@ -1433,8 +1456,8 @@ def backfill_verbatim(ctx):
         f"\n[bold]Done.[/bold] Checked {total_checked} fragments, "
         f"flipped [green]{total_flipped}[/green] to verbatim."
     )
-    if skipped_no_raw:
-        console.print(f"[dim]Skipped {skipped_no_raw} papers without raw_text.[/dim]")
+    if skipped_no_text:
+        console.print(f"[dim]Skipped {skipped_no_text} papers without text source.[/dim]")
 
 
 # --- Backward-compatible aliases ---
