@@ -28,3 +28,36 @@ litresearch.ru {
 		-Server
 	}
 }
+
+# rfm-admin — RFM analytics admin (project: rfm-admin). Container rfm-admin-api-1
+# (full name required: service alias `api` collides with klemma's api on deploy_default).
+rfm.bolkhovsky.ru {
+	reverse_proxy rfm-admin-api-1:8000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+}
+
+# miz-assist — AI catalog assistant (project: miz-assist). Container miz-assist-miz-assist-1
+miz.bolkhovsky.ru {
+	reverse_proxy miz-assist:8000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+}
