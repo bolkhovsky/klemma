@@ -112,6 +112,11 @@ Suggest papers to acquire for filling reference gaps. Pure skill — no file I/O
 - `suggest_acquisitions(gaps, search, limit, max_age_years, classic_min_score)` → `(list[SuggestCandidate], filtered_count)` — resolve top gaps via SearchProvider, build acquire commands, apply recency filter (skip old papers unless high-score classics)
 - `_parse_sections(raw)` — parse DB `dissertation_sections` field (JSON arrays, GROUP_CONCAT joins, plain CSV fallback)
 
+### gaps.py (~150 lines)
+Citation-graph gap discovery — rerank a seed's unowned neighbours. Pure skill (no `state.py` import, `logger` only, embeddings provider injected; cosine inlined to avoid a `skills → embeddings.py` arrow).
+- `GapCandidate` / `GapResult` — dataclasses; `GapResult` carries `gaps`, `n_neighbours`, `n_owned_suppressed` (suppression count surfaced for verbose-mutation visibility)
+- `find_citation_gaps(seed_citekey, *, candidates, owned_dois, owned_titles, seed_vector, embeddings, deep=False, limit=15)` — diff `candidates` (from `literature.citation_graph`) against the library by normalized DOI + title (normalization owned here, single source of truth), embed survivors title-only (or title+abstract when `deep`) via `embeddings.embed_batch`, rank by cosine to `seed_vector`. Seed vector must come from the same model as `embeddings` (CLI enforces).
+
 ### work_context.py (93 lines)
 Dynamic work context builder — replaces hardcoded DISSERTATION_CONTEXT constant.
 - `build_work_context(project, language)` — generates context string from ProjectConfig fields (title, chapters, deadlines, priority terms); supports any project type (dissertation/paper/thesis)
@@ -159,6 +164,9 @@ If vault note missing: triggers `literature.note_factory.create_vault_note()` fi
 
 ### Paper acquisition
 `klemma acquire <url>` → `acquirer.acquire_paper_local()` → **DOI pre-check** (library hit → skip download, return `ok_library_doi`) → download PDF → **hash dedup** (library hit → skip extraction, use library metadata) → `resolve_metadata()` (PDF props + S2 API) → if Zotero running: create item via Connector + get BBT citekey → else: local citekey + local PDF storage → `paper_store.register_paper()` → `user_library.add_source()` → `state.register_sources()` + `state.update_source_info()`.
+
+### Citation-graph gap discovery
+`klemma gaps <citekey>` → CLI resolves seed embedding (stored if model matches `kctx.embeddings`, else re-embed) → `literature.citation_graph.fetch_seed_work()` + `fetch_citation_graph()` (OpenAlex references + citers, `type:article`) → CLI reads `state.get_all_sources_metadata()` for owned DOIs/titles → `gaps.find_citation_gaps()` diffs + embeds survivors (bge-m3) + ranks by cosine to seed → Rich table of missing neighbours with DOIs for `klemma acquire`. Read-only (no persistence).
 
 ### Library analysis
 `klemma library` → `librarian.analyze_library()` → `LibraryReport` → `project_root/notes/library/Library_{mode}_{date}.md`.
