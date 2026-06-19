@@ -358,10 +358,11 @@ def _try_zotero(
 
 
 def _enrich_metadata(meta: PaperMetadata) -> dict:
-    """Fill missing metadata from CrossRef (by DOI) or S2 (by title).
+    """Fill missing metadata from CrossRef (by DOI) or OpenAlex (by title).
 
     CrossRef is tried first when we have a DOI (common for DOI-only acquires).
-    S2 is tried when we have a title but no DOI.
+    OpenAlex is tried when we have a title — it carries abstracts (CrossRef
+    usually doesn't) and replaces the dead S2 path (429 without a key).
     Mutates meta in-place, returns resolved dict for abstract etc.
     """
     resolved: dict = {}
@@ -381,11 +382,11 @@ def _enrich_metadata(meta: PaperMetadata) -> dict:
         except Exception as e:
             logger.debug("CrossRef DOI lookup failed: %s", e)
 
-    # 2. S2 by title — fills abstract (CrossRef doesn't have it)
+    # 2. OpenAlex by title — fills abstract (CrossRef usually doesn't; S2 is dead)
     if meta.title:
         try:
-            from ..literature.metadata import lookup_s2
-            hit = lookup_s2(meta.title)
+            from ..literature.metadata import lookup_openalex
+            hit = lookup_openalex(meta.title)
             if hit:
                 if not resolved:
                     resolved = hit
@@ -397,11 +398,11 @@ def _enrich_metadata(meta: PaperMetadata) -> dict:
                     meta.year = hit["year"]
                 if not meta.doi and hit.get("doi"):
                     meta.doi = hit["doi"]
-                # S2 has abstracts, CrossRef usually doesn't
+                # OpenAlex carries abstracts, CrossRef usually doesn't
                 if hit.get("abstract") and not resolved.get("abstract"):
                     resolved["abstract"] = hit["abstract"]
         except Exception as e:
-            logger.debug("S2 metadata lookup failed: %s", e)
+            logger.debug("OpenAlex metadata lookup failed: %s", e)
 
     return resolved
 
