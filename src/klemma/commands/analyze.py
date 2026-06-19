@@ -515,6 +515,7 @@ def gaps_walk(ctx, citekey, top, deep, backend, mailto):
         seed_vector = emb.embed(seed.get("title") or citekey, seed.get("abstract") or "")
         if seed_vector:
             state.save_embedding(citekey, seed_vector, emb.model_name)
+            console.print(f"[dim]Embedded @{citekey} with {emb.model_name} on the fly[/dim]")
     if not seed_vector:
         console.print(f"[red]Could not obtain an embedding for @{citekey}.[/red]")
         return
