@@ -54,7 +54,7 @@ jobs:
 
       - name: Run Codex
         if: steps.check-key.outputs.skip != 'true'
-        uses: openai/codex-action@v1.8
+        uses: openai/codex-action@v1.9
         with:
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           prompt: |
