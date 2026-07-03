@@ -1,0 +1,112 @@
+name: Deploy Bonum Portal
+
+# Separate build for the Bonum meeting-analytics portal — its own container,
+# volume and subdomain on the klemma VPS. Manual trigger, pick the branch.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch/ref to deploy"
+        required: true
+        default: "feat/bonum-meeting-portal"
+
+concurrency:
+  group: deploy-bonum
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      # Build the portal-only SPA (served by the bonum container at root)
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: saas/dashboard/package-lock.json
+      - name: Build portal frontend
+        env:
+          VITE_API_BASE: ""
+          VITE_PORTAL_ONLY: "1"
+        run: cd saas/dashboard && npm ci && npm run build
+
+      # Build the bonum image (bakes the dist via saas/deploy/bonum/Dockerfile)
+      - uses: docker/setup-buildx-action@v4
+      - name: Build Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: saas/deploy/bonum/Dockerfile
+          tags: bonum-portal:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Save image
+        run: docker save bonum-portal:latest | gzip > bonum-portal.tar.gz
+
+      - name: Deploy to VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          SSH_PORT="${VPS_SSH_PORT:-2222}"
+          SSH_OPTS="-i ~/.ssh/deploy_key -p $SSH_PORT -o StrictHostKeyChecking=accept-new"
+          SCP_OPTS="-i ~/.ssh/deploy_key -P $SSH_PORT -o StrictHostKeyChecking=accept-new"
+
+          scp $SCP_OPTS bonum-portal.tar.gz "${VPS_USER}@${VPS_HOST}:/tmp/"
+          # Ship compose + caddy snippet (NOT .env — set once on the server)
+          ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "mkdir -p /opt/bonum/deploy"
+          scp $SCP_OPTS saas/deploy/bonum/docker-compose.yml saas/deploy/bonum/caddy-block.conf \
+            "${VPS_USER}@${VPS_HOST}:/opt/bonum/deploy/"
+
+          set +e
+          timeout --signal=KILL 600 ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" > /tmp/deploy.out 2>&1 << 'DEPLOY_SCRIPT'
+            set -e
+            cd /opt/bonum/deploy
+            if [ ! -f .env ]; then
+              echo "ERROR: /opt/bonum/deploy/.env missing — create it from .env.example first"
+              exit 1
+            fi
+            sudo docker load < /tmp/bonum-portal.tar.gz
+            rm /tmp/bonum-portal.tar.gz
+            sudo docker compose up -d --force-recreate </dev/null
+
+            # Ensure the shared Caddy has the bonum site block, then reload.
+            CADDY=/opt/klemma/deploy/Caddyfile
+            if ! grep -q "bonum-analytics.bolkhovsky.ru" "$CADDY"; then
+              echo "" | sudo tee -a "$CADDY" >/dev/null
+              cat /opt/bonum/deploy/caddy-block.conf | sudo tee -a "$CADDY" >/dev/null
+              echo "Added bonum block to shared Caddyfile"
+            fi
+            sudo docker exec deploy-caddy-1 caddy reload --config /etc/caddy/Caddyfile </dev/null || true
+
+            # Health via container (no published host port)
+            for i in 1 2 3 4 5; do
+              sleep 3
+              if sudo docker exec bonum-portal python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" 2>/dev/null; then
+                echo "BONUM_DEPLOY_OK"
+                exit 0
+              fi
+              echo "health attempt $i failed..."
+            done
+            echo "health check failed"; exit 1
+          DEPLOY_SCRIPT
+          SSH_EXIT=$?
+          set -e
+          cat /tmp/deploy.out
+          grep -q "^BONUM_DEPLOY_OK$" /tmp/deploy.out && exit 0
+          echo "deploy marker missing — ssh exit $SSH_EXIT"; exit 1
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
