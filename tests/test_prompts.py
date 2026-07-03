@@ -16,6 +16,21 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 # Minimal context per template — just enough to avoid undefined variable errors.
 # Each key is a prompt filename, value is the render kwargs.
 TEMPLATE_CONTEXTS = {
+    "meeting_qa.md": {
+        "query": "Что с контрактом по Турции?",
+        "fragments": [
+            {
+                "n": 1,
+                "text": "Контейнер задержан в Турции из-за неоплаты.",
+                "meeting": "Оперативка: отгрузки и логистика",
+                "type": "ОМС",
+                "site": "Челябинск",
+                "date": "2026-06-24",
+                "time": "23:16",
+                "speaker": "Елена Орлова",
+            }
+        ],
+    },
     "morning.md": {
         "project_type": "dissertation",
         "dissertation_context": "Test context",
