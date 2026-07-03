@@ -135,10 +135,17 @@ def create_app() -> FastAPI:
 
         class _SPAStatic(StaticFiles):
             async def get_response(self, path, scope):
-                response = await super().get_response(path, scope)
-                if response.status_code == 404:
-                    response = await super().get_response("index.html", scope)
-                return response
+                # Starlette's StaticFiles raises HTTPException(404) for a
+                # missing path rather than returning a 404 response, so the
+                # SPA-history fallback must catch it, not branch on status.
+                from starlette.exceptions import HTTPException
+
+                try:
+                    return await super().get_response(path, scope)
+                except HTTPException as exc:
+                    if exc.status_code != 404:
+                        raise
+                    return await super().get_response("index.html", scope)
 
         app.mount("/", _SPAStatic(directory=spa_dir, html=True), name="spa")
 
