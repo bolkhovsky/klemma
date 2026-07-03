@@ -180,6 +180,204 @@ def test_ingest_meeting_idempotent_replace(tmp_path):
     assert n_tasks_2 == 1  # replaced, not 3
 
 
+# Synthetic protocol mirroring the real Bitrix-disk dialect: docx built from
+# Word paragraph styles → pandoc docx→gfm renders section labels as plain text
+# (no #/##), metadata/risks/tasks as pipe tables, bullets wrap across physical
+# lines, and punctuation is backslash-escaped. Fictitious company/site/names.
+PANDOC_SAMPLE = """\
+ПРОТОКОЛ СОВЕЩАНИЯ
+
+Отчет ОМС Северного филиала
+
+| **Дата:** | **вторник, 10 марта 2026 г.** |
+|----|----|
+| Время: | 08:00 |
+| Длительность: | 22 мин |
+| Платформа: | Zoom |
+| Расшифровка встречи (MyMeet): | https://app.mymeet.ai/ru/meetings/abc123 |
+
+Краткая сводка
+
+| **Статус производства:** | **Требует внимания** |
+|----|----|
+| Критические проблемы: | Дефицит крепежа на складе |
+| Задач назначено: | 2 |
+| Требуют эскалации: | 1 |
+| Рекомендация: | Ускорить закупку крепежа |
+
+Участники
+
+| **№** | **ФИО** | **Роль** |
+|-------|---------|----------|
+| 1 | Сергеева Анна | Директор филиала |
+| 2 | SPEAKER_00 \\[не идентифицирован\\] | Участник |
+
+Повестка
+
+\\_Повестка не сформирована\\_
+
+Производство по направлениям
+
+| **Направление** | **Статус** | **Отставание** | **Причина** |
+|-----------------|------------|-----------------|-------------|
+| Сборка | В графике | — | — |
+
+Резюме
+
+Дефицит крепежа на складе
+
+• Обнаружена нехватка крепежа для финальной сборки, поставщик подтвердил
+задержку до конца недели 4:12
+
+Контроль качества
+
+• Технологический контроль замечаний не выявил 9:40
+
+Риски и эскалации
+
+| **Риск** | **Влияние** | **Статус** | **Эскалация** |
+|----------|-------------|------------|---------------|
+| Дефицит крепежа — поставка сдвинута | Останавливает финальную сборку | Критично | Да |
+| Задержка окраски | Косметический дефект | В работе | Нет |
+
+Задачи
+
+| **№** | **Задача** | **Ответственный** | **Срок** | **Приоритет** |
+|-------|------------|--------------------|----------|---------------|
+| 1 | Согласовать срочную закупку крепежа | Сергеева Анна | 12.03 чт | |
+| —     | —          | —                 | —        | —             |
+
+Задачи по сотрудникам
+
+**Сергеева Анна:**
+
+1\\. Согласовать срочную закупку крепежа (12.03 чт, )
+
+Метрики совещания
+
+| **Параметр** | **Значение** |
+|----|----|
+| Длительность | 22 мин |
+
+*Протокол сформирован автоматически*
+
+*Система: BONUM AI Protocol v0.2*
+
+*ID записи: abc123*
+"""
+
+
+def test_parse_pandoc_protocol_dispatch():
+    pm = parse_protocol(PANDOC_SAMPLE)
+    assert pm.title == "Отчет ОМС Северного филиала"
+
+
+def test_parse_pandoc_protocol_summary_and_participants():
+    pm = parse_protocol(PANDOC_SAMPLE)
+    assert "Требует внимания" in pm.summary
+    assert "Ускорить закупку крепежа" in pm.summary
+    # Unidentified-speaker bracket annotation unescaped, placeholder rows excluded
+    assert pm.meta["speakers"] == ["Сергеева Анна", "SPEAKER_00 [не идентифицирован]"]
+
+
+def test_parse_pandoc_protocol_resume_themes_and_wrapped_bullet():
+    pm = parse_protocol(PANDOC_SAMPLE)
+    assert pm.themes == ["Дефицит крепежа на складе", "Контроль качества"]
+    assert len(pm.points) == 2
+    # Wrapped across two physical lines, joined with a space; trailing timecode stripped
+    assert "поставщик подтвердил задержку" in pm.points[0].text
+    assert pm.points[0].timecode == "4:12"
+    assert pm.points[0].theme == "Дефицит крепежа на складе"
+
+
+def test_parse_pandoc_protocol_risks_split_escalation_vs_decision():
+    pm = parse_protocol(PANDOC_SAMPLE)
+    # Escalation risk becomes a pseudo-task (status="escalation"); non-escalation → decision
+    escalations = [t for t in pm.tasks if t.status == "escalation"]
+    assert len(escalations) == 1
+    assert "Дефицит крепежа" in escalations[0].action
+    assert len(pm.decisions) == 1
+    assert "Задержка окраски" in pm.decisions[0]
+
+
+def test_parse_pandoc_protocol_tasks_table():
+    pm = parse_protocol(PANDOC_SAMPLE)
+    real_tasks = [t for t in pm.tasks if t.status != "escalation"]
+    assert len(real_tasks) == 1
+    task = real_tasks[0]
+    assert task.action == "Согласовать срочную закупку крепежа"
+    assert task.assignee == "Сергеева Анна"
+    assert task.deadline == "12.03 чт"
+
+
+def test_parse_pandoc_protocol_empty_meeting():
+    empty = """\
+ПРОТОКОЛ СОВЕЩАНИЯ
+
+Отчет ОМС Пустого филиала
+
+| **Дата:** | **пятница, 13 марта 2026 г.** |
+|----|----|
+
+Краткая сводка
+
+| **Статус производства:** | **—** |
+|----|----|
+| Рекомендация: | Данные совещания отсутствуют |
+
+Участники
+
+| **№** | **ФИО** | **Роль** |
+|-------|---------|----------|
+| —     | Участники не определены | —        |
+
+Повестка
+
+\\_Повестка не сформирована\\_
+
+Резюме
+
+\\_Резюме не сформировано\\_
+
+Задачи
+
+| **№** | **Задача** | **Ответственный** | **Срок** | **Приоритет** |
+|-------|------------|--------------------|----------|---------------|
+| —     | —          | —                 | —        | —             |
+"""
+    pm = parse_protocol(empty)
+    assert pm.title == "Отчет ОМС Пустого филиала"
+    assert pm.meta["speakers"] == []
+    assert pm.points == []
+    assert pm.tasks == []
+    assert pm.decisions == []
+
+
+def test_ingest_meeting_pandoc_protocol_preserves_participants(tmp_path):
+    """parse_nodul_payload must not wipe pandoc-table-extracted speakers when
+    the webhook payload itself carries no `speakers` field (backfill path)."""
+    from klemma.meetings import ingest_meeting
+    from klemma.state import StateManager
+
+    state = StateManager(str(tmp_path / "data" / "klemma.db"))
+    payload = {
+        "meeting_id": "backfill-severny-20260310-0800",
+        "date": "2026-03-10",
+        "type": "ОМС",
+        "site": "Северный филиал",
+        "protocol_md": PANDOC_SAMPLE,
+    }
+    result = ingest_meeting(state, None, payload)
+    src = state.get_source(result["source_id"])
+    assert src["source_type"] == "meeting"
+    meta = json.loads(src["meeting_meta"])
+    assert meta["speakers"] == ["Сергеева Анна", "SPEAKER_00 [не идентифицирован]"]
+
+    frags = state.get_fragments(source_id=result["source_id"], limit=1000)
+    escalation_frags = [f for f in frags if f.get("citation_intent") == "escalation"]
+    assert len(escalation_frags) == 1
+
+
 def test_import_meeting_writes_db(tmp_path):
     """End-to-end DB write (no embeddings): source + fragments + meeting_meta."""
     from klemma.meetings import import_meeting

@@ -188,8 +188,222 @@ def _is_header_line(line: str) -> bool:
     return line.startswith("#") or _is_bold_only(line)
 
 
+# ── Pandoc-converted protocol dialect (real Bitrix docx → gfm output) ─────────
+#
+# node_17_bitrix24_upload.js uploads DOCX built from Word paragraph styles, not
+# markdown headings — pandoc's docx→gfm reader renders section labels as plain
+# text lines (no ``#``/``##``) and metadata/tasks/risks as pipe tables instead
+# of bold-annotated bullets. This dialect is detected and parsed separately;
+# the original bold-header dialect (seed data, Nodul JSON `tasks`) is untouched.
+
+_PANDOC_TITLE_MARKER = "протокол совещания"
+_PANDOC_SECTION_LABELS = {
+    "краткая сводка": "summary",
+    "участники": "participants",
+    "повестка": "agenda",
+    "производство по направлениям": "skip",
+    "резюме": "resume",
+    "риски и эскалации": "risks",
+    "задачи": "tasks",
+    "задачи по сотрудникам": "skip",
+    "метрики совещания": "skip",
+}
+_PANDOC_TIMECODE_RE = re.compile(r"\s+(\d{1,2}:\d{2}(?::\d{2})?)\s*$")
+_PANDOC_PLACEHOLDER_RE = re.compile(
+    r"^—$|не (сформирован|определен|назначен)\w*", re.IGNORECASE
+)
+# Pandoc escapes markdown-special punctuation in docx→gfm output (e.g. "\[",
+# "\_") — strip the backslash so downstream text/placeholder matching sees the
+# literal characters.
+_PANDOC_ESCAPE_RE = re.compile(r"\\([\\`*_{}\[\]()#+.!-])")
+
+
+def _unescape_pandoc(s: str) -> str:
+    return _PANDOC_ESCAPE_RE.sub(r"\1", s)
+
+
+def _looks_like_pandoc_protocol(text: str) -> bool:
+    head = text[:200].lower()
+    return _PANDOC_TITLE_MARKER in head and "\n|" in text
+
+
+def _split_paragraphs(text: str) -> list[list[str]]:
+    """Split text into blank-line-delimited paragraph blocks (each a line list).
+
+    Pandoc reflows wrapped bullet/paragraph text across physical lines without
+    repeating the ``•`` marker, but always separates logical units (section
+    labels, bullets, table blocks) with a blank line — so blank-line splitting
+    is the reliable paragraph boundary for this dialect.
+    """
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for raw in text.splitlines():
+        line = _unescape_pandoc(raw.strip())
+        if not line:
+            if current:
+                blocks.append(current)
+                current = []
+            continue
+        current.append(line)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def _is_pandoc_placeholder(text: str) -> bool:
+    return bool(_PANDOC_PLACEHOLDER_RE.search(text.strip()))
+
+
+def _parse_pipe_table(lines: list[str]) -> list[list[str]]:
+    """Parse pipe-table lines into cleaned cell rows, dropping separator rows."""
+    rows: list[list[str]] = []
+    for line in lines:
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if cells and all(re.fullmatch(r":?-{2,}:?", c) for c in cells if c):
+            continue
+        cells = [re.sub(r"^\*\*(.*)\*\*$", r"\1", c).strip() for c in cells]
+        rows.append(cells)
+    return rows
+
+
+def _clean_pandoc_bullet(joined: str) -> tuple[str, str]:
+    text = re.sub(r"^[•]\s*", "", joined).strip()
+    m = _PANDOC_TIMECODE_RE.search(text)
+    timecode = ""
+    if m:
+        timecode = m.group(1)
+        text = text[: m.start()].strip()
+    return text, timecode
+
+
+def _summary_from_pandoc_table(rows: list[list[str]]) -> str:
+    kv = {row[0].rstrip(":").strip(): row[1].strip() for row in rows if len(row) >= 2}
+    parts = []
+    status = kv.get("Статус производства", "")
+    if status and status != "—":
+        parts.append(status)
+    problems = kv.get("Критические проблемы", "")
+    if problems and problems != "—":
+        parts.append(f"Проблемы: {problems}")
+    rec = kv.get("Рекомендация", "")
+    if rec and rec != "—":
+        parts.append(f"Рекомендация: {rec}")
+    return ". ".join(parts)
+
+
+def _participants_from_pandoc_table(rows: list[list[str]]) -> list[str]:
+    names = []
+    for row in rows[1:]:  # rows[0] is the header (№ / ФИО / Роль)
+        if len(row) < 2:
+            continue
+        name = row[1].strip()
+        if name and name != "—" and not _is_pandoc_placeholder(name):
+            names.append(name)
+    return names
+
+
+def _risks_from_pandoc_table(rows: list[list[str]], pm: ParsedMeeting) -> None:
+    for row in rows[1:]:  # rows[0] is the header (Риск / Влияние / Статус / Эскалация)
+        if len(row) < 4 or row[0] in ("", "—"):
+            continue
+        risk, impact, escalation = row[0], row[1], row[3]
+        text = f"{risk} — {impact}" if impact and impact != "—" else risk
+        if escalation.strip().lower() == "да":
+            pm.tasks.append(ParsedTask(action=text, status="escalation"))
+        else:
+            pm.decisions.append(text)
+
+
+def _tasks_from_pandoc_table(rows: list[list[str]], pm: ParsedMeeting) -> None:
+    for row in rows[1:]:  # rows[0] is the header (№ / Задача / Ответственный / Срок / Приоритет)
+        if len(row) < 2 or row[0] in ("", "—"):
+            continue
+        action = row[1].strip() if len(row) > 1 else ""
+        if not action or action == "—":
+            continue
+        assignee = row[2].strip() if len(row) > 2 else ""
+        deadline = row[3].strip() if len(row) > 3 else ""
+        pm.tasks.append(
+            ParsedTask(
+                action=action,
+                assignee="" if assignee == "—" else assignee,
+                deadline="" if deadline == "—" else deadline,
+                overdue=bool(_OVERDUE_RE.search(deadline)),
+            )
+        )
+
+
+def _parse_pandoc_protocol(text: str) -> ParsedMeeting:
+    blocks = _split_paragraphs(text)
+    pm = ParsedMeeting()
+    i = 0
+
+    if i < len(blocks) and len(blocks[i]) == 1 and blocks[i][0].strip().lower() == _PANDOC_TITLE_MARKER:
+        i += 1
+    if i < len(blocks) and len(blocks[i]) == 1 and not blocks[i][0].startswith("|"):
+        pm.title = blocks[i][0].strip()
+        i += 1
+    if i < len(blocks) and blocks[i][0].startswith("|"):  # metadata table (Дата/Время/...)
+        i += 1
+
+    section: Optional[str] = None
+    current_theme = ""
+    agenda_points: list[ParsedPoint] = []
+
+    while i < len(blocks):
+        block = blocks[i]
+        i += 1
+        first = block[0]
+
+        if len(block) == 1 and not first.startswith("|") and not first.startswith("•"):
+            label = first.strip().rstrip(":").lower()
+            if label in _PANDOC_SECTION_LABELS:
+                section = _PANDOC_SECTION_LABELS[label]
+                current_theme = ""
+                continue
+
+        if first.startswith("|"):
+            rows = _parse_pipe_table(block)
+            if section == "summary":
+                pm.summary = _summary_from_pandoc_table(rows)
+            elif section == "participants":
+                pm.meta["speakers"] = _participants_from_pandoc_table(rows)
+            elif section == "risks":
+                _risks_from_pandoc_table(rows, pm)
+            elif section == "tasks":
+                _tasks_from_pandoc_table(rows, pm)
+            continue
+
+        joined = " ".join(block)
+        if _is_pandoc_placeholder(joined):
+            continue
+
+        if section == "resume":
+            if first.startswith("•"):
+                text_clean, timecode = _clean_pandoc_bullet(joined)
+                if text_clean:
+                    pm.points.append(ParsedPoint(text=text_clean, theme=current_theme, timecode=timecode))
+                    if current_theme and current_theme not in pm.themes:
+                        pm.themes.append(current_theme)
+            else:
+                current_theme = joined
+        elif section == "agenda" and first.startswith("•"):
+            text_clean, timecode = _clean_pandoc_bullet(joined)
+            if text_clean:
+                agenda_points.append(ParsedPoint(text=text_clean, timecode=timecode))
+
+    if not pm.points and agenda_points:
+        pm.points = agenda_points
+    if not pm.title:
+        pm.title = "Совещание"
+    return pm
+
+
 def parse_protocol(text: str) -> ParsedMeeting:
     """Parse a meeting-protocol markdown document into a ``ParsedMeeting``."""
+    if _looks_like_pandoc_protocol(text):
+        return _parse_pandoc_protocol(text)
+
     meta, body = _strip_frontmatter(text)
     speakers = meta.get("speakers") or []
     if isinstance(speakers, str):
@@ -367,7 +581,7 @@ def parse_nodul_payload(payload: dict) -> tuple[str, ParsedMeeting]:
     protocol_md = str(payload.get("protocol_md") or "")
     pm = parse_protocol(protocol_md)
 
-    speakers = payload.get("speakers") or []
+    speakers = payload.get("speakers") or pm.meta.get("speakers") or []
     if isinstance(speakers, str):
         speakers = [s.strip() for s in speakers.split(",") if s.strip()]
 
