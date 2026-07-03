@@ -1,0 +1,107 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   Klemma Meeting Portal (Bonum) — design-system tokens + helpers.
+   Tokens lifted verbatim from the litresearch design system (claude.ai/design).
+   Scoped under `.portal-root` so they never collide with the dissertation
+   dashboard's own `--color-*` tokens. Apply `.portal-root` to the layout root.
+   ───────────────────────────────────────────────────────────────────────── */
+
+@import url('https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;0,7..72,600;0,7..72,700;1,7..72,400&family=Source+Sans+3:wght@300;400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400;1,8..60,500&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+.portal-root {
+  /* Ink */
+  --ink: #1a1a2e;
+  --ink-light: #3d3d5c;
+  --ink-muted: #6b6b8a;
+  --ink-faint: #9a9388;
+  /* Paper */
+  --paper: #faf9f7;
+  --paper-2: #f3f1ec;
+  --paper-3: #e8e5de;
+  --paper-warm: #f5f3ef;
+  --paper-white: #ffffff;
+  /* Teal accent */
+  --accent: #0d7377;
+  --accent-light: #14919b;
+  --accent-pale: #e0f4f4;
+  --accent-tint: oklch(96% 0.015 190);
+  --accent-rule: oklch(85% 0.03 190);
+  --accent-deep: #065a5e;
+  /* Amber */
+  --amber: #a97624;
+  --amber-light: #c99a48;
+  --amber-pale: #faf0dc;
+  --amber-deep: #7d5518;
+  /* Picked */
+  --picked: oklch(52% 0.11 65);
+  --picked-tint: oklch(96% 0.025 75);
+  /* Violet */
+  --violet: #6b5f8a;
+  --violet-light: #8a7eb0;
+  --violet-pale: #ede8f5;
+  --violet-deep: #4e4468;
+  /* CTA */
+  --cta: #b83b3b;
+  --cta-light: #cf4f4f;
+  --cta-pale: #fce8e8;
+  /* Status */
+  --ok: #2d6a4f;        --ok-bg: #d8f3dc;
+  --warn: #b45309;      --warn-bg: #fef3c7;
+  --err: #991b1b;       --err-bg: #fee2e2;
+  /* Borders */
+  --rule: #e8e5df;
+  --rule-light: #f0ede8;
+  /* Fonts */
+  --font-display: 'Literata', 'Georgia', serif;
+  --font-body: 'Source Sans 3', 'Segoe UI', sans-serif;
+  --font-body-serif: 'Source Serif 4', 'Georgia', serif;
+  --font-ui: 'Inter', 'Source Sans 3', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-full: 999px;
+  /* Shadows + focus */
+  --shadow-sm: 0 1px 6px -3px rgba(30, 27, 24, 0.18);
+  --shadow-pop: 0 8px 24px rgba(30, 27, 24, 0.08), 0 2px 6px rgba(30, 27, 24, 0.04);
+  --ring-accent: 0 0 0 3px var(--accent-tint);
+
+  font-family: var(--font-ui);
+  color: var(--ink);
+  background: var(--paper);
+}
+
+/* ── Component helpers (from the design canvas) ──────────────────────────── */
+.portal-root ::selection { background: var(--accent-pale); }
+.portal-root *, .portal-root *::before, .portal-root *::after { box-sizing: border-box; }
+
+.lr-nav { transition: background .12s, color .12s; }
+.lr-nav:hover { background: var(--paper-warm); }
+.lr-nav[data-active="true"] { background: var(--accent-tint); color: var(--accent); font-weight: 500; }
+.lr-nav[data-active="true"] svg { color: var(--accent); }
+
+.lr-mrow { transition: background .12s; }
+.lr-mrow:hover { background: var(--paper-warm); }
+
+.lr-card-hover { transition: border-color .15s, box-shadow .15s; }
+.lr-card-hover:hover { border-color: var(--accent) !important; box-shadow: var(--shadow-sm); }
+
+.lr-link { color: var(--accent); text-decoration: none; cursor: pointer; }
+.lr-link:hover { color: var(--accent-deep); text-decoration: underline; }
+
+.lr-cite {
+  cursor: pointer; text-decoration: none; font-family: var(--font-mono);
+  font-size: 12px; font-weight: 600; color: var(--accent); background: var(--accent-pale);
+  border-radius: 4px; padding: 1px 5px; margin-left: 3px; vertical-align: super; line-height: 1;
+  transition: background .12s;
+}
+.lr-cite:hover { background: var(--accent); color: #fff; }
+
+.lr-fade { animation: lr-fade-up .5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+@keyframes lr-fade-up { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes lr-spin { to { transform: rotate(360deg); } }
+.lr-spin { animation: lr-spin .8s linear infinite; }
+
+.portal-root input::placeholder { color: var(--ink-faint); }
+.portal-root input:focus { outline: none; }

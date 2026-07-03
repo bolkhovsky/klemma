@@ -3,7 +3,9 @@
  * Handles JWT token management, refresh, and request formatting.
  */
 
-const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+// `?? '/api'` (not `||`) so an explicitly-empty VITE_API_BASE (portal build,
+// where the bonum container serves both API and SPA at root) is preserved.
+const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
 /** Auth endpoints where 401 means bad credentials, not expired token. */
 const AUTH_PATHS = ['/auth/login', '/auth/register']
@@ -100,6 +102,91 @@ export const auth = {
     }),
 
   me: () => request<{ user_id: string; email: string; name: string }>('/auth/me'),
+}
+
+// Meeting-analytics portal (Bonum B2B)
+export interface MeetingTask {
+  title: string
+  who: string
+  due: string
+  overdue: boolean
+  time: string
+}
+export interface MeetingItem {
+  id: string
+  date: string
+  type: string
+  site: string
+  time: string
+  title: string
+  tasks: number
+  speakers: string[]
+  chips: { label: string; tone: string }[]
+  summary: string
+  decisions: string[]
+  task_list: MeetingTask[]
+}
+export interface MeetingsList {
+  meetings: MeetingItem[]
+  stats: { meetings: number; tasks: number; escalations: number }
+}
+export interface SearchResultItem {
+  quote: string
+  score: number
+  speaker: string
+  meeting: string
+  type: string
+  site: string
+  date: string
+  time: string
+  citekey: string
+  tag: string
+}
+export interface MeetingsSearch {
+  query: string
+  results: SearchResultItem[]
+  semantic_count: number
+  keyword_count: number
+}
+export interface AskSource {
+  n: number
+  quote: string
+  meeting: string
+  date: string
+  time: string
+  speaker: string
+  citekey: string
+}
+export interface AskAnswer {
+  answer: string
+  model: string
+  sources: AskSource[]
+  followups: string[]
+}
+export interface TasksBoard {
+  stats: { n: number; label: string; tone: string }[]
+  themes: {
+    title: string
+    count: number
+    escalated: boolean
+    meetings: { date: string; type: string; site: string }[]
+  }[]
+  overdue_persons: { name: string; n: number; pct: string }[]
+  overdue_sites: { name: string; n: number; pct: string }[]
+  escalations: { title: string; owner: string; site: string; age: string }[]
+}
+
+export const meetings = {
+  list: () => request<MeetingsList>('/meetings'),
+  get: (id: string) => request<MeetingItem>(`/meetings/${encodeURIComponent(id)}`),
+  search: (q: string) =>
+    request<MeetingsSearch>(`/meetings/search?q=${encodeURIComponent(q)}`),
+  tasks: () => request<TasksBoard>('/meetings/tasks'),
+  ask: (query: string) =>
+    request<AskAnswer>('/meetings/ask', {
+      method: 'POST',
+      body: JSON.stringify({ query }),
+    }),
 }
 
 // Library

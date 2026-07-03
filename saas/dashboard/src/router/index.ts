@@ -1,5 +1,14 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+/** Portal-only build (Bonum) lands on the meeting portal instead of the
+ *  academic library after login. Toggled by VITE_PORTAL_ONLY at build time. */
+export const PORTAL_ONLY =
+  import.meta.env.VITE_PORTAL_ONLY === '1' || import.meta.env.VITE_PORTAL_ONLY === 'true'
+
+export function postLoginPath(projectId: string): string {
+  return PORTAL_ONLY ? `/${projectId}/portal/meetings` : `/${projectId}/library`
+}
+
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -26,6 +35,35 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     // Project-scoped routes
+    {
+      // Bonum meeting-analytics portal — standalone (own shell, no app chrome)
+      path: '/:projectId/portal',
+      component: () => import('../views/portal/PortalLayout.vue'),
+      meta: { requiresAuth: true, standalone: true },
+      children: [
+        { path: '', redirect: (to) => `/${to.params.projectId}/portal/meetings` },
+        {
+          path: 'meetings',
+          name: 'portal-meetings',
+          component: () => import('../views/portal/PortalMeetingsView.vue'),
+        },
+        {
+          path: 'tasks',
+          name: 'portal-tasks',
+          component: () => import('../views/portal/PortalTasksView.vue'),
+        },
+        {
+          path: 'search',
+          name: 'portal-search',
+          component: () => import('../views/portal/PortalSearchView.vue'),
+        },
+        {
+          path: 'question',
+          name: 'portal-question',
+          component: () => import('../views/portal/PortalQuestionView.vue'),
+        },
+      ],
+    },
     {
       path: '/:projectId/map',
       name: 'map',
@@ -96,7 +134,7 @@ router.beforeEach(async (to) => {
       const { userProjects } = await import('../api/client')
       const data = await userProjects.list()
       const first = data.projects[0]
-      if (first) return { path: `/${first.project_id}/library` }
+      if (first) return { path: postLoginPath(first.project_id) }
     } catch { /* fall through */ }
     return { path: '/library' }
   }

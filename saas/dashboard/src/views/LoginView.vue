@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { auth, userProjects, ApiError } from '@/api/client'
+import { postLoginPath } from '@/router'
 
 const router = useRouter()
 const email = ref('')
@@ -19,7 +20,7 @@ async function handleLogin() {
     try {
       const projectsData = await userProjects.list()
       const first = projectsData.projects[0]
-      router.push(first ? `/${first.project_id}/library` : '/library')
+      router.push(first ? postLoginPath(first.project_id) : '/library')
     } catch {
       router.push('/library')
     }
