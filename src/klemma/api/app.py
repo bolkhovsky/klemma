@@ -34,6 +34,7 @@ from .routes import (
     git,
     health,
     library,
+    meetings,
     process,
     projects,
     sync,
@@ -112,6 +113,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router, prefix="/health")
     app.include_router(auth.router, prefix="/auth", tags=["auth"])
     app.include_router(library.router, prefix="/library", tags=["library"])
+    app.include_router(meetings.router, prefix="/meetings", tags=["meetings"])
     app.include_router(projects.router, prefix="/projects", tags=["projects"])
     app.include_router(drafts.router, prefix="/projects", tags=["drafts"])
     app.include_router(curation.router, prefix="/projects", tags=["curation"])
@@ -122,5 +124,22 @@ def create_app() -> FastAPI:
     app.include_router(sync.router, prefix="/sync", tags=["sync"])
     app.include_router(git.router, tags=["git"])  # no prefix — route itself starts with /git/
     app.include_router(admin.router, prefix="/admin", tags=["admin"])
+
+    # Optional self-contained SPA serving (bonum portal container). When
+    # KLEMMA_SERVE_SPA points at a built dashboard dir, mount it at "/" as a
+    # fallback AFTER all API routers, with SPA history fallback to index.html.
+    # The klemma SaaS leaves this unset (Caddy serves the SPA there).
+    spa_dir = os.environ.get("KLEMMA_SERVE_SPA", "").strip()
+    if spa_dir and Path(spa_dir).is_dir():
+        from starlette.staticfiles import StaticFiles
+
+        class _SPAStatic(StaticFiles):
+            async def get_response(self, path, scope):
+                response = await super().get_response(path, scope)
+                if response.status_code == 404:
+                    response = await super().get_response("index.html", scope)
+                return response
+
+        app.mount("/", _SPAStatic(directory=spa_dir, html=True), name="spa")
 
     return app
