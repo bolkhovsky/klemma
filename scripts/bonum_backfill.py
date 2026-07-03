@@ -171,7 +171,12 @@ def slugify(value: str) -> str:
 
 
 def build_meeting_id(site_folder_name: str, date_str: str, time_str: str) -> str:
-    return f"{slugify(site_folder_name)}-{date_str.replace('-', '')}-{time_str.replace(':', '')}"
+    # Keep date_str dashed (not "20260211") so meetings.build_records' own
+    # "date_str in stem" dedup check recognizes the date is already present
+    # and skips its redundant re-prepend — that prepend was pushing the
+    # differentiating time suffix past the source_id length cap for long
+    # site names, colliding two different same-day meetings into one row.
+    return f"{slugify(site_folder_name)}-{date_str}-{time_str.replace(':', '')}"
 
 
 # ── docx → markdown ──────────────────────────────────────────────────────────

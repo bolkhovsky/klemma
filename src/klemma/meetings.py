@@ -474,8 +474,13 @@ def _year_from_date(date_str: str) -> Optional[int]:
 
 
 def _slug(value: str) -> str:
+    # Long enough that "<long site name>-<date>-<time>" never collides two
+    # distinct meetings into the same source_id by truncating away the
+    # differentiating time suffix (was 48 — too tight for real site names;
+    # e.g. "ОМС Заготовительное производство" + date + time collapsed two
+    # same-day meetings at different times to one source_id).
     value = re.sub(r"[^\w]+", "-", value.lower(), flags=re.UNICODE).strip("-")
-    return value[:48] or "meeting"
+    return value[:96] or "meeting"
 
 
 def build_records(pm: ParsedMeeting, stem: str) -> tuple[str, dict, list[dict]]:
