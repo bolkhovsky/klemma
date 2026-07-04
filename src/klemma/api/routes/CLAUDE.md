@@ -125,6 +125,18 @@ Library-first pivot: users accept/reject fragments, assign them to outline secti
 - Depends on: `user_store`, `paper_store`, `user_library` from `deps.py`
 - Schemas: `PendingFragmentsResponse`, `CurateRequest`, `CuratedBankResponse`, `CuratedFragmentResponse`, `SuggestFragmentsResponse`, `GenerateSentencesRequest`, `GenerateSentencesResponse`. `PendingFragment` / `CuratedFragmentResponse` include optional `suggested_text` + `sentence_model` (ADR-017).
 
+### meetings.py (~300 lines)
+Bonum meeting-portal endpoints — mounted with `prefix="/meetings"`. Backed by the meeting project DB at `KLEMMA_BONUM_PROJECT_ROOT` (not SaaS stores). JWT auth; per-user site scoping via `portal_access` (`_scope` helper: director → all/{site}, leader → own slugs, foreign site → 403).
+- `GET /meetings?site=&days=` — meeting cards + stats (days clamped to {7,14,30,90,180})
+- `GET /meetings/sites` — allowed sites with 90-day counts, `{role, can_view_all, sites}`
+- `POST /meetings/sites/sync` — X-Ingest-Token; fetch sites webhook (body url or `KLEMMA_BONUM_SITES_WEBHOOK`), upsert + remap all meetings, returns distribution
+- `GET /meetings/search?q=&site=` — semantic search, site post-filter
+- `GET /meetings/tasks?site=&days=` — task board aggregate
+- `GET /meetings/analytics?site=&days=30|90|180&refresh=` — cross-meeting report (synchronous LLM, daily cache); `site=''` = whole company (director only)
+- `POST /meetings/ask` — RAG Q&A `{query, site?}`
+- `POST /meetings/ingest` — X-Ingest-Token; idempotent by meeting_id
+- `GET /meetings/{meeting_id}` — detail (declared last; fixed paths must stay above)
+
 ## Adding a new router
 
 1. Create `<domain>.py` with `router = APIRouter(tags=["<domain>"])` and route handlers.

@@ -1,18 +1,24 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { meetings as api, type MeetingItem, type MeetingsList } from '@/api/client'
 import {
   dayOf, monOf, typeBg, typeInk, toneInk, toneBg, avatarBg, avatarFg, dueColor,
 } from './helpers'
+import { useSiteFilter } from './useSiteFilter'
+
+const { selected, siteParam, siteName, loaded, load } = useSiteFilter()
 
 const loading = ref(true)
 const error = ref('')
 const data = ref<MeetingsList>({ meetings: [], stats: { meetings: 0, tasks: 0, escalations: 0 } })
 const openId = ref<string | null>(null)
 const typeFilter = ref('Все типы')
+const days = ref(14)
+const periodOpen = ref(false)
 const MODEL = 'Claude Haiku 4.5'
 
 const TYPES = ['Все типы', 'ОМС', 'Scrum', 'Продажи']
+const PERIOD_OPTIONS = [7, 14, 30, 90]
 
 const filtered = computed<MeetingItem[]>(() =>
   typeFilter.value === 'Все типы'
@@ -24,16 +30,43 @@ function toggle(id: string) {
   openId.value = openId.value === id ? null : id
 }
 
-onMounted(async () => {
+function setPeriod(d: number) {
+  days.value = d
+  periodOpen.value = false
+}
+
+// Guard against out-of-order responses on rapid site/period switching.
+let seq = 0
+async function fetchData() {
+  const my = ++seq
+  loading.value = true
+  error.value = ''
   try {
-    data.value = await api.list()
-    const first = data.value.meetings[0]
-    if (first) openId.value = first.id
+    const res = await api.list({ site: siteParam.value, days: days.value })
+    if (my !== seq) return
+    data.value = res
+    const first = res.meetings[0]
+    openId.value = first ? first.id : null
   } catch (e: any) {
+    if (my !== seq) return
     error.value = e?.message || 'Ошибка загрузки'
   } finally {
-    loading.value = false
+    if (my === seq) loading.value = false
   }
+}
+
+// Single watch source: fires once when the site registry finishes loading,
+// then on every site/period change — no separate onMounted fetch.
+watch(
+  [loaded, selected, days],
+  ([ok]) => {
+    if (ok) fetchData()
+  },
+  { immediate: true },
+)
+
+onMounted(() => {
+  load()
 })
 </script>
 
@@ -45,12 +78,35 @@ onMounted(async () => {
         <p style="margin:5px 0 0;font-size:14px;color:var(--ink-muted)">История протоколов · смысловой слой над совещаниями компании</p>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <button style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;background:var(--paper-white);border:1px solid var(--rule);border-radius:var(--radius-sm);font:inherit;font-size:13px;color:var(--ink-light);cursor:pointer">
-          <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint)">Площадка</span>Все
-        </button>
-        <button style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;background:var(--paper-white);border:1px solid var(--rule);border-radius:var(--radius-sm);font:inherit;font-size:13px;color:var(--ink-light);cursor:pointer">
-          <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint)">Период</span>14 дней
-        </button>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;background:var(--paper-white);border:1px solid var(--rule);border-radius:var(--radius-sm);font-size:13px;color:var(--ink-light);max-width:280px" :title="siteName">
+          <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);flex-shrink:0">Площадка</span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ siteName }}</span>
+        </span>
+        <div style="position:relative">
+          <button @click="periodOpen = !periodOpen" style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;background:var(--paper-white);border:1px solid var(--rule);border-radius:var(--radius-sm);font:inherit;font-size:13px;color:var(--ink-light);cursor:pointer">
+            <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint)">Период</span>{{ days }} дней
+            <span style="color:var(--ink-muted);display:inline-flex">
+              <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5l3 3 3-3" /></svg>
+            </span>
+          </button>
+          <div
+            v-if="periodOpen"
+            style="position:absolute;top:calc(100% + 6px);right:0;min-width:128px;background:var(--paper-white);border:1px solid var(--rule);border-radius:6px;box-shadow:var(--shadow-pop);padding:6px;z-index:30"
+          >
+            <button
+              v-for="p in PERIOD_OPTIONS"
+              :key="p"
+              @click="setPeriod(p)"
+              :style="{
+                width: '100%', textAlign: 'left', padding: '7px 8px', border: 'none', borderRadius: '4px',
+                font: 'inherit', fontSize: '13px', cursor: 'pointer',
+                background: days === p ? 'var(--accent-tint)' : 'transparent',
+                color: days === p ? 'var(--accent)' : 'var(--ink-light)',
+                fontWeight: days === p ? '500' : '400',
+              }"
+            >{{ p }} дней</button>
+          </div>
+        </div>
       </div>
     </div>
 

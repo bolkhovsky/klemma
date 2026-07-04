@@ -16,6 +16,13 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 # Minimal context per template — just enough to avoid undefined variable errors.
 # Each key is a prompt filename, value is the render kwargs.
 TEMPLATE_CONTEXTS = {
+    "meeting_analytics.md": {
+        "site_name": "ОМС Альфа",
+        "period_label": "90 дней: 2026-04-05 — 2026-07-04",
+        "meetings_count": 12,
+        "digest": "[2026-06-24] ОМС Альфа (ОМС Альфа)\n  Сводка: Обсудили статус.",
+        "metrics_summary": "Всего за период: 12 совещаний, 30 задач, 2 эскалации, 3 просрочено.",
+    },
     "meeting_qa.md": {
         "query": "Что с контрактом по Турции?",
         "fragments": [

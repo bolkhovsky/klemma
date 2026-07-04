@@ -13,6 +13,10 @@ Usage:
         --root ~/klemma-bonum-demo \
         --email demo@bonum.ru --password bonum-demo
 
+    # + ~90 days of deterministic history across 4 sites (cross-meeting
+    # analytics needs evolving topic arcs, KPI drift, recurring assignees):
+    python scripts/seed_bonum_demo.py --root ~/klemma-bonum-demo --history 90
+
 Then run the API with:
     KLEMMA_BONUM_PROJECT_ROOT=~/klemma-bonum-demo \
     KLEMMA_EMBEDDINGS_ALLOW_REMOTE=1 \
@@ -23,7 +27,9 @@ Then run the API with:
 from __future__ import annotations
 
 import argparse
+import random
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 # Allow running from the repo without install
@@ -35,6 +41,34 @@ from klemma.meetings import (  # noqa: E402
     import_meeting,
     parse_protocol,
 )
+from klemma.meetings_sites import (  # noqa: E402
+    ensure_portal_tables,
+    remap_meeting_sites,
+    set_access,
+    upsert_sites,
+)
+
+# ── Synthetic sites registry (webhook `value` shape) ──────────────────────────
+# Invented names/leaders — NEVER real client sites (repo is public). The pair
+# «ОМС …» vs «ЦФО Затраты» mirrors the structural edge case where an org-prefix
+# keyword must disambiguate two units sharing generic tokens.
+SITES = [
+    {"site_slug": "oms_liteynyi_tseh", "site_name": "ОМС Литейного цеха",
+     "site_type": "oms", "leader": "Королёв Андрей",
+     "site_keywords": ["омс литейн"], "enabled": True},
+    {"site_slug": "oms_sborochnoe_proizvodstvo", "site_name": "ОМС Сборочного производства",
+     "site_type": "oms", "leader": "Гусева Марина",
+     "site_keywords": ["омс сборочн"], "enabled": True},
+    {"site_slug": "oms_otdel_prodazh", "site_name": "ОМС Отдела продаж",
+     "site_type": "oms", "leader": "Ветров Павел",
+     "site_keywords": ["омс продаж", "отдел продаж"], "enabled": True},
+    {"site_slug": "os_snabzheniya", "site_name": "ОС Снабжения",
+     "site_type": "procurement", "leader": "Чагин Сергей",
+     "site_keywords": ["ос снабжен", "снабжени"], "enabled": True},
+    {"site_slug": "tsfo_zatraty", "site_name": "ЦФО Затраты",
+     "site_type": "oms", "leader": "Никонова Дарья",
+     "site_keywords": ["цфо затрат"], "enabled": True},
+]
 
 # ── Demo meeting data ─────────────────────────────────────────────────────────
 # Recurring themes are deliberate so insights/search/escalations have signal:
@@ -239,6 +273,206 @@ MEETINGS = [
 ]
 
 
+# ── Deterministic history generator (--history N) ─────────────────────────────
+# Each site runs 2-3 topic arcs with phases (тема появляется → обсуждается →
+# эскалация → решение или повтор) so cross-meeting analytics has real signal:
+# recurring topics, KPI drift, rotating assignees, ~15% overdue tasks.
+
+HISTORY_SITES = [
+    {
+        "slug": "oms_liteynyi_tseh",
+        "site": "Литейного цеха",  # prefix-less raw site, like prod payloads
+        "title": "ОМС Литейного цеха",
+        "type": "ОМС",
+        "speakers": ["Королёв Андрей", "Мишина Ольга", "Трофимов Денис", "Зайцева Ирина"],
+        "arcs": [
+            {"title": "Брак литья по корпусам",
+             "phases": [
+                 "зафиксирован рост брака литья по корпусам, причины уточняются",
+                 "брак литья по корпусам держится, идёт разбор с технологами",
+                 "брак литья по корпусам блокирует отгрузку, требуется срочное решение",
+                 "после ввода входного контроля форм брак литья по корпусам снижается",
+             ],
+             "escalate_phase": 2, "resolve_phase": 3},
+            {"title": "Дебиторская задолженность",
+             "kpi": ("дебиторская задолженность", 12.4, 9.8, "млн")},
+            {"title": "Ремонт печи №2",
+             "phases": [
+                 "печь №2 выведена в ремонт, график ремонта согласовывается",
+                 "ремонт печи №2 идёт по графику, поставка футеровки подтверждена",
+                 "ремонт печи №2 задерживается из-за футеровки, сроки сдвигаются",
+                 "печь №2 запущена после ремонта, выход на режим в течение недели",
+             ],
+             "escalate_phase": 2, "resolve_phase": 3},
+        ],
+    },
+    {
+        "slug": "oms_sborochnoe_proizvodstvo",
+        "site": "Сборочного производства",
+        "title": "ОМС Сборочного производства",
+        "type": "ОМС",
+        "speakers": ["Гусева Марина", "Лобанов Кирилл", "Фомина Алла"],
+        "arcs": [
+            {"title": "Дефицит крепежа на сборке",
+             "phases": [
+                 "выявлен дефицит крепежа на линии финальной сборки",
+                 "дефицит крепежа сохраняется, поставщик подтверждает задержку",
+                 "дефицит крепежа останавливает финальную сборку, нужна эскалация закупки",
+                 "крепёж поступил, финальная сборка восстановлена",
+             ],
+             "escalate_phase": 2, "resolve_phase": 3},
+            {"title": "Выполнение плана сборки",
+             "kpi": ("выполнение плана сборки", 82.0, 96.0, "%")},
+        ],
+    },
+    {
+        "slug": "oms_otdel_prodazh",
+        "site": "Отдела продаж",
+        "title": "ОМС Отдела продаж",
+        "type": "Продажи",
+        "speakers": ["Ветров Павел", "Крылова Софья", "Ежов Артём"],
+        "arcs": [
+            {"title": "Конверсия воронки",
+             "kpi": ("конверсия воронки", 11.5, 14.2, "%")},
+            # NB: no "просроч" in the arc title/texts — the parser treats that
+            # marker as an overdue flag and would taint every related task.
+            {"title": "Неоплаченные счета клиентов",
+             "phases": [
+                 "растёт объём неоплаченных счетов по ключевым клиентам",
+                 "неоплаченные счета обсуждаются повторно, прогресса по оплатам нет",
+                 "неоплаченные счета без движения третью неделю, вопрос требует эскалации",
+                 "неоплаченные счета без движения, повторная эскалация финансовому директору",
+             ],
+             "escalate_phase": 2},  # no resolve — recurring problem for analytics
+            {"title": "Запуск нового прайс-листа",
+             "phases": [
+                 "стартовала подготовка нового прайс-листа",
+                 "новый прайс-лист согласовывается с производством",
+                 "новый прайс-лист утверждён и разослан клиентам",
+             ],
+             "resolve_phase": 2},
+        ],
+    },
+    {
+        "slug": "os_snabzheniya",
+        "site": "Снабжения",
+        "title": "ОС Снабжения",
+        "type": "ОС",
+        "speakers": ["Чагин Сергей", "Романова Вера", "Белов Максим", "Осипов Глеб"],
+        "arcs": [
+            {"title": "Переход на предоплату с поставщиками",
+             "phases": [
+                 "начат перевод ключевых поставщиков на предоплату",
+                 "перевод на предоплату буксует, два поставщика не согласовали условия",
+                 "перевод на предоплату заблокирован, эскалация коммерческому директору",
+                 "условия предоплаты согласованы со всеми ключевыми поставщиками",
+             ],
+             "escalate_phase": 2, "resolve_phase": 3},
+            {"title": "Остатки металлопроката",
+             "kpi": ("остатки металлопроката", 340.0, 210.0, "т")},
+        ],
+    },
+]
+
+_TASK_TEMPLATES = [
+    "Подготовить план действий по теме «{arc}»",
+    "Свести данные по теме «{arc}» к следующему совещанию",
+    "Согласовать ответственных по теме «{arc}»",
+    "Обновить статус по теме «{arc}» в отчёте",
+]
+
+
+def _gen_meeting(site_def: dict, day: date, idx: int, progress: float,
+                 rng: random.Random) -> dict:
+    """One synthetic meeting for a site: 2 arcs, phase-appropriate texts."""
+    arcs = site_def["arcs"]
+    chosen = [arcs[idx % len(arcs)], arcs[(idx + 1) % len(arcs)]]
+    speakers = site_def["speakers"]
+
+    themes = []
+    decisions = []
+    tasks = []
+    summary_bits = []
+    for j, arc in enumerate(chosen):
+        speaker = speakers[(idx + j) % len(speakers)]
+        timecode = f"{2 + j * 9}:{rng.randint(10, 59)}"
+        if "kpi" in arc:
+            name, v_from, v_to, unit = arc["kpi"]
+            value = v_from + (v_to - v_from) * progress + rng.uniform(-0.05, 0.05) * abs(
+                v_to - v_from
+            )
+            text = f"доложил(а), что {name} составляет {value:.1f} {unit}, целевой уровень {v_to:g} {unit}"
+            summary_bits.append(f"{name}: {value:.1f} {unit}")
+        else:
+            phases = arc["phases"]
+            phase = min(int(progress * len(phases)), len(phases) - 1)
+            text = f"сообщил(а): {phases[phase]}"
+            summary_bits.append(phases[phase])
+            if phase == arc.get("resolve_phase"):
+                decisions.append(f"Зафиксировать закрытие темы «{arc['title']}».")
+            if phase == arc.get("escalate_phase") and rng.random() < 0.3:
+                # Escalation signal: an overdue task on the hot topic (gated so
+                # overall overdue share stays near ~15%, not every meeting).
+                who = speakers[(idx + j + 1) % len(speakers)]
+                overdue_day = day - timedelta(days=rng.randint(2, 6))
+                tasks.append((
+                    f"Эскалировать вопрос «{arc['title']}» руководству",
+                    who,
+                    f"просроч. {overdue_day.strftime('%d.%m')}",
+                    f"{15 + j * 5}:{rng.randint(10, 59)}",
+                ))
+        themes.append((arc["title"], [(speaker, text, timecode)]))
+
+        # 0-2 regular tasks per arc, rotating assignees, ~15% overdue.
+        for _ in range(rng.randint(0, 2)):
+            who = speakers[rng.randrange(len(speakers))]
+            action = rng.choice(_TASK_TEMPLATES).format(arc=arc["title"])
+            due = day + timedelta(days=rng.randint(2, 7))
+            deadline = due.strftime("%d.%m")
+            if rng.random() < 0.1:
+                overdue_day = day - timedelta(days=rng.randint(1, 5))
+                deadline = f"просроч. {overdue_day.strftime('%d.%m')}"
+            tasks.append((action, who, deadline, f"{20 + j * 4}:{rng.randint(10, 59)}"))
+
+    if not decisions and rng.random() < 0.4:
+        decisions.append(f"Вынести тему «{chosen[0]['title']}» на следующее совещание.")
+
+    time_str = rng.choice(["08:00", "08:30", "09:00", "09:30"])
+    return {
+        "date": day.isoformat(),
+        "type": site_def["type"],
+        "site": site_def["site"],
+        "time": time_str,
+        "duration": rng.randint(18, 55),
+        "speakers": speakers,
+        "title": site_def["title"],
+        "summary": [(f"{b}." if not b.endswith(".") else b, "0:00") for b in summary_bits[:2]],
+        "themes": themes,
+        "decisions": decisions,
+        "tasks": tasks,
+    }
+
+
+def history_meetings(n_days: int, seed: int = 42) -> list[dict]:
+    """~n_days of history across 4 sites, 2-3 meetings/week each. Deterministic
+    arc phases, но даты привязаны к date.today() — демо всегда свежее."""
+    rng = random.Random(seed)
+    today = date.today()
+    start = today - timedelta(days=n_days)
+    meetings = []
+    for site_def in HISTORY_SITES:
+        idx = 0
+        day = start
+        while day <= today:
+            # Mon/Wed/Fri cadence with ~20% skips → 2-3 meetings a week.
+            if day.weekday() in (0, 2, 4) and rng.random() > 0.2:
+                progress = (day - start).days / max(n_days, 1)
+                meetings.append(_gen_meeting(site_def, day, idx, progress, rng))
+                idx += 1
+            day += timedelta(days=1)
+    return meetings
+
+
 def render(m: dict) -> str:
     lines = ["---"]
     lines.append(f"date: {m['date']}")
@@ -285,12 +519,8 @@ def write_protocols(seed_dir: Path) -> list[Path]:
     return paths
 
 
-def seed_meetings(root: Path, seed_dir: Path) -> dict:
+def seed_meetings(state, embeddings, seed_dir: Path) -> dict:
     paths = write_protocols(seed_dir)
-    state, embeddings = build_state_and_embeddings(root)
-    if embeddings is None:
-        print("⚠ No embedding backend resolved — importing without vectors "
-              "(semantic search / ask will be empty).")
     total_frags = total_emb = 0
     for p in paths:
         pm = parse_protocol(p.read_text(encoding="utf-8"))
@@ -299,6 +529,32 @@ def seed_meetings(root: Path, seed_dir: Path) -> dict:
         total_emb += r["embedded"]
         print(f"  ✓ {r['source_id']}: {r['fragments']} fragments, {r['embedded']} embedded")
     return {"meetings": len(paths), "fragments": total_frags, "embedded": total_emb}
+
+
+def seed_history(state, embeddings, n_days: int) -> dict:
+    """Import the generated history via the same render()/import path as the
+    static protocols (identical parsing, embeddings, and slug resolution)."""
+    meetings = history_meetings(n_days)
+    total_frags = total_emb = 0
+    for i, m in enumerate(meetings, 1):
+        stem = f"{m['date']}-{m['site']}-{m['time'].replace(':', '-')}"
+        pm = parse_protocol(render(m))
+        r = import_meeting(state, embeddings, pm, stem)
+        total_frags += r["fragments"]
+        total_emb += r["embedded"]
+        if i % 25 == 0 or i == len(meetings):
+            print(f"  … {i}/{len(meetings)} history meetings imported")
+    return {"meetings": len(meetings), "fragments": total_frags, "embedded": total_emb}
+
+
+def print_site_distribution(state) -> None:
+    """Visible remap report — silent mis-mapping must be impossible."""
+    result = remap_meeting_sites(state)
+    names = {s["site_slug"]: s["site_name"] for s in SITES}
+    print(f"→ Site mapping: {result['mapped']} mapped, {result['unmapped']} unmapped")
+    for slug, count in sorted(result["distribution"].items(), key=lambda kv: (-kv[1], kv[0])):
+        label = names.get(slug, slug) if slug else "(не сопоставлено)"
+        print(f"    {label:<36} {count}")
 
 
 def seed_saas(data_dir: Path, email: str, password: str) -> tuple[str, str]:
@@ -333,6 +589,9 @@ def main() -> None:
     ap.add_argument("--email", default="demo@bonum.ru")
     ap.add_argument("--password", default="bonum-demo")
     ap.add_argument("--no-saas", action="store_true", help="Skip SaaS user/project creation")
+    ap.add_argument("--history", type=int, default=0, metavar="N",
+                    help="Also generate ~N days of deterministic meeting history "
+                         "across 4 sites (0 = static demo protocols only)")
     args = ap.parse_args()
 
     import os
@@ -340,10 +599,29 @@ def main() -> None:
     root = Path(args.root).expanduser()
     seed_dir = Path(__file__).resolve().parent / "seed_bonum_meetings"
 
+    state, embeddings = build_state_and_embeddings(root)
+    if embeddings is None:
+        print("⚠ No embedding backend resolved — importing without vectors "
+              "(semantic search / ask will be empty).")
+
+    # Sites first so import_meeting resolves site_slug at write time.
+    print("→ Registering synthetic portal sites")
+    ensure_portal_tables(state)
+    upsert_sites(state, SITES)
+
     print(f"→ Importing meetings into {root}/.klemma/data/klemma.db")
-    stats = seed_meetings(root, seed_dir)
+    stats = seed_meetings(state, embeddings, seed_dir)
     print(f"  Imported {stats['meetings']} meetings, {stats['fragments']} fragments, "
           f"{stats['embedded']} embedded.\n")
+
+    if args.history > 0:
+        print(f"→ Generating ~{args.history} days of history (deterministic, seed=42)")
+        h = seed_history(state, embeddings, args.history)
+        print(f"  Imported {h['meetings']} history meetings, {h['fragments']} fragments, "
+              f"{h['embedded']} embedded.\n")
+
+    print_site_distribution(state)
+    print()
 
     project_id = "<run with SaaS>"
     if not args.no_saas:
@@ -353,7 +631,10 @@ def main() -> None:
         print(f"→ Creating SaaS user + project in {data_dir}/users.db")
         try:
             user_id, project_id = seed_saas(data_dir, args.email, args.password)
-            print(f"  user_id={user_id}  project_id={project_id}\n")
+            # Explicit access row (directors also work with NO row — this is
+            # the example of how leader/director rows are written).
+            set_access(state, user_id, "director", [])
+            print(f"  user_id={user_id}  project_id={project_id}  access=director\n")
         except Exception as e:  # pragma: no cover - bootstrap convenience
             print(f"  ⚠ SaaS bootstrap skipped: {e}\n")
 

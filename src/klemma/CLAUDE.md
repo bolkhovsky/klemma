@@ -294,6 +294,18 @@ FastAPI application. Install extra: `pip install "klemma[api]"`. Entry point: `u
 - `api/auth/` — JWT (python-jose), argon2 passwords, Pydantic schemas, FastAPI deps
 See [api/CLAUDE.md](api/CLAUDE.md) and [api/auth/CLAUDE.md](api/auth/CLAUDE.md) for full detail.
 
+### Meeting portal domain (Bonum B2B)
+Client-facing meeting-analytics portal built on the same store. Meetings are `sources` rows (`source_type='meeting'`, `meeting_meta` JSON column added by guarded ALTER — NOT in `_migrate_schema`); extracted items are `fragments`. Portal tables (`portal_sites`, `portal_access`, `portal_analytics`) are created by guarded `CREATE TABLE IF NOT EXISTS` in the portal project DB only.
+
+#### meetings.py (~1230 lines)
+Protocol parsing (bold-header + pandoc docx→gfm dialects), ingest (`ingest_meeting` idempotent by meeting_id, resolves `site_slug` at write time), and read aggregations for the portal screens: `list_meetings` / `search_meetings` / `aggregate_tasks` / `answer_question` — all accept `sites: set[str] | None` and `days` filters. Site-filtered search/ask over-retrieve ×12 before post-filtering (global top-k crowds out small sites). `build_state_and_embeddings(root)` / `build_ai(root)` bridge env/project config.
+
+#### meetings_sites.py (~330 lines)
+Sites registry + access control. `parse_sites_webhook` / `upsert_sites` (registry synced from `KLEMMA_BONUM_SITES_WEBHOOK`), layered `resolve_site_slug(site, title, sites)` (name substring > keyword all-words > significant-token overlap), `remap_meeting_sites` (returns visible distribution), `get_access`/`set_access`/`allowed_slugs` — no `portal_access` row → director (full view), leaders see only their `site_slugs`.
+
+#### meetings_analytics.py (~450 lines)
+Cross-meeting analytics (portal killer feature). `compute_metrics` — pure-Python ISO-week buckets (meetings/tasks/escalations/overdue) + top assignees; `build_digest` — compact per-meeting digest, drops oldest first over 90K chars; `generate_analytics` — daily cache in `portal_analytics` keyed (site_slug, days, date_to), LLM call via `ai.call_json(max_tokens=16000)` → topics/kpis/patterns/summary with enum clamping. Empty generation (no summary + no topics) is flagged `detail` and NOT cached. `site_slug=''` = whole company.
+
 ## Data flows
 
 ### Auto-sync sections

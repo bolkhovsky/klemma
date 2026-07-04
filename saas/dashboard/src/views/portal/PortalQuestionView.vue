@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { meetings as api, type AskAnswer } from '@/api/client'
 import { humanizeModel } from '@/utils/model'
+import { useSiteFilter } from './useSiteFilter'
+
+const { selected, siteParam, siteName, loaded, load } = useSiteFilter()
 
 const query = ref('Что происходит с контрактом по Турции и кто отвечает?')
 const asked = ref('')
@@ -38,21 +41,38 @@ const answerHtml = computed(() => {
   return out.join('')
 })
 
+// Guard against out-of-order responses (site switch while an answer is in flight).
+let seq = 0
 async function ask(q?: string) {
   const text = (q ?? query.value).trim()
   if (!text) return
+  const my = ++seq
   query.value = text
   asked.value = text
   loading.value = true
   data.value = null
   try {
-    data.value = await api.ask(text)
+    const res = await api.ask(text, siteParam.value)
+    if (my !== seq) return
+    data.value = res
   } finally {
-    loading.value = false
+    if (my === seq) loading.value = false
   }
 }
 
-onMounted(() => ask())
+// Single watch source: first question fires when the site registry is loaded;
+// on site change, re-ask the last asked question within the new scope.
+watch(
+  [loaded, selected],
+  ([ok]) => {
+    if (ok) ask(asked.value || undefined)
+  },
+  { immediate: true },
+)
+
+onMounted(() => {
+  load()
+})
 </script>
 
 <template>
@@ -112,5 +132,6 @@ onMounted(() => ask())
       <input v-model="query" placeholder="Спросите по всей истории совещаний…" style="flex:1;border:none;background:transparent;font:inherit;font-size:15px;color:var(--ink)" />
       <button type="submit" :disabled="loading" style="padding:9px 18px;background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:var(--radius-sm);font:inherit;font-size:14px;font-weight:500;cursor:pointer;flex-shrink:0">Спросить</button>
     </form>
+    <div style="font-size:12px;color:var(--ink-faint);padding:0 4px;margin-top:-10px">Поиск по: {{ siteName }}</div>
   </div>
 </template>

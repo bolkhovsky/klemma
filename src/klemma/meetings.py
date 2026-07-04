@@ -29,10 +29,19 @@ Storage notes
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
+
+from .meetings_sites import (
+    ensure_portal_tables,
+    get_sites,
+    resolve_site_slug,
+    site_display_names,
+)
 
 # ── Block headers in a protocol MD (bold lines) ───────────────────────────────
 _BLOCK_SUMMARY = ("супер крат", "краткое содерж", "tl;dr")
@@ -655,6 +664,14 @@ def import_meeting(state, embeddings, pm: ParsedMeeting, stem: str) -> dict:
     source_id, meeting_meta, frags = build_records(pm, stem)
 
     _ensure_meeting_meta_column(state)
+    # Resolve the portal site slug once at write time (this is the common path
+    # for both seed import and webhook ingest). Empty registry → '' (a later
+    # /meetings/sites/sync remaps all meetings).
+    ensure_portal_tables(state)
+    sites = get_sites(state)
+    meeting_meta["site_slug"] = (
+        resolve_site_slug(meeting_meta.get("site", ""), pm.title, sites) if sites else ""
+    )
     state.register_sources([source_id])
     state.update_source_info(
         source_id,
@@ -865,12 +882,54 @@ def _meeting_meta_map(state) -> dict[str, dict]:
     return {r[0]: _loads(r[1]) for r in rows}
 
 
-def list_meetings(state) -> dict:
+def _days_cutoff(days: Optional[int]) -> Optional[str]:
+    """ISO date string for the window start, or None when no days filter."""
+    if days is None:
+        return None
+    return (date.today() - timedelta(days=days)).isoformat()
+
+
+def _passes_filters(meta: dict, sites: Optional[set[str]], cutoff: Optional[str]) -> bool:
+    """Site/days filter over one meeting_meta.
+
+    A meeting with an unresolved slug ('') passes only when ``sites`` is None
+    (director view); meetings without a date are skipped only when a days
+    window is set (ISO string compare needs a date).
+    """
+    if sites is not None and meta.get("site_slug", "") not in sites:
+        return False
+    if cutoff is not None:
+        date_str = str(meta.get("date") or "")
+        if not date_str or date_str < cutoff:
+            return False
+    return True
+
+
+def count_meetings_by_site(state, days: int = 90) -> dict[str, int]:
+    """Per-slug meeting counts within the last ``days`` (unresolved excluded)."""
+    cutoff = _days_cutoff(days)
+    counts: dict[str, int] = {}
+    for meta in _meeting_meta_map(state).values():
+        if not _passes_filters(meta, None, cutoff):
+            continue
+        slug = meta.get("site_slug", "")
+        if slug:
+            counts[slug] = counts.get(slug, 0) + 1
+    return counts
+
+
+def list_meetings(
+    state, *, sites: Optional[set[str]] = None, days: Optional[int] = None
+) -> dict:
     """Build the Совещания screen payload: per-meeting cards + headline stats."""
     metas = _meeting_meta_map(state)
+    display = site_display_names(state)
+    cutoff = _days_cutoff(days)
     meetings = []
     total_tasks = total_escalations = 0
     for sid, meta in metas.items():
+        if not _passes_filters(meta, sites, cutoff):
+            continue
         frags = state.get_fragments(source_id=sid, limit=100000)
         task_list = []
         overdue = escalation = 0
@@ -901,12 +960,14 @@ def list_meetings(state) -> dict:
         if not chips:
             chips.append({"label": "в работе", "tone": "ok"})
         speakers = meta.get("speakers") or []
+        # Resolved slug → registry display name; unresolved → raw meta string.
+        site_label = display.get(meta.get("site_slug", "")) or meta.get("site", "")
         meetings.append(
             {
                 "id": sid,
                 "date": meta.get("date", ""),
                 "type": meta.get("type", ""),
-                "site": meta.get("site", ""),
+                "site": site_label,
                 "time": meta.get("time", ""),
                 "title": meta.get("title", ""),
                 "tasks": len(task_list),
@@ -928,17 +989,31 @@ def list_meetings(state) -> dict:
     }
 
 
-def search_meetings(state, embeddings, query: str, top_k: int = 8) -> dict:
+def search_meetings(
+    state,
+    embeddings,
+    query: str,
+    top_k: int = 8,
+    *,
+    sites: Optional[set[str]] = None,
+) -> dict:
     """Semantic search across meeting fragments + keyword-overlap comparison."""
     if embeddings is None or not query.strip():
         return {"query": query, "results": [], "semantic_count": 0, "keyword_count": 0}
     metas = _meeting_meta_map(state)
     qv = embeddings.embed(query, "")
+    # Over-retrieve so a site post-filter still fills top_k. With a site filter
+    # the global top can be dominated by literal matches from OTHER sites, so
+    # the multiplier must be much larger than the unfiltered case needs.
+    over = top_k * 12 if sites is not None else top_k * 4
     hits = (
-        state.retrieve_similar_fragments(qv, top_k=top_k, model=embeddings.model_name)
+        state.retrieve_similar_fragments(qv, top_k=over, model=embeddings.model_name)
         if qv
         else []
     )
+    if sites is not None:
+        hits = [h for h in hits if metas.get(h["source_id"], {}).get("site_slug", "") in sites]
+    hits = hits[:top_k]
     words = [w for w in re.split(r"\W+", query.lower()) if len(w) > 2]
     keyword_count = 0
     results = []
@@ -970,9 +1045,16 @@ def search_meetings(state, embeddings, query: str, top_k: int = 8) -> dict:
     }
 
 
-def aggregate_tasks(state) -> dict:
+def aggregate_tasks(
+    state, *, sites: Optional[set[str]] = None, days: Optional[int] = None
+) -> dict:
     """Build the Задачи screen payload: stats, recurring themes, overdue, escalations."""
     metas = _meeting_meta_map(state)
+    display = site_display_names(state)
+    cutoff = _days_cutoff(days)
+    metas = {
+        sid: meta for sid, meta in metas.items() if _passes_filters(meta, sites, cutoff)
+    }
     open_tasks = overdue = escalations_n = 0
     overdue_persons: dict[str, int] = {}
     overdue_sites: dict[str, int] = {}
@@ -982,6 +1064,8 @@ def aggregate_tasks(state) -> dict:
 
     for sid, meta in metas.items():
         site = meta.get("site", "")
+        # Overdue-by-site ranking uses registry display names when resolved.
+        site_label = display.get(meta.get("site_slug", "")) or site
         frags = state.get_fragments(source_id=sid, limit=100000)
         for f in frags:
             if f["fragment_type"] == "summary" and f.get("section"):
@@ -994,7 +1078,7 @@ def aggregate_tasks(state) -> dict:
                 overdue += 1
                 who = h.get("assignee") or "—"
                 overdue_persons[who] = overdue_persons.get(who, 0) + 1
-                overdue_sites[site] = overdue_sites.get(site, 0) + 1
+                overdue_sites[site_label] = overdue_sites.get(site_label, 0) + 1
             if f.get("citation_intent") == "escalation":
                 escalations_n += 1
                 escalations.append(
@@ -1048,8 +1132,16 @@ def aggregate_tasks(state) -> dict:
     }
 
 
+def _prompts_dir() -> Path:
+    """Shipped prompts directory: KLEMMA_PROMPTS_DIR (container) or dev layout."""
+    env = os.environ.get("KLEMMA_PROMPTS_DIR")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parent.parent.parent / "prompts"
+
+
 def _load_qa_prompt() -> str:
-    path = Path(__file__).resolve().parent.parent.parent / "prompts" / "meeting_qa.md"
+    path = _prompts_dir() / "meeting_qa.md"
     try:
         return path.read_text(encoding="utf-8")
     except Exception:
@@ -1060,17 +1152,33 @@ def _load_qa_prompt() -> str:
         )
 
 
-def answer_question(state, embeddings, ai, model: str, query: str, top_k: int = 10) -> dict:
+def answer_question(
+    state,
+    embeddings,
+    ai,
+    model: str,
+    query: str,
+    top_k: int = 10,
+    *,
+    sites: Optional[set[str]] = None,
+) -> dict:
     """RAG answer over meeting fragments with cited sources."""
     metas = _meeting_meta_map(state)
     if embeddings is None or not query.strip():
         return {"answer": "", "model": model, "sources": [], "followups": []}
     qv = embeddings.embed(query, "")
+    # Over-retrieve so a site post-filter still fills the context window (same
+    # rationale as search_meetings: a site's fragments can be crowded out of
+    # the global top by literal matches from other sites).
+    over = top_k * 12 if sites is not None else top_k * 4
     hits = (
-        state.retrieve_similar_fragments(qv, top_k=top_k, model=embeddings.model_name)
+        state.retrieve_similar_fragments(qv, top_k=over, model=embeddings.model_name)
         if qv
         else []
     )
+    if sites is not None:
+        hits = [h for h in hits if metas.get(h["source_id"], {}).get("site_slug", "") in sites]
+    hits = hits[:top_k]
     frags = []
     sources = []
     for i, h in enumerate(hits, 1):

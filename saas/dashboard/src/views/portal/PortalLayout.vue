@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useRoute, useRouter, RouterLink } from 'vue-router'
+import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import type { SiteInfo } from '@/api/client'
+import { useSiteFilter } from './useSiteFilter'
 import '@/assets/portal.css'
 
 const route = useRoute()
@@ -8,12 +10,60 @@ const router = useRouter()
 const projectId = computed(() => String(route.params.projectId || ''))
 const dropOpen = ref(false)
 
+const { sites, canViewAll, selected, siteName, load, setSite } = useSiteFilter()
+
 const nav = [
   { name: 'portal-meetings', label: 'Совещания', seg: 'meetings' },
+  { name: 'portal-analytics', label: 'Аналитика', seg: 'analytics' },
   { name: 'portal-tasks', label: 'Задачи', seg: 'tasks' },
   { name: 'portal-search', label: 'Поиск', seg: 'search' },
   { name: 'portal-question', label: 'Вопрос', seg: 'question' },
 ]
+
+const TYPE_LABELS: Record<string, string> = { oms: 'ОМС', procurement: 'Снабжение' }
+
+// Flat list when few sites; grouped by type (ОМС / Снабжение / Прочее) when >6.
+const siteGroups = computed<{ label: string; sites: SiteInfo[] }[]>(() => {
+  const list = sites.value
+  if (list.length <= 6) return [{ label: '', sites: list }]
+  const order: string[] = []
+  const map = new Map<string, SiteInfo[]>()
+  for (const s of list) {
+    const label = TYPE_LABELS[s.type] ?? 'Прочее'
+    if (!map.has(label)) {
+      map.set(label, [])
+      order.push(label)
+    }
+    map.get(label)!.push(s)
+  }
+  const rank = (l: string) => (l === 'ОМС' ? 0 : l === 'Снабжение' ? 1 : 2)
+  order.sort((a, b) => rank(a) - rank(b))
+  return order.map((label) => ({ label, sites: map.get(label) ?? [] }))
+})
+
+function pickSite(slug: string) {
+  setSite(slug)
+  dropOpen.value = false
+}
+
+function optStyle(active: boolean): Record<string, string> {
+  return {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    textAlign: 'left',
+    padding: '7px 8px',
+    background: active ? 'var(--accent-tint)' : 'transparent',
+    color: active ? 'var(--accent)' : 'var(--ink-light)',
+    border: 'none',
+    borderRadius: '4px',
+    font: 'inherit',
+    fontSize: '13px',
+    fontWeight: active ? '500' : '400',
+    cursor: 'pointer',
+  }
+}
 
 function go(seg: string) {
   router.push(`/${projectId.value}/portal/${seg}`)
@@ -22,6 +72,10 @@ function go(seg: string) {
 function isActive(name: string) {
   return route.name === name
 }
+
+onMounted(() => {
+  load()
+})
 </script>
 
 <template>
@@ -41,7 +95,7 @@ function isActive(name: string) {
         >
           <span style="display:flex;flex-direction:column;line-height:1.25;min-width:0">
             <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint)">Область</span>
-            <span style="font-size:13px;font-weight:500;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Бонум — вся компания</span>
+            <span style="font-size:13px;font-weight:500;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ siteName }}</span>
           </span>
           <span style="color:var(--ink-muted);display:inline-flex">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5l3 3 3-3" /></svg>
@@ -49,12 +103,29 @@ function isActive(name: string) {
         </button>
         <div
           v-if="dropOpen"
-          style="position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--paper-white);border:1px solid var(--rule);border-radius:6px;box-shadow:var(--shadow-pop);padding:6px;z-index:40"
+          style="position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--paper-white);border:1px solid var(--rule);border-radius:6px;box-shadow:var(--shadow-pop);padding:6px;z-index:40;max-height:340px;overflow-y:auto"
         >
           <div style="padding:6px 8px 4px;font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint)">Область данных</div>
-          <button style="width:100%;text-align:left;padding:7px 8px;background:var(--accent-tint);color:var(--accent);border:none;border-radius:4px;font:inherit;font-size:13px;font-weight:500;cursor:pointer">Бонум — вся компания</button>
-          <button style="width:100%;text-align:left;padding:7px 8px;background:transparent;color:var(--ink-light);border:none;border-radius:4px;font:inherit;font-size:13px;cursor:pointer">Площадка Челябинск</button>
-          <button style="width:100%;text-align:left;padding:7px 8px;background:transparent;color:var(--ink-light);border:none;border-radius:4px;font:inherit;font-size:13px;cursor:pointer">Площадка Тольятти</button>
+          <button v-if="canViewAll" :style="optStyle(selected === 'all')" @click="pickSite('all')">
+            <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Бонум — вся компания</span>
+          </button>
+          <template v-for="g in siteGroups" :key="g.label || 'flat'">
+            <div
+              v-if="g.label"
+              style="padding:8px 8px 3px;font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint)"
+            >{{ g.label }}</div>
+            <button
+              v-for="s in g.sites"
+              :key="s.slug"
+              :style="optStyle(selected === s.slug)"
+              :title="s.name"
+              @click="pickSite(s.slug)"
+            >
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ s.name }}</span>
+              <span style="font-family:var(--font-mono);font-size:12px;color:var(--ink-faint);flex-shrink:0">{{ s.meetings }}</span>
+            </button>
+          </template>
+          <div v-if="!sites.length" style="padding:7px 8px 8px;font-size:13px;color:var(--ink-muted)">Площадки не загружены</div>
         </div>
       </div>
 
@@ -69,7 +140,10 @@ function isActive(name: string) {
         style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:5px;font:inherit;font-size:13px;color:var(--ink-light);background:transparent;border:none;cursor:pointer;text-align:left;margin-bottom:2px"
       >
         <span style="width:14px;display:inline-flex;flex-shrink:0;color:var(--ink-muted)">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+          <svg v-if="item.seg === 'analytics'" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1.8 1.8v10.4h10.4" /><path d="M4.2 9.4l2.3-2.8 1.9 1.6 3.2-3.9" />
+          </svg>
+          <svg v-else width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
             <rect x="1.5" y="2.6" width="11" height="9.9" rx="1.4" /><path d="M1.5 5.2h11M4.3 1.4v2.2M9.7 1.4v2.2" />
           </svg>
         </span>

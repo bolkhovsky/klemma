@@ -1,21 +1,46 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { meetings as api, type TasksBoard } from '@/api/client'
 import { statColor, typeBg, typeInk } from './helpers'
+import { useSiteFilter } from './useSiteFilter'
+
+const { selected, siteParam, loaded, load } = useSiteFilter()
 
 const loading = ref(true)
 const error = ref('')
 const data = ref<TasksBoard | null>(null)
 const MODEL = 'Claude Haiku 4.5'
 
-onMounted(async () => {
+// Guard against out-of-order responses on rapid site switching.
+let seq = 0
+async function fetchData() {
+  const my = ++seq
+  loading.value = true
+  error.value = ''
   try {
-    data.value = await api.tasks()
+    const res = await api.tasks({ site: siteParam.value })
+    if (my !== seq) return
+    data.value = res
   } catch (e: any) {
+    if (my !== seq) return
     error.value = e?.message || 'Ошибка загрузки'
   } finally {
-    loading.value = false
+    if (my === seq) loading.value = false
   }
+}
+
+// Single watch source: initial fetch fires when the site registry is loaded,
+// re-fetch on site change.
+watch(
+  [loaded, selected],
+  ([ok]) => {
+    if (ok) fetchData()
+  },
+  { immediate: true },
+)
+
+onMounted(() => {
+  load()
 })
 </script>
 

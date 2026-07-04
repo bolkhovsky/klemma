@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { meetings as api, type MeetingsSearch, type SearchResultItem } from '@/api/client'
 import { scoreStr, tagLabel, tagTone, toneInk, toneBg } from './helpers'
+import { useSiteFilter } from './useSiteFilter'
+
+const { selected, siteParam, loaded, load } = useSiteFilter()
 
 const query = ref('дефицит труб')
 const loading = ref(false)
@@ -24,19 +27,36 @@ const missed = computed(() =>
   data.value ? data.value.semantic_count - data.value.keyword_count : 0,
 )
 
+// Guard against out-of-order responses (site switch while a search is in flight).
+let seq = 0
 async function run() {
   if (query.value.trim().length < 2) return
+  const my = ++seq
   loading.value = true
   keywordOnly.value = false
   try {
-    data.value = await api.search(query.value.trim())
+    const res = await api.search(query.value.trim(), siteParam.value)
+    if (my !== seq) return
+    data.value = res
     searched.value = true
   } finally {
-    loading.value = false
+    if (my === seq) loading.value = false
   }
 }
 
-onMounted(run)
+// Single watch source: initial search runs when the site registry is loaded,
+// re-run the current query on site change.
+watch(
+  [loaded, selected],
+  ([ok]) => {
+    if (ok) run()
+  },
+  { immediate: true },
+)
+
+onMounted(() => {
+  load()
+})
 </script>
 
 <template>

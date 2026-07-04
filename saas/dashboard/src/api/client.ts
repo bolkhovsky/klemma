@@ -175,18 +175,100 @@ export interface TasksBoard {
   overdue_sites: { name: string; n: number; pct: string }[]
   escalations: { title: string; owner: string; site: string; age: string }[]
 }
+export interface SiteInfo {
+  slug: string
+  name: string
+  type: string
+  leader: string
+  meetings: number
+}
+export interface SitesResponse {
+  role: 'director' | 'leader'
+  can_view_all: boolean
+  sites: SiteInfo[]
+}
+export interface AnalyticsWeek {
+  week: string
+  label: string
+  meetings: number
+  tasks: number
+  escalations: number
+  overdue: number
+}
+export interface AnalyticsTopic {
+  title: string
+  status: string
+  first_seen: string
+  last_seen: string
+  meetings: number
+  timeline: { date: string; note: string }[]
+  insight: string
+}
+export interface AnalyticsKpi {
+  name: string
+  trend: string
+  evidence: string
+}
+export interface AnalyticsPattern {
+  observation: string
+  recommendation: string
+  severity: string
+}
+export interface AnalyticsReport {
+  site: string
+  site_name: string
+  days: number
+  window: { from: string; to: string }
+  meetings_analyzed: number
+  truncated: boolean
+  generated_at: string
+  model: string
+  cached: boolean
+  detail?: string
+  metrics: {
+    weeks: AnalyticsWeek[]
+    totals: { meetings: number; tasks: number; escalations: number; overdue: number }
+    top_assignees: { name: string; tasks: number; overdue: number }[]
+  }
+  summary: string
+  topics: AnalyticsTopic[]
+  kpis: AnalyticsKpi[]
+  patterns: AnalyticsPattern[]
+}
 
 export const meetings = {
-  list: () => request<MeetingsList>('/meetings'),
+  sites: () => request<SitesResponse>('/meetings/sites'),
+  list: (opts?: { site?: string; days?: number }) => {
+    const params = new URLSearchParams()
+    if (opts?.site) params.set('site', opts.site)
+    if (opts?.days) params.set('days', String(opts.days))
+    const qs = params.size ? `?${params}` : ''
+    return request<MeetingsList>(`/meetings${qs}`)
+  },
   get: (id: string) => request<MeetingItem>(`/meetings/${encodeURIComponent(id)}`),
-  search: (q: string) =>
-    request<MeetingsSearch>(`/meetings/search?q=${encodeURIComponent(q)}`),
-  tasks: () => request<TasksBoard>('/meetings/tasks'),
-  ask: (query: string) =>
+  search: (q: string, site?: string) => {
+    const params = new URLSearchParams({ q })
+    if (site) params.set('site', site)
+    return request<MeetingsSearch>(`/meetings/search?${params}`)
+  },
+  tasks: (opts?: { site?: string; days?: number }) => {
+    const params = new URLSearchParams()
+    if (opts?.site) params.set('site', opts.site)
+    if (opts?.days) params.set('days', String(opts.days))
+    const qs = params.size ? `?${params}` : ''
+    return request<TasksBoard>(`/meetings/tasks${qs}`)
+  },
+  ask: (query: string, site?: string) =>
     request<AskAnswer>('/meetings/ask', {
       method: 'POST',
-      body: JSON.stringify({ query }),
+      body: JSON.stringify(site ? { query, site } : { query }),
     }),
+  analytics: (opts: { site?: string; days: number; refresh?: boolean }) => {
+    const params = new URLSearchParams({ days: String(opts.days) })
+    if (opts.site) params.set('site', opts.site)
+    if (opts.refresh) params.set('refresh', '1')
+    return request<AnalyticsReport>(`/meetings/analytics?${params}`)
+  },
 }
 
 // Library

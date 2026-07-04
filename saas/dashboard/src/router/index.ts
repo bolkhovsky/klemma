@@ -48,6 +48,11 @@ const router = createRouter({
           component: () => import('../views/portal/PortalMeetingsView.vue'),
         },
         {
+          path: 'analytics',
+          name: 'portal-analytics',
+          component: () => import('../views/portal/PortalAnalyticsView.vue'),
+        },
+        {
           path: 'tasks',
           name: 'portal-tasks',
           component: () => import('../views/portal/PortalTasksView.vue'),

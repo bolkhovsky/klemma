@@ -17,6 +17,8 @@ services:
       - KLEMMA_SERVE_SPA=/app/dashboard
       - KLEMMA_JWT_SECRET=${KLEMMA_JWT_SECRET}
       - KLEMMA_BONUM_INGEST_TOKEN=${KLEMMA_BONUM_INGEST_TOKEN}
+      # Nodul sites-collection webhook (POST /meetings/sites/sync fallback URL).
+      - KLEMMA_BONUM_SITES_WEBHOOK=${KLEMMA_BONUM_SITES_WEBHOOK:-}
       # LLM for /ask — Anthropic Haiku via the shared VPN egress proxy (geoblock).
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - KLEMMA_BONUM_AI_MODEL=${KLEMMA_BONUM_AI_MODEL:-anthropic/claude-haiku-4-5-20251001}

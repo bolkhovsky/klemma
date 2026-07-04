@@ -24,6 +24,21 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
+def _parse_access_spec(ap: argparse.ArgumentParser, spec: str) -> tuple[str, str, list[str]]:
+    """Parse ``email:director`` or ``email:leader:slug1,slug2`` → (email, role, slugs)."""
+    parts = spec.split(":")
+    email = parts[0].strip()
+    role = parts[1].strip() if len(parts) > 1 else ""
+    slugs = (
+        [s.strip() for s in parts[2].split(",") if s.strip()] if len(parts) > 2 else []
+    )
+    if not email or role not in ("director", "leader"):
+        ap.error(f"bad --access '{spec}', expected EMAIL:director or EMAIL:leader:slug1,slug2")
+    if role == "leader" and not slugs:
+        ap.error(f"bad --access '{spec}': leader needs at least one site slug")
+    return email, role, slugs
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Bootstrap Bonum portal accounts + project")
     ap.add_argument(
@@ -33,17 +48,34 @@ def main() -> None:
         metavar="EMAIL:PASSWORD:NAME",
         help="Account to create (repeatable). NAME may contain spaces.",
     )
+    ap.add_argument(
+        "--access",
+        action="append",
+        default=[],
+        metavar="EMAIL:ROLE[:SLUGS]",
+        help="Portal access row (repeatable): 'email:director' or "
+        "'email:leader:slug1,slug2'. User must already exist (or be created "
+        "via --user in the same run).",
+    )
     ap.add_argument("--project-name", default="Бонум")
     ap.add_argument(
         "--data-dir",
         default=os.environ.get("KLEMMA_DATA_DIR", str(Path.home() / ".klemma")),
         help="users.db location (default: $KLEMMA_DATA_DIR or ~/.klemma)",
     )
+    ap.add_argument(
+        "--root",
+        default=os.environ.get("KLEMMA_BONUM_PROJECT_ROOT"),
+        help="Meeting project root — required for --access "
+        "(default: $KLEMMA_BONUM_PROJECT_ROOT)",
+    )
     ap.add_argument("--tokens", type=int, default=1_000_000, help="AI token grant per user")
     args = ap.parse_args()
 
-    if not args.user:
-        ap.error("at least one --user EMAIL:PASSWORD:NAME is required")
+    if not args.user and not args.access:
+        ap.error("at least one --user EMAIL:PASSWORD:NAME (or --access) is required")
+    if args.access and not args.root:
+        ap.error("--access requires --root (or KLEMMA_BONUM_PROJECT_ROOT) for the meeting DB")
 
     from klemma.api.auth.password import hash_password
     from klemma.stores.user_store import LocalUserStore
@@ -72,21 +104,43 @@ def main() -> None:
             owner_id = user.user_id
 
     # One shared "Бонум" project owned by the first user
-    projects = []
-    try:
-        projects = store.get_projects(owner_id)
-    except Exception:
+    proj = None
+    if owner_id is not None:
         projects = []
-    proj = next((p for p in projects if p.get("name") == args.project_name), None)
-    if proj is None:
-        proj = store.create_project(owner_id, args.project_name, "dissertation")
-        print(f"  + created project '{args.project_name}'")
-    else:
-        print(f"  = project '{args.project_name}' exists")
+        try:
+            projects = store.get_projects(owner_id)
+        except Exception:
+            projects = []
+        proj = next((p for p in projects if p.get("name") == args.project_name), None)
+        if proj is None:
+            proj = store.create_project(owner_id, args.project_name, "dissertation")
+            print(f"  + created project '{args.project_name}'")
+        else:
+            print(f"  = project '{args.project_name}' exists")
+
+    # Portal access rows live in the MEETING DB (portal_access), keyed by the
+    # users.db user_id — look each account up by email.
+    if args.access:
+        from klemma.meetings import bonum_db_path
+        from klemma.meetings_sites import ensure_portal_tables, set_access
+        from klemma.state import StateManager
+
+        meeting_state = StateManager(str(bonum_db_path(args.root)))
+        ensure_portal_tables(meeting_state)
+        for spec in args.access:
+            email, role, slugs = _parse_access_spec(ap, spec)
+            u = store.get_user_by_email(email)
+            if u is None:
+                print(f"  ⚠ access skipped — no such user: {email}")
+                continue
+            set_access(meeting_state, u.user_id, role, slugs)
+            suffix = f" → {', '.join(slugs)}" if slugs else ""
+            print(f"  ✓ access {email}: {role}{suffix}")
 
     print("\n" + "─" * 60)
-    print(f"project_id: {proj['project_id']}")
-    print(f"portal:     /{proj['project_id']}/portal/meetings")
+    if proj is not None:
+        print(f"project_id: {proj['project_id']}")
+        print(f"portal:     /{proj['project_id']}/portal/meetings")
 
 
 if __name__ == "__main__":
