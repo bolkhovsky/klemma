@@ -81,6 +81,29 @@ def test_resolver_latin_keyword_variant():
     ) == "oms_zagotovka"
 
 
+def test_resolver_stem_match_survives_broken_title():
+    # Observed in production: the transcriber emits a junk title
+    # ("# ПРОТОКОЛ СОВЕЩАНИЯ") so only the folder-derived site string is
+    # usable — and the registry name is genitive ("Северного филиала") while
+    # the folder is nominative ("Северный филиал"). Token-stem comparison
+    # ("северн...") must still map it.
+    # (Adjective must be ≥8 chars — the ≥5-char stem floor deliberately keeps
+    # short words exact, so "южного"-style 6-char forms stay conservative.)
+    sites = SITES + [
+        {"slug": "oms_zarechnyi_filial", "name": "Отчет ОМС Директора Заречного филиала",
+         "keywords": ["омс заречн"], "enabled": True},
+    ]
+    assert resolve_site_slug(
+        "Заречный филиал", "# ПРОТОКОЛ СОВЕЩАНИЯ", sites
+    ) == "oms_zarechnyi_filial"
+
+
+def test_resolver_stem_no_false_positive_on_short_tokens():
+    # Short tokens (≤5 chars) are not loosened: "аксай"-style fragments must
+    # not match a longer stem, and an unrelated short name stays unmatched.
+    assert resolve_site_slug("", "Стендап ЦФО Юг", SITES) == ""
+
+
 def test_resolver_unmatched_returns_empty():
     assert resolve_site_slug("Марс", "Планёрка колонистов", SITES) == ""
 

@@ -190,6 +190,17 @@ def _site_fields(site: dict) -> tuple[str, str, list[str], bool]:
     return slug, name, [str(k) for k in keywords], enabled
 
 
+def _token_stem(token: str) -> str:
+    """Trim a Russian case ending (up to 3 chars) keeping a ≥5-char stem.
+
+    Registry names carry genitive forms ("Аксайского филиала") while meeting
+    folders use nominative ("Аксайский филиал") — exact token matching missed
+    those. Short tokens (≤5 chars, "траст"/"аксай") are returned unchanged so
+    they never loosen into false positives.
+    """
+    return token[: max(5, len(token) - 3)]
+
+
 def resolve_site_slug(site: str, title: str, sites: list[dict]) -> str:
     """Resolve a meeting to a site slug over ``f"{site} {title}"`` (lowered).
 
@@ -199,7 +210,8 @@ def resolve_site_slug(site: str, title: str, sites: list[dict]) -> str:
         the text as a substring (keywords are prefixes like "омс ремонтн")
         → score 3, longer phrase breaks ties
       * significant-token overlap: site-name tokens minus stopwords; ≥1
-        significant token and ALL of them present → score 2
+        significant token and ALL of them present, compared by ``_token_stem``
+        → score 2
     Highest (score, matched-name length) across sites wins; no match → ``""``.
     Only enabled sites participate.
     """
@@ -229,7 +241,7 @@ def resolve_site_slug(site: str, title: str, sites: list[dict]) -> str:
         if name_low:
             tokens = [t for t in re.split(r"\W+", name_low, flags=re.UNICODE) if t]
             significant = [t for t in tokens if t not in _SITE_STOPWORDS]
-            if significant and all(t in text for t in significant):
+            if significant and all(_token_stem(t) in text for t in significant):
                 candidates.append((2, len(name_low)))
 
         if candidates:
