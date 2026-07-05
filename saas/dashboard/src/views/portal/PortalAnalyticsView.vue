@@ -1,16 +1,23 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { meetings as api, type AnalyticsReport } from '@/api/client'
 import { humanizeModel } from '@/utils/model'
 import { toneInk, toneBg } from './helpers'
 import { useSiteFilter } from './useSiteFilter'
 
+const route = useRoute()
 const { selected, siteParam, loaded, load } = useSiteFilter()
 
 const days = ref(90)
 const loading = ref(true)
+// True only for refresh=1 requests: full LLM generation, 30–90s server-side.
+const generating = ref(false)
 const error = ref('')
 const report = ref<AnalyticsReport | null>(null)
+
+// Backend sentinel: no cached report exists for (site, days) — metrics-only preview.
+const NOT_GENERATED = 'Отчёт ещё не сформирован — нажмите «Обновить»'
 
 const PERIODS = [
   { days: 30, label: '30 дней' },
@@ -27,13 +34,40 @@ const isEmpty = computed(
     !!report.value &&
     (report.value.meetings_analyzed < 3 || report.value.detail === 'Недостаточно данных за период'),
 )
+const notGenerated = computed(() => report.value?.detail === NOT_GENERATED)
+
+// «отчёт от DD.MM HH:mm» — local time; amber when generated on an earlier day.
+const generatedAt = computed(() => {
+  const iso = report.value?.generated_at
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const now = new Date()
+  const today =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  return {
+    label: `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
+    stale: !today,
+  }
+})
+
+/** Deep link to a source protocol on the meetings view (expands + highlights it). */
+function protocolLink(source: string): string {
+  return `/${route.params.projectId}/portal/meetings?open=${encodeURIComponent(source)}`
+}
 
 // Guard against out-of-order responses when the user switches site/period
-// while a (potentially 30–60s) generation request is still in flight.
+// while a (potentially 30–90s) generation request is still in flight.
+// Without refresh the backend never runs the LLM (cached report or fast
+// metrics-only preview), so plain loads use the light loading state.
 let seq = 0
 async function fetchReport(refresh = false) {
   const my = ++seq
   loading.value = true
+  generating.value = refresh
   error.value = ''
   try {
     const r = await api.analytics({
@@ -48,7 +82,10 @@ async function fetchReport(refresh = false) {
     report.value = null
     error.value = e?.message || 'Не удалось загрузить аналитику'
   } finally {
-    if (my === seq) loading.value = false
+    if (my === seq) {
+      loading.value = false
+      generating.value = false
+    }
   }
 }
 
@@ -176,8 +213,8 @@ const chart = computed(() => {
       </div>
     </div>
 
-    <!-- Loading: generation can take 30–60s server-side -->
-    <div v-if="loading" style="display:flex;flex-direction:column;gap:14px">
+    <!-- Generating (refresh=1 only): LLM run can take 30–90s server-side -->
+    <div v-if="generating" style="display:flex;flex-direction:column;gap:14px">
       <div style="display:flex;align-items:center;gap:14px;border:1px solid var(--rule);border-radius:var(--radius-xl);background:var(--paper-white);padding:18px 20px">
         <span class="lr-spin" style="width:22px;height:22px;border-radius:50%;border:2px solid var(--accent);border-top-color:transparent;display:inline-block;flex-shrink:0"></span>
         <div>
@@ -198,6 +235,11 @@ const chart = computed(() => {
       </div>
     </div>
 
+    <!-- Light loading: cached report / metrics preview — fast, no LLM -->
+    <div v-else-if="loading" style="display:flex;justify-content:center;padding:40px">
+      <span class="lr-spin" style="width:22px;height:22px;border-radius:50%;border:2px solid var(--accent);border-top-color:transparent;display:inline-block"></span>
+    </div>
+
     <!-- Error -->
     <div v-else-if="error" style="padding:18px;border:1px solid var(--err);background:var(--err-bg);border-radius:var(--radius-xl);display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <span style="color:var(--err);font-size:14px">{{ error }}</span>
@@ -212,13 +254,23 @@ const chart = computed(() => {
 
     <template v-else-if="report">
       <!-- Partial-report notice (e.g. AI unavailable — metrics only) -->
-      <div v-if="report.detail" style="border:1px solid var(--amber-light);background:var(--amber-pale);border-radius:var(--radius-xl);padding:12px 18px;font-size:14px;color:var(--amber-deep)">{{ report.detail }}</div>
+      <div v-if="report.detail && !notGenerated" style="border:1px solid var(--amber-light);background:var(--amber-pale);border-radius:var(--radius-xl);padding:12px 18px;font-size:14px;color:var(--amber-deep)">{{ report.detail }}</div>
+
+      <!-- No cached LLM report for this (site, period) yet — metrics below, generation by button -->
+      <div v-if="notGenerated" style="border:1px solid var(--rule);border-radius:var(--radius-xl);background:var(--paper-white);padding:22px 24px;display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:15px;font-weight:600;color:var(--ink)">ИИ-отчёт за этот период ещё не формировался</div>
+          <div style="font-size:13px;color:var(--ink-muted);margin-top:4px;line-height:1.5">Сквозной анализ тем, KPI и паттернов запускается по кнопке и занимает до минуты</div>
+        </div>
+        <button @click="fetchReport(true)" style="padding:9px 18px;background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:var(--radius-sm);font:inherit;font-size:14px;font-weight:500;cursor:pointer;flex-shrink:0">Сформировать отчёт</button>
+      </div>
 
       <!-- 1. Executive summary -->
       <div v-if="report.summary" style="border:1px solid var(--rule);border-radius:var(--radius-xl);background:var(--paper-white);padding:20px 24px">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
           <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-muted)">Сводка за период</span>
           <span v-if="report.model" style="display:inline-flex;align-items:center;gap:6px;padding:3px 9px 3px 8px;border-radius:var(--radius-full);background:var(--violet-pale);color:var(--violet-deep);font-family:var(--font-mono);font-size:12px;font-weight:500;white-space:nowrap"><span style="color:var(--violet)">✦</span>сгенерировано · {{ modelLabel }}</span>
+          <span v-if="generatedAt" :style="{ fontFamily: 'var(--font-mono)', fontSize: '12px', whiteSpace: 'nowrap', color: generatedAt.stale ? 'var(--amber)' : 'var(--ink-muted)' }" :title="generatedAt.stale ? 'Отчёт сформирован не сегодня — нажмите «Обновить» для актуализации' : ''">отчёт от {{ generatedAt.label }}</span>
           <span style="flex:1"></span>
           <span style="font-size:13px;color:var(--ink-muted)">{{ report.meetings_analyzed }} протоколов · {{ report.window.from }} — {{ report.window.to }}<template v-if="report.truncated"> (старейшие протоколы не вошли в анализ)</template></span>
         </div>
@@ -314,7 +366,10 @@ const chart = computed(() => {
           <div v-if="t.timeline.length" style="margin-top:14px;border-left:2px solid var(--rule);padding-left:16px;display:flex;flex-direction:column;gap:10px">
             <div v-for="(e, ei) in t.timeline" :key="ei" style="position:relative">
               <span style="position:absolute;left:-21px;top:5px;width:8px;height:8px;border-radius:50%;background:var(--accent);border:1.5px solid var(--paper-white)"></span>
-              <div style="font-family:var(--font-mono);font-size:11px;color:var(--ink-faint)">{{ e.date }}</div>
+              <div style="font-family:var(--font-mono);font-size:11px;color:var(--ink-faint)">
+                <RouterLink v-if="e.source" :to="protocolLink(e.source)" class="lr-link" style="font-family:var(--font-mono);font-size:11px" title="Открыть исходный протокол">{{ e.date }} · протокол →</RouterLink>
+                <template v-else>{{ e.date }}</template>
+              </div>
               <div style="font-size:13px;color:var(--ink-light);line-height:1.5;margin-top:1px">{{ e.note }}</div>
             </div>
           </div>

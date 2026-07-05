@@ -273,7 +273,14 @@ def test_analytics_endpoint_with_stub_ai(client, monkeypatch):
     r = client.post("/meetings/ingest", json=payload, headers={"X-Ingest-Token": "test-ingest"})
     assert r.status_code == 200
 
-    r = client.get("/meetings/analytics", params={"days": 90})
+    # Plain page load before any generation: fast preview, NO LLM call
+    data0 = client.get("/meetings/analytics", params={"days": 90}).json()
+    assert stub.calls == 0
+    assert data0["detail"].startswith("Отчёт ещё не сформирован")
+    assert data0["metrics"]["totals"]["meetings"] == 3
+
+    # Explicit refresh (the «Обновить» button) triggers the LLM
+    r = client.get("/meetings/analytics", params={"days": 90, "refresh": 1})
     assert r.status_code == 200
     data = r.json()
     assert data["site"] == ""
@@ -285,16 +292,20 @@ def test_analytics_endpoint_with_stub_ai(client, monkeypatch):
     assert data["metrics"]["totals"]["meetings"] == 3
     assert stub.calls == 1
 
-    # Second request is served from the daily cache — no extra LLM call
+    # Subsequent plain loads are served from cache — no extra LLM call
     data2 = client.get("/meetings/analytics", params={"days": 90}).json()
     assert data2["cached"] is True
     assert stub.calls == 1
 
 
 def test_analytics_days_clamped_metrics_only(client):
-    # AI is (None, "test-model") from the fixture → metrics-only partial report
+    # Plain load, nothing generated yet → preview with clamped window, no LLM
     data = client.get("/meetings/analytics", params={"days": 45}).json()
     assert data["days"] == 30  # clamped to the nearest allowed window
+    assert data["detail"].startswith("Отчёт ещё не сформирован")
+    # Refresh with <3 meetings → metrics-only degradation, cached
+    data = client.get("/meetings/analytics", params={"days": 45, "refresh": 1}).json()
+    assert data["days"] == 30
     assert data["detail"] == "Недостаточно данных за период"  # 2 meetings < 3
     assert data["metrics"]["totals"]["meetings"] == 2
 

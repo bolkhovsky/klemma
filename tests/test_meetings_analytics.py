@@ -149,7 +149,8 @@ def test_build_digest_format():
     metas, frags = _digest_inputs(2)
     digest, truncated = build_digest(metas, frags)
     assert not truncated
-    assert "[2026-06-01] Совещание 0 (ОМС Альфа)" in digest
+    # Meeting id rides in the header — the LLM cites it as timeline `source`.
+    assert "[2026-06-01 | id:mtg-0] Совещание 0 (ОМС Альфа)" in digest
     assert "Сводка:" in digest and "Решения: Решение 0" in digest
     assert "Задачи: Задача 0 (Иванов, new)" in digest
     assert "Эскалации: Эскалация 0 (без ответственного, просрочена)" in digest
@@ -188,7 +189,8 @@ def test_generate_analytics_report_shape(tmp_path):
     state = _state(tmp_path)
     _seed_three(state)
     ai = StubAI(LLM_PAYLOAD)
-    r = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90)
+    r = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90,
+                           refresh=True)
     assert ai.calls == 1
     assert r["site"] == "oms_alfa"
     assert r["site_name"] == "ОМС Альфа"
@@ -208,27 +210,100 @@ def test_generate_analytics_report_shape(tmp_path):
     assert r["metrics"]["totals"]["meetings"] == 3
 
 
-def test_generate_analytics_caches(tmp_path):
+def test_generate_analytics_caches(tmp_path, monkeypatch):
+    import klemma.meetings_analytics as ma
+
     state = _state(tmp_path)
     _seed_three(state)
     ai = StubAI(LLM_PAYLOAD)
-    r1 = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90)
+    r1 = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90,
+                            refresh=True)
     r2 = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90)
-    assert ai.calls == 1  # second call served from cache — no AI call
+    assert ai.calls == 1  # plain load served from cache — no AI call
     assert r1["cached"] is False and r2["cached"] is True
     assert r2["summary"] == r1["summary"]
-    # refresh=True regenerates
+    # refresh=True regenerates (debounce disabled for the test)
+    monkeypatch.setattr(ma, "_REFRESH_DEBOUNCE_SECONDS", 0)
     r3 = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90,
                             refresh=True)
     assert ai.calls == 2
     assert r3["cached"] is False
 
 
+def test_generate_analytics_refresh_debounced(tmp_path):
+    # A second explicit refresh right after generation returns the fresh cache
+    # instead of paying for an identical LLM call (double-click guard).
+    state = _state(tmp_path)
+    _seed_three(state)
+    ai = StubAI(LLM_PAYLOAD)
+    generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90,
+                       refresh=True)
+    r2 = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90,
+                            refresh=True)
+    assert ai.calls == 1
+    assert r2["cached"] is True
+
+
+def test_generate_analytics_plain_load_never_calls_llm(tmp_path):
+    from klemma.meetings_analytics import DETAIL_NOT_GENERATED
+
+    state = _state(tmp_path)
+    _seed_three(state)
+    ai = StubAI(LLM_PAYLOAD)
+    r = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90)
+    assert ai.calls == 0
+    assert r["detail"] == DETAIL_NOT_GENERATED
+    assert r["metrics"]["totals"]["meetings"] == 3  # metrics preview still there
+    # The preview is NOT cached — the next load recomputes it, still without AI
+    r2 = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90)
+    assert ai.calls == 0 and r2["cached"] is False
+
+
+def test_generate_analytics_serves_stale_snapshot_on_load(tmp_path):
+    # Yesterday's report keeps serving page loads today — no daily auto-regen.
+    state = _state(tmp_path)
+    _seed_three(state)
+    ai = StubAI(LLM_PAYLOAD)
+    generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90,
+                       refresh=True)
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    with state._conn() as conn:
+        conn.execute("UPDATE portal_analytics SET date_to=?", (yesterday,))
+    r = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90)
+    assert ai.calls == 1  # served from the stale snapshot
+    assert r["cached"] is True
+    assert r["summary"] == "Главный риск — брак литья."
+
+
+def test_generate_analytics_timeline_source_validated(tmp_path):
+    state = _state(tmp_path)
+    real_sid = _mk_meeting(state, days_ago=20)["source_id"]
+    _mk_meeting(state, days_ago=10)
+    _mk_meeting(state, days_ago=2)
+    payload = {
+        "summary": "Ок.",
+        "topics": [{
+            "title": "Брак литья", "status": "developing",
+            "timeline": [
+                {"date": "2026-06-01", "note": "реальный источник", "source": real_sid},
+                {"date": "2026-06-05", "note": "выдуманный источник", "source": "mtg-fake-42"},
+                {"date": "2026-06-07", "note": "без источника"},
+            ],
+        }],
+        "kpis": [], "patterns": [],
+    }
+    r = generate_analytics(state, StubAI(payload), "stub-model",
+                           site_slug="oms_alfa", days=90, refresh=True)
+    sources = [p["source"] for p in r["topics"][0]["timeline"]]
+    assert sources == [real_sid, "", ""]  # hallucinated id stripped, absent → ''
+
+
 def test_generate_analytics_ai_failure_falls_back_to_metrics(tmp_path):
     state = _state(tmp_path)
     _seed_three(state)
     ai = StubAI(raise_error=True)
-    r = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90)
+    r = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90,
+                           refresh=True)
     assert r["detail"] == "AI недоступен — только метрики"
     assert r["summary"] == "" and r["topics"] == [] and r["kpis"] == []
     assert r["metrics"]["totals"]["meetings"] == 3
@@ -237,7 +312,8 @@ def test_generate_analytics_ai_failure_falls_back_to_metrics(tmp_path):
 def test_generate_analytics_ai_none(tmp_path):
     state = _state(tmp_path)
     _seed_three(state)
-    r = generate_analytics(state, None, "", site_slug="oms_alfa", days=90)
+    r = generate_analytics(state, None, "", site_slug="oms_alfa", days=90,
+                           refresh=True)
     assert r["detail"] == "AI недоступен — только метрики"
 
 
@@ -246,7 +322,8 @@ def test_generate_analytics_too_few_meetings_skips_llm(tmp_path):
     _mk_meeting(state, days_ago=5)
     _mk_meeting(state, days_ago=3)
     ai = StubAI(LLM_PAYLOAD)
-    r = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90)
+    r = generate_analytics(state, ai, "stub-model", site_slug="oms_alfa", days=90,
+                           refresh=True)
     assert ai.calls == 0
     assert r["detail"] == "Недостаточно данных за период"
     assert r["meetings_analyzed"] == 2
@@ -259,7 +336,7 @@ def test_generate_analytics_whole_company(tmp_path):
     state = _state(tmp_path)
     _seed_three(state)
     _mk_meeting(state, days_ago=4, site="Марс", title="Планёрка")  # unresolved slug
-    r = generate_analytics(state, None, "", site_slug="", days=90)
+    r = generate_analytics(state, None, "", site_slug="", days=90, refresh=True)
     assert r["site_name"] == "Вся компания"
     # No site filter → unresolved meetings included
     assert r["meetings_analyzed"] == 4

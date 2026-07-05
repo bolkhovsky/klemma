@@ -66,7 +66,7 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 `fragments` (list of {n, text, meeting, type, site, date, time, speaker}), `query`
 
 ### meeting_analytics.md
-`site_name`, `period_label`, `meetings_count`, `digest` (per-meeting digest text), `metrics_summary` (compact totals/weekly text). Output: strict JSON {summary, topics, kpis, patterns}
+`site_name`, `period_label`, `meetings_count`, `digest` (per-meeting digest text), `metrics_summary` (compact totals/weekly text). Output: strict JSON {summary, topics, kpis, patterns}; each topics[].timeline entry carries `source` — the exact meeting id echoed from the digest header (validated server-side, hallucinated ids stripped)
 
 ### analyst.md
 `pdf_text`, `library_entries`, `paper_citekey`, `paper_title`

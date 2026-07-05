@@ -201,7 +201,8 @@ export interface AnalyticsTopic {
   first_seen: string
   last_seen: string
   meetings: number
-  timeline: { date: string; note: string }[]
+  // source: validated meeting id for deep-linking to the protocol ('' when unknown)
+  timeline: { date: string; note: string; source?: string }[]
   insight: string
 }
 export interface AnalyticsKpi {

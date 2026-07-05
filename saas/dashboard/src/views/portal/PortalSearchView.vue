@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { meetings as api, type MeetingsSearch, type SearchResultItem } from '@/api/client'
 import { scoreStr, tagLabel, tagTone, toneInk, toneBg } from './helpers'
 import { useSiteFilter } from './useSiteFilter'
 
+const route = useRoute()
 const { selected, siteParam, loaded, load } = useSiteFilter()
+
+/** Deep link to the source protocol on the meetings view (expands + highlights it). */
+function protocolLink(citekey: string): string {
+  return `/${route.params.projectId}/portal/meetings?open=${encodeURIComponent(citekey)}`
+}
 
 const query = ref('дефицит труб')
 const loading = ref(false)
@@ -113,7 +120,8 @@ onMounted(() => {
           <div style="display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap">
             <span v-if="r.speaker" style="font-size:13px;color:var(--ink-light);font-weight:500">{{ r.speaker }}</span>
             <span v-if="r.speaker" style="color:var(--rule)">·</span>
-            <span class="lr-link" style="font-family:var(--font-mono);font-size:13px;white-space:nowrap">{{ r.meeting }} · {{ r.time }} ↗</span>
+            <span style="font-family:var(--font-mono);font-size:13px;color:var(--ink-muted);white-space:nowrap">{{ r.meeting }} · {{ r.time }}</span>
+            <RouterLink v-if="r.citekey" :to="protocolLink(r.citekey)" class="lr-link" style="font-family:var(--font-mono);font-size:12px;white-space:nowrap">открыть протокол →</RouterLink>
             <span style="flex:1"></span>
             <span :style="{ display:'inline-flex', alignItems:'center', padding:'2px 9px', borderRadius:'var(--radius-full)', fontSize:'12px', fontWeight:'500', color: toneInk(tagTone(r.tag)), background: toneBg(tagTone(r.tag)) }">{{ tagLabel(r.tag) }}</span>
           </div>

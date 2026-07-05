@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { meetings as api, type MeetingItem, type MeetingsList } from '@/api/client'
 import {
   dayOf, monOf, typeBg, typeInk, toneInk, toneBg, avatarBg, avatarFg, dueColor,
 } from './helpers'
 import { useSiteFilter } from './useSiteFilter'
 
+const route = useRoute()
+const router = useRouter()
 const { selected, siteParam, siteName, loaded, load } = useSiteFilter()
 
 const loading = ref(true)
@@ -13,12 +16,28 @@ const error = ref('')
 const data = ref<MeetingsList>({ meetings: [], stats: { meetings: 0, tasks: 0, escalations: 0 } })
 const openId = ref<string | null>(null)
 const typeFilter = ref('Все типы')
-const days = ref(14)
+// ?open=<meeting id> deep link (from Аналитика/Поиск/Вопрос). The target may be
+// older than any default window, so it forces the «все» period until the user
+// changes период/площадка manually.
+const initialOpen = typeof route.query.open === 'string' ? route.query.open : ''
+const days = ref<number | null>(initialOpen ? null : 14)
+const pendingOpen = ref(initialOpen)
+const notFound = ref(false)
+const highlightId = ref<string | null>(null)
 const periodOpen = ref(false)
 const MODEL = 'Claude Haiku 4.5'
 
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
 const TYPES = ['Все типы', 'ОМС', 'Scrum', 'Продажи']
-const PERIOD_OPTIONS = [7, 14, 30, 90]
+const PERIOD_OPTIONS: { d: number | null; label: string }[] = [
+  { d: 7, label: '7 дней' },
+  { d: 14, label: '14 дней' },
+  { d: 30, label: '30 дней' },
+  { d: 90, label: '90 дней' },
+  { d: null, label: 'все' },
+]
+const periodLabel = computed(() => (days.value === null ? 'все' : `${days.value} дней`))
 
 const filtered = computed<MeetingItem[]>(() =>
   typeFilter.value === 'Все типы'
@@ -30,9 +49,45 @@ function toggle(id: string) {
   openId.value = openId.value === id ? null : id
 }
 
-function setPeriod(d: number) {
-  days.value = d
+function setPeriod(d: number | null) {
   periodOpen.value = false
+  clearOpen()
+  days.value = d
+}
+
+/** Drop the ?open deep link: dismiss notice + highlight, strip the query param. */
+function clearOpen() {
+  pendingOpen.value = ''
+  notFound.value = false
+  highlightId.value = null
+  if (route.query.open !== undefined) {
+    const { open: _open, ...rest } = route.query
+    router.replace({ query: rest })
+  }
+}
+
+/** Expand + scroll to + temporarily highlight the deep-linked meeting, if visible. */
+function revealPending() {
+  const id = pendingOpen.value
+  if (!id) return
+  const hit = data.value.meetings.find((m) => m.id === id)
+  if (!hit) {
+    notFound.value = true // e.g. leader lacks access to the source site
+    return
+  }
+  notFound.value = false
+  if (typeFilter.value !== 'Все типы' && hit.type !== typeFilter.value) typeFilter.value = 'Все типы'
+  openId.value = id
+  highlightId.value = id
+  nextTick(() => {
+    document.getElementById(`mrow-${id}`)?.scrollIntoView({
+      block: 'center',
+      behavior: reducedMotion ? 'auto' : 'smooth',
+    })
+  })
+  window.setTimeout(() => {
+    if (highlightId.value === id) highlightId.value = null
+  }, 2000)
 }
 
 // Guard against out-of-order responses on rapid site/period switching.
@@ -42,11 +97,12 @@ async function fetchData() {
   loading.value = true
   error.value = ''
   try {
-    const res = await api.list({ site: siteParam.value, days: days.value })
+    const res = await api.list({ site: siteParam.value, days: days.value ?? undefined })
     if (my !== seq) return
     data.value = res
     const first = res.meetings[0]
     openId.value = first ? first.id : null
+    if (pendingOpen.value) revealPending()
   } catch (e: any) {
     if (my !== seq) return
     error.value = e?.message || 'Ошибка загрузки'
@@ -55,12 +111,44 @@ async function fetchData() {
   }
 }
 
+// True while the deep-link handler itself switches days to «все», so the data
+// watch below doesn't mistake that for a manual change and strip ?open.
+let openApplying = false
+
+// Deep-link changes after mount (e.g. a «протокол →» click while already here).
+// The initial ?open is consumed via initialOpen above, so no immediate run.
+watch(
+  () => route.query.open,
+  (v) => {
+    const id = typeof v === 'string' ? v : ''
+    if (!id) {
+      pendingOpen.value = ''
+      notFound.value = false
+      return
+    }
+    pendingOpen.value = id
+    notFound.value = false
+    if (days.value !== null) {
+      openApplying = true
+      days.value = null // data watch refetches the full history, then reveals
+    } else if (!loading.value) {
+      revealPending() // full history already loaded — no refetch needed
+    }
+  },
+)
+
 // Single watch source: fires once when the site registry finishes loading,
 // then on every site/period change — no separate onMounted fetch.
+// A manual период/площадка change invalidates the ?open deep link so it
+// doesn't re-trigger (removed from the URL via router.replace in clearOpen).
 watch(
   [loaded, selected, days],
-  ([ok]) => {
-    if (ok) fetchData()
+  ([ok], old) => {
+    if (!ok) return
+    const wasLoaded = old?.[0] ?? false
+    if (wasLoaded && !openApplying && pendingOpen.value) clearOpen()
+    openApplying = false
+    fetchData()
   },
   { immediate: true },
 )
@@ -84,7 +172,7 @@ onMounted(() => {
         </span>
         <div style="position:relative">
           <button @click="periodOpen = !periodOpen" style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;background:var(--paper-white);border:1px solid var(--rule);border-radius:var(--radius-sm);font:inherit;font-size:13px;color:var(--ink-light);cursor:pointer">
-            <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint)">Период</span>{{ days }} дней
+            <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint)">Период</span>{{ periodLabel }}
             <span style="color:var(--ink-muted);display:inline-flex">
               <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5l3 3 3-3" /></svg>
             </span>
@@ -95,16 +183,16 @@ onMounted(() => {
           >
             <button
               v-for="p in PERIOD_OPTIONS"
-              :key="p"
-              @click="setPeriod(p)"
+              :key="p.label"
+              @click="setPeriod(p.d)"
               :style="{
                 width: '100%', textAlign: 'left', padding: '7px 8px', border: 'none', borderRadius: '4px',
                 font: 'inherit', fontSize: '13px', cursor: 'pointer',
-                background: days === p ? 'var(--accent-tint)' : 'transparent',
-                color: days === p ? 'var(--accent)' : 'var(--ink-light)',
-                fontWeight: days === p ? '500' : '400',
+                background: days === p.d ? 'var(--accent-tint)' : 'transparent',
+                color: days === p.d ? 'var(--accent)' : 'var(--ink-light)',
+                fontWeight: days === p.d ? '500' : '400',
               }"
-            >{{ p }} дней</button>
+            >{{ p.label }}</button>
           </div>
         </div>
       </div>
@@ -147,6 +235,12 @@ onMounted(() => {
       <span style="font-size:13px;color:var(--ink-muted)">Показано <span style="font-family:var(--font-mono);color:var(--ink-light)">{{ filtered.length }}</span> протоколов</span>
     </div>
 
+    <!-- Deep-link target missing (bad id or leader lacks access to that site) -->
+    <div v-if="notFound" style="display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--amber-light);background:var(--amber-pale);border-radius:var(--radius-xl);padding:10px 16px">
+      <span style="font-size:13px;color:var(--amber-deep)">Протокол не найден или недоступен.</span>
+      <button @click="clearOpen()" aria-label="Скрыть" style="background:transparent;border:none;color:var(--amber-deep);font:inherit;font-size:14px;line-height:1;cursor:pointer;padding:2px 4px;flex-shrink:0">✕</button>
+    </div>
+
     <!-- Loading / empty -->
     <div v-if="loading" style="display:flex;justify-content:center;padding:40px">
       <span class="lr-spin" style="width:22px;height:22px;border-radius:50%;border:2px solid var(--accent);border-top-color:transparent;display:inline-block"></span>
@@ -159,7 +253,12 @@ onMounted(() => {
       <div
         v-for="m in filtered"
         :key="m.id"
-        style="border:1px solid var(--rule);border-radius:var(--radius-xl);background:var(--paper-white);overflow:hidden"
+        :id="`mrow-${m.id}`"
+        :style="{
+          border: '1px solid var(--rule)', borderRadius: 'var(--radius-xl)', background: 'var(--paper-white)', overflow: 'hidden',
+          boxShadow: highlightId === m.id ? '0 0 0 2px var(--accent)' : 'none',
+          transition: reducedMotion ? 'none' : 'box-shadow .6s',
+        }"
       >
         <button
           class="lr-mrow"

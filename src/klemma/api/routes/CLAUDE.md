@@ -132,7 +132,7 @@ Bonum meeting-portal endpoints — mounted with `prefix="/meetings"`. Backed by 
 - `POST /meetings/sites/sync` — X-Ingest-Token; fetch sites webhook (body url or `KLEMMA_BONUM_SITES_WEBHOOK`), upsert + remap all meetings, returns distribution
 - `GET /meetings/search?q=&site=` — semantic search, site post-filter
 - `GET /meetings/tasks?site=&days=` — task board aggregate
-- `GET /meetings/analytics?site=&days=30|90|180&refresh=` — cross-meeting report (synchronous LLM, daily cache); `site=''` = whole company (director only)
+- `GET /meetings/analytics?site=&days=30|90|180&refresh=` — cross-meeting report; plain load = latest cache or metrics preview (never LLM), `refresh=1` = synchronous LLM generation; `site=''` = whole company (director only)
 - `POST /meetings/ask` — RAG Q&A `{query, site?}`
 - `POST /meetings/ingest` — X-Ingest-Token; idempotent by meeting_id
 - `GET /meetings/{meeting_id}` — detail (declared last; fixed paths must stay above)

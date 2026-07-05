@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { meetings as api, type AskAnswer } from '@/api/client'
 import { humanizeModel } from '@/utils/model'
 import { useSiteFilter } from './useSiteFilter'
 
+const route = useRoute()
 const { selected, siteParam, siteName, loaded, load } = useSiteFilter()
+
+/** Deep link to the source protocol on the meetings view (expands + highlights it). */
+function protocolLink(citekey: string): string {
+  return `/${route.params.projectId}/portal/meetings?open=${encodeURIComponent(citekey)}`
+}
 
 const query = ref('Что происходит с контрактом по Турции и кто отвечает?')
 const asked = ref('')
@@ -111,9 +118,10 @@ onMounted(() => {
             <div style="flex:1;min-width:0">
               <p style="font-family:var(--font-body-serif);font-style:italic;font-size:14px;line-height:1.5;color:var(--ink);margin:0">«{{ s.quote }}»</p>
               <div style="display:flex;align-items:center;gap:10px;margin-top:7px;flex-wrap:wrap">
-                <span class="lr-link" style="font-family:var(--font-mono);font-size:12px;white-space:nowrap">{{ s.meeting }} · {{ s.date }} · {{ s.time }} ↗</span>
+                <span style="font-family:var(--font-mono);font-size:12px;color:var(--ink-muted);white-space:nowrap">{{ s.meeting }} · {{ s.date }} · {{ s.time }}</span>
                 <span v-if="s.speaker" style="color:var(--rule)">·</span>
                 <span v-if="s.speaker" style="font-size:12px;color:var(--ink-muted)">{{ s.speaker }}</span>
+                <RouterLink v-if="s.citekey" :to="protocolLink(s.citekey)" class="lr-link" style="font-family:var(--font-mono);font-size:12px;white-space:nowrap">открыть протокол →</RouterLink>
               </div>
             </div>
           </div>

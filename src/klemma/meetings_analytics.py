@@ -26,6 +26,15 @@ _CACHE_RETENTION_DAYS = 14
 _MONTHS_RU = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
 
 _TOPIC_STATUSES = {"developing", "stalled", "resolved", "recurring_problem"}
+
+# Returned as ``detail`` when no report was ever generated for (site, days) —
+# the frontend turns it into a "Сформировать отчёт" call-to-action. Page loads
+# never trigger the LLM; only refresh=1 does.
+DETAIL_NOT_GENERATED = "Отчёт ещё не сформирован — нажмите «Обновить»"
+
+# Explicit refresh within this window returns the just-generated report instead
+# of paying for a second identical LLM call (double-click / concurrent users).
+_REFRESH_DEBOUNCE_SECONDS = 60
 _KPI_TRENDS = {"improving", "degrading", "flat", "unclear"}
 _SEVERITIES = {"high", "medium", "low"}
 
@@ -191,8 +200,10 @@ def build_digest(
     """
     blocks: list[str] = []
     for sid, meta in meetings_meta_sorted:
+        # The meeting id rides along in the header so the LLM can cite it as
+        # the `source` of every timeline entry (validated in _clean_topics).
         lines = [
-            f"[{meta.get('date', '')}] {meta.get('title', '')} ({meta.get('site', '')})".rstrip()
+            f"[{meta.get('date', '')} | id:{sid}] {meta.get('title', '')} ({meta.get('site', '')})".rstrip()
         ]
         summary = str(meta.get("summary") or "").strip()
         if summary:
@@ -223,7 +234,7 @@ def build_digest(
 # ── LLM output validation (tolerant — missing keys → empty, clamp enums) ──────
 
 
-def _clean_topics(raw) -> list[dict]:
+def _clean_topics(raw, valid_ids: Optional[set] = None) -> list[dict]:
     out = []
     for t in raw if isinstance(raw, list) else []:
         if not isinstance(t, dict):
@@ -236,8 +247,18 @@ def _clean_topics(raw) -> list[dict]:
         raw_timeline = t.get("timeline")
         for p in raw_timeline if isinstance(raw_timeline, list) else []:
             if isinstance(p, dict) and (p.get("date") or p.get("note")):
+                # Traceability with an anti-fabrication gate: keep the source
+                # meeting id ONLY if it names a meeting that actually fed the
+                # digest — a hallucinated id must not become a clickable link.
+                source = str(p.get("source") or "").strip()
+                if valid_ids is not None and source not in valid_ids:
+                    source = ""
                 timeline.append(
-                    {"date": str(p.get("date") or ""), "note": str(p.get("note") or "")}
+                    {
+                        "date": str(p.get("date") or ""),
+                        "note": str(p.get("note") or ""),
+                        "source": source,
+                    }
                 )
         try:
             n_meetings = int(t.get("meetings") or 0)
@@ -313,6 +334,36 @@ def _cache_get(state, site_slug: str, days: int, date_to: str) -> Optional[dict]
         return None
 
 
+def _cache_get_latest(state, site_slug: str, days: int) -> Optional[dict]:
+    """Latest cached report for (site, days) regardless of generation date.
+
+    Plain page loads serve this — possibly a previous day's snapshot — so a
+    load never triggers an LLM call; only the explicit refresh button does.
+    """
+    with state._conn() as conn:
+        row = conn.execute(
+            "SELECT report FROM portal_analytics WHERE site_slug=? AND days=? "
+            "ORDER BY date_to DESC LIMIT 1",
+            (site_slug, days),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        report = json.loads(row[0])
+        return report if isinstance(report, dict) else None
+    except Exception:
+        return None
+
+
+def _is_fresh(report: dict, *, seconds: int) -> bool:
+    """True when the report was generated within the last ``seconds``."""
+    try:
+        generated = datetime.fromisoformat(str(report.get("generated_at") or ""))
+        return (datetime.now(timezone.utc) - generated).total_seconds() < seconds
+    except (TypeError, ValueError):
+        return False
+
+
 def _cache_put(state, report: dict) -> None:
     with state._conn() as conn:
         conn.execute(
@@ -344,6 +395,32 @@ def _load_analytics_prompt() -> str:
         return _FALLBACK_PROMPT
 
 
+def _build_base_report(state, site_slug: str, days: int, model: str, today: date) -> tuple[dict, list, dict]:
+    """Compute the metrics-only report skeleton. Returns (report, collected, display)."""
+    sites = None if site_slug == "" else {site_slug}
+    collected = _collect_meetings(state, sites, days)
+    metrics = _metrics_from_collected(collected, days)
+    display = site_display_names(state)
+    site_name = "Вся компания" if site_slug == "" else display.get(site_slug, site_slug)
+    report: dict = {
+        "site": site_slug,
+        "site_name": site_name,
+        "days": days,
+        "window": {"from": (today - timedelta(days=days)).isoformat(), "to": today.isoformat()},
+        "meetings_analyzed": metrics["totals"]["meetings"],
+        "truncated": False,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "model": model or "",
+        "cached": False,
+        "metrics": metrics,
+        "summary": "",
+        "topics": [],
+        "kpis": [],
+        "patterns": [],
+    }
+    return report, collected, display
+
+
 def generate_analytics(
     state,
     ai,
@@ -353,47 +430,43 @@ def generate_analytics(
     days: int,
     refresh: bool = False,
 ) -> dict:
-    """Full cross-meeting analytics report per the portal contract.
+    """Cross-meeting analytics report per the portal contract.
 
     ``site_slug=''`` means the whole company (no site filter — routes make sure
-    leaders never reach it). Reports are cached per (site_slug, days, today);
-    ``refresh=True`` regenerates. On <3 meetings the report degrades to
-    metrics-only with a Russian ``detail`` message and is cached; on AI
-    absence/failure it also degrades to metrics-only but is NOT cached, so the
-    next request retries generation instead of pinning an empty report.
+    leaders never reach it).
+
+    The LLM runs ONLY on ``refresh=True`` (the explicit «Обновить» button).
+    A plain page load (``refresh=False``) never spends AI resources: it returns
+    the latest cached report for (site, days) regardless of its date — the
+    frontend shows the report's own generated_at — or, when nothing was ever
+    generated, a fast metrics-only preview with ``detail=DETAIL_NOT_GENERATED``
+    (not cached). On refresh: <3 meetings degrades to metrics-only with a
+    Russian ``detail`` and is cached; AI absence/failure degrades to
+    metrics-only but is NOT cached, so the next refresh retries.
     """
+    ensure_portal_tables(state)
+    today = date.today()
+    date_to = today.isoformat()
+
+    if not refresh:
+        cached = _cache_get_latest(state, site_slug, days)
+        if cached is not None:
+            cached["cached"] = True
+            return cached
+        report, _, _ = _build_base_report(state, site_slug, days, model, today)
+        report["detail"] = DETAIL_NOT_GENERATED
+        return report
+
     with _GENERATE_LOCK:
-        ensure_portal_tables(state)
-        today = date.today()
-        date_to = today.isoformat()
-        if not refresh:
-            cached = _cache_get(state, site_slug, days, date_to)
-            if cached is not None:
-                cached["cached"] = True
-                return cached
+        # Double-click / concurrent-refresh guard: if a report for today was
+        # generated moments ago (possibly by the request that held this lock),
+        # serve it instead of paying for a second identical LLM call.
+        cached = _cache_get(state, site_slug, days, date_to)
+        if cached is not None and _is_fresh(cached, seconds=_REFRESH_DEBOUNCE_SECONDS):
+            cached["cached"] = True
+            return cached
 
-        sites = None if site_slug == "" else {site_slug}
-        collected = _collect_meetings(state, sites, days)
-        metrics = _metrics_from_collected(collected, days)
-        display = site_display_names(state)
-        site_name = "Вся компания" if site_slug == "" else display.get(site_slug, site_slug)
-
-        report: dict = {
-            "site": site_slug,
-            "site_name": site_name,
-            "days": days,
-            "window": {"from": (today - timedelta(days=days)).isoformat(), "to": date_to},
-            "meetings_analyzed": metrics["totals"]["meetings"],
-            "truncated": False,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "model": model or "",
-            "cached": False,
-            "metrics": metrics,
-            "summary": "",
-            "topics": [],
-            "kpis": [],
-            "patterns": [],
-        }
+        report, collected, display = _build_base_report(state, site_slug, days, model, today)
 
         if report["meetings_analyzed"] < 3:
             report["detail"] = "Недостаточно данных за период"
@@ -411,6 +484,7 @@ def generate_analytics(
             frags_by_sid[entry["sid"]] = entry["frags"]
         digest, truncated = build_digest(meta_list, frags_by_sid)
         report["truncated"] = truncated
+        valid_ids = {sid for sid, _ in meta_list}
 
         llm: Optional[dict] = None
         if ai is not None:
@@ -418,11 +492,11 @@ def generate_analytics(
 
             window = report["window"]
             system = SandboxedEnvironment().from_string(_load_analytics_prompt()).render(
-                site_name=site_name,
+                site_name=report["site_name"],
                 period_label=f"{days} дней: {window['from']} — {window['to']}",
                 meetings_count=report["meetings_analyzed"],
                 digest=digest,
-                metrics_summary=_metrics_summary_text(metrics),
+                metrics_summary=_metrics_summary_text(report["metrics"]),
             )
             try:
                 # 16K output budget: an all-company digest yields long topic
@@ -438,7 +512,7 @@ def generate_analytics(
 
         if llm:
             report["summary"] = str(llm.get("summary") or "").strip()
-            report["topics"] = _clean_topics(llm.get("topics"))
+            report["topics"] = _clean_topics(llm.get("topics"), valid_ids)
             report["kpis"] = _clean_kpis(llm.get("kpis"))
             report["patterns"] = _clean_patterns(llm.get("patterns"))
 

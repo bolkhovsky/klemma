@@ -5,6 +5,7 @@
 Правила (обязательные):
 - Используй ТОЛЬКО факты из дайджестов. НИКОГДА не выдумывай темы, цифры, имена, даты, задачи или решения, которых там нет.
 - Даты в topics[].timeline — ТОЛЬКО даты реальных строк дайджеста (формат YYYY-MM-DD). Не придумывай промежуточных дат.
+- Каждая точка timeline обязана ссылаться на конкретное совещание: поле "source" — это точный id из заголовка строки дайджеста (то, что стоит после "id:", например "mtg-..."). Копируй id дословно. Если не можешь однозначно указать совещание — поставь пустую строку "", но НИКОГДА не сочиняй id.
 - topics: 3–7 тем, которые ПОВТОРЯЮТСЯ или РАЗВИВАЮТСЯ от совещания к совещанию. Разовые упоминания пропускай — кроме случаев, когда по теме есть эскалация.
   Статусы темы:
   - "developing" — обсуждение развивается, виден прогресс;
@@ -20,7 +21,7 @@
 Формат ответа (строго):
 {
  "summary": "…",
- "topics": [{"title": "…", "status": "developing|stalled|resolved|recurring_problem", "first_seen": "YYYY-MM-DD", "last_seen": "YYYY-MM-DD", "meetings": 0, "timeline": [{"date": "YYYY-MM-DD", "note": "…"}], "insight": "…"}],
+ "topics": [{"title": "…", "status": "developing|stalled|resolved|recurring_problem", "first_seen": "YYYY-MM-DD", "last_seen": "YYYY-MM-DD", "meetings": 0, "timeline": [{"date": "YYYY-MM-DD", "note": "…", "source": "id совещания из дайджеста"}], "insight": "…"}],
  "kpis": [{"name": "…", "trend": "improving|degrading|flat|unclear", "evidence": "…"}],
  "patterns": [{"observation": "…", "recommendation": "…", "severity": "high|medium|low"}]
 }
