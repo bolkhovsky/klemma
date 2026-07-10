@@ -28,6 +28,9 @@ ENV PYTHONPATH=/app/src
 ENV KLEMMA_ENV=production
 ENV KLEMMA_PROMPTS_DIR=/app/prompts
 ENV KLEMMA_SERVE_SPA=/app/dashboard
+# Serve the marketing landing at "/" (baked into the SPA build via public/);
+# the portal SPA stays reachable on every other route. Unset elsewhere.
+ENV KLEMMA_SPA_ROOT_FILE=portal-soveshchaniy.html
 ENV KLEMMA_DATA_DIR=/data/saas
 ENV KLEMMA_BONUM_PROJECT_ROOT=/data/meetings
 

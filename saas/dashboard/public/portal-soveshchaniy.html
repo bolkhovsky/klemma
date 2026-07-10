@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Клемма · портал совещаний — все совещания компании на одном экране</title>
+<meta name="description" content="Портал сводит все совещания компании в один дашборд: что застряло, где опаздываем, что не дошло до руководителя. Meeting Intelligence на вашей инфраструктуре, 152-ФЗ.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  html{scroll-behavior:smooth}
+  body{margin:0;background:#ffffff;font-family:'Archivo',system-ui,sans-serif;color:#16161a;-webkit-font-smoothing:antialiased}
+  a{color:#2f5bea;text-decoration:none}
+  a:hover{color:#2447c9}
+  ::-webkit-scrollbar{width:9px}
+  ::-webkit-scrollbar-thumb{background:#d9d9dd;border-radius:5px}
+
+  /* hover states (converted from the source design's inline hover attributes) */
+  .lnk{transition:color .18s}
+  .lnk:hover{color:#16161a}
+  .btn-primary:hover{background:#2447c9;color:#fff}
+  .btn-bright:hover{background:#4670ff;color:#fff}
+  .btn-ghost:hover{border-color:#16161a;color:#16161a}
+  .btn-ghost-dark:hover{border-color:#7a7a82;color:#fff}
+  .chip:hover{background:#e7e7ea}
+  .rowh:hover{background:#f7f7f9}
+  .rowt:hover{background:#faf8f4}
+  .lift{transition:transform .25s,box-shadow .25s}
+  .lift:hover{transform:translateY(-4px);box-shadow:0 18px 40px -22px rgba(20,20,50,.25)}
+  .flink{transition:color .15s}
+  .flink:hover{color:#fff}
+  .flinkd{transition:color .15s}
+  .flinkd:hover{color:#c8c8d0}
+
+  /* responsive — stack multi-column grids on small screens */
+  @media (max-width:920px){
+    .g2,.g3,.gfoot{grid-template-columns:1fr!important}
+    .navlinks{display:none!important}
+    .h1{font-size:44px!important}
+  }
+</style>
+<noscript><style>[data-reveal]{opacity:1!important;transform:none!important}</style></noscript>
+</head>
+<body>
+
+<div style="background:#ffffff;color:#16161a">
+
+<!-- ============ 1. NAVBAR ============ -->
+<nav style="position:sticky;top:0;z-index:30;background:rgba(255,255,255,.88);backdrop-filter:blur(12px);border-bottom:1px solid #ededed">
+  <div style="max-width:1180px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;padding:16px 40px">
+    <a href="#top" style="display:flex;align-items:baseline;gap:11px;color:#16161a">
+      <span style="font-weight:800;font-size:20px;letter-spacing:-0.02em">Клемма</span>
+      <span style="font-size:12px;color:#9a9aa2;font-weight:500">портал совещаний</span>
+    </a>
+    <div class="navlinks" style="display:flex;align-items:center;gap:30px;font-size:14.5px;color:#4a4a52;font-weight:500">
+      <a href="#features" class="lnk" style="color:inherit">Возможности</a>
+      <a href="#how" class="lnk" style="color:inherit">Как работает</a>
+      <a href="#security" class="lnk" style="color:inherit">Безопасность</a>
+      <a href="#demo" class="lnk" style="color:inherit">Цена</a>
+    </div>
+    <a href="#demo" class="btn-primary" style="background:#2f5bea;color:#fff;border-radius:999px;padding:10px 20px;font-weight:600;font-size:14.5px;transition:background .18s">Запросить демо</a>
+  </div>
+</nav>
+
+<!-- ============ 2. HERO ============ -->
+<header id="top" style="text-align:center;max-width:940px;margin:0 auto;padding:78px 40px 30px">
+  <div style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:0.2em;color:#2f5bea;font-weight:500;margin-bottom:24px">ПОРТАЛ СОВЕЩАНИЙ · MEETING INTELLIGENCE</div>
+  <div>
+    <h1 class="h1" style="font-size:64px;line-height:1.02;letter-spacing:-0.035em;font-weight:800;margin:0 0 26px">Все совещания компании —<br>на одном экране</h1>
+    <p style="font-size:20px;line-height:1.5;color:#5a5a64;margin:0 auto 30px;max-width:670px">Что застряло, где опаздываем и что не дошло до вас. Каждое совещание автоматически становится протоколом и задачами в вашей CRM.</p>
+  </div>
+  <div style="display:flex;gap:22px;justify-content:center;margin-bottom:32px;font-size:13.5px;color:#6a6a72;font-weight:500;flex-wrap:wrap">
+    <span style="display:flex;align-items:center;gap:7px"><span style="width:7px;height:7px;border-radius:2px;background:#c0362c;display:inline-block"></span>Что застряло</span>
+    <span style="display:flex;align-items:center;gap:7px"><span style="width:7px;height:7px;border-radius:2px;background:#b06a00;display:inline-block"></span>Где опаздываем</span>
+    <span style="display:flex;align-items:center;gap:7px"><span style="width:7px;height:7px;border-radius:2px;background:#2f5bea;display:inline-block"></span>Что не дошло до вас</span>
+  </div>
+  <div style="display:flex;gap:13px;justify-content:center;align-items:center;flex-wrap:wrap">
+    <a href="#demo" class="btn-primary" style="background:#2f5bea;color:#fff;border-radius:999px;padding:15px 30px;font-weight:600;font-size:16px;transition:background .18s">Запросить демо</a>
+    <a href="#how" class="btn-ghost" style="background:#fff;color:#16161a;border:1.5px solid #d9d9dd;border-radius:999px;padding:13.5px 26px;font-weight:600;font-size:16px;transition:border-color .18s">Как это работает ↓</a>
+  </div>
+  <div style="margin-top:34px;font-size:13px;color:#9a9aa2;font-weight:500">Работает на вашей инфраструктуре · 152-ФЗ · данные не уходят на сторону</div>
+</header>
+
+<!-- hero product mockup -->
+<div style="padding:14px 40px 72px;max-width:1050px;margin:0 auto">
+  <div style="border:1px solid #e6e6e8;border-radius:18px;overflow:hidden;background:#fff;box-shadow:0 44px 90px -46px rgba(20,20,50,.4)">
+    <div style="display:flex;align-items:center;gap:10px;padding:13px 18px;border-bottom:1px solid #eee;background:#fafafa">
+      <span style="width:11px;height:11px;border-radius:50%;background:#e4e4e8;display:inline-block"></span>
+      <span style="width:11px;height:11px;border-radius:50%;background:#e4e4e8;display:inline-block"></span>
+      <span style="width:11px;height:11px;border-radius:50%;background:#e4e4e8;display:inline-block"></span>
+      <span style="margin-left:8px;font-size:13px;font-weight:600;color:#4a4a52">Клемма · Аналитика</span>
+      <span style="margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#9a9aa2">неделя 23–29 июня</span>
+    </div>
+    <div style="display:flex;gap:8px;padding:16px 20px 8px;flex-wrap:wrap;align-items:center">
+      <span style="background:#2f5bea;color:#fff;border-radius:999px;padding:7px 15px;font-size:13px;font-weight:600;cursor:pointer">Вся компания</span>
+      <span class="chip" style="background:#f2f2f4;color:#4a4a52;border-radius:999px;padding:7px 15px;font-size:13px;font-weight:500;cursor:pointer">Завод №1</span>
+      <span class="chip" style="background:#f2f2f4;color:#4a4a52;border-radius:999px;padding:7px 15px;font-size:13px;font-weight:500;cursor:pointer">Склад</span>
+      <span class="chip" style="background:#f2f2f4;color:#4a4a52;border-radius:999px;padding:7px 15px;font-size:13px;font-weight:500;cursor:pointer">Дирекция</span>
+    </div>
+    <div class="g3" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:12px 20px 4px">
+      <div style="border:1px solid #ececee;border-radius:12px;padding:15px 16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:12.5px;color:#7a7a82;font-weight:600">Застряло тем</span><span style="font-size:11px;font-weight:600;color:#2d6a4f;background:#e4f4ea;padding:2px 7px;border-radius:5px">12 → 8</span></div>
+        <div style="font-size:30px;font-weight:800;letter-spacing:-0.02em;margin-bottom:8px">8</div>
+        <svg width="100%" height="30" viewBox="0 0 120 30" preserveAspectRatio="none"><polyline points="0,6 20,10 40,8 60,15 80,18 100,22 120,25" fill="none" stroke="#c0362c" stroke-width="2.5" stroke-linecap="round"/></svg>
+      </div>
+      <div style="border:1px solid #ececee;border-radius:12px;padding:15px 16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:12.5px;color:#7a7a82;font-weight:600">Просрочки</span><span style="font-size:11px;font-weight:600;color:#b06a00;background:#fdf1dd;padding:2px 7px;border-radius:5px">+4</span></div>
+        <div style="font-size:30px;font-weight:800;letter-spacing:-0.02em;margin-bottom:8px">23</div>
+        <svg width="100%" height="30" viewBox="0 0 120 30" preserveAspectRatio="none"><polyline points="0,20 20,17 40,19 60,12 80,14 100,8 120,6" fill="none" stroke="#b06a00" stroke-width="2.5" stroke-linecap="round"/></svg>
+      </div>
+      <div style="border:1px solid #ececee;border-radius:12px;padding:15px 16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:12.5px;color:#7a7a82;font-weight:600">Не дошло до вас</span><span style="font-size:11px;font-weight:600;color:#2f5bea;background:#e9eefc;padding:2px 7px;border-radius:5px">ново</span></div>
+        <div style="font-size:30px;font-weight:800;letter-spacing:-0.02em;margin-bottom:8px">5</div>
+        <svg width="100%" height="30" viewBox="0 0 120 30" preserveAspectRatio="none"><polyline points="0,22 20,20 40,16 60,17 80,11 100,13 120,7" fill="none" stroke="#2f5bea" stroke-width="2.5" stroke-linecap="round"/></svg>
+      </div>
+    </div>
+    <div class="g2" style="display:grid;grid-template-columns:1.25fr 1fr;gap:16px;padding:16px 20px 22px">
+      <div style="border:1px solid #ececee;border-radius:12px;padding:16px 18px">
+        <div style="font-size:13px;font-weight:700;margin-bottom:14px">Темы в динамике по неделям</div>
+        <div style="display:flex;align-items:flex-end;gap:10px;height:130px">
+          <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:3px;height:100%"><div style="background:#c0362c;border-radius:3px 3px 0 0;height:32%"></div><div style="background:#dcdce0;border-radius:0 0 3px 3px;height:20%"></div></div>
+          <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:3px;height:100%"><div style="background:#c0362c;border-radius:3px 3px 0 0;height:44%"></div><div style="background:#dcdce0;border-radius:0 0 3px 3px;height:26%"></div></div>
+          <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:3px;height:100%"><div style="background:#c0362c;border-radius:3px 3px 0 0;height:38%"></div><div style="background:#dcdce0;border-radius:0 0 3px 3px;height:30%"></div></div>
+          <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:3px;height:100%"><div style="background:#2f5bea;border-radius:3px 3px 0 0;height:60%"></div><div style="background:#dcdce0;border-radius:0 0 3px 3px;height:24%"></div></div>
+          <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:3px;height:100%"><div style="background:#2f5bea;border-radius:3px 3px 0 0;height:52%"></div><div style="background:#dcdce0;border-radius:0 0 3px 3px;height:34%"></div></div>
+          <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:3px;height:100%"><div style="background:#2f5bea;border-radius:3px 3px 0 0;height:74%"></div><div style="background:#dcdce0;border-radius:0 0 3px 3px;height:22%"></div></div>
+        </div>
+      </div>
+      <div style="border:1px solid #ececee;border-radius:12px;padding:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px 8px;font-size:12.5px;font-weight:700">Темы<span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:500;color:#9a9aa2">статус · возраст</span></div>
+        <div class="rowh" style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-radius:8px"><span style="font-size:13px;font-weight:500">Запуск склада в Ростове</span><span style="font-size:11px;font-weight:600;color:#c0362c;background:#fbe9e7;padding:2px 8px;border-radius:5px">Застряло · 3 нед</span></div>
+        <div class="rowh" style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-radius:8px"><span style="font-size:13px;font-weight:500">Труба 1420 — сроки</span><span style="font-size:11px;font-weight:600;color:#b06a00;background:#fdf1dd;padding:2px 8px;border-radius:5px">Опаздывает</span></div>
+        <div class="rowh" style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-radius:8px"><span style="font-size:13px;font-weight:500">Найм в цех сборки</span><span style="font-size:11px;font-weight:600;color:#2f5bea;background:#e9eefc;padding:2px 8px;border-radius:5px">В работе</span></div>
+        <div class="rowh" style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-radius:8px"><span style="font-size:13px;font-weight:500">Претензия по партии №418</span><span style="font-size:11px;font-weight:600;color:#6b4ea8;background:#efe9fa;padding:2px 8px;border-radius:5px">Повторяется</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 3. SOCIAL PROOF — BONUM ============ -->
+<section id="bonum" data-reveal style="opacity:0;transform:translateY(20px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1);background:#f7f7f8;border-top:1px solid #ededed;border-bottom:1px solid #ededed">
+  <div style="max-width:1140px;margin:0 auto;padding:64px 40px 68px">
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:0.18em;color:#9a9aa2;font-weight:500">КЕЙС ВНЕДРЕНИЯ</div>
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 12px;border:1px dashed #c8c8ce;border-radius:8px;font-size:12px;color:#9a9aa2;background:#fff">
+        <span style="width:20px;height:20px;border-radius:5px;background:#16161a;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:11px">B</span>
+        Bonum <span style="font-size:10px;color:#b8b8be">[логотип]</span>
+      </div>
+    </div>
+    <h2 style="font-size:38px;line-height:1.08;letter-spacing:-0.025em;font-weight:800;margin:0 0 36px;max-width:600px">Так это работает у Bonum</h2>
+    <div class="g3" style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:34px">
+      <div style="background:#fff;border:1px solid #e6e6e8;border-radius:14px;padding:24px">
+        <div style="font-size:46px;font-weight:800;letter-spacing:-0.03em;line-height:1;margin-bottom:10px;color:#2f5bea">[N]</div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:2px">площадок в портале</div>
+        <div style="font-size:13.5px;color:#8a8a92">сведены в один дашборд</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e6e6e8;border-radius:14px;padding:24px">
+        <div style="font-size:46px;font-weight:800;letter-spacing:-0.03em;line-height:1;margin-bottom:10px;color:#2f5bea">[N]</div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:2px">совещаний в месяц</div>
+        <div style="font-size:13.5px;color:#8a8a92">в одной картине по компании</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e6e6e8;border-radius:14px;padding:24px">
+        <div style="font-size:24px;font-weight:800;letter-spacing:-0.02em;line-height:1;margin-bottom:12px;color:#2f5bea">[N] ч <span style="color:#c8c8ce">→</span> [N] мин</div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:2px">на сбор сводок</div>
+        <div style="font-size:13.5px;color:#8a8a92">было вручную → стало автоматически</div>
+      </div>
+    </div>
+    <blockquote style="margin:0;border-left:3px solid #2f5bea;padding:6px 0 6px 22px">
+      <p style="font-size:22px;line-height:1.45;font-weight:500;letter-spacing:-0.01em;margin:0 0 14px;color:#2a2a32">«[Цитата COO Bonum — 1–2 фразы про то, что раньше не видел, а теперь видит. Реальная, получить у клиента.]»</p>
+      <footer style="font-size:14px;color:#8a8a92;font-weight:500">[Имя], COO Bonum</footer>
+    </blockquote>
+    <div style="margin-top:26px;font-size:12.5px;color:#a8a8ae;display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:4px;background:#f0e0c0;display:inline-block"></span>Плейсхолдеры <span style="font-family:'JetBrains Mono',monospace">[N]</span> и цитата заполняются реальными данными Bonum перед публикацией.</div>
+  </div>
+</section>
+
+<!-- ============ 4. CTA (промежуточный) ============ -->
+<section id="demo" data-reveal style="opacity:0;transform:translateY(20px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)">
+  <div style="max-width:1140px;margin:0 auto;padding:72px 40px">
+    <div style="background:#16161a;border-radius:22px;padding:56px 56px;display:flex;align-items:center;justify-content:space-between;gap:40px;flex-wrap:wrap">
+      <div style="max-width:620px">
+        <h2 style="color:#fff;font-size:34px;line-height:1.1;letter-spacing:-0.025em;font-weight:800;margin:0 0 14px">Покажем портал на ваших реальных протоколах</h2>
+        <p style="color:#a8a8b2;font-size:18px;line-height:1.5;margin:0">На демо загрузим 2–3 ваших совещания и покажем готовый дашборд — не слайды, а вашу компанию на экране.</p>
+      </div>
+      <a href="#top" class="btn-bright" style="background:#2f5bea;color:#fff;border-radius:999px;padding:17px 34px;font-weight:600;font-size:17px;white-space:nowrap;transition:background .18s">Запросить демо</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. FEATURES & OBJECTIONS ============ -->
+<!-- Триада -->
+<section id="features" data-reveal style="opacity:0;transform:translateY(20px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)">
+  <div style="max-width:1140px;margin:0 auto;padding:20px 40px 8px">
+    <div style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:0.18em;color:#9a9aa2;font-weight:500;margin-bottom:26px">ТРИ ВОПРОСА РУКОВОДИТЕЛЯ</div>
+    <div class="g3" style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px">
+      <div class="lift" style="border:1px solid #e6e6e8;border-top:3px solid #c0362c;border-radius:14px;padding:26px">
+        <h3 style="font-size:20px;font-weight:700;margin:0 0 10px;letter-spacing:-0.01em">Что застряло</h3>
+        <p style="font-size:15px;line-height:1.5;color:#5a5a64;margin:0">Проекты и темы, которые буксуют неделями, но не двигаются.</p>
+      </div>
+      <div class="lift" style="border:1px solid #e6e6e8;border-top:3px solid #b06a00;border-radius:14px;padding:26px">
+        <h3 style="font-size:20px;font-weight:700;margin:0 0 10px;letter-spacing:-0.01em">Где опаздываем</h3>
+        <p style="font-size:15px;line-height:1.5;color:#5a5a64;margin:0">Просрочки, сорванные сроки и эскалации по всем площадкам.</p>
+      </div>
+      <div class="lift" style="border:1px solid #e6e6e8;border-top:3px solid #2f5bea;border-radius:14px;padding:26px">
+        <h3 style="font-size:20px;font-weight:700;margin:0 0 10px;letter-spacing:-0.01em">Что не доходит до вас</h3>
+        <p style="font-size:15px;line-height:1.5;color:#5a5a64;margin:0">Проблемы, которые тонут на уровне отделов и не всплывают наверх.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Фича 1 — Единый дашборд -->
+<section data-reveal style="opacity:0;transform:translateY(20px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)">
+  <div class="g2" style="max-width:1140px;margin:0 auto;padding:64px 40px;display:grid;grid-template-columns:1fr 1.05fr;gap:56px;align-items:center">
+    <div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:0.16em;color:#2f5bea;font-weight:500;margin-bottom:16px">ЕДИНЫЙ ДАШБОРД</div>
+      <h2 style="font-size:34px;line-height:1.1;letter-spacing:-0.025em;font-weight:800;margin:0 0 16px">Вся компания — от цеха до дирекции — в одном дашборде</h2>
+      <p style="font-size:17px;line-height:1.55;color:#5a5a64;margin:0 0 22px">Совещания идут на каждом уровне и в каждом отделе. Портал сводит их в одну картину: смотрите всю компанию целиком или открывайте отдельную площадку одним кликом. Сводки обновляются после каждого совещания — руками собирать ничего не нужно.</p>
+      <div style="background:#f7f7f8;border-radius:12px;padding:16px 18px;font-size:14.5px;line-height:1.5;color:#4a4a52"><span style="font-weight:700;color:#16161a">«У нас и так хватает отчётов».</span> Это не ещё один отчёт, который кто-то составляет вручную, — а живая картина из того, что реально говорили на совещаниях.</div>
+    </div>
+    <div style="border:1px solid #e6e6e8;border-radius:16px;background:#fff;box-shadow:0 30px 70px -40px rgba(20,20,50,.35);overflow:hidden">
+      <div style="padding:16px 18px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:10px">
+        <span style="font-size:13px;font-weight:700">Обзор компании</span>
+        <span style="margin-left:auto;display:inline-flex;background:#f2f2f4;border-radius:999px;padding:3px;font-size:12px;font-weight:600"><span style="background:#2f5bea;color:#fff;border-radius:999px;padding:5px 12px">Вся компания</span><span style="color:#7a7a82;padding:5px 12px">Площадка</span></span>
+      </div>
+      <div style="padding:14px 18px 18px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:14px"><span style="width:96px;font-size:13px;font-weight:600">Завод №1</span><div style="flex:1;height:10px;background:#eef0f4;border-radius:5px;overflow:hidden"><div style="width:72%;height:100%;background:#2f5bea"></div></div><span style="font-size:12px;color:#7a7a82;width:64px;text-align:right">18 тем</span></div>
+        <div style="display:flex;align-items:center;gap:14px"><span style="width:96px;font-size:13px;font-weight:600">Склад</span><div style="flex:1;height:10px;background:#eef0f4;border-radius:5px;overflow:hidden"><div style="width:44%;height:100%;background:#2f5bea"></div></div><span style="font-size:12px;color:#7a7a82;width:64px;text-align:right">11 тем</span></div>
+        <div style="display:flex;align-items:center;gap:14px"><span style="width:96px;font-size:13px;font-weight:600">Логистика</span><div style="flex:1;height:10px;background:#eef0f4;border-radius:5px;overflow:hidden"><div style="width:58%;height:100%;background:#2f5bea"></div></div><span style="font-size:12px;color:#7a7a82;width:64px;text-align:right">14 тем</span></div>
+        <div style="display:flex;align-items:center;gap:14px"><span style="width:96px;font-size:13px;font-weight:600">Дирекция</span><div style="flex:1;height:10px;background:#eef0f4;border-radius:5px;overflow:hidden"><div style="width:30%;height:100%;background:#2f5bea"></div></div><span style="font-size:12px;color:#7a7a82;width:64px;text-align:right">7 тем</span></div>
+        <div style="margin-top:6px;font-size:12px;color:#9a9aa2;font-family:'JetBrains Mono',monospace">обновлено после совещания «Оперативка · 09:00»</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Фича 2 — Что застряло (visual left) -->
+<section data-reveal style="opacity:0;transform:translateY(20px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1);background:#f7f7f8;border-top:1px solid #ededed;border-bottom:1px solid #ededed">
+  <div class="g2" style="max-width:1140px;margin:0 auto;padding:64px 40px;display:grid;grid-template-columns:1.05fr 1fr;gap:56px;align-items:center">
+    <div style="border:1px solid #e6e6e8;border-radius:16px;background:#fff;box-shadow:0 30px 70px -40px rgba(20,20,50,.3);overflow:hidden">
+      <div style="padding:18px;border-bottom:1px solid #eee">
+        <div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:15px;font-weight:700">Запуск склада в Ростове</span><span style="font-size:11px;font-weight:600;color:#c0362c;background:#fbe9e7;padding:3px 9px;border-radius:6px">Застряло · 3 недели</span></div>
+      </div>
+      <div style="padding:18px;position:relative">
+        <div style="position:absolute;left:26px;top:26px;bottom:26px;width:2px;background:#eaeaee"></div>
+        <div style="display:flex;gap:16px;margin-bottom:16px"><span style="width:11px;height:11px;border-radius:50%;background:#c0362c;margin-top:3px;z-index:1;box-shadow:0 0 0 4px #fff"></span><div><div style="font-size:13px;font-weight:600">Оперативка · 12 июня</div><div style="font-size:13px;color:#6a6a72">Подняли впервые. Ответственный: логистика.</div></div></div>
+        <div style="display:flex;gap:16px;margin-bottom:16px"><span style="width:11px;height:11px;border-radius:50%;background:#c0362c;margin-top:3px;z-index:1;box-shadow:0 0 0 4px #fff"></span><div><div style="font-size:13px;font-weight:600">Планёрка · 19 июня</div><div style="font-size:13px;color:#6a6a72">Мешает: не согласован подрядчик.</div></div></div>
+        <div style="display:flex;gap:16px"><span style="width:11px;height:11px;border-radius:50%;background:#c0362c;margin-top:3px;z-index:1;box-shadow:0 0 0 4px #fff"></span><div><div style="font-size:13px;font-weight:600">Оперативка · 26 июня</div><div style="font-size:13px;color:#6a6a72">Всплыло снова. Движения нет. <a href="#top">→ протокол</a></div></div></div>
+      </div>
+    </div>
+    <div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:0.16em;color:#c0362c;font-weight:500;margin-bottom:16px">ЧТО ЗАСТРЯЛО</div>
+      <h2 style="font-size:34px;line-height:1.1;letter-spacing:-0.025em;font-weight:800;margin:0 0 16px">Видно, что буксует, — пока это не стало срывом</h2>
+      <p style="font-size:17px;line-height:1.55;color:#5a5a64;margin:0">Тема всплывает на совещаниях третью неделю подряд, но не двигается? Портал помечает такие темы как застрявшие и показывает их историю: когда подняли, кто отвечает, что мешает. Проблема перестаёт тонуть в потоке.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Фича 3 — Где опаздываем -->
+<section data-reveal style="opacity:0;transform:translateY(20px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)">
+  <div class="g2" style="max-width:1140px;margin:0 auto;padding:64px 40px;display:grid;grid-template-columns:1fr 1.05fr;gap:56px;align-items:center">
+    <div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:0.16em;color:#b06a00;font-weight:500;margin-bottom:16px">ГДЕ ОПАЗДЫВАЕМ</div>
+      <h2 style="font-size:34px;line-height:1.1;letter-spacing:-0.025em;font-weight:800;margin:0 0 16px">Просрочки и срывы сроков — на виду, а не в чьей-то голове</h2>
+      <p style="font-size:17px;line-height:1.55;color:#5a5a64;margin:0">Задачи из совещаний уходят в вашу CRM, а портал сводит просрочки, эскалации и поручения без движения по всем площадкам. Отставания видны раньше, чем о них доложат.</p>
+    </div>
+    <div style="border:1px solid #e6e6e8;border-radius:16px;background:#fff;box-shadow:0 30px 70px -40px rgba(20,20,50,.35);overflow:hidden">
+      <div style="padding:16px 18px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:10px"><span style="font-size:13px;font-weight:700">Задачи · просрочки</span><span style="margin-left:auto;font-size:11px;font-weight:600;color:#b06a00;background:#fdf1dd;padding:3px 9px;border-radius:6px">23 просрочено</span></div>
+      <div style="padding:8px 10px 12px">
+        <div class="rowt" style="display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:9px"><span style="width:8px;height:8px;border-radius:50%;background:#c0362c"></span><div style="flex:1"><div style="font-size:13.5px;font-weight:600">Согласовать подрядчика · Ростов</div><div style="font-size:12px;color:#8a8a92">Логистика · срок −6 дней</div></div><span style="font-size:11px;font-weight:600;color:#c0362c;background:#fbe9e7;padding:3px 8px;border-radius:5px">Эскалация</span></div>
+        <div class="rowt" style="display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:9px"><span style="width:8px;height:8px;border-radius:50%;background:#b06a00"></span><div style="flex:1"><div style="font-size:13.5px;font-weight:600">Поставка трубы 1420</div><div style="font-size:12px;color:#8a8a92">Снабжение · срок −2 дня</div></div><span style="font-size:11px;font-weight:600;color:#b06a00;background:#fdf1dd;padding:3px 8px;border-radius:5px">Просрочено</span></div>
+        <div class="rowt" style="display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:9px"><span style="width:8px;height:8px;border-radius:50%;background:#b06a00"></span><div style="flex:1"><div style="font-size:13.5px;font-weight:600">Акт по партии №418</div><div style="font-size:12px;color:#8a8a92">Качество · срок −1 день</div></div><span style="font-size:11px;font-weight:600;color:#b06a00;background:#fdf1dd;padding:3px 8px;border-radius:5px">Просрочено</span></div>
+        <div class="rowt" style="display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:9px"><span style="width:8px;height:8px;border-radius:50%;background:#9a9aa2"></span><div style="flex:1"><div style="font-size:13.5px;font-weight:600">Ответ на претензию клиента</div><div style="font-size:12px;color:#8a8a92">Продажи · без движения 8 дней</div></div><span style="font-size:11px;font-weight:600;color:#6a6a72;background:#eef0f2;padding:3px 8px;border-radius:5px">Завис</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Фича 4 — Что не доходит (visual left) -->
+<section data-reveal style="opacity:0;transform:translateY(20px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1);background:#f7f7f8;border-top:1px solid #ededed;border-bottom:1px solid #ededed">
+  <div class="g2" style="max-width:1140px;margin:0 auto;padding:64px 40px;display:grid;grid-template-columns:1.05fr 1fr;gap:56px;align-items:center">
+    <div style="border:1px solid #e6e6e8;border-radius:16px;background:#fff;box-shadow:0 30px 70px -40px rgba(20,20,50,.3);overflow:hidden">
+      <div style="padding:16px 18px;border-bottom:1px solid #eee;font-size:13px;font-weight:700">Паттерны и тренды</div>
+      <div style="padding:14px 16px 6px">
+        <div style="display:flex;gap:12px;padding:11px 12px;border-radius:9px;background:#f9f5ff;margin-bottom:8px"><span style="width:8px;height:8px;border-radius:50%;background:#6b4ea8;margin-top:5px"></span><div><div style="font-size:13.5px;font-weight:600">Повторяющаяся жалоба на смежников</div><div style="font-size:12.5px;color:#7a7a82">4 раза за месяц на 3 площадках · <a href="#top">→ протокол</a></div></div></div>
+        <div style="display:flex;gap:12px;padding:11px 12px;border-radius:9px;background:#fef4ee;margin-bottom:8px"><span style="width:8px;height:8px;border-radius:50%;background:#b06a00;margin-top:5px"></span><div><div style="font-size:13.5px;font-weight:600">Узкое место: приёмка на складе</div><div style="font-size:12.5px;color:#7a7a82">упоминается всё чаще · <a href="#top">→ протокол</a></div></div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:6px 16px 18px">
+        <div style="border:1px solid #ececee;border-radius:10px;padding:12px 13px"><div style="font-size:12px;color:#7a7a82;font-weight:600;margin-bottom:4px">Смежники</div><div style="font-size:14px;font-weight:700;color:#c0362c">хуже ▲</div></div>
+        <div style="border:1px solid #ececee;border-radius:10px;padding:12px 13px"><div style="font-size:12px;color:#7a7a82;font-weight:600;margin-bottom:4px">Сроки поставок</div><div style="font-size:14px;font-weight:700;color:#2d6a4f">лучше ▼</div></div>
+      </div>
+    </div>
+    <div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:0.16em;color:#6b4ea8;font-weight:500;margin-bottom:16px">ЧТО НЕ ДОХОДИТ ДО ВАС · ПОДСКАЗКИ</div>
+      <h2 style="font-size:34px;line-height:1.1;letter-spacing:-0.025em;font-weight:800;margin:0 0 16px">Проблемы, которые тонут на уровне отдела, — поднимаются наверх</h2>
+      <p style="font-size:17px;line-height:1.55;color:#5a5a64;margin:0 0 22px">Портал сам находит повторяющиеся жалобы, узкие места и то, что тормозит работу, — о таком вам обычно не докладывают. И показывает тренды: где стало лучше, а где хуже, без запросов и ручного анализа.</p>
+      <div style="background:#fff;border:1px solid #e6e6e8;border-radius:12px;padding:16px 18px;font-size:14.5px;line-height:1.5;color:#4a4a52"><span style="font-weight:700;color:#16161a">«ИИ-аналитике нельзя верить».</span> Каждый сигнал трассируется до конкретной реплики в протоколе: вы видите не абстрактный статус, а кто и что сказал на совещании.</div>
+    </div>
+  </div>
+</section>
+
+<!-- Фича 5 — Поиск -->
+<section data-reveal style="opacity:0;transform:translateY(20px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)">
+  <div class="g2" style="max-width:1140px;margin:0 auto;padding:64px 40px;display:grid;grid-template-columns:1fr 1.05fr;gap:56px;align-items:center">
+    <div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:0.16em;color:#2f5bea;font-weight:500;margin-bottom:16px">ПОИСК И ВОПРОСЫ</div>
+      <h2 style="font-size:34px;line-height:1.1;letter-spacing:-0.025em;font-weight:800;margin:0 0 16px">Спросите портал — как спросили бы аналитика</h2>
+      <p style="font-size:17px;line-height:1.55;color:#5a5a64;margin:0">«Что решили по трубе 1420 за месяц?», «Где стопорится проект по новому складу?» — портал отвечает по всей истории совещаний и даёт ссылки на протоколы. Без перечитывания десятков файлов.</p>
+    </div>
+    <div style="border:1px solid #e6e6e8;border-radius:16px;background:#fff;box-shadow:0 30px 70px -40px rgba(20,20,50,.35);overflow:hidden">
+      <div style="padding:18px 18px 12px">
+        <div style="display:flex;align-items:center;gap:10px;border:1.5px solid #d9d9dd;border-radius:12px;padding:12px 14px"><span style="color:#9a9aa2;font-size:16px">⌕</span><span style="font-size:14px;font-weight:500">Что решили по трубе 1420 за месяц?</span></div>
+      </div>
+      <div style="padding:4px 18px 18px">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:0.12em;color:#9a9aa2;margin:8px 0 10px">ОТВЕТ ПОРТАЛА</div>
+        <p style="font-size:14.5px;line-height:1.55;color:#3a3a42;margin:0 0 14px">Поставку перенесли на 30 июня из-за подрядчика (оперативка 12.06). На планёрке 19.06 согласовали аванс, задача в CRM закрыта. Открытый риск — приёмка на складе.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <a href="#top" style="font-size:12px;font-weight:600;color:#2f5bea;background:#e9eefc;padding:5px 11px;border-radius:7px">Оперативка · 12.06</a>
+          <a href="#top" style="font-size:12px;font-weight:600;color:#2f5bea;background:#e9eefc;padding:5px 11px;border-radius:7px">Планёрка · 19.06</a>
+          <a href="#top" style="font-size:12px;font-weight:600;color:#2f5bea;background:#e9eefc;padding:5px 11px;border-radius:7px">Задача CRM #4182</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Как это работает -->
+<section id="how" data-reveal style="opacity:0;transform:translateY(20px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1);background:#f7f7f8;border-top:1px solid #ededed">
+  <div style="max-width:1140px;margin:0 auto;padding:66px 40px 30px">
+    <div style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:0.18em;color:#9a9aa2;font-weight:500;margin-bottom:12px">КАК ЭТО РАБОТАЕТ · ФУНДАМЕНТ</div>
+    <h2 style="font-size:34px;line-height:1.1;letter-spacing:-0.025em;font-weight:800;margin:0 0 34px;max-width:640px">Механика под капотом — три шага без вашего участия</h2>
+    <div class="g3" style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px">
+      <div style="background:#fff;border:1px solid #e6e6e8;border-radius:14px;padding:26px">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:#2f5bea;font-weight:600;margin-bottom:14px">01</div>
+        <h3 style="font-size:18px;font-weight:700;margin:0 0 8px">Запись</h3>
+        <p style="font-size:14.5px;line-height:1.5;color:#5a5a64;margin:0">Совещание записывается на вашем стеке — MyMeet или SaluteSpeech.</p>
+      </div>
+      <div style="background:#fff;border:1px solid #e6e6e8;border-radius:14px;padding:26px">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:#2f5bea;font-weight:600;margin-bottom:14px">02</div>
+        <h3 style="font-size:18px;font-weight:700;margin:0 0 8px">Авто-разбор</h3>
+        <p style="font-size:14.5px;line-height:1.5;color:#5a5a64;margin:0">Речь превращается в протокол, решения и задачи. Задачи уходят в вашу CRM.</p>
+      </div>
+      <div style="background:#fff;border:1px solid #e6e6e8;border-radius:14px;padding:26px">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:#2f5bea;font-weight:600;margin-bottom:14px">03</div>
+        <h3 style="font-size:18px;font-weight:700;margin:0 0 8px">Дашборд</h3>
+        <p style="font-size:14.5px;line-height:1.5;color:#5a5a64;margin:0">Кросс-встречная аналитика по неделям и площадкам — с трассировкой каждого сигнала до реплики.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Строка доверия / безопасность -->
+<section id="security" style="background:#f7f7f8;border-bottom:1px solid #ededed">
+  <div style="max-width:1140px;margin:0 auto;padding:16px 40px 62px">
+    <div class="g3" style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px">
+      <div style="border-top:1px solid #dedee2;padding-top:18px"><div style="font-size:15px;font-weight:700;margin-bottom:6px">На вашей инфраструктуре</div><div style="font-size:14px;line-height:1.5;color:#6a6a72">152-ФЗ · данные не уходят на сторону.</div></div>
+      <div style="border-top:1px solid #dedee2;padding-top:18px"><div style="font-size:15px;font-weight:700;margin-bottom:6px">Ролевой доступ</div><div style="font-size:14px;line-height:1.5;color:#6a6a72">COO видит всю компанию, руководитель площадки — только свою.</div></div>
+      <div style="border-top:1px solid #dedee2;padding-top:18px"><div style="font-size:15px;font-weight:700;margin-bottom:6px">Прозрачный счётчик ИИ</div><div style="font-size:14px;line-height:1.5;color:#6a6a72">Расходы на ИИ-запросы всегда под контролем.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6. REPEAT CTA ============ -->
+<section data-reveal style="opacity:0;transform:translateY(20px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1);background:#16161a">
+  <div style="max-width:960px;margin:0 auto;padding:88px 40px;text-align:center">
+    <h2 style="color:#fff;font-size:46px;line-height:1.05;letter-spacing:-0.03em;font-weight:800;margin:0 0 18px">Перестаньте узнавать о проблемах последним</h2>
+    <p style="color:#a8a8b2;font-size:19px;line-height:1.5;margin:0 auto 34px;max-width:620px">Один дашборд по всем совещаниям — вы видите застрявшее и опаздывающее раньше, чем это станет пожаром.</p>
+    <div style="display:flex;gap:13px;justify-content:center;align-items:center;flex-wrap:wrap">
+      <a href="#top" class="btn-bright" style="background:#2f5bea;color:#fff;border-radius:999px;padding:16px 32px;font-weight:600;font-size:17px;transition:background .18s">Запросить демо</a>
+      <a href="#how" class="btn-ghost-dark" style="background:transparent;color:#fff;border:1.5px solid #3a3a42;border-radius:999px;padding:14.5px 28px;font-weight:600;font-size:17px;transition:border-color .18s">Как это работает ↓</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 7. FOOTER ============ -->
+<footer style="background:#111114;color:#c8c8d0">
+  <div class="gfoot" style="max-width:1140px;margin:0 auto;padding:56px 40px 40px;display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:40px">
+    <div>
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:12px"><span style="font-weight:800;font-size:19px;color:#fff">Клемма</span><span style="font-size:12px;color:#7a7a86">портал совещаний</span></div>
+      <p style="font-size:14px;line-height:1.55;color:#8a8a96;margin:0;max-width:320px">Все совещания компании — на одном экране: что застряло, где опаздываем, что не дошло до вас.</p>
+    </div>
+    <div>
+      <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#6a6a76;text-transform:uppercase;margin-bottom:14px">Продукт</div>
+      <div style="display:flex;flex-direction:column;gap:9px;font-size:14px">
+        <a href="#features" class="flink" style="color:#c8c8d0">Возможности</a>
+        <a href="#how" class="flink" style="color:#c8c8d0">Как работает</a>
+        <a href="#security" class="flink" style="color:#c8c8d0">Безопасность и 152-ФЗ</a>
+      </div>
+    </div>
+    <div>
+      <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#6a6a76;text-transform:uppercase;margin-bottom:14px">Контакты</div>
+      <div style="display:flex;flex-direction:column;gap:9px;font-size:14px;color:#8a8a96">
+        <span style="color:#c8c8d0">Илья Болховский</span>
+        <span>внедрение Meeting Intelligence</span>
+        <a href="#top" class="flink" style="color:#c8c8d0">email · Telegram [подставить]</a>
+      </div>
+    </div>
+  </div>
+  <div style="border-top:1px solid #232329">
+    <div style="max-width:1140px;margin:0 auto;padding:18px 40px;display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;font-size:12.5px;color:#6a6a76">
+      <span>© 2026 Клемма</span>
+      <span style="display:flex;gap:22px"><a href="#top" class="flinkd" style="color:#6a6a76">Политика конфиденциальности</a><a href="#top" class="flinkd" style="color:#6a6a76">Обработка ПДн (152-ФЗ)</a></span>
+    </div>
+  </div>
+</footer>
+
+</div>
+
+<script>
+// scroll-reveal: fade sections in as they enter the viewport
+(function () {
+  var els = document.querySelectorAll('[data-reveal]');
+  if (!('IntersectionObserver' in window)) {
+    els.forEach(function (e) { e.style.opacity = '1'; e.style.transform = 'none'; });
+    return;
+  }
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (en) {
+      if (en.isIntersecting) {
+        en.target.style.opacity = '1';
+        en.target.style.transform = 'none';
+        io.unobserve(en.target);
+      }
+    });
+  }, { threshold: 0.06, rootMargin: '0px 0px -6% 0px' });
+  els.forEach(function (e) { io.observe(e); });
+})();
+</script>
+
+</body>
+</html>

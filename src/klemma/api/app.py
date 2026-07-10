@@ -133,6 +133,20 @@ def create_app() -> FastAPI:
     if spa_dir and Path(spa_dir).is_dir():
         from starlette.staticfiles import StaticFiles
 
+        # Optional landing override: serve a specific file at exactly "/" (e.g. the
+        # Bonum marketing landing baked into the SPA build) while every other route
+        # keeps the SPA — the portal stays reachable behind login unchanged. This
+        # explicit route is registered BEFORE the "/" mount below, so it wins for
+        # GET "/". Unset (klemma SaaS) → "/" serves the SPA index as before.
+        root_file = os.environ.get("KLEMMA_SPA_ROOT_FILE", "").strip()
+        root_path = Path(spa_dir) / root_file if root_file else None
+        if root_path is not None and root_path.is_file():
+            from starlette.responses import FileResponse
+
+            @app.get("/", include_in_schema=False)
+            async def _spa_root_landing():
+                return FileResponse(root_path)
+
         class _SPAStatic(StaticFiles):
             async def get_response(self, path, scope):
                 # Starlette's StaticFiles raises HTTPException(404) for a
