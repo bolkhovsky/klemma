@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { auth, userProjects, ApiError } from '@/api/client'
-import { postLoginPath } from '@/router'
+import { postLoginPath, safeRedirect } from '@/router'
 
+const route = useRoute()
 const router = useRouter()
 const email = ref('')
 const password = ref('')
@@ -17,6 +18,16 @@ async function handleLogin() {
     const data = await auth.login(email.value, password.value)
     localStorage.setItem('access_token', data.access_token)
     localStorage.setItem('refresh_token', data.refresh_token)
+    // Адрес, с которого нас развернул beforeEach (внешний диплинк на встречу),
+    // важнее дефолтной посадочной страницы — иначе ссылка из мобильного
+    // приложения после ввода пароля приводит на общий список без ?open=.
+    // safeRedirect отсекает чужие домены: страница логина не должна быть
+    // open-redirect'ом.
+    const back = safeRedirect(route.query.redirect)
+    if (back) {
+      router.push(back)
+      return
+    }
     try {
       const projectsData = await userProjects.list()
       const first = projectsData.projects[0]

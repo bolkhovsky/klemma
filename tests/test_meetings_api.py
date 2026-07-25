@@ -182,6 +182,38 @@ def test_ingest_adds_meeting(client):
     assert any(m["title"] == "Спринт 99" for m in after["meetings"])
 
 
+def test_ingest_accepts_explicit_site_slug(client):
+    """Отправитель, который знает слаг (мобильный воркер читает его из того же
+    GET /meetings/sites), не должен зависеть от нечёткого резолвера: 'ИТ' не
+    матчится ни на одну площадку реестра, и без явного слага встреча осталась бы
+    неразрешённой — невидимой для руководителя площадки."""
+    unresolved = dict(INGEST_PAYLOAD, meeting_id="no-slug", date=DATE_RECENT)
+    assert client.post("/meetings/ingest", json=unresolved,
+                       headers={"X-Ingest-Token": "test-ingest"}).status_code == 200
+    assert not any(
+        m["title"] == "Спринт 99"
+        for m in client.get("/meetings", params={"site": "oms_tlt"}).json()["meetings"]
+    )
+
+    explicit = dict(INGEST_PAYLOAD, meeting_id="with-slug", date=DATE_RECENT,
+                    site_slug="oms_tlt")
+    assert client.post("/meetings/ingest", json=explicit,
+                       headers={"X-Ingest-Token": "test-ingest"}).status_code == 200
+    scoped = client.get("/meetings", params={"site": "oms_tlt"}).json()["meetings"]
+    assert any(m["title"] == "Спринт 99" for m in scoped)
+
+
+def test_ingest_ignores_unknown_site_slug(client):
+    """Опечатка в слаге не создаёт встречу, до которой не дойдёт ни один аккаунт:
+    падаем обратно на резолвер по имени площадки и заголовку."""
+    payload = dict(INGEST_PAYLOAD, meeting_id="bad-slug", date=DATE_RECENT,
+                   site="Челябинск", title="ОМС Челябинск", site_slug="oms_chelyabinks")
+    assert client.post("/meetings/ingest", json=payload,
+                       headers={"X-Ingest-Token": "test-ingest"}).status_code == 200
+    scoped = client.get("/meetings", params={"site": "oms_chel"}).json()["meetings"]
+    assert any(m["title"] == "ОМС Челябинск" for m in scoped)
+
+
 def test_get_meeting_404(client):
     assert client.get("/meetings/nope").status_code == 404
 

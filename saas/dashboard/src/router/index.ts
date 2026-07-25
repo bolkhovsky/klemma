@@ -9,6 +9,23 @@ export function postLoginPath(projectId: string): string {
   return PORTAL_ONLY ? `/${projectId}/portal/meetings` : `/${projectId}/library`
 }
 
+/**
+ * Санитайзер для `?redirect=` — возвращает путь только если он ведёт внутрь SPA.
+ *
+ * Страница логина принимает адрес возврата из query, поэтому без проверки она
+ * становится open-redirect: `/login?redirect=https://evil.example` увёл бы
+ * пользователя на чужой домен сразу после ввода пароля. Пропускаем только
+ * абсолютный путь с одним ведущим слэшем: `//host` браузер трактует как
+ * protocol-relative URL на другой хост, а `\` в некоторых движках нормализуется
+ * в `/` — обе формы отсекаем явно.
+ */
+export function safeRedirect(raw: unknown): string | null {
+  if (typeof raw !== 'string' || !raw) return null
+  if (!raw.startsWith('/')) return null
+  if (raw.startsWith('//') || raw.startsWith('/\\')) return null
+  return raw
+}
+
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -26,6 +43,14 @@ const router = createRouter({
       path: '/register',
       name: 'register',
       component: () => import('../views/RegisterView.vue'),
+    },
+    // External deep link to one meeting (mobile app, email). Resolves the
+    // user's project, then replaces itself with the real portal route.
+    {
+      path: '/meetings/:sourceId',
+      name: 'meeting-deeplink',
+      component: () => import('../views/portal/MeetingDeepLinkView.vue'),
+      meta: { requiresAuth: true, standalone: true },
     },
     // Global library — all sources across projects (top-level, no projectId)
     {
@@ -133,8 +158,16 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   const token = localStorage.getItem('access_token')
-  if (to.meta.requiresAuth && !token) return { name: 'login' }
+  // Куда пользователь шёл — в query, иначе внешний диплинк (напр. /meetings/<id>
+  // из мобильного приложения) с непрогретой сессией теряется на логине.
+  if (to.meta.requiresAuth && !token) {
+    return { name: 'login', query: { redirect: to.fullPath } }
+  }
   if ((to.name === 'login' || to.name === 'register') && token) {
+    // Строкой, а не { path }: fullPath несёт query (`?open=<id>`), а объектная
+    // форма трактует path как чистый путь.
+    const back = safeRedirect(to.query.redirect)
+    if (back) return back
     try {
       const { userProjects } = await import('../api/client')
       const data = await userProjects.list()

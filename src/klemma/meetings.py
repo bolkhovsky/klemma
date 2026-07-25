@@ -37,9 +37,10 @@ from pathlib import Path
 from typing import Optional
 
 from .meetings_sites import (
+    RESOLVED,
     ensure_portal_tables,
     get_sites,
-    resolve_site_slug,
+    pick_site_slug,
     site_display_names,
 )
 
@@ -505,6 +506,9 @@ def build_records(pm: ParsedMeeting, stem: str) -> tuple[str, dict, list[dict]]:
         "date": date_str,
         "type": mtype,
         "site": site,
+        # Запрошенный отправителем слаг; import_meeting решает, принять его или
+        # резолвить площадку самостоятельно (см. pick_site_slug).
+        "site_slug": str(meta.get("site_slug") or ""),
         "time": str(meta.get("time") or ""),
         "duration": meta.get("duration"),
         "speakers": meta.get("speakers") or [],
@@ -603,6 +607,10 @@ def parse_nodul_payload(payload: dict) -> tuple[str, ParsedMeeting]:
         "date": str(payload.get("date") or ""),
         "type": str(payload.get("type") or ""),
         "site": str(payload.get("site") or ""),
+        # Точный слаг площадки, когда отправитель его знает (мобильный клиент берёт
+        # его из того же GET /meetings/sites). Пусто → площадку резолвит
+        # resolve_site_slug по имени и заголовку, как для payload'ов Нодуля.
+        "site_slug": str(payload.get("site_slug") or "").strip(),
         "time": str(payload.get("time") or ""),
         "duration": payload.get("duration"),
         "speakers": speakers,
@@ -669,9 +677,17 @@ def import_meeting(state, embeddings, pm: ParsedMeeting, stem: str) -> dict:
     # /meetings/sites/sync remaps all meetings).
     ensure_portal_tables(state)
     sites = get_sites(state)
-    meeting_meta["site_slug"] = (
-        resolve_site_slug(meeting_meta.get("site", ""), pm.title, sites) if sites else ""
-    )
+    if sites:
+        slug, slug_source = pick_site_slug(
+            str(meeting_meta.get("site_slug") or ""),
+            meeting_meta.get("site", ""),
+            pm.title,
+            sites,
+        )
+    else:
+        slug, slug_source = "", RESOLVED
+    meeting_meta["site_slug"] = slug
+    meeting_meta["site_slug_source"] = slug_source
     state.register_sources([source_id])
     state.update_source_info(
         source_id,

@@ -30,10 +30,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from klemma.meetings import BONUM_ROOT_ENV, _meeting_meta_map, bonum_db_path  # noqa: E402
 from klemma.meetings_sites import (  # noqa: E402
+    EXPLICIT,
     ensure_portal_tables,
     parse_sites_webhook,
+    pick_site_slug,
     remap_meeting_sites,
-    resolve_site_slug,
     upsert_sites,
 )
 from klemma.state import StateManager  # noqa: E402
@@ -113,7 +114,14 @@ def main() -> None:
         for meta in metas.values():
             site = str(meta.get("site") or "")
             title = str(meta.get("title") or "")
-            slug = resolve_site_slug(site, title, enabled)
+            # Тем же правилом, что и живой прогон (pick_site_slug), иначе dry-run
+            # обещал бы пересчёт площадок, которые remap на самом деле сохранит.
+            slug, _source = pick_site_slug(
+                str(meta.get("site_slug") or "") if meta.get("site_slug_source") == EXPLICIT else "",
+                site,
+                title,
+                enabled,
+            )
             distribution[slug] = distribution.get(slug, 0) + 1
             if not slug:
                 unmapped.append((str(meta.get("date") or ""), site, title))
@@ -125,7 +133,8 @@ def main() -> None:
     n = upsert_sites(state, items)
     result = remap_meeting_sites(state)
     print(f"\n→ Upserted {n} sites; remapped {result['mapped'] + result['unmapped']} meetings "
-          f"({result['mapped']} mapped, {result['unmapped']} unmapped)")
+          f"({result['mapped']} mapped, {result['unmapped']} unmapped, "
+          f"{result['preserved']} kept as sender-supplied)")
 
     unmapped = [
         (str(m.get("date") or ""), str(m.get("site") or ""), str(m.get("title") or ""))

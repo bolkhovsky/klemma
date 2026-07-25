@@ -252,16 +252,65 @@ def resolve_site_slug(site: str, title: str, sites: list[dict]) -> str:
     return best_slug
 
 
-def remap_meeting_sites(state) -> dict:
-    """Re-resolve ``site_slug`` for ALL meeting sources against the registry.
+EXPLICIT = "explicit"
+RESOLVED = "resolved"
 
-    Returns ``{"mapped": n, "unmapped": n, "distribution": {slug_or_"": count}}``
-    so callers can print the result — silent mis-mapping is not acceptable.
+
+def _enabled_slugs(sites: list[dict]) -> set[str]:
+    """Live slugs from a registry listing (defensive about the disabled flag:
+    ``get_sites`` filters by default, but callers may pass ``enabled_only=False``)."""
+    known = set()
+    for entry in sites:
+        if not isinstance(entry, dict):
+            continue
+        slug, _name, _keywords, enabled = _site_fields(entry)
+        if slug and enabled:
+            known.add(slug)
+    return known
+
+
+def pick_site_slug(
+    explicit: str, site: str, title: str, sites: list[dict]
+) -> tuple[str, str]:
+    """Choose a meeting's site slug — ``(slug, source)``, source ∈ explicit|resolved.
+
+    Senders that already know the registry id must not have it thrown away and
+    re-guessed: the mobile client reads the slug from the same
+    ``GET /meetings/sites`` this portal serves, so its value is authoritative in
+    a way ``resolve_site_slug`` (substring / keyword / stem scoring over the site
+    string plus the title) can never be. A miss there yields ``''``, and an
+    unresolved meeting is invisible to every site leader.
+
+    An explicit slug wins ONLY when it names a live enabled site. A typo or a
+    retired slug falls back to the resolver rather than creating a meeting that
+    no account can reach — silently trusting it would trade one failure mode
+    for a worse one.
+    """
+    if explicit and explicit in _enabled_slugs(sites):
+        return explicit, EXPLICIT
+    return resolve_site_slug(site, title, sites), RESOLVED
+
+
+def remap_meeting_sites(state) -> dict:
+    """Re-resolve ``site_slug`` for meeting sources against the registry.
+
+    Returns ``{"mapped": n, "unmapped": n, "preserved": n, "distribution":
+    {slug_or_"": count}}`` so callers can print the result — silent mis-mapping
+    is not acceptable.
+
+    Meetings whose slug came in explicitly (``site_slug_source == "explicit"``,
+    see ``pick_site_slug``) are LEFT ALONE while that slug still names a live
+    site. Without this a single ``POST /meetings/sites/sync`` would overwrite
+    every authoritative slug with a fuzzy guess — the exact loss the explicit
+    field exists to prevent. They still count as ``mapped`` (so
+    ``mapped + unmapped`` stays the total) and are reported separately as
+    ``preserved``: silently kept is as unacceptable as silently re-mapped.
     """
     ensure_portal_tables(state)
     sites = get_sites(state)
+    known = _enabled_slugs(sites)
     distribution: dict[str, int] = {}
-    mapped = unmapped = 0
+    mapped = unmapped = preserved = 0
     with state._conn() as conn:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(sources)")}
         if "meeting_meta" not in cols:
@@ -276,10 +325,18 @@ def remap_meeting_sites(state) -> dict:
                 meta = {}
             if not isinstance(meta, dict):
                 meta = {}
+            current = str(meta.get("site_slug") or "")
+            if meta.get("site_slug_source") == EXPLICIT and current in known:
+                # Авторитетный слаг живой площадки — не трогаем и не переписываем строку.
+                distribution[current] = distribution.get(current, 0) + 1
+                mapped += 1
+                preserved += 1
+                continue
             slug = resolve_site_slug(
                 str(meta.get("site") or ""), str(meta.get("title") or ""), sites
             )
             meta["site_slug"] = slug
+            meta["site_slug_source"] = RESOLVED
             conn.execute(
                 "UPDATE sources SET meeting_meta=? WHERE id=?",
                 (json.dumps(meta, ensure_ascii=False), sid),
@@ -289,7 +346,12 @@ def remap_meeting_sites(state) -> dict:
                 mapped += 1
             else:
                 unmapped += 1
-    return {"mapped": mapped, "unmapped": unmapped, "distribution": distribution}
+    return {
+        "mapped": mapped,
+        "unmapped": unmapped,
+        "preserved": preserved,
+        "distribution": distribution,
+    }
 
 
 # ── Access control ────────────────────────────────────────────────────────────

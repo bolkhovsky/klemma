@@ -12,6 +12,7 @@ no row → director (full view), leaders see only their ``site_slugs``.
 from __future__ import annotations
 
 import os
+import secrets
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel
@@ -95,7 +96,9 @@ def _scope(state, user, site: str | None) -> set[str] | None:
 
 def _check_ingest_token(x_ingest_token: str | None) -> None:
     expected = os.getenv("KLEMMA_BONUM_INGEST_TOKEN", "")
-    if not expected or x_ingest_token != expected:
+    # compare_digest: сравнение секрета за постоянное время. Обычный != выходит на
+    # первом несовпавшем байте и по времени ответа выдаёт длину общего префикса.
+    if not expected or not secrets.compare_digest(x_ingest_token or "", expected):
         raise HTTPException(status_code=401, detail="invalid ingest token")
 
 
@@ -131,6 +134,10 @@ class IngestRequest(BaseModel):
     date: str = ""
     type: str = ""
     site: str = ""
+    # Точный слаг площадки, если отправитель его знает (мобильный воркер читает
+    # его из GET /meetings/sites). Пусто → площадку резолвит resolve_site_slug
+    # по `site` и заголовку, как для payload'ов Нодуля.
+    site_slug: str = ""
     time: str = ""
     duration: int | None = None
     speakers: list[str] = []

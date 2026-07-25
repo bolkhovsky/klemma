@@ -8,13 +8,22 @@ different prefix), latin/cyrillic keyword variants, and unmatched → ''.
 
 from datetime import date, timedelta
 
-from klemma.meetings import ParsedMeeting, ParsedTask, import_meeting, list_meetings
+from klemma.meetings import (
+    ParsedMeeting,
+    ParsedTask,
+    _meeting_meta_map,
+    import_meeting,
+    list_meetings,
+)
 from klemma.meetings_sites import (
+    EXPLICIT,
+    RESOLVED,
     allowed_slugs,
     ensure_portal_tables,
     get_access,
     get_sites,
     parse_sites_webhook,
+    pick_site_slug,
     remap_meeting_sites,
     resolve_site_slug,
     set_access,
@@ -222,17 +231,123 @@ def test_access_rejects_bad_role(tmp_path):
 # ── Remap + write-time resolution ─────────────────────────────────────────────
 
 
-def _mk_meeting(state, *, date_str, site, title, overdue=False):
+def _mk_meeting(state, *, date_str, site, title, overdue=False, site_slug=""):
     pm = ParsedMeeting(
         title=title,
         summary="Обсудили статус.",
         tasks=[ParsedTask(action="Сделать отчёт", assignee="Иванов",
                           deadline="просроч. вчера" if overdue else "завтра",
                           overdue=overdue)],
-        meta={"date": date_str, "site": site, "type": "ОМС", "time": "09:00",
-              "speakers": []},
+        meta={"date": date_str, "site": site, "site_slug": site_slug, "type": "ОМС",
+              "time": "09:00", "speakers": []},
     )
     return import_meeting(state, None, pm, f"{date_str}-{title}")
+
+
+def _all_sites():
+    return [
+        {"site_slug": s["slug"], "site_name": s["name"],
+         "site_keywords": s["keywords"], "enabled": s["enabled"]}
+        for s in SITES
+    ]
+
+
+def _meta_of(state, source_id) -> dict:
+    return _meeting_meta_map(state)[source_id]
+
+
+# ── Explicit (sender-supplied) slug ───────────────────────────────────────────
+#
+# Отправитель, который слаг ЗНАЕТ (мобильный воркер читает его из того же
+# GET /meetings/sites), не должен отдавать площадку на откуп нечёткому
+# резолверу: его промах даёт site_slug='' — встречу не видит ни один
+# руководитель площадки.
+
+
+def test_pick_prefers_explicit_over_resolver():
+    # site/title уверенно резолвятся в ОДНУ площадку, явный слаг называет ДРУГУЮ —
+    # выигрывает явный, иначе проверка ничего не доказывает.
+    assert resolve_site_slug("Ремонтного участка", "ОМС Ремонтного участка", SITES) == (
+        "oms_remontnyi_uchastok"
+    )
+    assert pick_site_slug(
+        "oms_vympel", "Ремонтного участка", "ОМС Ремонтного участка", SITES
+    ) == ("oms_vympel", EXPLICIT)
+
+
+def test_pick_falls_back_when_slug_unknown():
+    # Опечатка в слаге не должна создавать встречу, до которой никто не дойдёт.
+    assert pick_site_slug(
+        "oms_vymple", "Ремонтного участка", "ОМС Ремонтного участка", SITES
+    ) == ("oms_remontnyi_uchastok", RESOLVED)
+
+
+def test_pick_falls_back_when_site_disabled():
+    # closed_site есть в реестре, но выключен — на него нельзя писать новые встречи.
+    assert pick_site_slug("closed_site", "ВЫМПЕЛ", "Ежедневный ОМС ВЫМПЕЛ", SITES) == (
+        "oms_vympel", RESOLVED,
+    )
+
+
+def test_pick_without_explicit_is_plain_resolve():
+    assert pick_site_slug("", "ВЫМПЕЛ", "Ежедневный ОМС ВЫМПЕЛ", SITES) == (
+        "oms_vympel", RESOLVED,
+    )
+
+
+def test_import_honours_explicit_slug(tmp_path):
+    state = _state(tmp_path)
+    upsert_sites(state, _all_sites())
+    result = _mk_meeting(
+        state, date_str="2026-06-05", site="Ремонтного участка",
+        title="ОМС Ремонтного участка", site_slug="oms_vympel",
+    )
+    meta = _meta_of(state, result["source_id"])
+    assert meta["site_slug"] == "oms_vympel"
+    assert meta["site_slug_source"] == EXPLICIT
+
+
+def test_remap_preserves_explicit_slug(tmp_path):
+    """Регресс: без этого первый же POST /meetings/sites/sync затирал точный
+    слаг с мобилки результатом нечёткого угадывания."""
+    state = _state(tmp_path)
+    upsert_sites(state, _all_sites())
+    explicit = _mk_meeting(
+        state, date_str="2026-06-05", site="Ремонтного участка",
+        title="ОМС Ремонтного участка", site_slug="oms_vympel",
+    )
+    resolved = _mk_meeting(
+        state, date_str="2026-06-06", site="ВЫМПЕЛ", title="Ежедневный ОМС ВЫМПЕЛ",
+    )
+
+    result = remap_meeting_sites(state)
+
+    assert _meta_of(state, explicit["source_id"])["site_slug"] == "oms_vympel"
+    assert _meta_of(state, resolved["source_id"])["site_slug"] == "oms_vympel"
+    assert result["preserved"] == 1
+    # preserved входит в mapped, чтобы mapped + unmapped оставалось общим числом
+    assert result["mapped"] == 2
+    assert result["unmapped"] == 0
+
+
+def test_remap_recomputes_when_explicit_site_retired(tmp_path):
+    state = _state(tmp_path)
+    upsert_sites(state, _all_sites())
+    meeting = _mk_meeting(
+        state, date_str="2026-06-05", site="Ремонтного участка",
+        title="ОМС Ремонтного участка", site_slug="oms_vympel",
+    )
+    assert _meta_of(state, meeting["source_id"])["site_slug"] == "oms_vympel"
+
+    # Площадку выключили в реестре — держать на ней встречу больше нельзя.
+    upsert_sites(state, [{"site_slug": "oms_vympel", "site_name": "ОМС ВЫМПЕЛ",
+                          "site_keywords": ["омс вымпел"], "enabled": False}])
+    result = remap_meeting_sites(state)
+
+    meta = _meta_of(state, meeting["source_id"])
+    assert meta["site_slug"] == "oms_remontnyi_uchastok"
+    assert meta["site_slug_source"] == RESOLVED
+    assert result["preserved"] == 0
 
 
 def test_remap_distribution(tmp_path):
