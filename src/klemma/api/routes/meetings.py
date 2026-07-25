@@ -15,7 +15,7 @@ import os
 import secrets
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from klemma.meetings import (
     BONUM_ROOT_ENV,
@@ -125,12 +125,8 @@ class AskRequest(BaseModel):
     site: str | None = None
 
 
-class SitesSyncRequest(BaseModel):
-    url: str | None = None
-
-
 class IngestRequest(BaseModel):
-    meeting_id: str
+    meeting_id: str = Field(min_length=1)
     date: str = ""
     type: str = ""
     site: str = ""
@@ -189,14 +185,16 @@ async def get_sites_registry(user: UserRecord = Depends(get_current_user)) -> di
 
 @router.post("/sites/sync")
 async def post_sites_sync(
-    body: SitesSyncRequest | None = None,
     x_ingest_token: str | None = Header(default=None, alias="X-Ingest-Token"),
 ) -> dict:
     """Refresh the sites registry from the Nodul webhook + remap all meetings.
 
-    Authed by the shared ingest token (webhook-to-webhook, no user session)."""
+    Authed by the shared ingest token (webhook-to-webhook, no user session).
+    The webhook URL comes only from ``KLEMMA_BONUM_SITES_WEBHOOK`` — taking it
+    from the request body would let any ingest-token holder point the server
+    at arbitrary URLs (SSRF)."""
     _check_ingest_token(x_ingest_token)
-    url = (body.url if body else None) or os.getenv("KLEMMA_BONUM_SITES_WEBHOOK", "")
+    url = os.getenv("KLEMMA_BONUM_SITES_WEBHOOK", "")
     if not url:
         raise HTTPException(status_code=400, detail="no sites webhook url configured")
     items = parse_sites_webhook(_fetch_json(url))

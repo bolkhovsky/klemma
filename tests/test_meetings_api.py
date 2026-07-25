@@ -182,6 +182,14 @@ def test_ingest_adds_meeting(client):
     assert any(m["title"] == "Спринт 99" for m in after["meetings"])
 
 
+def test_ingest_rejects_empty_meeting_id(client):
+    """Пустой meeting_id + пустой title схлопывались бы в source_id="mtg-meeting"
+    и перезатирали друг друга — отсекаем на валидации."""
+    payload = {**INGEST_PAYLOAD, "meeting_id": ""}
+    r = client.post("/meetings/ingest", json=payload, headers={"X-Ingest-Token": "test-ingest"})
+    assert r.status_code == 422
+
+
 def test_ingest_accepts_explicit_site_slug(client):
     """Отправитель, который знает слаг (мобильный воркер читает его из того же
     GET /meetings/sites), не должен зависеть от нечёткого резолвера: 'ИТ' не
@@ -379,11 +387,20 @@ def test_sites_sync_no_url_configured(client):
     assert r.status_code == 400
 
 
+def test_sites_sync_ignores_body_url(client):
+    """Регресс SSRF: URL вебхука берётся только из env — url в теле запроса
+    держатель ingest-токена подсунуть не может."""
+    r = client.post("/meetings/sites/sync", json={"url": "https://evil.test/hook"},
+                    headers={"X-Ingest-Token": "test-ingest"})
+    assert r.status_code == 400
+
+
 def test_sites_sync_upserts_and_remaps(client, monkeypatch):
     import klemma.api.routes.meetings as mroutes
 
+    monkeypatch.setenv("KLEMMA_BONUM_SITES_WEBHOOK", "https://example.test/hook")
     monkeypatch.setattr(mroutes, "_fetch_json", lambda url: SYNC_PAYLOAD)
-    r = client.post("/meetings/sites/sync", json={"url": "https://example.test/hook"},
+    r = client.post("/meetings/sites/sync", json={},
                     headers={"X-Ingest-Token": "test-ingest"})
     assert r.status_code == 200
     data = r.json()
@@ -404,6 +421,7 @@ def test_sites_sync_fetch_failure_502(client, monkeypatch):
         raise requests.ConnectionError("no route to host")
 
     monkeypatch.setattr(requests, "get", boom)
-    r = client.post("/meetings/sites/sync", json={"url": "https://example.test/hook"},
+    monkeypatch.setenv("KLEMMA_BONUM_SITES_WEBHOOK", "https://example.test/hook")
+    r = client.post("/meetings/sites/sync", json={},
                     headers={"X-Ingest-Token": "test-ingest"})
     assert r.status_code == 502
