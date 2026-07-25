@@ -11,6 +11,10 @@ Run inside the bonum container:
         --user "nadezhda@bonum.ru:<pwd>:Надежда Михайленко" \
         --user "ilya@bonum.ru:<pwd>:Илья Болховский"
 
+``--site`` seeds the sites registry by hand, for contours where the Nodul sites
+webhook is not reachable (local test rigs). In production the registry comes
+from ``POST /meetings/sites/sync`` and hand-seeded rows are overwritten by it.
+
 KLEMMA_DATA_DIR must match the running app (users.db location).
 """
 
@@ -39,6 +43,25 @@ def _parse_access_spec(ap: argparse.ArgumentParser, spec: str) -> tuple[str, str
     return email, role, slugs
 
 
+def _parse_site_spec(ap: argparse.ArgumentParser, spec: str) -> dict:
+    """Parse ``slug:name[:type[:leader]]`` → an upsert_sites item dict."""
+    parts = spec.split(":")
+    slug = parts[0].strip()
+    name = parts[1].strip() if len(parts) > 1 else ""
+    if not slug or not name:
+        ap.error(f"bad --site '{spec}', expected SLUG:NAME[:TYPE[:LEADER]]")
+    return {
+        "site_slug": slug,
+        "site_name": name,
+        "site_type": (parts[2].strip() if len(parts) > 2 and parts[2].strip() else "oms"),
+        "leader": (parts[3].strip() if len(parts) > 3 else ""),
+        # Keywords drive the fuzzy resolver for payloads without an explicit
+        # slug; the name itself is the sane default seed.
+        "site_keywords": [name.lower()],
+        "enabled": True,
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Bootstrap Bonum portal accounts + project")
     ap.add_argument(
@@ -57,6 +80,15 @@ def main() -> None:
         "'email:leader:slug1,slug2'. User must already exist (or be created "
         "via --user in the same run).",
     )
+    ap.add_argument(
+        "--site",
+        action="append",
+        default=[],
+        metavar="SLUG:NAME[:TYPE[:LEADER]]",
+        help="Sites-registry row (repeatable): 'oms_test:ОМС Тест' or "
+        "'oms_test:ОМС Тест:oms:Иванов И.И.'. Needed where the Nodul webhook "
+        "is unreachable — uploads are rejected for slugs absent from the registry.",
+    )
     ap.add_argument("--project-name", default="Бонум")
     ap.add_argument(
         "--data-dir",
@@ -72,10 +104,12 @@ def main() -> None:
     ap.add_argument("--tokens", type=int, default=1_000_000, help="AI token grant per user")
     args = ap.parse_args()
 
-    if not args.user and not args.access:
-        ap.error("at least one --user EMAIL:PASSWORD:NAME (or --access) is required")
+    if not args.user and not args.access and not args.site:
+        ap.error("at least one --user EMAIL:PASSWORD:NAME (or --access/--site) is required")
     if args.access and not args.root:
         ap.error("--access requires --root (or KLEMMA_BONUM_PROJECT_ROOT) for the meeting DB")
+    if args.site and not args.root:
+        ap.error("--site requires --root (or KLEMMA_BONUM_PROJECT_ROOT) for the meeting DB")
 
     from klemma.api.auth.password import hash_password
     from klemma.stores.user_store import LocalUserStore
@@ -117,6 +151,20 @@ def main() -> None:
             print(f"  + created project '{args.project_name}'")
         else:
             print(f"  = project '{args.project_name}' exists")
+
+    # Sites registry lives in the MEETING DB (portal_sites). Seeded before the
+    # access rows below, so a leader's --access slugs point at existing sites.
+    if args.site:
+        from klemma.meetings import bonum_db_path
+        from klemma.meetings_sites import upsert_sites
+        from klemma.state import StateManager
+
+        site_state = StateManager(str(bonum_db_path(args.root)))
+        items = [_parse_site_spec(ap, spec) for spec in args.site]
+        n = upsert_sites(site_state, items)
+        for item in items:
+            print(f"  ✓ site {item['site_slug']}: {item['site_name']}")
+        print(f"  → {n} site row(s) in the registry")
 
     # Portal access rows live in the MEETING DB (portal_access), keyed by the
     # users.db user_id — look each account up by email.
