@@ -46,9 +46,21 @@ const router = createRouter({
     },
     // External deep link to one meeting (mobile app, email). Resolves the
     // user's project, then replaces itself with the real portal route.
+    //
+    // Path is '/m/', NOT '/meetings/': in the self-contained portal container
+    // (KLEMMA_SERVE_SPA) FastAPI matches its own '/meetings' router first, so a
+    // browser hitting '/meetings/<id>' gets 401 JSON and never reaches the SPA.
+    {
+      path: '/m/:sourceId',
+      name: 'meeting-deeplink',
+      component: () => import('../views/portal/MeetingDeepLinkView.vue'),
+      meta: { requiresAuth: true, standalone: true },
+    },
+    // Kept for links minted before the move to '/m/'. Only reachable where the
+    // SPA is served by a separate front (Caddy), not by the portal container.
     {
       path: '/meetings/:sourceId',
-      name: 'meeting-deeplink',
+      name: 'meeting-deeplink-legacy',
       component: () => import('../views/portal/MeetingDeepLinkView.vue'),
       meta: { requiresAuth: true, standalone: true },
     },
