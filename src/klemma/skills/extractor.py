@@ -36,10 +36,9 @@ def validate_verbatim_fragments(
     threshold, flip the flag to `false` instead of dropping the fragment —
     a paraphrase is still useful, we just don't let it masquerade as a quote.
 
-    NOTE: searches `pdf_text` directly because the current pipeline passes the
-    whole (50K-truncated) extraction into the AI prompt. If chunking is
-    introduced upstream, this validator must move to the full cached
-    ``papers.raw_text`` rather than a per-chunk slice.
+    Caller must pass the full normalized PDF text. Under chunked extraction,
+    `process_source` / `reprocess_paper` build it from `extract_pages()` and
+    cap it via ``VERBATIM_VALIDATION_CAP_LARGE`` before passing here.
     """
     stats = DowngradeStats()
     if not fragments:

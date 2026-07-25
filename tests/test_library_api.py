@@ -68,7 +68,7 @@ def test_list_sources_empty(client):
 
 def test_list_sources_requires_auth(client):
     resp = client.get("/library/sources")
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +228,98 @@ def test_upload_dedup(client):
     assert r2.json()["deduplicated"] is True
 
 
+def test_upload_citekey_collision_uses_bbt_suffix(client):
+    """Same-author/same-year uploads from different PDFs must get a/b/c
+    suffixes (BBT-compatible), not `_{hash[:6]}`.
+
+    Example: two different Smith-2023 papers upload in sequence:
+        1st → smith2023
+        2nd → smith2023a
+        3rd → smith2023b
+    """
+    token = _register_and_get_token(client)
+    r1 = client.post(
+        "/library/upload",
+        files={"file": ("Smith - 2023 - Paper One.pdf", _fake_pdf(2048), "application/pdf")},
+        headers=_auth_headers(token),
+    )
+    r2 = client.post(
+        "/library/upload",
+        files={"file": ("Smith - 2023 - Paper Two.pdf", _fake_pdf(3072), "application/pdf")},
+        headers=_auth_headers(token),
+    )
+    r3 = client.post(
+        "/library/upload",
+        files={"file": ("Smith - 2023 - Paper Three.pdf", _fake_pdf(4096), "application/pdf")},
+        headers=_auth_headers(token),
+    )
+    assert r1.status_code == 201
+    assert r2.status_code == 201
+    assert r3.status_code == 201
+    assert r1.json()["citekey"] == "smith2023"
+    assert r2.json()["citekey"] == "smith2023a"
+    assert r3.json()["citekey"] == "smith2023b"
+    # All three are distinct papers
+    assert r1.json()["paper_id"] != r2.json()["paper_id"] != r3.json()["paper_id"]
+
+
+def test_upload_dedup_attaches_source_to_current_project(client, stores):
+    """Re-uploading an already-owned PDF into a different project should
+    attach the source to the new project without removing it from the old one.
+    """
+    user_store, _, user_library, _, _ = stores
+    token = _register_and_get_token(client)
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    proj_a = user_store.create_project(user_id=user_id, name="Project A")
+    proj_b = user_store.create_project(user_id=user_id, name="Project B")
+
+    pdf = _fake_pdf()
+
+    r1 = client.post(
+        "/library/upload",
+        files={"file": ("paper.pdf", pdf, "application/pdf")},
+        data={"project_id": proj_a["project_id"]},
+        headers=_auth_headers(token),
+    )
+    assert r1.status_code == 201, r1.json()
+    citekey = r1.json()["citekey"]
+
+    # Confirm initial project attachment
+    src = user_library.get_source_by_citekey(citekey, user_id=user_id)
+    assert src.project_id == proj_a["project_id"]
+    assert src.project_ids == [proj_a["project_id"]]
+
+    # Second upload of same PDF into a different project
+    r2 = client.post(
+        "/library/upload",
+        files={"file": ("paper.pdf", pdf, "application/pdf")},
+        data={"project_id": proj_b["project_id"]},
+        headers=_auth_headers(token),
+    )
+    assert r2.status_code == 201
+    assert r2.json()["already_owned"] is True
+    assert r2.json()["citekey"] == citekey
+
+    # Source remains attached to A and is now also attached to B
+    src = user_library.get_source_by_citekey(citekey, user_id=user_id)
+    assert src.project_id == proj_a["project_id"]
+    assert set(src.project_ids) == {proj_a["project_id"], proj_b["project_id"]}
+
+    resp_a = client.get(
+        f"/library/sources?project_id={proj_a['project_id']}",
+        headers=_auth_headers(token),
+    )
+    resp_b = client.get(
+        f"/library/sources?project_id={proj_b['project_id']}",
+        headers=_auth_headers(token),
+    )
+    citekeys_a = {s["citekey"] for s in resp_a.json()["sources"]}
+    citekeys_b = {s["citekey"] for s in resp_b.json()["sources"]}
+    assert citekey in citekeys_a
+    assert citekey in citekeys_b
+
+
 def test_upload_dedup_same_user_preserves_citekey(client):
     """Re-uploading the same PDF by the same user returns the original citekey (issue #268)."""
     token = _register_and_get_token(client)
@@ -250,6 +342,52 @@ def test_upload_dedup_same_user_preserves_citekey(client):
         "not generate a new one with hash suffix"
     )
     assert r2.json()["deduplicated"] is True
+
+
+def test_upload_dedup_same_user_attaches_source_to_multiple_projects(client, stores):
+    """Re-uploading the same PDF into another project should attach, not move."""
+    token = _register_and_get_token(client)
+    user_store, _, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+    proj_a = user_store.create_project(user_id=user_id, name="Project A")
+    proj_b = user_store.create_project(user_id=user_id, name="Project B")
+    pdf = _fake_pdf()
+
+    r1 = client.post(
+        "/library/upload",
+        files={"file": ("smith2020.pdf", pdf, "application/pdf")},
+        data={"project_id": proj_a["project_id"]},
+        headers=_auth_headers(token),
+    )
+    assert r1.status_code == 201
+    citekey = r1.json()["citekey"]
+
+    r2 = client.post(
+        "/library/upload",
+        files={"file": ("smith2020.pdf", pdf, "application/pdf")},
+        data={"project_id": proj_b["project_id"]},
+        headers=_auth_headers(token),
+    )
+    assert r2.status_code == 201
+    assert r2.json()["already_owned"] is True
+    assert r2.json()["citekey"] == citekey
+
+    src = user_library.get_source_by_citekey(citekey, user_id=user_id)
+    assert src is not None
+    assert set(src.project_ids) == {proj_a["project_id"], proj_b["project_id"]}
+    assert user_library.get_project_citekeys(proj_a["project_id"], user_id=user_id) == {citekey}
+    assert user_library.get_project_citekeys(proj_b["project_id"], user_id=user_id) == {citekey}
+
+    resp_a = client.get(
+        f"/library/sources?project_id={proj_a['project_id']}",
+        headers=_auth_headers(token),
+    )
+    resp_b = client.get(
+        f"/library/sources?project_id={proj_b['project_id']}",
+        headers=_auth_headers(token),
+    )
+    assert citekey in {s["citekey"] for s in resp_a.json()["sources"]}
+    assert citekey in {s["citekey"] for s in resp_b.json()["sources"]}
 
 
 def test_upload_rejects_non_pdf(client):
@@ -277,7 +415,7 @@ def test_upload_requires_auth(client):
         "/library/upload",
         files={"file": ("test.pdf", _fake_pdf(), "application/pdf")},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -609,6 +747,396 @@ def test_gaps_legacy_background_neutralized(client, stores):
     assert gap is not None
     assert gap["score"] > 0
     assert abs(gap["intent_weight"] - 1.0) < 0.01  # neutral weight
+
+
+# ---------------------------------------------------------------------------
+# BBT import
+# ---------------------------------------------------------------------------
+
+
+def _make_bbt(items: list) -> bytes:
+    import json as _json
+    return _json.dumps({"items": items}).encode("utf-8")
+
+
+def test_import_bbt_doi_match(client, stores):
+    """DOI-exact match: external_citekey is set on the library row."""
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(
+        title="Some Paper", pdf_hash="hash1", doi="10.1234/abc"
+    )
+    user_library.add_source(pid, "ugly_ck", status="completed", user_id=user_id)
+
+    bbt = _make_bbt([
+        {"itemType": "journalArticle", "citationKey": "smith2020",
+         "title": "Some Paper", "DOI": "10.1234/abc",
+         "creators": [{"creatorType": "author", "lastName": "Smith"}],
+         "date": "2020"},
+    ])
+    resp = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", bbt, "application/json")},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["matched"]) == 1
+    assert data["matched"][0] == {
+        "citekey": "ugly_ck",
+        "external_citekey": "smith2020",
+        "strategy": "doi",
+        "title": "Some Paper",
+    }
+    assert data["unmatched"] == []
+    assert data["ambiguous"] == []
+    # Persisted
+    src = user_library.get_source_by_citekey("ugly_ck", user_id=user_id)
+    assert src.external_citekey == "smith2020"
+
+
+def test_import_bbt_fuzzy_match(client, stores):
+    """No DOI — match by title prefix + author + year."""
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(title="Arctic Sea Ice Forecasting Methods", pdf_hash="h2")
+    paper_store.update_paper_metadata(pid, authors="Andersson K", year=2021)
+    user_library.add_source(pid, "andersson2021", status="completed", user_id=user_id)
+
+    bbt = _make_bbt([
+        {"itemType": "journalArticle", "citationKey": "ak2021",
+         "title": "Arctic Sea Ice Forecasting Methods",
+         "creators": [{"creatorType": "author", "lastName": "Andersson"}],
+         "date": "2021"},
+    ])
+    resp = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", bbt, "application/json")},
+        headers=_auth_headers(token),
+    )
+    data = resp.json()
+    assert len(data["matched"]) == 1
+    assert data["matched"][0]["external_citekey"] == "ak2021"
+    assert data["matched"][0]["strategy"] == "fuzzy"
+
+
+def test_import_bbt_fuzzy_cyrillic_match(client, stores):
+    """Russian author + title fuzzy match."""
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(title="Основные направления СМП", pdf_hash="h3")
+    paper_store.update_paper_metadata(pid, authors="Воронина", year=2023)
+    user_library.add_source(pid, "воронина2023_ugly", status="completed", user_id=user_id)
+
+    bbt = _make_bbt([
+        {"itemType": "journalArticle", "citationKey": "voronina2023",
+         "title": "Основные направления СМП",
+         "creators": [{"creatorType": "author", "lastName": "Воронина"}],
+         "date": "2023"},
+    ])
+    resp = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", bbt, "application/json")},
+        headers=_auth_headers(token),
+    )
+    data = resp.json()
+    assert len(data["matched"]) == 1
+    assert data["matched"][0]["external_citekey"] == "voronina2023"
+
+
+def test_import_bbt_unmatched(client, stores):
+    """BBT entry with no corresponding library source → unmatched list."""
+    token = _register_and_get_token(client)
+
+    bbt = _make_bbt([
+        {"itemType": "journalArticle", "citationKey": "nonexistent2020",
+         "title": "Not in library", "DOI": "10.99/x",
+         "creators": [{"creatorType": "author", "lastName": "Stranger"}],
+         "date": "2020"},
+    ])
+    resp = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", bbt, "application/json")},
+        headers=_auth_headers(token),
+    )
+    data = resp.json()
+    assert data["matched"] == []
+    assert len(data["unmatched"]) == 1
+    assert data["unmatched"][0]["bbt_citekey"] == "nonexistent2020"
+    assert data["unmatched"][0]["doi"] == "10.99/x"
+    assert data["ambiguous"] == []
+
+
+def test_import_bbt_ambiguous(client, stores):
+    """Two library sources match the same fuzzy predicate → ambiguous, no external_citekey set."""
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    # Two different papers with same title-prefix + author + year
+    for i, pdf_hash in enumerate(["h_a", "h_b"]):
+        pid = paper_store.register_paper(title="Same Title Here", pdf_hash=pdf_hash)
+        paper_store.update_paper_metadata(pid, authors="Smith", year=2023)
+        user_library.add_source(pid, f"smith2023_{i}", status="completed", user_id=user_id)
+
+    bbt = _make_bbt([
+        {"itemType": "journalArticle", "citationKey": "smith2023",
+         "title": "Same Title Here",
+         "creators": [{"creatorType": "author", "lastName": "Smith"}],
+         "date": "2023"},
+    ])
+    resp = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", bbt, "application/json")},
+        headers=_auth_headers(token),
+    )
+    data = resp.json()
+    assert data["matched"] == []
+    assert len(data["ambiguous"]) == 1
+    amb = data["ambiguous"][0]
+    assert amb["bbt_citekey"] == "smith2023"
+    assert set(amb["candidates"]) == {"smith2023_0", "smith2023_1"}
+    # Neither source got external_citekey set
+    for i in range(2):
+        src = user_library.get_source_by_citekey(f"smith2023_{i}", user_id=user_id)
+        assert src.external_citekey is None
+
+
+def test_import_bbt_idempotent(client, stores):
+    """Re-running the import produces the same result."""
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(title="X", pdf_hash="h", doi="10.1/x")
+    user_library.add_source(pid, "ck", status="completed", user_id=user_id)
+
+    bbt = _make_bbt([
+        {"itemType": "journalArticle", "citationKey": "new_ck",
+         "title": "X", "DOI": "10.1/x",
+         "creators": [{"creatorType": "author", "lastName": "Y"}],
+         "date": "2020"},
+    ])
+    r1 = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", bbt, "application/json")},
+        headers=_auth_headers(token),
+    )
+    r2 = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", bbt, "application/json")},
+        headers=_auth_headers(token),
+    )
+    assert r1.json() == r2.json()
+    src = user_library.get_source_by_citekey("ck", user_id=user_id)
+    assert src.external_citekey == "new_ck"
+
+
+def test_import_bbt_rejects_non_json_extension(client):
+    token = _register_and_get_token(client)
+    resp = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.bib", b"@article{x,title={Y}}", "text/plain")},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 400
+
+
+def test_import_bbt_rejects_malformed_json(client):
+    token = _register_and_get_token(client)
+    resp = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", b"not json", "application/json")},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 400
+
+
+def test_import_bbt_requires_auth(client):
+    resp = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", b'{"items":[]}', "application/json")},
+    )
+    assert resp.status_code == 401
+
+
+def test_import_bbt_fuzzy_matches_given_family_format(client, stores):
+    """Authors stored as 'John Smith' (CrossRef/Semantic Scholar compressed
+    form) should fuzzy-match BBT entries by the last token, not the first.
+    Regression: Codex P1 finding on #346.
+    """
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(title="Deep Learning for Sea Ice", pdf_hash="h1")
+    # CrossRef-style: "Given Family" (not "Family, Given")
+    paper_store.update_paper_metadata(pid, authors="John Smith", year=2022)
+    user_library.add_source(pid, "internal_ck", status="completed", user_id=user_id)
+
+    bbt = _make_bbt([
+        {"itemType": "journalArticle", "citationKey": "smith2022",
+         "title": "Deep Learning for Sea Ice",
+         "creators": [{"creatorType": "author", "lastName": "Smith"}],
+         "date": "2022"},
+    ])
+    resp = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", bbt, "application/json")},
+        headers=_auth_headers(token),
+    )
+    data = resp.json()
+    assert len(data["matched"]) == 1, f"Expected 1 match; got {data}"
+    assert data["matched"][0]["external_citekey"] == "smith2022"
+
+
+def test_get_source_accepts_external_citekey(client, stores):
+    """GET /library/sources/{ck} must resolve either internal or external
+    citekey (dual-key) and echo display in the response.
+    """
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(title="X", pdf_hash="h_dk")
+    user_library.add_source(pid, "internal_ugly", status="completed", user_id=user_id)
+    user_library.set_external_citekey("internal_ugly", "smith2023", user_id=user_id)
+
+    # By internal — response echoes display
+    r1 = client.get("/library/sources/internal_ugly", headers=_auth_headers(token))
+    assert r1.status_code == 200
+    assert r1.json()["citekey"] == "smith2023"
+
+    # By external — same result
+    r2 = client.get("/library/sources/smith2023", headers=_auth_headers(token))
+    assert r2.status_code == 200
+    assert r2.json()["citekey"] == "smith2023"
+
+
+def test_list_sources_q_searches_external_citekey(client, stores):
+    """?q=<external> finds source whose internal citekey doesn't match q."""
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(title="Some Title", pdf_hash="h_qlist")
+    user_library.add_source(pid, "internal_xyz", status="completed", user_id=user_id)
+    user_library.set_external_citekey("internal_xyz", "voronina2023", user_id=user_id)
+
+    resp = client.get("/library/sources?q=voronina2023", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    citekeys = [s["citekey"] for s in resp.json()["sources"]]
+    assert "voronina2023" in citekeys
+
+
+def test_import_bbt_doi_matches_url_wrapped_stored_doi(client, stores):
+    """Paper DOI stored with URL prefix (e.g. ``https://doi.org/10.x``) must
+    normalize-match a bare DOI in the BBT entry. Regression: Codex P2 on #346.
+    """
+    token = _register_and_get_token(client)
+    _, paper_store, user_library, _, _ = stores
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(
+        title="X", pdf_hash="h_doi_url", doi="https://doi.org/10.1234/WrAp",
+    )
+    user_library.add_source(pid, "internal_ck2", status="completed", user_id=user_id)
+
+    bbt = _make_bbt([
+        {"itemType": "journalArticle", "citationKey": "new_ck",
+         "title": "X", "DOI": "10.1234/wrap",
+         "creators": [{"creatorType": "author", "lastName": "Y"}],
+         "date": "2020"},
+    ])
+    resp = client.post(
+        "/library/import-bbt",
+        files={"file": ("refs.json", bbt, "application/json")},
+        headers=_auth_headers(token),
+    )
+    data = resp.json()
+    assert len(data["matched"]) == 1
+    assert data["matched"][0]["strategy"] == "doi"
+    assert data["matched"][0]["external_citekey"] == "new_ck"
+
+
+# ---------------------------------------------------------------------------
+# Gap recency filter (existing)
+# ---------------------------------------------------------------------------
+
+
+def test_draft_wikilink_conversion_handles_extended_charset():
+    """tasks.py post-processes [[@key]] → [@key] after drafter output.
+    The regex charset must match drafter._extract_citations (word + : . + -)
+    or BBT keys with those characters leak as raw Obsidian wikilinks in
+    API draft text. Regression: Codex P2 on #349.
+    """
+    import re
+    # This is the exact regex used in api/tasks.py::generate_draft
+    pattern = r"\[\[@([\w:.+\-]+)\]\]"
+
+    cases = [
+        ("[[@smith2020]]", "[@smith2020]"),
+        ("[[@smith-2020]]", "[@smith-2020]"),
+        ("[[@doe.2019]]", "[@doe.2019]"),
+        ("[[@brown:v2]]", "[@brown:v2]"),
+        ("[[@a+b]]", "[@a+b]"),
+        ("See [[@smith:2023]] and [[@jones.2020]].",
+         "See [@smith:2023] and [@jones.2020]."),
+    ]
+    for inp, expected in cases:
+        assert re.sub(pattern, r"[@\1]", inp) == expected, f"failed for {inp!r}"
+
+
+def test_generate_sentences_rewrites_external_to_internal(client, stores, monkeypatch):
+    """generate_sentences_task looks up sources via get_source_by_citekey
+    (not dual-key). The route must therefore rewrite body.citekey to the
+    internal key before enqueue, otherwise external-key submissions fail
+    async with "Source not found". Regression: Codex P1 on #349.
+    """
+    monkeypatch.setenv("KLEMMA_ALLOW_LOCAL_JOBS", "1")
+    user_store, paper_store, user_library, _, _ = stores
+    token = _register_and_get_token(client)
+    user_id = client.get("/auth/me", headers=_auth_headers(token)).json()["user_id"]
+
+    pid = paper_store.register_paper(title="X", pdf_hash="hgs")
+    user_library.add_source(pid, "internal_key", status="completed", user_id=user_id)
+    user_library.set_external_citekey("internal_key", "ext2023", user_id=user_id)
+
+    project = user_store.create_project(user_id=user_id, name="Proj")
+    project_id = project["project_id"]
+
+    enqueued: dict = {}
+
+    async def fake_run_local_job(job_id, func, *args):
+        enqueued["args"] = args
+
+    monkeypatch.setattr(
+        "klemma.api.routes.process._run_local_job", fake_run_local_job
+    )
+
+    resp = client.post(
+        f"/projects/{project_id}/fragments/generate-sentences",
+        json={"citekey": "ext2023", "mode": "missing"},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 202, resp.json()
+    assert resp.json()["citekey"] == "ext2023"  # echoed
+
+    import time as _time
+    for _ in range(50):
+        if enqueued.get("args"):
+            break
+        _time.sleep(0.02)
+    assert enqueued.get("args"), "task was not enqueued"
+    assert enqueued["args"][0] == project_id
+    # Internal citekey, not the external one the client submitted
+    assert enqueued["args"][1] == "internal_key"
 
 
 def test_gaps_recency_filter(client, stores):

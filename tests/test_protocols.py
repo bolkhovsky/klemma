@@ -59,6 +59,7 @@ class TestUserSource:
         assert s.quality_score is None
         assert s.chapters == []
         assert s.sections == []
+        assert s.project_ids == []
 
     def test_all_fields(self):
         s = UserSource(
@@ -69,9 +70,11 @@ class TestUserSource:
             quality_score=4,
             chapters=[1, 2],
             sections=["1.1", "2.3"],
+            project_ids=["proj-a", "proj-b"],
         )
         assert s.quality_score == 4
         assert len(s.chapters) == 2
+        assert s.project_ids == ["proj-a", "proj-b"]
 
 
 class TestProtocolsAreRuntimeCheckable:
@@ -99,3 +102,24 @@ class TestProtocolsAreRuntimeCheckable:
         assert not isinstance(Empty(), PaperStore)
         assert not isinstance(Empty(), UserLibrary)
         assert not isinstance(Empty(), ProjectStore)
+
+
+class TestLocalPaperStoreProtocolConformance:
+    """Verify LocalPaperStore satisfies PaperStore including find_similar_fragments."""
+
+    def test_local_paper_store_satisfies_protocol(self, tmp_path):
+        from klemma.stores import LocalPaperStore
+        store = LocalPaperStore(tmp_path / "library.db")
+        assert isinstance(store, PaperStore)
+
+    def test_find_similar_fragments_exists(self, tmp_path):
+        from klemma.stores import LocalPaperStore
+        store = LocalPaperStore(tmp_path / "library.db")
+        assert hasattr(store, "find_similar_fragments")
+        assert callable(store.find_similar_fragments)
+
+    def test_find_similar_fragments_returns_list(self, tmp_path):
+        from klemma.stores import LocalPaperStore
+        store = LocalPaperStore(tmp_path / "library.db")
+        result = store.find_similar_fragments([0.0] * 1024, user_id="u", limit=5)
+        assert isinstance(result, list)

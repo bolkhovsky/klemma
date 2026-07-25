@@ -103,11 +103,21 @@ def _compute_semantic_factor(
         return 1.0  # Not enough data — neutral
 
     max_avg_cosine = 0.0
+    found_compatible = False
     for centroid in section_centroids.values():
+        if len(centroid) != dim:
+            # Centroid from a different embedding model — skip rather than
+            # computing cross-dimension cosine which always returns 0.0 and
+            # would collapse the factor to 0.5 (bogus penalty).
+            continue
+        found_compatible = True
         cosines = [_cosine_similarity(v, centroid) for v in vecs]
         avg_cosine = sum(cosines) / len(cosines)
         if avg_cosine > max_avg_cosine:
             max_avg_cosine = avg_cosine
+
+    if not found_compatible:
+        return 1.0  # All centroids are from a different model family — neutral
 
     return 0.5 + 0.5 * max_avg_cosine
 

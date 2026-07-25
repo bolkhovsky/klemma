@@ -6,6 +6,7 @@ set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$REPO_ROOT/.env.local"
+ENV_EXAMPLE_FILE="$REPO_ROOT/.env.local.example"
 
 # ── Загрузка .env.local ───────────────────────────────────────────────────
 
@@ -16,12 +17,25 @@ if [[ -f "$ENV_FILE" ]]; then
   source "$ENV_FILE"
   set +a
 else
-  echo "⚠  $ENV_FILE не найден — создайте его из примера ниже:"
+  echo "⚠  $ENV_FILE не найден — локальные defaults будут использованы."
+  if [[ -f "$ENV_EXAMPLE_FILE" ]]; then
+    echo "   При необходимости скопируйте шаблон: cp $ENV_EXAMPLE_FILE $ENV_FILE"
+  fi
   echo ""
-  echo "  KLEMMA_JWT_SECRET=\$(python3 -c \"import secrets; print(secrets.token_hex(32))\")"
+  echo "  # Optional: LLM API key for AI features"
   echo "  ANTHROPIC_API_KEY=sk-ant-..."
   echo ""
+  echo "  # Required for local SaaS embeddings"
+  echo "  KLEMMA_EMBEDDINGS_BACKEND=litellm"
+  echo "  KLEMMA_EMBEDDINGS_MODEL=ollama/bge-m3"
+  echo "  KLEMMA_EMBEDDINGS_BASE_URL=http://127.0.0.1:11434"
+  echo ""
 fi
+
+# Match the Docker Compose defaults so local backend startup works out of the box.
+export KLEMMA_EMBEDDINGS_BACKEND="${KLEMMA_EMBEDDINGS_BACKEND:-litellm}"
+export KLEMMA_EMBEDDINGS_MODEL="${KLEMMA_EMBEDDINGS_MODEL:-ollama/bge-m3}"
+export KLEMMA_EMBEDDINGS_BASE_URL="${KLEMMA_EMBEDDINGS_BASE_URL:-http://127.0.0.1:11434}"
 
 # ── Проверка зависимостей ─────────────────────────────────────────────────
 
@@ -40,6 +54,20 @@ fi
 if [[ ! -d "$REPO_ROOT/saas/dashboard/node_modules" ]]; then
   echo "→ npm install..."
   npm --prefix "$REPO_ROOT/saas/dashboard" install --silent
+fi
+
+if ! command -v curl &>/dev/null; then
+  echo "✗ curl не найден. Он нужен для проверки локального Ollama." >&2
+  exit 1
+fi
+
+if ! curl -fsS "${KLEMMA_EMBEDDINGS_BASE_URL%/}/api/tags" >/dev/null 2>&1; then
+  echo "✗ Ollama недоступен по $KLEMMA_EMBEDDINGS_BASE_URL" >&2
+  echo "  Локальный SaaS backend требует embeddings через Ollama." >&2
+  echo "  Запустите:" >&2
+  echo "    ollama serve" >&2
+  echo "    ollama pull bge-m3" >&2
+  exit 1
 fi
 
 # ── Запуск процессов ──────────────────────────────────────────────────────
@@ -64,6 +92,7 @@ FRONTEND_PID=$!
 echo ""
 echo "  Backend:  http://localhost:8000"
 echo "  Frontend: http://localhost:5173"
+echo "  Embeddings: $KLEMMA_EMBEDDINGS_MODEL via $KLEMMA_EMBEDDINGS_BASE_URL"
 echo "  Остановить: Ctrl+C"
 echo ""
 

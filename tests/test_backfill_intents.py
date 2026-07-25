@@ -320,7 +320,7 @@ def test_backfill_with_raw_text_updates_intents(db, tmp_path):
 def test_backfill_endpoint_requires_auth(client):
     """Unauthenticated request → 403."""
     resp = client.post("/admin/backfill/citation-intents?target_user_id=someuser")
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 def test_backfill_endpoint_non_admin_403(client):
@@ -335,6 +335,7 @@ def test_backfill_endpoint_non_admin_403(client):
         f"/admin/backfill/citation-intents?target_user_id={user_id}",
         headers=_auth(token2),
     )
+    # 403 — authenticated as non-admin, admin-only endpoint forbids.
     assert resp.status_code == 403
 
 

@@ -111,7 +111,7 @@ function sectionWordCount(id: string): number {
 function renderWithCitekeys(text: string): string {
   return text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/\[@([\w\d_:.-]+)\]/g, '<span class="citekey-link" data-citekey="$1">[@$1]</span>')
+    .replace(/\[@([\w:.+\-]+)\]/g, '<span class="citekey-link" data-citekey="$1">[@$1]</span>')
     .replace(/\n/g, '<br>')
 }
 
@@ -132,7 +132,7 @@ const panelSources = computed((): string[] => {
   const id = activeSectionId.value
   if (!id) return []
   const text = currentSectionText(id)
-  const fromText = [...text.matchAll(/\[@([\w\d_:.-]+)\]/g)].map(m => m[1]!)
+  const fromText = [...text.matchAll(/\[@([\w:.+\-]+)\]/g)].map(m => m[1]!)
   return [...new Set([...assignedSources.value, ...fromText])]
 })
 

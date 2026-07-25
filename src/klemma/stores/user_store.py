@@ -633,9 +633,12 @@ class LocalUserStore:
 
         Each decision: {fragment_id, citekey, verdict, assigned_section?, note?,
         suggested_text?, sentence_model?}.
-        On upsert, `note`, `suggested_text`, and `sentence_model` are preserved
-        when the new decision omits them (COALESCE). Pass explicit values to
-        overwrite.
+        On upsert, ``assigned_section``, ``note``, ``suggested_text``, and
+        ``sentence_model`` are preserved when the new decision omits them
+        (COALESCE) — only ``verdict`` is always overwritten. This matters
+        for concurrent post-hooks: ``generate_sentences_task`` can fire
+        after ``_run_auto_suggest`` has already stored an auto-assigned
+        section, and we must not clobber it back to NULL.
         Returns count of rows upserted.
         """
         if not decisions:
@@ -649,7 +652,7 @@ class LocalUserStore:
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                        ON CONFLICT(project_id, fragment_id) DO UPDATE SET
                          verdict = excluded.verdict,
-                         assigned_section = excluded.assigned_section,
+                         assigned_section = COALESCE(excluded.assigned_section, fragment_curation.assigned_section),
                          note = COALESCE(excluded.note, fragment_curation.note),
                          suggested_text = COALESCE(excluded.suggested_text, fragment_curation.suggested_text),
                          sentence_model = COALESCE(excluded.sentence_model, fragment_curation.sentence_model),

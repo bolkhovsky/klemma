@@ -13,5 +13,6 @@ from . import (  # noqa: F401
     manage,
     process,
     research,
+    verify,
     write,
 )

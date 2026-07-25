@@ -70,6 +70,65 @@ def test_curate_fragments(store):
     assert accepted[0]["assigned_section"] == "intro"
 
 
+def test_curate_fragments_upsert_preserves_assigned_section_on_none(store):
+    """Regression: concurrent post-hooks. _run_auto_suggest writes
+    assigned_section='intro'; generate_sentences_task later writes a
+    suggestion for the same fragment with suggested_text but
+    assigned_section=None (sentence path doesn't know the auto-assignment).
+    The None must NOT clobber the previously-stored section. Codex P1 on
+    #360.
+    """
+    pid = _make_project(store)
+
+    # First write — auto_suggest with an assigned section
+    store.curate_fragments(pid, [
+        {
+            "fragment_id": "f1",
+            "citekey": "ck",
+            "verdict": "suggested",
+            "assigned_section": "1.1",
+        },
+    ])
+    assert store.get_curated(pid)[0]["assigned_section"] == "1.1"
+
+    # Second write — sentence generator arrives with suggested_text but no section
+    store.curate_fragments(pid, [
+        {
+            "fragment_id": "f1",
+            "citekey": "ck",
+            "verdict": "suggested",
+            "assigned_section": None,
+            "suggested_text": "Academic paraphrase [@ck].",
+            "sentence_model": "sonnet-4",
+        },
+    ])
+    row = store.get_curated(pid)[0]
+    # Preserved — not clobbered to NULL
+    assert row["assigned_section"] == "1.1"
+    # New field landed
+    assert row["suggested_text"] == "Academic paraphrase [@ck]."
+    assert row["sentence_model"] == "sonnet-4"
+
+
+def test_curate_fragments_upsert_allows_explicit_section_overwrite(store):
+    """COALESCE skips the update when new value is NULL, but an explicit
+    non-null value must still overwrite the old one (e.g. user changes
+    section assignment via a curate decision).
+    """
+    pid = _make_project(store)
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck", "verdict": "suggested",
+         "assigned_section": "1.1"},
+    ])
+    store.curate_fragments(pid, [
+        {"fragment_id": "f1", "citekey": "ck", "verdict": "accepted",
+         "assigned_section": "2.3"},
+    ])
+    row = store.get_curated(pid)[0]
+    assert row["assigned_section"] == "2.3"
+    assert row["verdict"] == "accepted"
+
+
 def test_curation_stats(store):
     pid = _make_project(store)
     store.curate_fragments(pid, [

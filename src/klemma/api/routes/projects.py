@@ -264,13 +264,21 @@ async def get_section_sources(
     section: str,
     user: UserRecord = Depends(get_current_user),
 ) -> SectionSourcesResponse:
-    """List sources assigned to a specific section."""
+    """List sources assigned to a specific section.
+
+    Response echoes display citekeys (``external_citekey`` when set via BBT
+    import, else the internal citekey) so the frontend's text → assignment
+    merging in SectionEditor compares values from the same citekey-space.
+    """
     store = get_project_store()
-    citekeys = store.get_sources_by_section(section, user_id=user.user_id)
+    library = get_user_library()
+    internal_cks = store.get_sources_by_section(section, user_id=user.user_id)
+    display_map = library.get_display_citekeys(internal_cks, user_id=user.user_id)
+    display_cks = [display_map.get(ck, ck) for ck in internal_cks]
     return SectionSourcesResponse(
         section=section,
-        citekeys=citekeys,
-        count=len(citekeys),
+        citekeys=display_cks,
+        count=len(display_cks),
     )
 
 
@@ -279,12 +287,16 @@ async def assign_source_sections(
     body: AssignSectionRequest,
     user: UserRecord = Depends(get_current_user),
 ) -> dict:
-    """Assign a source to sections in the project."""
+    """Assign a source to sections in the project.
+
+    ``body.citekey`` may be either the internal citekey or the
+    ``external_citekey`` override (BBT display); writes always use the
+    internal citekey for DB consistency, response echoes display.
+    """
     store = get_project_store()
     library = get_user_library()
 
-    # Verify source exists in the authenticated user's library
-    src = library.get_source_by_citekey(body.citekey, user_id=user.user_id)
+    src = library.get_source_by_any_key(body.citekey, user_id=user.user_id)
     if src is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -292,9 +304,10 @@ async def assign_source_sections(
         )
 
     store.set_source_sections(
-        body.citekey, src.paper_id, body.sections, body.chapters, user_id=user.user_id
+        src.citekey, src.paper_id, body.sections, body.chapters, user_id=user.user_id
     )
-    return {"citekey": body.citekey, "sections": body.sections}
+    display_ck = src.external_citekey or src.citekey
+    return {"citekey": display_ck, "sections": body.sections}
 
 
 @router.get("/sources/{citekey}/sections")
@@ -302,10 +315,17 @@ async def get_source_sections(
     citekey: str,
     user: UserRecord = Depends(get_current_user),
 ) -> dict:
-    """Get sections assigned to a source in the project."""
+    """Get sections assigned to a source in the project.
+
+    Accepts internal citekey or external_citekey. Response echoes display.
+    """
     store = get_project_store()
-    sections = store.get_source_sections(citekey, user_id=user.user_id)
-    return {"citekey": citekey, "sections": sections}
+    library = get_user_library()
+    src = library.get_source_by_any_key(citekey, user_id=user.user_id)
+    internal_ck = src.citekey if src else citekey
+    display_ck = (src.external_citekey or src.citekey) if src else citekey
+    sections = store.get_source_sections(internal_ck, user_id=user.user_id)
+    return {"citekey": display_ck, "sections": sections}
 
 
 @router.delete(
@@ -331,7 +351,11 @@ async def detach_source_from_section(
             detail="detach not supported on this backend",
         )
 
-    removed = store.remove_source_from_section(citekey, section, user_id=user.user_id)
+    # Dual-key: accept internal citekey or external_citekey in the path.
+    library = get_user_library()
+    src = library.get_source_by_any_key(citekey, user_id=user.user_id)
+    internal_ck = src.citekey if src else citekey
+    removed = store.remove_source_from_section(internal_ck, section, user_id=user.user_id)
     if not removed:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

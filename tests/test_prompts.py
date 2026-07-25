@@ -275,6 +275,19 @@ TEMPLATE_CONTEXTS = {
         "loaded_sources_md": "- **Paper A** — Author A, 2023\n  Abstract preview",
         "candidates_md": "1. **Cand** — Author, 2022 (cited_by=2, intent=method)",
     },
+    "citation_check.md": {
+        "bundles": [
+            {
+                "anchor_id": "10:20",
+                "anchor_kind": "numeric",
+                "anchor_raw": "15.5 °C",
+                "claim_sentence": "The temperature is 15.5 °C [@smith2020].",
+                "passages": ["The surface temperature was measured at 15.5 degrees Celsius."],
+            }
+        ],
+        "max_claim_chars": 1000,
+        "max_passage_chars": 2000,
+    },
     "reconstruct.md": {
         "paper_title": "Test Paper",
         "abstract": "An abstract",

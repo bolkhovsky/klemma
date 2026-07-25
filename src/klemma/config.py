@@ -326,6 +326,20 @@ class AIConfig(BaseModel):
     # For claude backend: not needed (class names work as --model shorthands)
     _resolved_api_keys: dict = PrivateAttr(default_factory=dict)
 
+    # Citation integrity verification (ADR-018)
+    citation_check_model: Optional[str] = None
+    citation_check_timeout: int = 60
+    citation_check_retries: int = 0
+    citation_check_fail_on: str = "hard_warn"
+    max_ai_calls_per_draft: int = 12
+    citation_check_max_wall_clock: int = 120
+    citation_check_max_claim_chars: int = 1000
+    citation_check_max_passage_chars: int = 2000
+    citation_check_max_passages: int = 8
+    citation_check_max_prompt_chars: int = 12000
+    citation_check_max_output_tokens: int = 1024
+    verify_citations_inline: bool = True  # CLI default ON; SaaS gates via KLEMMA_VERIFY_CITATIONS_INLINE
+
     @property
     def api_key(self) -> Optional[str]:
         """Resolve API key: klemmarc api_keys → env var fallback.
@@ -617,6 +631,19 @@ class KlemmaConfig(BaseModel):
 # --- KLEMMA.md frontmatter parser ---
 
 
+def split_frontmatter(text: str) -> tuple[str, str]:
+    """Split YAML frontmatter header from body text.
+
+    Only matches frontmatter at the very start of the text (--- on first line).
+    Returns (frontmatter_yaml_string, body_text).
+    If no frontmatter, returns ("", text).
+    """
+    m = re.match(r"\A---\n(.+?)\n---\n(.*)", text, re.DOTALL)
+    if not m:
+        return "", text
+    return m.group(1), m.group(2)
+
+
 def parse_klemma_md(path: Path) -> tuple[dict, str]:
     """Split YAML frontmatter from KLEMMA.md body.
 
@@ -629,14 +656,14 @@ def parse_klemma_md(path: Path) -> tuple[dict, str]:
     if not path.exists():
         return {}, ""
     text = path.read_text(encoding="utf-8")
-    m = re.match(r"\A---\n(.+?)\n---\n(.*)", text, re.DOTALL)
-    if not m:
+    fm_text, body = split_frontmatter(text)
+    if not fm_text:
         return {}, text
-    raw = yaml.safe_load(m.group(1)) or {}
+    raw = yaml.safe_load(fm_text) or {}
     # Ensure chapters keys are int (YAML may parse them as int already, but be explicit)
     if "chapters" in raw and isinstance(raw["chapters"], dict):
         raw["chapters"] = {int(k): v for k, v in raw["chapters"].items()}
-    return raw, m.group(2)
+    return raw, body
 
 
 def save_klemma_md(path: Path, frontmatter: dict, body: str) -> None:

@@ -106,6 +106,29 @@ class FragmentSearchResponse(BaseModel):
     query: str
 
 
+class SemanticSearchRequest(BaseModel):
+    query: str
+    limit: int = 20
+    citekey: str | None = None
+
+
+class SemanticSearchResult(BaseModel):
+    fragment_id: str
+    citekey: str
+    title: str = ""
+    authors: str = ""
+    year: int | None = None
+    text: str
+    similarity: float
+    page_number: int | None = None
+
+
+class SemanticSearchResponse(BaseModel):
+    results: list[SemanticSearchResult]
+    total: int
+    query: str
+
+
 class SectionServed(BaseModel):
     section: str
     count: int
@@ -203,6 +226,41 @@ class EnrichResponse(BaseModel):
     embedding_status: str  # "pending" | "skipped"
 
 
+class BbtMatch(BaseModel):
+    """One successfully-matched BBT entry linked to an existing library source."""
+
+    citekey: str                # internal library citekey
+    external_citekey: str       # BBT-emitted citekey (now stored as external override)
+    strategy: str               # "doi" | "fuzzy"
+    title: str = ""
+
+
+class BbtUnmatched(BaseModel):
+    """One BBT entry that did not match any library source."""
+
+    bbt_citekey: str
+    title: str = ""
+    first_author_lastname: str = ""
+    year: int | None = None
+    doi: str | None = None
+
+
+class BbtAmbiguous(BaseModel):
+    """One BBT entry that matched more than one library source (first-hit avoided)."""
+
+    bbt_citekey: str
+    title: str = ""
+    candidates: list[str] = []  # internal citekeys that all matched
+
+
+class ImportBbtResponse(BaseModel):
+    """Result of POST /library/import-bbt."""
+
+    matched: list[BbtMatch]
+    unmatched: list[BbtUnmatched]
+    ambiguous: list[BbtAmbiguous]
+
+
 # In-memory rate limiter for enrich-metadata: 10 req/min per user
 _enrich_rate_limit_store: dict[str, list[float]] = {}
 
@@ -255,17 +313,22 @@ async def list_sources(
         paper = paper_store.get_paper_by_id(src.paper_id)
         title = paper.title if paper else ""
         authors = paper.authors if paper else ""
+        display_ck = src.external_citekey or src.citekey
+        # q matches both internal citekey and external_citekey, so searching
+        # for "voronina2023" finds a source with internal "воронина2023_ugly"
+        # and external_citekey "voronina2023".
         if q_lower and not (
             q_lower in title.lower()
             or q_lower in authors.lower()
             or q_lower in src.citekey.lower()
+            or (src.external_citekey and q_lower in src.external_citekey.lower())
         ):
             continue
         project_sections = project_store.get_source_sections(src.citekey, user_id=user.user_id)
         sections = project_sections if project_sections else src.sections
         results.append(
             SourceResponse(
-                citekey=src.citekey,
+                citekey=display_ck,
                 paper_id=src.paper_id,
                 status=src.status,
                 title=title,
@@ -300,10 +363,14 @@ async def search_fragments(
         return FragmentSearchResponse(results=[], total=0, query=q)
 
     raw = paper_store.search_fragments_for_user(user.user_id, q, limit)
+    # Batch-resolve display citekeys so results echo external_citekey when set.
+    library = get_user_library()
+    internal_cks = list({r["citekey"] for r in raw})
+    display_map = library.get_display_citekeys(internal_cks, user_id=user.user_id)
     results = [
         FragmentSearchResult(
             fragment_id=r["fragment_id"],
-            citekey=r["citekey"],
+            citekey=display_map.get(r["citekey"], r["citekey"]),
             title=r["title"],
             authors=r["authors"],
             year=r["year"],
@@ -315,16 +382,105 @@ async def search_fragments(
     return FragmentSearchResponse(results=results, total=len(results), query=q)
 
 
+@router.post("/fragments/semantic-search", response_model=SemanticSearchResponse)
+async def semantic_search_fragments(
+    body: SemanticSearchRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> SemanticSearchResponse:
+    """Semantic (vector) search over citation fragments in the user's library.
+
+    Embeds *query* via the active embedding provider, then runs KNN against
+    the sqlite-vec index.  When the vec extension is unavailable the endpoint
+    returns an empty result set rather than raising.
+
+    Optional *citekey* restricts the search to a single source — useful for
+    cross-lingual citation verification where the citing paper and the cited
+    paper share no token overlap.
+    """
+    from ..tasks import _create_embeddings_provider
+
+    limit = max(1, min(body.limit, 50))
+
+    paper_store = get_paper_store()
+
+    try:
+        emb_provider = _create_embeddings_provider()
+    except Exception as exc:
+        logger.warning("Embedding provider unavailable for semantic search: %s", exc)
+        return SemanticSearchResponse(results=[], total=0, query=body.query)
+
+    try:
+        vector = emb_provider.embed(body.query, "")
+    except Exception as exc:
+        logger.warning("Failed to embed semantic search query: %s", exc)
+        return SemanticSearchResponse(results=[], total=0, query=body.query)
+
+    if not vector:
+        return SemanticSearchResponse(results=[], total=0, query=body.query)
+
+    # Resolve citekey filter to internal key when caller used external_citekey
+    internal_citekey: str | None = None
+    if body.citekey:
+        library = get_user_library()
+        src = library.get_source_by_any_key(body.citekey, user_id=user.user_id)
+        if src is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Source '{body.citekey}' not found",
+            )
+        internal_citekey = src.citekey
+
+    raw = paper_store.find_similar_fragments(
+        vector, user.user_id, limit=limit, citekey_filter=internal_citekey
+    )
+
+    if not raw:
+        return SemanticSearchResponse(results=[], total=0, query=body.query)
+
+    # Batch-resolve display citekeys
+    library = get_user_library()
+    internal_cks = list({r["citekey"] for r in raw})
+    display_map = library.get_display_citekeys(internal_cks, user_id=user.user_id)
+
+    # Enrich with paper metadata in one pass
+    paper_ids = list({r["paper_id"] for r in raw})
+    papers: dict[str, object] = {}
+    for pid in paper_ids:
+        p = paper_store.get_paper_by_id(pid)
+        if p:
+            papers[pid] = p
+
+    results = [
+        SemanticSearchResult(
+            fragment_id=r["fragment_id"],
+            citekey=display_map.get(r["citekey"], r["citekey"]),
+            title=getattr(papers.get(r["paper_id"]), "title", "") or "",
+            authors=getattr(papers.get(r["paper_id"]), "authors", "") or "",
+            year=getattr(papers.get(r["paper_id"]), "year", None),
+            text=r["fragment_text"],
+            similarity=r["similarity"],
+            page_number=r.get("page_number"),
+        )
+        for r in raw
+    ]
+    return SemanticSearchResponse(results=results, total=len(results), query=body.query)
+
+
 @router.get("/sources/{citekey}", response_model=SourceDetailResponse)
 async def get_source(
     citekey: str,
     user: UserRecord = Depends(get_current_user),
 ) -> SourceDetailResponse:
-    """Get a source with its fragments. Only accessible if owned by the authenticated user."""
+    """Get a source with its fragments. Only accessible if owned by the authenticated user.
+
+    Accepts either the internal citekey or the external_citekey (BBT
+    display override); response echoes display citekey so the UI stays
+    in one namespace.
+    """
     library = get_user_library()
     paper_store = get_paper_store()
 
-    src = library.get_source_by_citekey(citekey, user_id=user.user_id)
+    src = library.get_source_by_any_key(citekey, user_id=user.user_id)
     if src is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -333,9 +489,10 @@ async def get_source(
 
     paper = paper_store.get_paper_by_id(src.paper_id)
     fragments = paper_store.get_fragments(src.paper_id)
+    display_ck = src.external_citekey or src.citekey
 
     return SourceDetailResponse(
-        citekey=src.citekey,
+        citekey=display_ck,
         paper_id=src.paper_id,
         status=src.status,
         title=paper.title if paper else "",
@@ -411,6 +568,197 @@ async def add_source(
     )
 
 
+def _normalize_title_prefix(title: str, n: int = 40) -> str:
+    """Lowercase, strip punctuation + whitespace, take first ``n`` chars."""
+    if not title:
+        return ""
+    stripped = re.sub(r"[^a-zа-яё0-9]+", "", title.lower())
+    return stripped[:n]
+
+
+_INITIAL_RE = re.compile(r"^[A-ZА-ЯЁ]\.?([A-ZА-ЯЁ]\.?)*$")
+
+
+def _looks_like_initial(token: str) -> bool:
+    """Heuristic: is this token a name initial (``"K"``, ``"J.D."``, ``"A.B."``)?
+
+    Matches a sequence of 1-2 uppercase letters, each optionally followed by
+    a dot. Doesn't match surnames like ``"Ng"`` (short but lowercase follow-ups)
+    — the all-upper pattern is the distinguishing signal for initials.
+    """
+    return bool(_INITIAL_RE.match(token)) and len(token.replace(".", "")) <= 3
+
+
+def _first_author_surname(authors: str) -> str:
+    """Extract the first author's surname from a free-form authors string.
+
+    Handles the three common forms:
+      - ``"Smith, J."``       (BibTeX/Zotero canonical, Last-first)
+      - ``"John Smith"``      (CrossRef/Semantic Scholar extended, Given-Family)
+      - ``"Smith J."``        (CrossRef/Semantic Scholar compressed, Last-initial)
+
+    Rules (in order):
+      1. Take the first chunk split on ``;`` (multi-author separator).
+      2. Comma present → BibTeX form → surname is before the comma.
+      3. Otherwise: strip trailing tokens that look like initials (``"K"``,
+         ``"J.D."``), then the last remaining token is the surname.
+      4. Single-token name → return as-is.
+    """
+    if not authors:
+        return ""
+    chunk = authors.split(";", 1)[0].strip()
+    if "," in chunk:
+        return chunk.split(",", 1)[0].strip()
+    tokens = chunk.split()
+    # Strip trailing initials so "Andersson K" and "Smith J.D." collapse to
+    # the surname. If the leading tokens ARE initials (Given-Family with
+    # "J. Smith"), they stay — the last non-initial is still the surname.
+    while len(tokens) > 1 and _looks_like_initial(tokens[-1]):
+        tokens.pop()
+    if not tokens:
+        return ""
+    return tokens[-1] if len(tokens) > 1 else tokens[0]
+
+
+def _match_bbt_to_library(
+    entries: list, paper_store, library, user_id: str
+) -> ImportBbtResponse:
+    """Match BBT entries to the user's library, set external_citekey for
+    single hits, return structured report. Never touches citekey.
+
+    Matching order per entry (first hit wins):
+        1. DOI exact (normalized both sides)
+        2. Fuzzy: normalized title prefix (40 chars) + latinized first-author
+           lastname + year. Multi-hit → ambiguous (no external_citekey set).
+    """
+    from klemma.literature.bbt_upload import normalize_doi
+    from klemma.utils.translit import transliterate_ru
+
+    # Build once: all user sources → (citekey, paper_record, normalized keys)
+    all_sources = library.get_all_sources(user_id=user_id)
+    # paper_id → PaperRecord (batched single-fetch would be nicer; this is
+    # a one-shot admin-ish endpoint so N+1 is acceptable for first cut)
+    indexed: list[tuple[str, object, str, str, int | None, str | None]] = []
+    for src in all_sources:
+        paper = paper_store.get_paper_by_id(src.paper_id)
+        if paper is None:
+            continue
+        title_prefix = _normalize_title_prefix(paper.title or "")
+        # Extract surname via shared helper (handles "Last, First", "Given Family",
+        # and single-token names — matches the BBT parser's lastName output).
+        first_author_raw = _first_author_surname(paper.authors or "")
+        author_norm = re.sub(r"[^a-z0-9]", "", transliterate_ru(first_author_raw).lower())
+        # Normalize stored DOI on both sides — papers can be created from raw
+        # CrossRef JSON or user input containing https://doi.org/... wrappers.
+        doi_norm = normalize_doi(paper.doi)
+        indexed.append((src.citekey, paper, title_prefix, author_norm, paper.year, doi_norm))
+
+    matched: list[BbtMatch] = []
+    unmatched: list[BbtUnmatched] = []
+    ambiguous: list[BbtAmbiguous] = []
+
+    for entry in entries:
+        # 1. DOI exact
+        if entry.doi:
+            doi_hits = [ck for ck, _paper, _, _, _, doi in indexed if doi == entry.doi]
+            if len(doi_hits) == 1:
+                library.set_external_citekey(doi_hits[0], entry.citekey, user_id=user_id)
+                matched.append(BbtMatch(
+                    citekey=doi_hits[0], external_citekey=entry.citekey,
+                    strategy="doi", title=entry.title,
+                ))
+                continue
+            if len(doi_hits) > 1:
+                ambiguous.append(BbtAmbiguous(
+                    bbt_citekey=entry.citekey, title=entry.title, candidates=doi_hits,
+                ))
+                continue
+
+        # 2. Fuzzy: title prefix + author + year
+        entry_title_prefix = _normalize_title_prefix(entry.title)
+        entry_author_norm = re.sub(
+            r"[^a-z0-9]",
+            "",
+            transliterate_ru(entry.first_author_lastname).lower(),
+        )
+        if not (entry_title_prefix and entry_author_norm and entry.year is not None):
+            # Not enough signal to fuzzy-match
+            unmatched.append(BbtUnmatched(
+                bbt_citekey=entry.citekey, title=entry.title,
+                first_author_lastname=entry.first_author_lastname,
+                year=entry.year, doi=entry.doi,
+            ))
+            continue
+
+        fuzzy_hits = [
+            ck for ck, _paper, title_pfx, author_norm, year, _doi in indexed
+            if title_pfx and title_pfx == entry_title_prefix
+            and author_norm == entry_author_norm
+            and year == entry.year
+        ]
+        if len(fuzzy_hits) == 1:
+            library.set_external_citekey(fuzzy_hits[0], entry.citekey, user_id=user_id)
+            matched.append(BbtMatch(
+                citekey=fuzzy_hits[0], external_citekey=entry.citekey,
+                strategy="fuzzy", title=entry.title,
+            ))
+        elif len(fuzzy_hits) > 1:
+            ambiguous.append(BbtAmbiguous(
+                bbt_citekey=entry.citekey, title=entry.title, candidates=fuzzy_hits,
+            ))
+        else:
+            unmatched.append(BbtUnmatched(
+                bbt_citekey=entry.citekey, title=entry.title,
+                first_author_lastname=entry.first_author_lastname,
+                year=entry.year, doi=entry.doi,
+            ))
+
+    return ImportBbtResponse(matched=matched, unmatched=unmatched, ambiguous=ambiguous)
+
+
+@router.post("/import-bbt", response_model=ImportBbtResponse)
+async def import_bbt(
+    file: UploadFile,
+    user: UserRecord = Depends(get_current_user),
+) -> ImportBbtResponse:
+    """Import a BetterBibTeX JSON export and attach BBT citekeys as
+    ``external_citekey`` overrides on matched library sources.
+
+    Matching strategy per entry (exactly-one-or-unmatched):
+      1. DOI exact match against ``papers.doi``.
+      2. Fuzzy: normalized title prefix (40 chars) + latinized first-author
+         lastname + year.
+
+    Entries matching >1 library source are returned under ``ambiguous`` —
+    their ``external_citekey`` is NOT set, so the user can decide manually.
+    Entries matching 0 are returned under ``unmatched`` — no phantom rows
+    are created.
+
+    Re-running this endpoint is idempotent: the same match reassigns the
+    same ``external_citekey`` on the same ``citekey``.
+    """
+    from klemma.literature.bbt_upload import parse_bbt_upload
+
+    if not file.filename or not file.filename.lower().endswith(".json"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected a .json file (BetterBibTeX export).",
+        )
+
+    data = await file.read()
+    try:
+        entries = parse_bbt_upload(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    if not entries:
+        return ImportBbtResponse(matched=[], unmatched=[], ambiguous=[])
+
+    paper_store = get_paper_store()
+    library = get_user_library()
+    return _match_bbt_to_library(entries, paper_store, library, user.user_id)
+
+
 @router.delete("/sources/{citekey}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_source(
     citekey: str,
@@ -423,14 +771,15 @@ async def delete_source(
     """
     library = get_user_library()
 
-    src = library.get_source_by_citekey(citekey, user_id=user.user_id)
+    src = library.get_source_by_any_key(citekey, user_id=user.user_id)
     if src is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source '{citekey}' not found",
         )
 
-    library.remove_source(citekey, user_id=user.user_id)
+    # Delete by internal citekey — external_citekey is not a PK.
+    library.remove_source(src.citekey, user_id=user.user_id)
     invalidate_for_user(get_paper_store(), user.user_id)
 
 
@@ -506,6 +855,21 @@ async def upload_pdf(
             existing.paper_id, user_id=user.user_id
         )
         if existing_source:
+            # User already owns this PDF. Re-uploading into another project
+            # should attach the existing source to that project, not move it
+            # away from the original one. Keep source metadata intact.
+            if project_id and project_id not in existing_source.project_ids:
+                library.add_source(
+                    existing.paper_id,
+                    existing_source.citekey,
+                    status=existing_source.status,
+                    pdf_path=existing_source.pdf_path,
+                    note_path=existing_source.note_path,
+                    quality_score=existing_source.quality_score,
+                    project_id=project_id,
+                    user_id=user.user_id,
+                )
+                invalidate_for_user(paper_store, user.user_id)
             return UploadResponse(
                 citekey=existing_source.citekey,
                 paper_id=existing.paper_id,
@@ -515,9 +879,8 @@ async def upload_pdf(
                 already_owned=True,
             )
         # New user, same PDF — generate citekey from filename
-        citekey = _citekey_from_filename(file.filename)
-        if library.get_source_by_citekey(citekey, user_id=user.user_id):
-            citekey = f"{citekey}_{pdf_hash[:6]}"
+        base = _citekey_from_filename(file.filename)
+        citekey = _resolve_citekey_collision(library, base, user.user_id, pdf_hash)
 
         library.add_source(
             existing.paper_id, citekey,
@@ -526,6 +889,7 @@ async def upload_pdf(
             user_id=user.user_id,
         )
         invalidate_for_user(paper_store, user.user_id)
+        paper_store.ensure_vec_entries_for_user_paper(user.user_id, existing.paper_id)
         return UploadResponse(
             citekey=citekey,
             paper_id=existing.paper_id,
@@ -536,9 +900,8 @@ async def upload_pdf(
 
     # New paper: register + store file
     try:
-        citekey = _citekey_from_filename(file.filename)
-        if library.get_source_by_citekey(citekey, user_id=user.user_id):
-            citekey = f"{citekey}_{pdf_hash[:6]}"
+        base = _citekey_from_filename(file.filename)
+        citekey = _resolve_citekey_collision(library, base, user.user_id, pdf_hash)
 
         paper_id = paper_store.register_paper(
             title=file.filename.rsplit(".", 1)[0],
@@ -590,10 +953,11 @@ async def metadata_preview(
     paper_store = get_paper_store()
     file_store = get_file_store()
 
-    # Ownership check
-    paper_id = library.resolve_paper_id(citekey, user_id=user.user_id)
-    if not paper_id:
+    # Ownership check (dual-key — accepts internal or external citekey)
+    src = library.get_source_by_any_key(citekey, user_id=user.user_id)
+    if src is None:
         raise HTTPException(status_code=404, detail=f"Source '{citekey}' not found")
+    paper_id = src.paper_id
 
     paper = paper_store.get_paper_by_id(paper_id)
     current = MetadataCurrentFields.from_paper(paper)
@@ -635,10 +999,13 @@ async def enrich_metadata(
     library = get_user_library()
     paper_store = get_paper_store()
 
-    # Ownership check
-    paper_id = library.resolve_paper_id(citekey, user_id=user.user_id)
-    if not paper_id:
+    # Ownership check (dual-key — accepts internal or external citekey)
+    src = library.get_source_by_any_key(citekey, user_id=user.user_id)
+    if src is None:
         raise HTTPException(status_code=404, detail=f"Source '{citekey}' not found")
+    paper_id = src.paper_id
+    # Rewrite the caller's view to the internal citekey for downstream writes.
+    citekey = src.citekey
 
     paper = paper_store.get_paper_by_id(paper_id)
     if not paper:
@@ -903,8 +1270,12 @@ async def list_recommendations(
                 warning=warning,
             )
 
-    # Build candidate pool (scored, without recency filter), scoped by project
-    candidates = compute_scored_gaps(
+    # Build candidate pool (scored), then apply recency filter BEFORE
+    # passing to the LLM. Without this the LLM freely picks seminal
+    # classics from 20-30 years ago because the prompt has no recency
+    # guidance — the user-facing rule "не старше 10 лет" was only being
+    # enforced on the AI-down fallback branch.
+    raw_candidates = compute_scored_gaps(
         paper_store=paper_store,
         library=library,
         project_store=project_store,
@@ -912,6 +1283,7 @@ async def list_recommendations(
         project_id=project_id,
         limit=CANDIDATE_LIMIT,
     )
+    candidates = apply_recency_filter(raw_candidates)
     if not candidates:
         return RecommendationsResponse(
             recommendations=[],
@@ -1088,13 +1460,54 @@ def _enqueue_processing(paper_id: str, citekey: str, user_id: str, project_id: s
         return None
 
 
+def _clean_author_slug(raw: str) -> str:
+    """Transliterate Cyrillic/diacritics → Latin, lowercase, strip to ``[a-z0-9]``.
+
+    Used by ``_citekey_from_filename`` to produce a BBT-compatible author
+    surname slug. Returns empty string if nothing usable remains.
+    """
+    if not raw:
+        return ""
+    from klemma.utils.translit import transliterate_ru
+
+    transliterated = transliterate_ru(raw)
+    return re.sub(r"[^a-z0-9]", "", transliterated.lower())
+
+
+def _resolve_citekey_collision(library, base: str, user_id: str, pdf_hash: str) -> str:
+    """Find an unused citekey given ``base`` (e.g. ``smith2023``) for the user.
+
+    BBT-style suffix sequence: ``base``, ``basea``, ``baseb`` … ``basez``.
+    If all 27 slots are taken (two authors + 26 disambiguators, which would
+    mean 27 papers by the same first author in the same year), falls back to
+    ``base_{pdf_hash[:6]}`` so we never loop forever and never clash.
+    """
+    if not library.get_source_by_citekey(base, user_id=user_id):
+        return base
+    for suffix in "abcdefghijklmnopqrstuvwxyz":
+        candidate = f"{base}{suffix}"
+        if not library.get_source_by_citekey(candidate, user_id=user_id):
+            return candidate
+    # Cosmic-ray territory — fall back to hash suffix for guaranteed uniqueness.
+    return f"{base}_{pdf_hash[:6]}"
+
+
 def _citekey_from_filename(filename: str) -> str:
-    """Generate a citekey from a PDF filename.
+    """Generate a BBT-style citekey from a PDF filename.
 
-    Matches CLI pattern (acquirer._generate_citekey): author+year+slug.
+    Format: ``{lastname_lat}{year}``. Cyrillic surnames are transliterated
+    via ``transliterate_ru``; the title is NOT included in the slug (BBT
+    default is short and deterministic; title slugs were the primary source
+    of the long Cyrillic keys seen in prod).
 
-    'Andersson et al. - 2021 - Seasonal Arctic sea ice.pdf' → 'andersson2021_seasonal_arctic_sea_ice'
-    'Smith_2020_Machine_Learning.pdf' → 'smith2020_machine_learning'
+    Collision handling lives at the caller (upload_pdf appends
+    ``_{pdf_hash[:6]}`` when the base is already taken).
+
+    Examples:
+        'Воронина - 2023 - Основные направления.pdf' → 'voronina2023'
+        'Andersson et al. - 2021 - Seasonal Arctic sea ice.pdf' → 'andersson2021'
+        'Smith_2020_Machine_Learning.pdf' → 'smith2020'
+        'Иванов 2019.pdf' → 'ivanov2019'
     """
     name = filename.rsplit(".", 1)[0]  # remove .pdf
 
@@ -1103,14 +1516,9 @@ def _citekey_from_filename(filename: str) -> str:
     if m:
         author_part = m.group(1).strip()
         year = m.group(2)
-        title_part = m.group(3).strip()
-        # First author's last name
-        first_author = re.split(r"[,\s]", author_part)[0]
-        first_author = re.sub(r"[^\w]", "", first_author).lower()
-        # Title slug: first ~30 chars, underscore-separated
-        slug = re.sub(r"[^\w\s]", "", title_part).strip()
-        slug = re.sub(r"\s+", "_", slug).lower()[:30].rstrip("_")
-        return f"{first_author}{year}_{slug}" if first_author else f"paper{year}_{slug}"
+        first_author_raw = re.split(r"[,\s]", author_part)[0]
+        first_author = _clean_author_slug(first_author_raw)
+        return f"{first_author}{year}" if first_author else f"paper{year}"
 
     # Fallback: split on separators, extract year if present
     parts = re.split(r"[_\-\s]+", name)
@@ -1118,31 +1526,16 @@ def _citekey_from_filename(filename: str) -> str:
     if not parts:
         return "unknown"
 
-    # Find year
     year = ""
-    year_idx = -1
-    for i, p in enumerate(parts):
+    for p in parts:
         if re.match(r"^\d{4}$", p):
             year = p
-            year_idx = i
             break
 
-    # First part before year = author, rest = title
-    first_author = parts[0].lower() if parts else "unknown"
-    first_author = re.sub(r"[^\w]", "", first_author)
+    first_author = _clean_author_slug(parts[0]) if parts else ""
+    # A digit-only "surname" means the filename started with the year — not a
+    # real author. Fall back to "paper" so we don't emit "20232023".
+    if not first_author or first_author.isdigit():
+        first_author = "paper"
 
-    if year_idx > 0:
-        # Title words after year
-        title_words = parts[year_idx + 1:]
-    elif year_idx == 0:
-        title_words = parts[1:]
-    else:
-        title_words = parts[1:]
-
-    slug = "_".join(w.lower() for w in title_words[:5])
-    slug = re.sub(r"[^\w_]", "", slug)[:30].rstrip("_")
-
-    key = f"{first_author}{year}"
-    if slug:
-        key += f"_{slug}"
-    return key or "unknown"
+    return f"{first_author}{year}" if year else first_author

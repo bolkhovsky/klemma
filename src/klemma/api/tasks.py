@@ -15,11 +15,18 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-def _create_ai_provider():
+def _create_ai_provider(*, json_mode: bool = False):
     """Create an AI provider from environment variables.
 
     Supports: ANTHROPIC_API_KEY, OPENAI_API_KEY via litellm backend.
     Model: KLEMMA_AI_MODEL env var (default: anthropic/claude-sonnet-4-20250514).
+
+    Args:
+        json_mode: When True, enables structured JSON output via
+            ``response_format={"type": "json_object"}`` for LiteLLM. Use for
+            tasks that parse the response as JSON (chunked extraction,
+            curation, outline generation). Free-form text tasks (draft,
+            research) should keep the default False.
     """
     from klemma.ai import create_ai
     from klemma.config import AIConfig
@@ -31,7 +38,7 @@ def _create_ai_provider():
     if os.getenv("OPENAI_API_KEY"):
         api_keys["openai"] = os.environ["OPENAI_API_KEY"]
 
-    config = AIConfig(backend="litellm", model=model)
+    config = AIConfig(backend="litellm", model=model, json_mode=json_mode)
     config._resolved_api_keys = api_keys
     return create_ai(config), config
 
@@ -114,6 +121,237 @@ def _create_embeddings_provider():
     if dim:
         config["dim"] = int(dim)
     return create_embeddings(config)
+
+
+def _run_chunked_extraction(
+    ai,
+    ai_config,
+    entry,
+    chunks,
+    paper_id: str,
+    source_label: str,
+    prompt_path,
+    *,
+    dissertation_context: str = "",
+    available_tags: str = "",
+    user_store=None,
+    user_id: str = "",
+    full_text: str = "",
+) -> dict | None:
+    """Run chunked AI extraction over a list of ChunkRecords.
+
+    Renders the extraction prompt once per chunk, calls the AI, accumulates
+    fragments across all chunks, then validates verbatim claims once against
+    the full document text (capped via VERBATIM_VALIDATION_CAP_*).
+
+    Args:
+        ai: AI provider instance (must implement render_prompt + call_with_meta).
+        ai_config: AIConfig — used for model name when recording token usage.
+        entry: ZoteroEntry built from the paper metadata.
+        chunks: list[ChunkRecord] — pre-built overlapping chunks from build_chunks_from_pages.
+        paper_id: Global paper id (used as prefix for content hash).
+        source_label: Citekey or paper_id — used only in log messages.
+        prompt_path: Path to the extract.md prompt template.
+        dissertation_context: Section list rendered for the AI (empty if no project).
+        available_tags: Comma-separated section ids (empty if no project).
+        user_store: LocalUserStore instance for recording per-chunk token usage, or None.
+        user_id: User id string for token recording (ignored when user_store is None).
+        full_text: Concatenated page text used for verbatim validation. Empty
+            string disables validation (older callers / tests).
+
+    Returns:
+        dict with keys: fragments, key_refs, fragment_ai_sections, predicted_sections,
+        predicted_chapters, chunks_processed, failed_chunks, downgrade_stats
+        — or None if every chunk produced zero fragments.
+    """
+    from klemma.ai import extract_json
+    from klemma.hashing import compute_content_hash
+    from klemma.literature.models import DowngradeStats, Fragment
+    from klemma.models import FragmentRecord
+    from klemma.skills.extractor import validate_verbatim_fragments
+
+    from .constants import VERBATIM_VALIDATION_CAP_LARGE, VERBATIM_VALIDATION_CAP_SMALL
+
+    system = (
+        "You are a research assistant extracting citation-worthy fragments from scientific papers. "
+        "Output only valid JSON with fragments array and key_references array."
+    )
+
+    fragments: list[FragmentRecord] = []
+    all_pydantic: list[Fragment] = []
+    fragment_ai_sections: dict[str, str | None] = {}
+    predicted_sections: set[str] = set()
+    predicted_chapters: set[int] = set()
+    all_key_refs: list[dict] = []
+    chunk_total = len(chunks)
+    failed_chunks = 0
+
+    for chunk in chunks:
+        user_prompt = ai.render_prompt(
+            prompt_path,
+            title=entry.title or "Unknown",
+            authors=entry.authors_str,
+            year=entry.year or "Unknown",
+            journal=entry.container_title or "N/A",
+            doi=entry.DOI or "N/A",
+            abstract=entry.abstract or "Not available",
+            pdf_text=chunk.text,
+            chunk_index=chunk.index,
+            chunk_total=chunk_total,
+            char_start=chunk.char_start,
+            char_end=chunk.char_end,
+            dissertation_context=dissertation_context,
+            available_tags=available_tags,
+            language="ru",
+            project_type="research",
+        )
+        chunk_chars = len(chunk.text)
+        adaptive_max_tokens = max(2048, min(8192, chunk_chars // 4))
+        chunk_result = ai.call_with_meta(system, user_prompt, max_tokens=adaptive_max_tokens)
+
+        if not chunk_result or not chunk_result.text:
+            logger.warning(
+                "Chunk %d/%d returned no AI response for %s — skipping",
+                chunk.index + 1, chunk_total, source_label,
+            )
+            failed_chunks += 1
+            continue
+
+        # Record token usage per chunk
+        if user_store and user_id:
+            user_store.record_usage(
+                user_id=user_id,
+                operation="process_source",
+                model=ai_config.model,
+                input_tokens=chunk_result.input_tokens or 0,
+                output_tokens=chunk_result.output_tokens or 0,
+                citekey=source_label,
+            )
+
+        data = extract_json(chunk_result.text)
+        if not data:
+            # Repair retry (#381): ask the AI to repair its own malformed JSON.
+            # Tracks tokens separately as `process_source_repair` for visibility.
+            repair_system = (
+                "You receive malformed JSON. Output ONLY a valid JSON object that "
+                "preserves every field and value exactly. Do not add commentary, "
+                "do not change content, do not drop fragments. Fix only the syntax."
+            )
+            repair_user = f"Repair this malformed JSON:\n\n{chunk_result.text}"
+            repair_result = ai.call_with_meta(
+                repair_system, repair_user,
+                max_tokens=min(8192, adaptive_max_tokens * 2),
+            )
+            if repair_result and repair_result.text:
+                if user_store and user_id:
+                    user_store.record_usage(
+                        user_id=user_id,
+                        operation="process_source_repair",
+                        model=ai_config.model,
+                        input_tokens=repair_result.input_tokens or 0,
+                        output_tokens=repair_result.output_tokens or 0,
+                        citekey=source_label,
+                    )
+                data = extract_json(repair_result.text)
+                if data:
+                    logger.info(
+                        "Chunk %d/%d: AI repair retry recovered JSON for %s",
+                        chunk.index + 1, chunk_total, source_label,
+                    )
+            if not data:
+                logger.warning(
+                    "Chunk %d/%d: failed to parse AI JSON for %s "
+                    "(repair retry also failed) — skipping",
+                    chunk.index + 1, chunk_total, source_label,
+                )
+                failed_chunks += 1
+                continue
+
+        # Collect key_references (bibliography; last chunk usually has the most)
+        all_key_refs.extend(data.get("key_references", []))
+
+        # Parse fragments from this chunk into parallel record/pydantic arrays.
+        # Validation is deferred until after all chunks are processed so the
+        # validator can match against the full document text (#379).
+        for f_data in data.get("fragments", []):
+            text = f_data.get("text", "").strip()
+            if not text:
+                continue
+            fragment_id = compute_content_hash(paper_id, text, f_data.get("page"))
+            claimed_verbatim = bool(f_data.get("verbatim", False))
+            all_pydantic.append(Fragment(text=text, verbatim=claimed_verbatim))
+            fragments.append(FragmentRecord(
+                fragment_id=fragment_id,
+                paper_id=paper_id,
+                fragment_text=text,
+                fragment_type=f_data.get("type", "key_idea"),
+                page_number=f_data.get("page"),
+                citation_intent=f_data.get("citation_intent"),
+                verbatim=claimed_verbatim,
+                content_hash=fragment_id,
+            ))
+            sec = str(f_data.get("section", "")).strip()
+            fragment_ai_sections[fragment_id] = sec or None
+            if sec:
+                predicted_sections.add(sec)
+            chap = f_data.get("chapter")
+            if isinstance(chap, int):
+                predicted_chapters.add(chap)
+
+    if not fragments:
+        return None
+
+    if failed_chunks > 0:
+        logger.warning(
+            "%s: %d/%d chunk(s) failed AI extraction — result covers only part of the PDF",
+            source_label, failed_chunks, chunk_total,
+        )
+
+    # Single full-text verbatim validation (#379). Per-chunk slices cause
+    # false-negative downgrades when the AI quotes text from outside its
+    # own chunk window (boundary text, cross-chunk quotes, prompt context).
+    downgrade_stats = DowngradeStats()
+    if all_pydantic:
+        # Production callers (process_source, reprocess_paper) pass the same
+        # full_text they cache in papers.raw_text. Direct callers (helper-level
+        # tests, future callers) that pass full_text="" fall back to the
+        # joined chunk text — broader than any single chunk, so cross-chunk
+        # quotes still validate cleanly even without an explicit full_text.
+        source_text = full_text or "\n\n".join(chunk.text for chunk in chunks)
+        if len(source_text) >= VERBATIM_VALIDATION_CAP_SMALL:
+            validation_text = source_text[:VERBATIM_VALIDATION_CAP_LARGE]
+            if len(source_text) > VERBATIM_VALIDATION_CAP_LARGE:
+                logger.warning(
+                    "verbatim validator (%s): source text %d chars truncated to %d for "
+                    "validation; fragments quoting beyond the cap may be downgraded",
+                    source_label, len(source_text), VERBATIM_VALIDATION_CAP_LARGE,
+                )
+        else:
+            validation_text = source_text
+        downgrade_stats = validate_verbatim_fragments(
+            all_pydantic, validation_text, source_label,
+        )
+        for record, pyd in zip(fragments, all_pydantic):
+            record.verbatim = pyd.verbatim
+        if downgrade_stats.downgraded:
+            logger.warning(
+                "verbatim validator (%s): %d/%d downgraded across %d chunk(s)",
+                source_label, downgrade_stats.downgraded,
+                downgrade_stats.verbatim_claimed, chunk_total,
+            )
+
+    fragments = dedup_fragments_by_prefix(fragments, min_prefix=100)
+
+    return {
+        "fragments": fragments,
+        "key_refs": all_key_refs,
+        "fragment_ai_sections": fragment_ai_sections,
+        "predicted_sections": predicted_sections,
+        "predicted_chapters": predicted_chapters,
+        "chunks_processed": chunk_total - failed_chunks,
+        "failed_chunks": failed_chunks,
+        "downgrade_stats": downgrade_stats,
+    }
 
 
 def _mirror_research_report(data_path: Path, project_id: str, section: str, text: str, model: str) -> None:
@@ -209,6 +447,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             "citekey": citekey,
             "fragment_count": len(existing),
         }
+    _force_delete_pending = False
     if existing and force:
         # Safety: don't delete shared global fragments if other users reference this paper
         other_owners = paper_store.count_paper_owners(paper_id)
@@ -223,8 +462,10 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 "citekey": citekey,
                 "fragment_count": len(existing),
             }
-        deleted = paper_store.delete_fragments(paper_id)
-        logger.info("Force reprocess: deleted %d existing fragments for %s", deleted, citekey)
+        # Deletion deferred until after extraction succeeds — abort if any chunks fail
+        # to preserve the complete existing corpus record (mirrors reprocess_paper guard).
+        _force_delete_pending = True
+        logger.info("Force reprocess queued for %s — old fragments held until extraction completes", citekey)
 
     # Mark as processing
     user_library.update_status(citekey, "processing", user_id=user_id or None)
@@ -236,28 +477,32 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         user_library.update_status(citekey, "failed", user_id=user_id or None)
         return {"status": "error", "detail": f"PDF not found for paper {paper_id}"}
 
-    # Extract PDF text
+    # Extract PDF text (page-aware, no truncation at source)
     try:
-        from klemma.literature.pdf import PDFExtractor
+        from klemma.literature.pdf import PDFExtractor, build_chunks_from_pages
 
         pdf_path = pdf_files[0]
-
         extractor = PDFExtractor()
-        pdf_text = extractor.extract(pdf_path)
-        if not pdf_text or len(pdf_text) < 500:
+        pages = extractor.extract_pages(pdf_path)
+        if not pages or sum(len(p) for p in pages) < 500:
             user_library.update_status(citekey, "failed", user_id=user_id or None)
             return {"status": "error", "detail": "PDF text too short or extraction failed"}
 
-        logger.info("Extracted %d chars from PDF for %s", len(pdf_text), citekey)
+        # Full concatenated text (no truncation) used for caching, abstract/DOI extraction.
+        full_text = "\n\n".join(f"[Page {i + 1}]\n{p}" for i, p in enumerate(pages))
+        logger.info("Extracted %d chars from %d pages for %s", len(full_text), len(pages), citekey)
 
-        # Cache the full PDF text on the paper record so the verbatim validator
-        # and future find-in-page UX can search the same string the AI saw.
+        # Cache the full PDF text so verbatim validator and find-in-page UX
+        # can search the same string the AI saw.
         try:
-            paper_store.update_paper_raw_text(paper_id, pdf_text)
+            paper_store.update_paper_raw_text(paper_id, full_text)
         except Exception as cache_exc:
-            logger.warning(
-                "raw_text cache write failed for %s (non-fatal): %s", citekey, cache_exc,
-            )
+            logger.warning("raw_text cache write failed for %s (non-fatal): %s", citekey, cache_exc)
+
+        # Build overlapping chunks for per-chunk AI extraction (removes 50K truncation)
+        chunks = build_chunks_from_pages(pages)
+        logger.info("Split %s into %d chunk(s) for extraction", citekey, len(chunks))
+
     except Exception as exc:
         logger.error("PDF extraction failed for %s: %s", citekey, exc)
         user_library.update_status(citekey, "failed", user_id=user_id or None)
@@ -267,25 +512,20 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
     try:
         from klemma.literature.metadata import _extract_abstract_from_text
 
-        abstract = _extract_abstract_from_text(pdf_text)
+        abstract = _extract_abstract_from_text(full_text)
         if abstract:
             paper_store.update_paper_metadata(paper_id, abstract=abstract)
             logger.info("Extracted abstract from PDF text for %s (%d chars)", citekey, len(abstract))
     except Exception as exc:
         logger.warning("Abstract extraction failed for %s (non-fatal): %s", citekey, exc)
 
-    # Auto-enrich metadata (title/authors/year/doi) via DOI lookup on CrossRef.
-    # Searches the full raw_text (not the 3000-char window used by the
-    # metadata-preview endpoint) so that MDPI/Elsevier/Nature PDFs with the
-    # DOI in a page-2 footer still resolve. Non-fatal: if CrossRef is slow or
-    # unreachable, the paper stays with filename-based title and the user can
-    # still enrich manually via MetadataEnrichDialog.
+    # Auto-enrich metadata via DOI lookup on CrossRef (non-fatal).
     try:
         from klemma.literature.metadata import (
             _extract_doi_from_text,
             lookup_crossref_by_doi,
         )
-        doi = _extract_doi_from_text(pdf_text, max_chars=None)
+        doi = _extract_doi_from_text(full_text, max_chars=None)
         if doi:
             meta = lookup_crossref_by_doi(doi, timeout=5)
             if meta:
@@ -326,13 +566,15 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
         except Exception as _exc:
             logger.warning("Failed to load project outline for %s: %s", project_id, _exc)
 
-    # Create AI provider and extract fragments
+    # Create AI provider and extract fragments. json_mode=True forces
+    # response_format="json_object" so chunked extraction calls get strict
+    # JSON output instead of free-form text wrapped in JSON (#381).
     try:
-        ai, ai_config = _create_ai_provider()
+        ai, ai_config = _create_ai_provider(json_mode=True)
 
-        from klemma.hashing import compute_content_hash
+        from klemma.ai import extract_json
+        from klemma.config import _SHIPPED_PROMPTS_DIR
         from klemma.literature.models import ZoteroEntry
-        from klemma.models import FragmentRecord
 
         # Build minimal entry from paper metadata
         entry = ZoteroEntry(
@@ -344,124 +586,48 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             abstract=paper.abstract or "",
         )
 
-        # Render extraction prompt — uses _SHIPPED_PROMPTS_DIR (respects KLEMMA_PROMPTS_DIR env)
-        from klemma.config import _SHIPPED_PROMPTS_DIR
         prompt_path = _SHIPPED_PROMPTS_DIR / "extract.md"
 
-        user_prompt = ai.render_prompt(
-            prompt_path,
-            title=entry.title or "Unknown",
-            authors=entry.authors_str,
-            year=entry.year or "Unknown",
-            journal=entry.container_title or "N/A",
-            doi=entry.DOI or "N/A",
-            abstract=entry.abstract or "Not available",
-            pdf_text=pdf_text[:50000],  # Cap at 50K chars
+        # --- Per-chunk extraction via shared helper ---
+        extraction = _run_chunked_extraction(
+            ai, ai_config, entry, chunks, paper_id, citekey, prompt_path,
             dissertation_context=dissertation_context,
             available_tags=available_tags,
-            language="ru",
-            project_type="research",
+            user_store=user_store,
+            user_id=user_id,
+            full_text=full_text,
         )
 
-        system = (
-            "You are a research assistant extracting citation-worthy fragments from scientific papers. "
-            "Output only valid JSON with fragments array and key_references array."
-        )
-
-        # Adaptive max_tokens: short PDFs produce few fragments, so a high
-        # cap is wasted latency + cost. ~4 chars per token, fragments are
-        # typically 200-400 tokens each; we scale with pdf size but floor
-        # at 2048 (floor was 1024, but PDFs shorter than 8K chars would get
-        # truncated JSON responses — raised after e2e test confirmed the bug)
-        # and cap at 8192 (the previous hardcoded ceiling).
-        pdf_chars = len(pdf_text)
-        adaptive_max_tokens = max(2048, min(8192, pdf_chars // 4))
-        result = ai.call_with_meta(system, user_prompt, max_tokens=adaptive_max_tokens)
-        if not result or not result.text:
-            user_library.update_status(citekey, "failed", user_id=user_id or None)
-            return {"status": "error", "detail": "AI extraction returned no data"}
-
-        # Record token usage
-        if user_store and user_id:
-            user_store.record_usage(
-                user_id=user_id,
-                operation="process_source",
-                model=ai_config.model,
-                input_tokens=result.input_tokens or 0,
-                output_tokens=result.output_tokens or 0,
-                citekey=citekey,
-            )
-
-        # Parse JSON from response
-        from klemma.ai import extract_json
-        data = extract_json(result.text)
-        if not data:
-            user_library.update_status(citekey, "failed", user_id=user_id or None)
-            return {"status": "error", "detail": "Failed to parse AI response as JSON"}
-
-        # Parse and save fragments; collect AI-predicted section assignments
-        fragments = []
-        fragment_ai_sections: dict[str, str | None] = {}  # fragment_id → AI predicted section
-        predicted_sections: set[str] = set()
-        predicted_chapters: set[int] = set()
-        # Build parallel Fragment (Pydantic) list purely to drive the verbatim
-        # validator — the SaaS worker stores FragmentRecord (dataclass), so we
-        # copy the validated flag back after the validator may downgrade it.
-        from klemma.literature.models import Fragment
-        from klemma.skills.extractor import validate_verbatim_fragments
-
-        pydantic_frags: list[Fragment] = []
-        for f_data in data.get("fragments", []):
-            text = f_data.get("text", "").strip()
-            if not text:
-                continue
-            fragment_id = compute_content_hash(paper_id, text, f_data.get("page"))
-            claimed_verbatim = bool(f_data.get("verbatim", False))
-            pydantic_frags.append(Fragment(text=text, verbatim=claimed_verbatim))
-            fragments.append(FragmentRecord(
-                fragment_id=fragment_id,
-                paper_id=paper_id,
-                fragment_text=text,
-                fragment_type=f_data.get("type", "key_idea"),
-                page_number=f_data.get("page"),
-                citation_intent=f_data.get("citation_intent"),
-                verbatim=claimed_verbatim,
-                content_hash=fragment_id,
-            ))
-            # Capture per-fragment AI section prediction (safe — keyed by ID, not index)
-            sec = str(f_data.get("section", "")).strip()
-            fragment_ai_sections[fragment_id] = sec or None
-            if sec:
-                predicted_sections.add(sec)
-            chap = f_data.get("chapter")
-            if isinstance(chap, int):
-                predicted_chapters.add(chap)
-
-        if not fragments:
+        if extraction is None:
+            if _force_delete_pending:
+                # All chunks failed but old fragments were never deleted — corpus is intact.
+                # Revert to "completed" so the source stays visible to downstream filters.
+                user_library.update_status(citekey, "completed", user_id=user_id or None)
+                logger.error(
+                    "Force reprocess failed for %s: all chunks produced zero fragments — "
+                    "existing fragments preserved, status reverted to completed",
+                    citekey,
+                )
+                return {
+                    "status": "error",
+                    "citekey": citekey,
+                    "detail": "All chunks failed AI extraction; existing fragments preserved",
+                }
             user_library.update_status(citekey, "failed", user_id=user_id or None)
             return {"status": "error", "detail": "No fragments extracted from PDF"}
 
-        # Verbatim integrity check — validator does offline substring matching,
-        # so it's safe to use a larger window than the AI prompt (50K cap).
-        # For small PDFs validate against full text; cap large PDFs at 150K to
-        # keep peak RAM predictable while still catching bibliography fragments.
-        from klemma.api.constants import (
-            VERBATIM_VALIDATION_CAP_LARGE,
-            VERBATIM_VALIDATION_CAP_SMALL,
-        )
-        _verbatim_window = (
-            pdf_text
-            if len(pdf_text) < VERBATIM_VALIDATION_CAP_SMALL
-            else pdf_text[:VERBATIM_VALIDATION_CAP_LARGE]
-        )
-        downgrade_stats = validate_verbatim_fragments(
-            pydantic_frags, _verbatim_window, citekey,
-        )
-        for record, pyd in zip(fragments, pydantic_frags):
-            record.verbatim = pyd.verbatim
+        fragments = extraction["fragments"]
+        fragment_ai_sections = extraction["fragment_ai_sections"]
+        predicted_sections = extraction["predicted_sections"]
+        predicted_chapters = extraction["predicted_chapters"]
+        all_key_refs = extraction["key_refs"]
+        downgrade_stats = extraction["downgrade_stats"]
+        failed_chunks = extraction.get("failed_chunks", 0)
+        chunks_processed = extraction.get("chunks_processed", len(chunks))
+
         if downgrade_stats.downgraded:
             logger.warning(
-                "verbatim validator (%s): %d/%d claimed fragments downgraded "
+                "verbatim validator (%s total): %d/%d claimed fragments downgraded "
                 "(%d fuzzy-rescued, %d confirmed)",
                 citekey,
                 downgrade_stats.downgraded,
@@ -469,6 +635,29 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 downgrade_stats.fuzzy_rescued,
                 downgrade_stats.verbatim_confirmed,
             )
+
+        # Force-reprocess: abort if extraction was partial to preserve existing corpus.
+        # Only delete old fragments after confirming all chunks succeeded.
+        if _force_delete_pending:
+            if failed_chunks > 0:
+                user_library.update_status(citekey, "completed", user_id=user_id or None)
+                logger.error(
+                    "Force reprocess aborted for %s: %d/%d chunks failed — "
+                    "existing fragments preserved, status reverted to completed",
+                    citekey, failed_chunks, failed_chunks + chunks_processed,
+                )
+                return {
+                    "status": "error",
+                    "citekey": citekey,
+                    "detail": (
+                        f"{failed_chunks}/{failed_chunks + chunks_processed} chunks failed; "
+                        "existing fragments preserved — retry without --force or fix the AI issue"
+                    ),
+                    "failed_chunks": failed_chunks,
+                    "chunks_processed": chunks_processed,
+                }
+            deleted = paper_store.delete_fragments(paper_id)
+            logger.info("Force reprocess: deleted %d existing fragments for %s", deleted, citekey)
 
         # Save to paper store
         prompt_hash = ""
@@ -520,15 +709,11 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
             )
 
         # Save citation links from bibliography (for reference gap analysis)
-        key_refs = data.get("key_references", [])
+        key_refs = all_key_refs
         if not key_refs:
-            # Main extraction often omits key_references — extract in a focused call
-            # Re-extract the FULL PDF text (main extraction truncates at 50K which often
-            # cuts off the bibliography section at the end)
+            # Chunks may not have extracted key_references — do a focused bibliography call
             try:
                 import re as _re
-                full_extractor = PDFExtractor(max_chars=200000)
-                full_text = full_extractor.extract(pdf_path) or ""
                 # Find the references/bibliography section by heading
                 bib_match = _re.search(
                     r'\n(References|REFERENCES|Bibliography|BIBLIOGRAPHY|Список литературы|Литература)\s*\n',
@@ -570,6 +755,7 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
 
         # ── Auto-suggest: enqueue as post-hook job (non-blocking) ────────
         auto_suggest_job_id: str | None = None
+        auto_sentences_job_id: str | None = None
         if project_id and user_id:
             auto_suggest_job_id = _enqueue_auto_suggest(
                 paper_id=paper_id,
@@ -581,24 +767,198 @@ def process_source(paper_id: str, citekey: str, data_dir: str, user_id: str = ""
                 fragment_ai_sections=fragment_ai_sections,
                 data_dir=data_dir,
             )
+            # ── Auto-generate sentences (ADR-017): ready-to-cite academic
+            # paraphrase per fragment, triggered immediately so the user
+            # doesn't have to press "Сгенерировать предложения" manually in
+            # FragmentReviewView. Runs in parallel with auto-suggest — the
+            # curate_fragments upsert uses COALESCE on suggested_text so
+            # whichever finishes second won't wipe the other's work.
+            auto_sentences_job_id = _enqueue_auto_sentences(
+                project_id=project_id,
+                citekey=citekey,
+                user_id=user_id,
+                data_dir=data_dir,
+            )
 
-        user_library.update_status(citekey, "completed", user_id=user_id or None)
-        logger.info("Extracted %d fragments for %s (%s)", saved, citekey, paper_id)
+        persist_status = "partial" if failed_chunks > 0 else "completed"
+        user_library.update_status(citekey, persist_status, user_id=user_id or None)
+        logger.info("Extracted %d fragments for %s (%s) [status=%s]", saved, citekey, paper_id, persist_status)
 
+        result_status = persist_status
         result_dict: dict = {
-            "status": "completed",
+            "status": result_status,
             "citekey": citekey,
             "fragment_count": saved,
+            "chunks_processed": chunks_processed,
             "downgrade_stats": downgrade_stats.as_dict(),
         }
+        if failed_chunks > 0:
+            result_dict["failed_chunks"] = failed_chunks
         if auto_suggest_job_id:
             result_dict["auto_suggest_job_id"] = auto_suggest_job_id
+        if auto_sentences_job_id:
+            result_dict["auto_sentences_job_id"] = auto_sentences_job_id
         return result_dict
 
     except Exception as exc:
         logger.error("AI extraction failed for %s: %s", citekey, exc, exc_info=True)
         user_library.update_status(citekey, "failed", user_id=user_id or None)
         return {"status": "error", "detail": f"Extraction failed: {type(exc).__name__}: {exc}"}
+
+
+def dedup_fragments_by_prefix(
+    fragments: list,
+    min_prefix: int = 100,
+) -> list:
+    """Remove later fragments whose text prefix (≥ min_prefix chars) duplicates an earlier one.
+
+    content_hash (INSERT OR IGNORE) handles identical texts; this pass removes
+    near-duplicates produced by overlapping chunk boundaries where the same
+    passage starts identically but ends slightly differently.
+    """
+    seen: set[str] = set()
+    out = []
+    for frag in fragments:
+        prefix = frag.fragment_text[:min_prefix]
+        if len(prefix) < min_prefix:
+            out.append(frag)
+            continue
+        if prefix not in seen:
+            seen.add(prefix)
+            out.append(frag)
+    return out
+
+
+def reprocess_paper(paper_id: str, data_dir: str) -> dict:
+    """Re-extract fragments for a paper at the global corpus level.
+
+    Unlike process_source(), this operates on the global paper record directly,
+    not on a user-specific citekey.  Safe for shared papers: old data is only
+    deleted after the new extraction succeeds, so a failed re-extract leaves
+    the existing fragments intact.
+
+    Returns a dict with status, fragment counts, and chunk statistics.
+    """
+    from klemma.literature.pdf import PDFExtractor, build_chunks_from_pages
+    from klemma.stores.file_store import LocalFileStore
+    from klemma.stores.paper_store import LocalPaperStore
+
+    data_path = Path(data_dir)
+    library_db = data_path / "library.db"
+    paper_store = LocalPaperStore(library_db)
+    file_store = LocalFileStore(data_path / "files")
+
+    paper = paper_store.get_paper_by_id(paper_id)
+    if paper is None:
+        return {"status": "error", "detail": f"Paper {paper_id} not found"}
+
+    paper_dir = file_store.get_paper_dir(paper_id)
+    pdf_files = list(paper_dir.glob("*.pdf")) if paper_dir.is_dir() else []
+    if not pdf_files:
+        return {"status": "error", "detail": f"PDF not found for paper {paper_id}"}
+
+    if not os.getenv("ANTHROPIC_API_KEY") and not os.getenv("OPENAI_API_KEY"):
+        return {"status": "error", "detail": "No AI API key configured"}
+
+    try:
+        extractor = PDFExtractor()
+        pages = extractor.extract_pages(pdf_files[0])
+        if not pages or sum(len(p) for p in pages) < 500:
+            return {"status": "error", "detail": "PDF text too short"}
+
+        full_text = "\n\n".join(f"[Page {i + 1}]\n{p}" for i, p in enumerate(pages))
+        chunks = build_chunks_from_pages(pages)
+        logger.info("reprocess_paper %s: %d page(s), %d chunk(s)", paper_id, len(pages), len(chunks))
+
+        # json_mode=True for chunked extraction — see process_source for details (#381).
+        ai, ai_config = _create_ai_provider(json_mode=True)
+        from klemma.config import _SHIPPED_PROMPTS_DIR
+        from klemma.literature.models import ZoteroEntry
+
+        entry = ZoteroEntry(
+            id=paper.paper_id,
+            title=paper.title or paper.paper_id,
+            author=[{"family": a.strip()} for a in (paper.authors or "").split(",") if a.strip()],
+            issued={"date-parts": [[paper.year]]} if paper.year else None,
+            DOI=paper.doi,
+            abstract=paper.abstract or "",
+        )
+
+        prompt_path = _SHIPPED_PROMPTS_DIR / "extract.md"
+
+        # --- Per-chunk extraction via shared helper ---
+        extraction = _run_chunked_extraction(
+            ai, ai_config, entry, chunks, paper.paper_id, paper_id, prompt_path,
+            full_text=full_text,
+        )
+
+        if extraction is None:
+            return {"status": "error", "detail": "No fragments extracted"}
+
+        reprocess_failed_chunks = extraction.get("failed_chunks", 0)
+        reprocess_chunk_total = extraction.get("chunks_processed", 0) + reprocess_failed_chunks
+        if reprocess_failed_chunks > 0:
+            # Refuse to replace a complete corpus record with partial extraction data.
+            # Old fragments are preserved; caller can retry.
+            logger.error(
+                "reprocess_paper %s: %d/%d chunk(s) failed — aborting swap to preserve existing corpus",
+                paper_id, reprocess_failed_chunks, reprocess_chunk_total,
+            )
+            return {
+                "status": "partial",
+                "paper_id": paper_id,
+                "detail": (
+                    f"{reprocess_failed_chunks}/{reprocess_chunk_total} chunks failed AI extraction; "
+                    "existing fragments preserved"
+                ),
+                "chunks_processed": reprocess_chunk_total - reprocess_failed_chunks,
+                "failed_chunks": reprocess_failed_chunks,
+            }
+
+        new_fragments = extraction["fragments"]
+        all_key_refs = extraction["key_refs"]
+        chunk_total = extraction["chunks_processed"]
+
+        # Atomic swap: only delete old data after new extraction fully succeeded
+        deleted = paper_store.delete_fragments(paper.paper_id)
+        saved = paper_store.save_fragments(paper.paper_id, new_fragments, "", ai_config.model)
+        paper_store.update_paper_raw_text(paper.paper_id, full_text)
+        if all_key_refs:
+            paper_store.save_citation_links(paper.paper_id, all_key_refs)
+
+        # Re-embed new fragments (non-fatal)
+        emb = _create_embeddings_provider()
+        frag_embedded = 0
+        if emb:
+            try:
+                texts = [f.fragment_text for f in new_fragments]
+                batch_fn = getattr(emb, "embed_batch", None)
+                vectors = batch_fn(texts) if callable(batch_fn) else [
+                    emb.embed(t, "") for t in texts
+                ]
+                for frag, vec in zip(new_fragments, vectors):
+                    if vec:
+                        paper_store.save_fragment_embedding(frag.fragment_id, vec, emb.model_name)
+                        frag_embedded += 1
+            except Exception as exc:
+                logger.warning("reprocess_paper embedding failed for %s: %s", paper_id, exc)
+
+        logger.info(
+            "reprocess_paper %s: deleted %d old, saved %d new fragments (%d chunks, %d embedded)",
+            paper_id, deleted, saved, chunk_total, frag_embedded,
+        )
+        return {
+            "status": "completed",
+            "paper_id": paper_id,
+            "chunks_processed": chunk_total,
+            "fragments_extracted": saved,
+            "fragments_embedded": frag_embedded,
+            "old_fragments_deleted": deleted,
+        }
+
+    except Exception as exc:
+        logger.error("reprocess_paper failed for %s: %s", paper_id, exc, exc_info=True)
+        return {"status": "error", "detail": f"Reprocess failed: {type(exc).__name__}: {exc}"}
 
 
 def _run_auto_suggest(
@@ -688,6 +1048,45 @@ def _enqueue_auto_suggest(
             paper_id, citekey, user_id, project_id,
             fragment_ids, citation_intents, fragment_ai_sections, data_dir,
         )
+        return None
+
+
+def _enqueue_auto_sentences(
+    project_id: str,
+    citekey: str,
+    user_id: str,
+    data_dir: str,
+) -> str | None:
+    """Enqueue generate_sentences_task in mode='missing' for a just-processed
+    source, so the user doesn't have to press "Сгенерировать предложения"
+    manually. Returns rq job_id, or None if Redis is unavailable (in which
+    case the task runs synchronously — slower but still completes).
+
+    Idempotent: mode='missing' only fills fragments that don't already have
+    a suggested_text. Re-running is a no-op.
+    """
+    try:
+        from redis import Redis
+        from rq import Queue
+
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        q = Queue(connection=Redis.from_url(redis_url))
+        job = q.enqueue(
+            generate_sentences_task,
+            project_id, citekey, data_dir, user_id, "missing",
+            job_timeout=300,
+        )
+        logger.info("Enqueued auto-sentences job %s for %s", job.id, citekey)
+        return job.id
+    except Exception as exc:
+        logger.warning(
+            "Auto-sentences enqueue failed for %s, running synchronously: %s",
+            citekey, exc,
+        )
+        try:
+            generate_sentences_task(project_id, citekey, data_dir, user_id, "missing")
+        except Exception as sync_exc:
+            logger.warning("Auto-sentences sync fallback failed for %s: %s", citekey, sync_exc)
         return None
 
 
@@ -969,22 +1368,31 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
         except Exception as exc:
             logger.warning("Failed to load project outline: %s", exc)
 
-    # Load section citekeys and build source_summaries + fragments
+    # Load section citekeys and build source_summaries + fragments. Everything
+    # the model sees (valid_citekeys, source_summaries[].citekey,
+    # fragments[].source, candidate_sentences[].citekey below) must live in the
+    # same citekey-space, otherwise the drafter's hallucination filter
+    # (drafter._filter_hallucinated_citations) will reject [@external] in
+    # output. Display map maps internal → external_citekey-if-set.
     source_summaries: list[dict] = []
     fragments: list[dict] = []
     valid_citekeys: set[str] = set()
 
     try:
         section_citekeys = project_store.get_sources_by_section(section, user_id=user_id or None)
+        display_map = user_library.get_display_citekeys(
+            list(section_citekeys), user_id=user_id or None,
+        )
         for citekey in section_citekeys:
-            valid_citekeys.add(citekey)
+            display_ck = display_map.get(citekey, citekey)
+            valid_citekeys.add(display_ck)
             src = user_library.get_source_by_citekey(citekey, user_id=user_id or None)
             if not src:
                 continue
             paper = paper_store.get_paper_by_id(src.paper_id)
             if paper:
                 source_summaries.append({
-                    "citekey": citekey,
+                    "citekey": display_ck,
                     "quality": "?",
                     "priority": "medium",
                     "summary": (paper.abstract or "")[:300],
@@ -992,10 +1400,13 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
             paper_fragments = paper_store.get_fragments(src.paper_id)
             for f in paper_fragments:
                 fragments.append({
-                    "source": citekey,
+                    "source": display_ck,
                     "type": f.fragment_type or "key_idea",
                     "relevance": 3,
                     "text": f.fragment_text,
+                    "page": f.page_number,
+                    "intent": f.citation_intent,
+                    "verbatim": f.verbatim,
                 })
     except Exception as exc:
         logger.warning("Failed to load section fragments: %s", exc)
@@ -1019,11 +1430,18 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
             accepted_rows = user_store.get_curated(
                 project_id, verdict="accepted", section=section
             )
+            # Resolve display for all candidate citekeys in one batch (may
+            # extend display_map with citekeys that belong to other sections).
+            candidate_cks = list({row["citekey"] for row in accepted_rows})
+            candidate_display_map = user_library.get_display_citekeys(
+                candidate_cks, user_id=user_id or None,
+            )
             for row in accepted_rows:
                 sentence = (row.get("suggested_text") or "").strip()
                 if sentence:
+                    internal_ck = row["citekey"]
                     candidate_sentences.append({
-                        "citekey": row["citekey"],
+                        "citekey": candidate_display_map.get(internal_ck, internal_ck),
                         "sentence": sentence,
                     })
         except Exception as exc:
@@ -1058,8 +1476,11 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
         if not result.text:
             return {"status": "error", "detail": "AI returned no draft text"}
 
-        # Convert Obsidian wikilinks [[@citekey]] → [@citekey] for SaaS output
-        text = re.sub(r"\[\[@([\w\-]+)\]\]", r"[@\1]", result.text)
+        # Convert Obsidian wikilinks [[@citekey]] → [@citekey] for SaaS output.
+        # Charset must match drafter._extract_citations (Biber/BibTeX valid:
+        # word + : . + -) — otherwise BBT keys with "." / ":" / "+" leak
+        # through as raw [[@key]] wikilinks in API draft output.
+        text = re.sub(r"\[\[@([\w:.+\-]+)\]\]", r"[@\1]", result.text)
 
         if user_id:
             user_store.record_usage(
@@ -1071,6 +1492,70 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
                 section=section,
             )
 
+        # Citation integrity check — opt-in on SaaS (CTO RC4: default OFF).
+        # Enable by setting KLEMMA_VERIFY_CITATIONS_INLINE=1 after validating cost.
+        citation_findings: list[dict] = []
+        if os.getenv("KLEMMA_VERIFY_CITATIONS_INLINE", "").strip() in ("1", "true", "yes"):
+            try:
+                from klemma.skills.citation_checker import (
+                    build_judge_provider,
+                    check_draft_inline,
+                )
+
+                # Inject judge model from env (CTO RC3 + резолюция-8 №5).
+                # Use model_copy so we don't mutate the shared config object — same
+                # isolation pattern as build_judge_provider (ADR-018 judge clone).
+                check_model = os.getenv("KLEMMA_CITATION_CHECK_MODEL", "").strip()
+                judge_ai_config = ai_config.model_copy()
+                judge_ai_config._resolved_api_keys = dict(ai_config._resolved_api_keys)
+                if check_model:
+                    judge_ai_config.citation_check_model = check_model
+                cite_config = config.model_copy(deep=True)
+                cite_config.ai = judge_ai_config
+
+                judge_ai = build_judge_provider(cite_config)
+                annotated, cite_report = check_draft_inline(
+                    text,
+                    fragments,
+                    [],
+                    config=cite_config,
+                    judge_ai=judge_ai,
+                    project_root=klemma_home,
+                    klemma_home=klemma_home,
+                    project_chain=[],
+                    use_ai=judge_ai is not None,
+                )
+                text = annotated
+
+                # Conditional token tracking (резолюция-17 №3): skip when no
+                # AI calls were made (degraded/no-AI run produces no real usage).
+                if user_id and cite_report.model and cite_report.input_tokens > 0:
+                    user_store.record_usage(
+                        user_id=user_id,
+                        operation="citation_check",
+                        model=cite_report.model,
+                        input_tokens=cite_report.input_tokens,
+                        output_tokens=cite_report.output_tokens,
+                        section=section,
+                    )
+
+                citation_findings = [
+                    {
+                        "severity": v.severity,
+                        "citekey": v.citekey,
+                        "reason": v.reason,
+                        "anchor": v.anchor.raw,
+                    }
+                    for v in cite_report.verdicts
+                    if v.severity in ("soft_warn", "hard_warn")
+                ]
+                logger.info(
+                    "Citation check for section %s: %s (%d findings)",
+                    section, cite_report.summary, len(citation_findings),
+                )
+            except Exception:
+                logger.exception("Citation check failed for section %s; draft saved as-is", section)
+
         logger.info(
             "Draft generated for section %s: %d words, %d citations",
             section, result.word_count, len(result.citations_used),
@@ -1081,6 +1566,7 @@ def generate_draft(section: str, data_dir: str, project_id: str = "", user_id: s
             "text": text,
             "word_count": result.word_count,
             "citations_used": result.citations_used,
+            **({"citation_findings": citation_findings} if citation_findings else {}),
         }
 
     except Exception as exc:
@@ -1173,6 +1659,10 @@ def generate_sentences_task(
 
     language = os.getenv("KLEMMA_SENTENCE_LANGUAGE", "Russian")
 
+    # Use display citekey (external_citekey if set via BBT import) in the
+    # generated sentence text. Internal citekey stays for DB writes below.
+    display_ck = src.external_citekey or src.citekey
+
     try:
         ai, ai_config = _create_ai_provider()
         from klemma.config import _SHIPPED_PROMPTS_DIR
@@ -1182,7 +1672,7 @@ def generate_sentences_task(
 
         result = generate_sentences(
             fragments_payload,
-            citekey=citekey,
+            citekey=display_ck,
             authors=(paper.authors if paper else "") or "",
             year=(paper.year if paper else None),
             outline=outline_payload,

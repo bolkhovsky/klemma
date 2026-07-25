@@ -60,7 +60,17 @@ class UserRecord:
 
 @dataclass
 class UserSource:
-    """A user's source entry mapping citekey → global paper."""
+    """A user's source entry mapping citekey → global paper.
+
+    `citekey` is the internal, immutable label used as PK and as the
+    reference key in drafts/curation/section-assignments (citekey-stability
+    invariant, issue #268). `external_citekey` is an optional display
+    override imported from a user's BetterBibTeX JSON (part 2 of BBT parity
+    plan): when set, it's what the cloud emits into generated text and
+    echoes in API responses, so `[@ck]` references match the user's local
+    `.bib` file. Dual-key lookups accept either on read paths; all writes
+    still use `citekey`.
+    """
 
     citekey: str
     paper_id: str
@@ -70,3 +80,6 @@ class UserSource:
     quality_score: int | None = None
     chapters: list[int] = field(default_factory=list)
     sections: list[str] = field(default_factory=list)
+    external_citekey: str | None = None
+    project_id: str | None = None
+    project_ids: list[str] = field(default_factory=list)

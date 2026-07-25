@@ -153,6 +153,12 @@ const router = createRouter({
       component: () => import('../views/SectionEditorView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/:projectId/settings',
+      name: 'project-settings',
+      component: () => import('../views/ProjectSettingsView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 
@@ -172,8 +178,14 @@ router.beforeEach(async (to) => {
       const { userProjects } = await import('../api/client')
       const data = await userProjects.list()
       const first = data.projects[0]
+      // postLoginPath обобщает master'овский `/${id}/library`: при PORTAL_ONLY=0
+      // это ровно он, при PORTAL_ONLY=1 — портальный экран совещаний.
       if (first) return { path: postLoginPath(first.project_id) }
-    } catch { /* fall through */ }
+    } catch {
+      // Токен исчез, пока шёл запрос (протух/разлогинились в другой вкладке) —
+      // не редиректим, даём отрисоваться логину (поведение из master).
+      if (!localStorage.getItem('access_token')) return
+    }
     return { path: '/library' }
   }
 })

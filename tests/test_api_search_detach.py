@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sqlite3
 
@@ -261,3 +262,146 @@ class TestDetachSourceFromSection:
         sections = resp.json()["sections"]
         assert "1.1" not in sections
         assert "2.1" in sections
+
+
+# ---------------------------------------------------------------------------
+# POST /library/fragments/semantic-search
+# ---------------------------------------------------------------------------
+
+_VEC_AVAILABLE = importlib.util.find_spec("sqlite_vec") is not None
+_skip_no_vec = pytest.mark.skipif(not _VEC_AVAILABLE, reason="sqlite-vec not installed")
+
+
+class TestSemanticSearch:
+    """Tests for POST /library/fragments/semantic-search (M2)."""
+
+    _DIM = 1024
+
+    def _seed_library(self, data_dir, mock_user):
+        """Seed library.db with two papers, each with one fragment + embedding."""
+        from klemma.models import FragmentRecord
+        from klemma.stores.paper_store import LocalPaperStore
+        from klemma.stores.user_library import LocalUserLibrary
+
+        os.environ["KLEMMA_EMBEDDINGS_MODEL"] = "test-model"
+        lib_db = data_dir / "library.db"
+        ps = LocalPaperStore(lib_db)
+        ul = LocalUserLibrary(lib_db)
+
+        def _vec(hot: int) -> list[float]:
+            v = [0.0] * self._DIM
+            v[hot] = 1.0
+            return v
+
+        papers = [
+            ("paper-A", "hash-A", "Ice Edge Prediction", "Author A", 2021),
+            ("paper-B", "hash-B", "Sea Ice Forecasting", "Author B", 2022),
+        ]
+        frags = [
+            ("frag-A", "paper-A", "IIEE metric measures ice edge location error", _vec(0)),
+            ("frag-B", "paper-B", "SPS index for Southern Ocean ice forecasting", _vec(1)),
+        ]
+
+        for paper_id, pdf_hash, title, authors, year in papers:
+            ps.register_paper(title=title, authors=authors, year=year, pdf_hash=pdf_hash)
+            # Insert with explicit paper_id
+            raw_conn = sqlite3.connect(str(lib_db))
+            raw_conn.execute(
+                "UPDATE papers SET paper_id=? WHERE pdf_hash=?", (paper_id, pdf_hash)
+            )
+            raw_conn.commit()
+            raw_conn.close()
+            ul.add_source(paper_id, paper_id.lower().replace("-", "_"),
+                          status="completed", user_id=mock_user.user_id)
+
+        for frag_id, paper_id, text, vec in frags:
+            frag = FragmentRecord(
+                fragment_id=frag_id,
+                paper_id=paper_id,
+                fragment_text=text,
+                fragment_type="key_idea",
+                page_number=1,
+                citation_intent="background",
+                content_hash=frag_id,
+            )
+            ps.save_fragments(paper_id, [frag], prompt_hash="p", ai_model="m")
+            ps.save_fragment_embedding(frag_id, vec, "test-model")
+
+        return ps
+
+    @_skip_no_vec
+    def test_semantic_search_returns_ranked_results(self, client, data_dir, mock_user):
+        """Query similar to frag-A should return frag-A first."""
+        from unittest.mock import MagicMock, patch
+
+        self._seed_library(data_dir, mock_user)
+
+        # Mock embedding provider to return vec close to frag-A (hot=0)
+        mock_emb = MagicMock()
+        mock_emb.embed.return_value = [1.0] + [0.0] * (self._DIM - 1)
+
+        with patch("klemma.api.tasks._create_embeddings_provider", return_value=mock_emb):
+            resp = client.post(
+                "/library/fragments/semantic-search",
+                json={"query": "ice edge error metric", "limit": 5},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 1
+        # frag-A must appear (closest to query vec)
+        fragment_ids = [r["fragment_id"] for r in data["results"]]
+        assert "frag-A" in fragment_ids
+        assert data["results"][0]["fragment_id"] == "frag-A"
+        assert data["results"][0]["similarity"] > 0.9
+
+    @_skip_no_vec
+    def test_semantic_search_citekey_filter(self, client, data_dir, mock_user):
+        """Restricting to paper_b citekey must exclude frag-A."""
+        from unittest.mock import MagicMock, patch
+
+        self._seed_library(data_dir, mock_user)
+
+        mock_emb = MagicMock()
+        mock_emb.embed.return_value = [1.0] + [0.0] * (self._DIM - 1)
+
+        with patch("klemma.api.tasks._create_embeddings_provider", return_value=mock_emb):
+            resp = client.post(
+                "/library/fragments/semantic-search",
+                json={"query": "ice forecasting", "limit": 5, "citekey": "paper_b"},
+            )
+
+        assert resp.status_code == 200
+        ids = [r["fragment_id"] for r in resp.json()["results"]]
+        assert "frag-A" not in ids
+
+    def test_semantic_search_returns_empty_when_provider_unavailable(self, client, data_dir):
+        """When embedding provider raises, endpoint returns empty results (not 500)."""
+        from unittest.mock import patch
+
+        with patch(
+            "klemma.api.tasks._create_embeddings_provider",
+            side_effect=RuntimeError("no embeddings"),
+        ):
+            resp = client.post(
+                "/library/fragments/semantic-search",
+                json={"query": "any query"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+
+    def test_semantic_search_citekey_not_found_returns_404(self, client):
+        """Unknown citekey filter returns 404."""
+        from unittest.mock import MagicMock, patch
+
+        mock_emb = MagicMock()
+        mock_emb.embed.return_value = [1.0] + [0.0] * (self._DIM - 1)
+
+        with patch("klemma.api.tasks._create_embeddings_provider", return_value=mock_emb):
+            resp = client.post(
+                "/library/fragments/semantic-search",
+                json={"query": "query", "citekey": "nonexistent_key"},
+            )
+
+        assert resp.status_code == 404

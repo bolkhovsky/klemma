@@ -87,6 +87,28 @@ class PaperStore(Protocol):
         """Flip a fragment's verbatim flag; True if a row was updated."""
         ...
 
+    def get_latest_embedding_dim(self, paper_ids: list[str]) -> int | None:
+        """Return the vector dimension of the most recently inserted embedding
+        for any of the given papers, or None if no embeddings exist.
+
+        Used to pin scoring to the current model's dimension after a migration.
+        """
+        ...
+
+    def find_similar_fragments(
+        self,
+        query_vector: list[float],
+        user_id: str,
+        limit: int = 20,
+        citekey_filter: str | None = None,
+    ) -> list[dict]:
+        """Return top-K fragments semantically closest to query_vector for the user.
+
+        Implementations without KNN support must return []. Never raises.
+        Each dict contains: fragment_id, fragment_text, paper_id, citekey, similarity.
+        """
+        ...
+
 
 @runtime_checkable
 class UserLibrary(Protocol):

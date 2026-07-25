@@ -4,7 +4,8 @@ Adds user_sources tables to ~/.klemma/library.db (same file as LocalPaperStore).
 Maps citekey → paper_id for the User Library tier.
 
 Multi-user support (v4): user_id column added to user_sources for SaaS data
-isolation. CLI mode passes user_id=None to skip filtering (single-user on disk).
+isolation. Project membership is many-to-many via user_source_projects (v7).
+CLI mode passes user_id=None to skip filtering (single-user on disk).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import TYPE_CHECKING, Generator, Optional
 if TYPE_CHECKING:
     from ..models import UserSource
 
-_SCHEMA_VERSION = 5  # v5: composite PK (user_id, citekey) for multi-user isolation
+_SCHEMA_VERSION = 7  # v7: many-to-many source ↔ project links
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS user_sources (
@@ -49,6 +50,15 @@ CREATE TABLE IF NOT EXISTS user_source_sections (
     user_id TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, citekey, section)
 );
+
+CREATE TABLE IF NOT EXISTS user_source_projects (
+    citekey    TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    user_id    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, citekey, project_id)
+);
+CREATE INDEX IF NOT EXISTS idx_usp_project_user ON user_source_projects(project_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_usp_citekey_user ON user_source_projects(citekey, user_id);
 """
 
 
@@ -167,6 +177,40 @@ class LocalUserLibrary:
                     PRIMARY KEY (user_id, citekey, section)
                 );
             """)
+        if version < 6:
+            # v6: external_citekey — optional BBT-imported display label.
+            # When set, the cloud emits this (not citekey) into generated text
+            # and echoes it in API responses, so [@key] references in drafts
+            # match the user's local .bib file. citekey itself stays immutable
+            # (stability invariant, issue #268).
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(user_sources)").fetchall()}
+            if "external_citekey" not in cols:
+                conn.execute("ALTER TABLE user_sources ADD COLUMN external_citekey TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_sources_external_ck"
+                " ON user_sources(user_id, external_citekey)"
+            )
+        has_project_links = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_source_projects'"
+        ).fetchone()
+        if version < 7 or not has_project_links:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS user_source_projects (
+                    citekey    TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    user_id    TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (user_id, citekey, project_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_usp_project_user
+                    ON user_source_projects(project_id, user_id);
+                CREATE INDEX IF NOT EXISTS idx_usp_citekey_user
+                    ON user_source_projects(citekey, user_id);
+                INSERT OR IGNORE INTO user_source_projects
+                    (citekey, project_id, user_id)
+                SELECT citekey, project_id, COALESCE(user_id, '')
+                FROM user_sources
+                WHERE project_id IS NOT NULL AND TRIM(project_id) <> '';
+            """)
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -174,6 +218,74 @@ class LocalUserLibrary:
     def _uid(user_id: Optional[str]) -> str:
         """Normalize user_id: None → '' for composite PK compatibility."""
         return user_id if user_id is not None else ""
+
+    @staticmethod
+    def _project(project_id: Optional[str]) -> Optional[str]:
+        """Normalize project_id: empty strings become None."""
+        if project_id is None:
+            return None
+        project_id = project_id.strip()
+        return project_id or None
+
+    def _attach_source_to_project(
+        self,
+        conn: sqlite3.Connection,
+        citekey: str,
+        project_id: Optional[str],
+        user_id: Optional[str],
+    ) -> None:
+        """Attach a source to a project without affecting source metadata."""
+        project_id = self._project(project_id)
+        if project_id is None:
+            return
+        conn.execute(
+            """INSERT OR IGNORE INTO user_source_projects
+               (citekey, project_id, user_id) VALUES (?, ?, ?)""",
+            (citekey, project_id, self._uid(user_id)),
+        )
+
+    def _row_to_source(
+        self, conn: sqlite3.Connection, row: sqlite3.Row
+    ) -> "UserSource":
+        """Hydrate a UserSource from a user_sources row."""
+        from ..models import UserSource
+
+        citekey = row["citekey"]
+        row_uid = row["user_id"] or ""
+        chapters = [
+            r[0]
+            for r in conn.execute(
+                "SELECT chapter FROM user_source_chapters WHERE citekey = ? AND user_id = ? ORDER BY chapter",
+                (citekey, row_uid),
+            ).fetchall()
+        ]
+        sections = [
+            r[0]
+            for r in conn.execute(
+                "SELECT section FROM user_source_sections WHERE citekey = ? AND user_id = ? ORDER BY section",
+                (citekey, row_uid),
+            ).fetchall()
+        ]
+        project_ids = [
+            r[0]
+            for r in conn.execute(
+                "SELECT project_id FROM user_source_projects WHERE citekey = ? AND user_id = ? ORDER BY project_id",
+                (citekey, row_uid),
+            ).fetchall()
+        ]
+        return UserSource(
+            citekey=citekey,
+            paper_id=row["paper_id"],
+            status=row["status"] or "pending",
+            pdf_path=row["pdf_path"],
+            note_path=row["note_path"],
+            quality_score=row["quality_score"],
+            chapters=chapters,
+            sections=sections,
+            external_citekey=_safe_ext_ck(row),
+            project_id=_safe_col(row, "project_id"),
+            project_ids=project_ids,
+        )
 
     # ------------------------------------------------------------------ #
     # UserLibrary Protocol implementation                                 #
@@ -201,6 +313,7 @@ class LocalUserLibrary:
         same global paper but are independent library entries).
         """
         uid = self._uid(user_id)
+        project_id = self._project(project_id)
         with self._conn() as conn:
             conn.execute(
                 """INSERT INTO user_sources
@@ -210,14 +323,15 @@ class LocalUserLibrary:
                    ON CONFLICT(user_id, citekey) DO UPDATE SET
                        paper_id=excluded.paper_id,
                        status=excluded.status,
-                       pdf_path=excluded.pdf_path,
-                       note_path=excluded.note_path,
-                       quality_score=excluded.quality_score,
-                       project_id=COALESCE(excluded.project_id, user_sources.project_id),
+                       pdf_path=COALESCE(excluded.pdf_path, user_sources.pdf_path),
+                       note_path=COALESCE(excluded.note_path, user_sources.note_path),
+                       quality_score=COALESCE(excluded.quality_score, user_sources.quality_score),
+                       project_id=COALESCE(user_sources.project_id, excluded.project_id),
                        updated_at=datetime('now')""",
                 (citekey, paper_id, status, pdf_path, note_path, quality_score,
                  project_id, uid),
             )
+            self._attach_source_to_project(conn, citekey, project_id, user_id)
             if chapters:
                 conn.execute(
                     "DELETE FROM user_source_chapters WHERE citekey = ? AND user_id = ?",
@@ -244,8 +358,6 @@ class LocalUserLibrary:
 
         In SaaS mode, pass user_id to scope lookup to a specific user.
         """
-        from ..models import UserSource
-
         with self._conn() as conn:
             if user_id is not None:
                 row = conn.execute(
@@ -258,31 +370,7 @@ class LocalUserLibrary:
                 ).fetchone()
             if not row:
                 return None
-            row_uid = row["user_id"] or ""
-            chapters = [
-                r[0]
-                for r in conn.execute(
-                    "SELECT chapter FROM user_source_chapters WHERE citekey = ? AND user_id = ? ORDER BY chapter",
-                    (citekey, row_uid),
-                ).fetchall()
-            ]
-            sections = [
-                r[0]
-                for r in conn.execute(
-                    "SELECT section FROM user_source_sections WHERE citekey = ? AND user_id = ? ORDER BY section",
-                    (citekey, row_uid),
-                ).fetchall()
-            ]
-        return UserSource(
-            citekey=row["citekey"],
-            paper_id=row["paper_id"],
-            status=row["status"] or "pending",
-            pdf_path=row["pdf_path"],
-            note_path=row["note_path"],
-            quality_score=row["quality_score"],
-            chapters=chapters,
-            sections=sections,
-        )
+            return self._row_to_source(conn, row)
 
     def resolve_paper_id(
         self, citekey: str, user_id: Optional[str] = None
@@ -319,8 +407,6 @@ class LocalUserLibrary:
         Used to detect when the same PDF is re-uploaded (same paper_id).
         Scoped to user_id in SaaS mode to avoid cross-user leakage.
         """
-        from ..models import UserSource
-
         with self._conn() as conn:
             if user_id is not None:
                 row = conn.execute(
@@ -334,33 +420,7 @@ class LocalUserLibrary:
                 ).fetchone()
             if not row:
                 return None
-            citekey = row["citekey"]
-            _uid = row["user_id"]
-            row_uid = row["user_id"] or ""
-            chapters = [
-                r[0]
-                for r in conn.execute(
-                    "SELECT chapter FROM user_source_chapters WHERE citekey = ? AND user_id = ? ORDER BY chapter",
-                    (citekey, row_uid),
-                ).fetchall()
-            ]
-            sections = [
-                r[0]
-                for r in conn.execute(
-                    "SELECT section FROM user_source_sections WHERE citekey = ? AND user_id = ? ORDER BY section",
-                    (citekey, row_uid),
-                ).fetchall()
-            ]
-        return UserSource(
-            citekey=citekey,
-            paper_id=row["paper_id"],
-            status=row["status"] or "pending",
-            pdf_path=row["pdf_path"],
-            note_path=row["note_path"],
-            quality_score=row["quality_score"],
-            chapters=chapters,
-            sections=sections,
-        )
+            return self._row_to_source(conn, row)
 
     # ------------------------------------------------------------------ #
     # Additional helpers (beyond Protocol minimum)                        #
@@ -388,6 +448,10 @@ class LocalUserLibrary:
                     "DELETE FROM user_source_sections WHERE citekey = ? AND user_id = ?",
                     (citekey, user_id),
                 )
+                conn.execute(
+                    "DELETE FROM user_source_projects WHERE citekey = ? AND user_id = ?",
+                    (citekey, user_id),
+                )
                 cursor = conn.execute(
                     "DELETE FROM user_sources WHERE citekey = ? AND user_id = ?",
                     (citekey, user_id),
@@ -395,6 +459,7 @@ class LocalUserLibrary:
             else:
                 conn.execute("DELETE FROM user_source_chapters WHERE citekey = ?", (citekey,))
                 conn.execute("DELETE FROM user_source_sections WHERE citekey = ?", (citekey,))
+                conn.execute("DELETE FROM user_source_projects WHERE citekey = ?", (citekey,))
                 cursor = conn.execute("DELETE FROM user_sources WHERE citekey = ?", (citekey,))
         return cursor.rowcount > 0
 
@@ -423,12 +488,12 @@ class LocalUserLibrary:
         with self._conn() as conn:
             if user_id is not None:
                 rows = conn.execute(
-                    "SELECT citekey FROM user_sources WHERE project_id = ? AND user_id = ?",
+                    "SELECT citekey FROM user_source_projects WHERE project_id = ? AND user_id = ?",
                     (project_id, user_id),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT citekey FROM user_sources WHERE project_id = ?",
+                    "SELECT citekey FROM user_source_projects WHERE project_id = ?",
                     (project_id,),
                 ).fetchall()
         return {r["citekey"] for r in rows}
@@ -452,20 +517,36 @@ class LocalUserLibrary:
             params: list = []
 
             if user_id is not None:
-                conditions.append("user_id = ?")
+                conditions.append("us.user_id = ?")
                 params.append(user_id)
 
             if project_id is not None:
-                conditions.append("(project_id = ? OR project_id IS NULL)")
+                conditions.append(
+                    """(
+                        EXISTS (
+                            SELECT 1
+                            FROM user_source_projects usp
+                            WHERE usp.citekey = us.citekey
+                              AND usp.user_id = us.user_id
+                              AND usp.project_id = ?
+                        )
+                        OR NOT EXISTS (
+                            SELECT 1
+                            FROM user_source_projects usp_any
+                            WHERE usp_any.citekey = us.citekey
+                              AND usp_any.user_id = us.user_id
+                        )
+                    )"""
+                )
                 params.append(project_id)
 
             if since is not None:
-                conditions.append("added_at >= ?")
+                conditions.append("us.added_at >= ?")
                 params.append(since)
 
             where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
             rows = conn.execute(
-                f"SELECT citekey, user_id FROM user_sources {where} ORDER BY added_at",
+                f"SELECT us.citekey, us.user_id FROM user_sources us {where} ORDER BY us.added_at",
                 params,
             ).fetchall()
         return [  # type: ignore[return-value]
@@ -511,3 +592,113 @@ class LocalUserLibrary:
                     paper_ids,
                 ).fetchall()
         return {row["paper_id"]: row["citekey"] for row in rows}
+
+    # ------------------------------------------------------------------ #
+    # External citekey (BBT import) support                               #
+    # ------------------------------------------------------------------ #
+
+    def set_external_citekey(
+        self,
+        citekey: str,
+        external_citekey: Optional[str],
+        user_id: Optional[str] = None,
+    ) -> bool:
+        """Set or clear the BBT-imported display override for a source.
+
+        ``citekey`` is the internal immutable key used as PK. Pass
+        ``external_citekey=None`` to clear a previous import. Returns True
+        if the row existed and was updated.
+        """
+        uid = self._uid(user_id)
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE user_sources SET external_citekey = ?, updated_at = datetime('now')"
+                " WHERE citekey = ? AND user_id = ?",
+                (external_citekey, citekey, uid),
+            )
+        return cursor.rowcount > 0
+
+    def get_source_by_any_key(
+        self, key: str, user_id: Optional[str] = None
+    ) -> Optional["UserSource"]:
+        """Resolve a user-submitted key to a UserSource by either citekey
+        or external_citekey.
+
+        Order of resolution:
+            1. exact citekey match (immutable, stability invariant)
+            2. external_citekey match (BBT display override)
+
+        Returns ``None`` if neither column matches. Used by read-path routes
+        that accept a user-submitted key in URL or query. All write paths
+        must use the returned ``source.citekey`` (internal).
+        """
+        # Step 1: try citekey (common case — internal or already-migrated draft)
+        src = self.get_source_by_citekey(key, user_id=user_id)
+        if src is not None:
+            return src
+        # Step 2: fall back to external_citekey
+        uid = self._uid(user_id)
+        with self._conn() as conn:
+            if user_id is not None:
+                row = conn.execute(
+                    "SELECT citekey FROM user_sources"
+                    " WHERE external_citekey = ? AND user_id = ?",
+                    (key, uid),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT citekey FROM user_sources WHERE external_citekey = ?",
+                    (key,),
+                ).fetchone()
+        if not row:
+            return None
+        # Delegate to primary lookup so chapters/sections are loaded consistently
+        return self.get_source_by_citekey(row["citekey"], user_id=user_id)
+
+    def get_display_citekeys(
+        self, citekeys: list[str], user_id: Optional[str] = None
+    ) -> dict[str, str]:
+        """Batch-resolve {internal citekey → display citekey}.
+
+        Display = ``external_citekey`` if set, else the internal citekey
+        itself. Used by worker tasks (generate_sentences, generate_draft)
+        and by routes that echo display keys in list responses. Citekeys
+        not found in the library are absent from the returned dict.
+        """
+        if not citekeys:
+            return {}
+        uid = self._uid(user_id)
+        placeholders = ",".join("?" for _ in citekeys)
+        with self._conn() as conn:
+            if user_id is not None:
+                rows = conn.execute(
+                    f"SELECT citekey, external_citekey FROM user_sources"
+                    f" WHERE citekey IN ({placeholders}) AND user_id = ?",
+                    (*citekeys, uid),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"SELECT citekey, external_citekey FROM user_sources"
+                    f" WHERE citekey IN ({placeholders})",
+                    citekeys,
+                ).fetchall()
+        return {
+            r["citekey"]: (r["external_citekey"] or r["citekey"])
+            for r in rows
+        }
+
+
+def _safe_ext_ck(row: sqlite3.Row) -> Optional[str]:
+    """Read external_citekey from a row, tolerating pre-v6 schemas in tests."""
+    try:
+        return row["external_citekey"]
+    except (IndexError, KeyError):
+        return None
+
+
+def _safe_col(row: sqlite3.Row, col: str) -> Optional[str]:
+    """Read a column from a sqlite3.Row, tolerating missing column in old schemas."""
+    try:
+        return row[col]
+    except (IndexError, KeyError):
+        return None
