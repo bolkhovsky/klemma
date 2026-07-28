@@ -85,6 +85,15 @@ jobs:
           # Transfer compose files
           scp $SCP_OPTS -r saas/deploy/ "${VPS_USER}@${VPS_HOST}:/opt/klemma/"
 
+          # Ship ONLY this repo's own site file into the shared sites.d.
+          # This directory lives outside /opt/klemma/, so the scp above cannot
+          # reach it — that is the whole point: a klemma deploy must never be
+          # able to delete another project's vhost again (см. b9ca8ac, где так
+          # уронили rfm и miz).
+          ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "sudo mkdir -p /opt/caddy/sites.d"
+          scp $SCP_OPTS saas/deploy/sites.d/litresearch.ru.conf "${VPS_USER}@${VPS_HOST}:/tmp/"
+          ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "sudo mv /tmp/litresearch.ru.conf /opt/caddy/sites.d/"
+
           # Backup current dashboard BEFORE uploading new one (so rollback has the old version)
           ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "\
             [ -d /opt/klemma/dashboard ] && \
@@ -133,12 +142,51 @@ jobs:
             sudo docker compose up -d --force-recreate api worker </dev/null
             sudo docker compose up -d </dev/null
 
-            # Health check with retries (5 attempts, 3s apart)
+            # --- Caddy: проверить конфиг ДО применения, затем применить ---
+            # Валидируем копию нового файла внутри контейнера: import
+            # /etc/caddy/sites.d/*.conf должен резолвиться там же, где будет
+            # работать. Невалидный конфиг обязан уронить деплой здесь, а не
+            # после reload, когда сайты уже лежат.
+            sudo docker cp /opt/klemma/deploy/Caddyfile deploy-caddy-1:/tmp/Caddyfile.new
+            sudo docker exec deploy-caddy-1 \
+              caddy validate --config /tmp/Caddyfile.new --adapter caddyfile
+            sudo docker exec deploy-caddy-1 rm -f /tmp/Caddyfile.new
+
+            # /etc/caddy/Caddyfile — bind mount ОДНОГО файла: scp выше заменил
+            # инод на хосте, поэтому контейнер может продолжать видеть старый
+            # файл, и reload перечитает именно его. Сравниваем и пересоздаём
+            # контейнер только при расхождении — иначе лишний обрыв TLS на
+            # каждом деплое. Каталог sites.d смонтирован как КАТАЛОГ, файлы
+            # внутри видны сразу, для них достаточно reload.
+            HOST_SUM=$(sudo md5sum /opt/klemma/deploy/Caddyfile | cut -d' ' -f1)
+            CTR_SUM=$(sudo docker exec deploy-caddy-1 md5sum /etc/caddy/Caddyfile | cut -d' ' -f1)
+            if [ "$HOST_SUM" != "$CTR_SUM" ]; then
+              echo "Caddyfile изменился — пересоздаю контейнер caddy"
+              sudo docker compose up -d --force-recreate caddy </dev/null
+              sleep 3
+            else
+              sudo docker exec deploy-caddy-1 \
+                caddy reload --config /etc/caddy/Caddyfile </dev/null
+            fi
+
+            # Health check with retries (5 attempts, 3s apart).
+            # ВАЖНО: проверяем по РЕАЛЬНОМУ хосту и утверждаем содержимое
+            # ответа. Прежняя проверка `curl -sf http://localhost/health` была
+            # пустышкой: порт 80 отдаёт 308-редирект на любой хост, включая
+            # несуществующий, а `curl -sf` считает 3xx успехом — то есть гейт
+            # не мог провалиться даже при нуле настроенных сайтов.
             for i in 1 2 3 4 5; do
               sleep 3
-              if curl -sf http://localhost/health; then
+              if curl -sf --max-time 10 https://litresearch.ru/api/health \
+                   | grep -q '"status":"ok"'; then
                 echo ""
                 echo "Deploy successful (attempt $i)"
+                # Что сейчас лежит в общем каталоге сайтов. Список не зашит в
+                # деплой намеренно: klemma больше не владеет чужими vhost'ами
+                # и не должна знать про них. Это строка для человека в логе —
+                # если сосед пропал, это видно сразу.
+                echo "Caddy sites.d:"
+                ls -1 /opt/caddy/sites.d/ 2>/dev/null | sed 's/^/  /' || echo "  (пусто!)"
                 # Clean up previous backups — all failures silenced
                 {
                   sudo docker image rm klemma-api:previous
