@@ -648,10 +648,21 @@ def ingest_meeting(state, embeddings, payload: dict) -> dict:
     """Ingest one meeting from a Nodul payload (idempotent, replace-on-reingest)."""
     meeting_id, pm = parse_nodul_payload(payload)
     stem = meeting_id or pm.title
-    source_id, _, _ = build_records(pm, stem)
+    source_id, _, frags = build_records(pm, stem)
     _ensure_meeting_meta_column(state)
     # Replace-on-reingest: a re-sent (re-generated) protocol fully replaces the
     # previous fragments instead of appending duplicates.
+    #
+    # ...but only when the new payload actually has content. ``source_id`` is
+    # derived from date+title (``_slug(f"{date}-{stem}")``), i.e. it is guessable
+    # by anyone who knows when a meeting happened and what it was called. Without
+    # this guard an empty ``protocol_md`` on a guessed id deletes the meeting and
+    # writes nothing back — a one-request wipe primitive for anyone holding the
+    # shared ingest token. Parsing already happened above, so this costs nothing.
+    if not frags:
+        raise ValueError(
+            "refusing to ingest an empty protocol — would wipe the meeting"
+        )
     state.delete_fragments(source_id)
     return import_meeting(state, embeddings, pm, stem)
 

@@ -93,6 +93,13 @@ def client(tmp_path, monkeypatch):
     app = create_app()
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id="u1")
 
+    # Лимитер /ask — модульный синглтон, ключ = IP клиента ("testclient" у всех
+    # тестов). Без сброса счётчик копится через весь прогон и тесты начинают
+    # зависеть от порядка запуска.
+    from klemma.api.rate_limit import _limiter
+
+    _limiter._requests.clear()
+
     with TestClient(app) as c:
         c.meeting_state = state  # handed to tests that write access rows
         yield c
@@ -425,3 +432,105 @@ def test_sites_sync_fetch_failure_502(client, monkeypatch):
     r = client.post("/meetings/sites/sync", json={},
                     headers={"X-Ingest-Token": "test-ingest"})
     assert r.status_code == 502
+
+
+# --- B4: неразрушающий ingest и утечки портала ---
+
+
+def test_ingest_empty_protocol_does_not_wipe_meeting(client):
+    """source_id считается из даты и заголовка, то есть угадывается любым, кто
+    знает когда и о чём было совещание. До фикса пустой protocol_md на угаданный
+    id удалял фрагменты и не писал ничего взамен — примитив стирания одним
+    запросом для всякого, у кого есть общий ingest-токен."""
+    hdrs = {"X-Ingest-Token": "test-ingest"}
+    # Заводим совещание и запоминаем, сколько у него фрагментов
+    assert client.post("/meetings/ingest", json=INGEST_PAYLOAD, headers=hdrs).status_code == 200
+    before = client.get("/meetings").json()
+    target = next(m for m in before["meetings"] if m["title"] == "Спринт 99")
+
+    # Тот же meeting_id, пустое тело протокола
+    wipe = {**INGEST_PAYLOAD, "protocol_md": "", "tasks": []}
+    r = client.post("/meetings/ingest", json=wipe, headers=hdrs)
+    assert r.status_code == 422
+    assert "empty protocol" in r.json()["detail"]
+
+    # Совещание на месте и не опустело
+    after = client.get("/meetings").json()
+    assert after["stats"]["meetings"] == before["stats"]["meetings"]
+    still = next(m for m in after["meetings"] if m["title"] == "Спринт 99")
+    assert still["id"] == target["id"]
+    assert still["task_list"] == target["task_list"]
+
+
+def test_ingest_token_non_ascii_is_401_not_500(client):
+    """secrets.compare_digest в строковой форме принимает только ASCII и на
+    неASCII-символе бросает TypeError. Он всплывал в глобальный обработчик и
+    превращался в неаутентифицированный 500 с трейсом.
+
+    Заголовок шлём байтами — так его и отправил бы реальный клиент; httpx не
+    пропускает non-ASCII str на своей стороне. Starlette декодирует байты как
+    latin-1, и получившаяся строка — ровно то, на чём ломался compare_digest.
+    """
+    r = client.post(
+        "/meetings/ingest",
+        json=INGEST_PAYLOAD,
+        headers={"X-Ingest-Token": "токен-кириллицей".encode()},
+    )
+    assert r.status_code == 401
+
+
+def test_ingest_rejects_oversized_protocol(client):
+    """Тело вебхука приходит по общему токену, без сессии пользователя, и до
+    фикса было неограниченным."""
+    payload = {**INGEST_PAYLOAD, "protocol_md": "x" * 2_000_001}
+    r = client.post("/meetings/ingest", json=payload, headers={"X-Ingest-Token": "test-ingest"})
+    assert r.status_code == 422
+
+
+def test_ask_query_length_capped(client):
+    """/ask уходит в платную LLM от любого аутентифицированного пользователя."""
+    r = client.post("/meetings/ask", json={"query": "я" * 2001})
+    assert r.status_code == 422
+    assert client.post("/meetings/ask", json={"query": ""}).status_code == 422
+
+
+def test_ask_is_rate_limited(client):
+    """Без лимита /ask — прямая утечка денег на Anthropic."""
+    ok = 0
+    for _ in range(12):
+        r = client.post("/meetings/ask", json={"query": "что с трубой?"})
+        if r.status_code == 200:
+            ok += 1
+        elif r.status_code == 429:
+            break
+    assert ok == 10, f"ожидали 10 успешных до 429, получили {ok}"
+    assert client.post("/meetings/ask", json={"query": "ещё"}).status_code == 429
+
+
+def test_production_hides_exception_details(tmp_path, monkeypatch):
+    """Текст исключения содержал имена таблиц SQLite и пути внутри контейнера и
+    отдавался наружу, в том числе на неаутентифицированных путях."""
+    monkeypatch.setenv("KLEMMA_ENV", "production")
+    monkeypatch.setenv("KLEMMA_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("KLEMMA_DATA_DIR", str(tmp_path / "saas"))
+    monkeypatch.setenv("KLEMMA_EMBEDDINGS_ALLOW_REMOTE", "1")
+
+    from fastapi import APIRouter
+
+    from klemma.api.app import create_app
+
+    app = create_app()
+    boom = APIRouter()
+
+    @boom.get("/boom")
+    async def _boom() -> dict:
+        raise RuntimeError("no such table: portal_sites at /data/meetings/klemma.db")
+
+    app.include_router(boom)
+
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.get("/boom")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Internal server error"
+    assert "portal_sites" not in r.text
+    assert "/data/meetings" not in r.text

@@ -104,10 +104,16 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("Unhandled error on %s %s", request.method, request.url.path)
-        return JSONResponse(
-            status_code=500,
-            content={"detail": f"{type(exc).__name__}: {exc}"},
+        # В проде наружу уходит только общая фраза: текст исключения содержал
+        # имена таблиц SQLite, пути внутри контейнера и куски SQL, и отдавался
+        # в том числе на неаутентифицированных путях. Полный трейс остаётся в
+        # логе выше — диагностика не теряется, теряется только утечка.
+        detail = (
+            "Internal server error"
+            if is_production
+            else f"{type(exc).__name__}: {exc}"
         )
+        return JSONResponse(status_code=500, content={"detail": detail})
 
     # Mount routers
     app.include_router(health.router, prefix="/health")

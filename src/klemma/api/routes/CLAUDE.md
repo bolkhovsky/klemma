@@ -133,8 +133,8 @@ Bonum meeting-portal endpoints — mounted with `prefix="/meetings"`. Backed by 
 - `GET /meetings/search?q=&site=` — semantic search, site post-filter
 - `GET /meetings/tasks?site=&days=` — task board aggregate
 - `GET /meetings/analytics?site=&days=30|90|180&refresh=` — cross-meeting report; plain load = latest cache or metrics preview (never LLM), `refresh=1` = synchronous LLM generation; `site=''` = whole company (director only)
-- `POST /meetings/ask` — RAG Q&A `{query, site?}`
-- `POST /meetings/ingest` — X-Ingest-Token; idempotent by meeting_id
+- `POST /meetings/ask` — RAG Q&A `{query, site?}`. `query` ограничен 1–2000 символами и защищён `rate_limit(10, 60)`: эндпоинт ходит в платную LLM от любого аутентифицированного пользователя.
+- `POST /meetings/ingest` — X-Ingest-Token; idempotent by meeting_id. Пустой `protocol_md` на существующий id → **422**, а не затирание совещания (`ValueError` из `ingest_meeting` ловится в route-слое; без этого глобальный обработчик отдал бы 500 и воркер ушёл бы в ретраи). Входные потолки: `protocol_md` ≤ 2 МБ, `speakers` ≤ 200, `tasks` ≤ 1000. Сравнение токена — `compare_digest` над **байтами**: строковая форма принимает только ASCII и на неASCII-заголовке давала неаутентифицированный 500.
 - `GET /meetings/{meeting_id}` — detail (declared last; fixed paths must stay above)
 
 ## Adding a new router
