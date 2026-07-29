@@ -39,6 +39,7 @@ from klemma.meetings_sites import (
 from klemma.models import UserRecord
 
 from ..auth.deps import get_current_user
+from ..rate_limit import check_user_rate_limit
 
 router = APIRouter()
 
@@ -98,7 +99,14 @@ def _check_ingest_token(x_ingest_token: str | None) -> None:
     expected = os.getenv("KLEMMA_BONUM_INGEST_TOKEN", "")
     # compare_digest: сравнение секрета за постоянное время. Обычный != выходит на
     # первом несовпавшем байте и по времени ответа выдаёт длину общего префикса.
-    if not expected or not secrets.compare_digest(x_ingest_token or "", expected):
+    #
+    # .encode() обязателен: строковая форма compare_digest принимает только ASCII
+    # и на неASCII-байте в заголовке бросает TypeError. Он всплывал в глобальный
+    # обработчик и превращался в неаутентифицированный 500 — то есть любой мог
+    # получить трейс, отправив кириллицу в X-Ingest-Token.
+    if not expected or not secrets.compare_digest(
+        (x_ingest_token or "").encode("utf-8"), expected.encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail="invalid ingest token")
 
 
@@ -121,7 +129,10 @@ def _fetch_json(url: str) -> object:
 
 
 class AskRequest(BaseModel):
-    query: str
+    # Потолок длины: /ask уходит в платную LLM, а запрос приходит от любого
+    # аутентифицированного пользователя. Без ограничения один запрос может
+    # утащить в промпт мегабайт текста.
+    query: str = Field(min_length=1, max_length=2000)
     site: str | None = None
 
 
@@ -136,9 +147,12 @@ class IngestRequest(BaseModel):
     site_slug: str = ""
     time: str = ""
     duration: int | None = None
-    speakers: list[str] = []
-    protocol_md: str = ""
-    tasks: list[dict] = []
+    # Потолки на вход вебхука: тело приходит по общему токену, без сессии
+    # пользователя, и до этих правок было неограниченным. 2 МБ — заведомо выше
+    # любого реального протокола (самый длинный в проде ~40 КБ).
+    speakers: list[str] = Field(default=[], max_length=200)
+    protocol_md: str = Field(default="", max_length=2_000_000)
+    tasks: list[dict] = Field(default=[], max_length=1000)
     title: str = ""
 
 
@@ -270,6 +284,9 @@ async def post_ask(
     user: UserRecord = Depends(get_current_user),
 ) -> dict:
     """RAG Q&A over the meeting history with cited sources (Вопрос screen)."""
+    # Лимит по пользователю, а не по IP: клиенты сидят за одним офисным NAT,
+    # и IP-ключ делил бы бюджет одного человека на весь офис.
+    check_user_rate_limit(user.user_id, 10, 60)
     state, emb = _state_emb()
     sites = _scope(state, user, body.site)
     ai, model = _ai()
@@ -285,7 +302,15 @@ async def post_ingest(
     (not JWT — the webhook has no user session). Idempotent by meeting_id."""
     _check_ingest_token(x_ingest_token)
     state, emb = _state_emb()
-    return ingest_meeting(state, emb, body.model_dump())
+    try:
+        return ingest_meeting(state, emb, body.model_dump())
+    except ValueError as e:
+        # Ловим здесь намеренно. Глобальный обработчик в app.py перехватывает
+        # любое необработанное исключение и отдаёт 500, поэтому без явного
+        # except отказ «пустой протокол затёр бы совещание» выглядел бы для
+        # отправителя как сбой сервера, а не как отклонённый запрос — и воркер
+        # ушёл бы в ретраи вместо того, чтобы пометить запись ошибочной.
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @router.get("/{meeting_id}")
