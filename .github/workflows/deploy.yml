@@ -169,6 +169,24 @@ jobs:
                 caddy reload --config /etc/caddy/Caddyfile </dev/null
             fi
 
+            # Сначала дождаться, пока api сам объявит себя здоровым.
+            # `docker compose up -d` возвращается раньше готовности приложения,
+            # а healthcheck в compose имеет interval 30s — то есть в первые
+            # полминуты контейнер заведомо ещё не healthy, и запрос через Caddy
+            # получил бы 502. Прежняя проверка этого не замечала, потому что
+            # била в порт 80 и довольствовалась 308-редиректом; когда её
+            # заменили на содержательную, коротких 15 секунд не хватило и
+            # деплой откатился на здоровом приложении (run 30461939404).
+            API_CID=$(sudo docker compose ps -q api)
+            API_STATE=unknown
+            for _ in $(seq 1 30); do
+              API_STATE=$(sudo docker inspect "$API_CID" \
+                --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
+              [ "$API_STATE" = "healthy" ] && break
+              sleep 5
+            done
+            echo "api health: $API_STATE"
+
             # Health check with retries (5 attempts, 3s apart).
             # ВАЖНО: проверяем по РЕАЛЬНОМУ хосту и утверждаем содержимое
             # ответа. Прежняя проверка `curl -sf http://localhost/health` была
