@@ -1,0 +1,55 @@
+# Личный инстанс портала Meeting Intelligence (Илья), отдельный от клиентского
+# контура Бонума: свой том, свои секреты, свой поддомен. Общая инфраструктура
+# переиспользуется — сеть deploy_default (Ollama для эмбеддингов) и общий Caddy.
+#
+# Это КОПИЯ того, что живёт на VPS в /opt/klemma-mi/docker-compose.yml.
+# До 29.07.2026 контур существовал только на машине и был восстановим лишь по
+# памяти. Полная автоматизация деплоя сознательно НЕ делается здесь: контур
+# переезжает в отдельный коммерческий репозиторий, и деплой с тегом :previous,
+# снапшотом БД и откатом собирается сразу там. См. saas/deploy/klemma-mi/README.md
+services:
+  klemma-mi-portal:
+    image: klemma-mi-portal:latest
+    container_name: klemma-mi-portal
+    environment:
+      - KLEMMA_ENV=production
+      - KLEMMA_DATA_DIR=/data/saas
+      - KLEMMA_BONUM_PROJECT_ROOT=/data/meetings
+      - KLEMMA_PROMPTS_DIR=/app/prompts
+      - KLEMMA_SERVE_SPA=/app/dashboard
+      - KLEMMA_JWT_SECRET=${KLEMMA_JWT_SECRET}
+      - KLEMMA_BONUM_INGEST_TOKEN=${KLEMMA_BONUM_INGEST_TOKEN}
+      # Аккаунты заводит только bonum_bootstrap.py: самозарегистрированный
+      # пользователь унаследовал бы дефолт director из portal_access.
+      - KLEMMA_DISABLE_REGISTRATION=1
+      - KLEMMA_CORS_ORIGINS=https://klemma.bolkhovsky.ru
+      # Эмбеддинги — общий Ollama в сети deploy_default.
+      - KLEMMA_EMBEDDINGS_BACKEND=litellm
+      - KLEMMA_EMBEDDINGS_MODEL=ollama/bge-m3
+      - KLEMMA_EMBEDDINGS_BASE_URL=http://ollama:11434
+      # LLM для /ask — через тот же VPN-прокси хоста, что и остальные стеки.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - KLEMMA_BONUM_AI_MODEL=${KLEMMA_BONUM_AI_MODEL:-anthropic/claude-haiku-4-5-20251001}
+      - HTTP_PROXY=${KLEMMA_EGRESS_PROXY-http://172.17.0.1:8888}
+      - HTTPS_PROXY=${KLEMMA_EGRESS_PROXY-http://172.17.0.1:8888}
+      - NO_PROXY=localhost,127.0.0.1,ollama,deploy-ollama-1
+    volumes:
+      - klemma-mi-data:/data
+    networks:
+      - default
+    expose:
+      - "8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen(\"http://localhost:8000/health\")"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  default:
+    external: true
+    name: deploy_default
+
+volumes:
+  klemma-mi-data:

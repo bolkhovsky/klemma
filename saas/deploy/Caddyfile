@@ -2,62 +2,21 @@
 	email ilya.bolkhovsky@gmail.com
 }
 
-litresearch.ru {
-	# API proxy — strip /api prefix
-	handle_path /api/* {
-		reverse_proxy api:8000 {
-			header_up X-Real-IP {remote_host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto {scheme}
-		}
-	}
-
-	# SPA static files
-	handle {
-		root * /srv/dashboard
-		try_files {path} /index.html
-		file_server
-	}
-
-	# Security headers
-	header {
-		X-Content-Type-Options nosniff
-		X-Frame-Options DENY
-		Referrer-Policy strict-origin-when-cross-origin
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		-Server
-	}
-}
-
-# rfm-admin — RFM analytics admin (project: rfm-admin). Container rfm-admin-api-1
-# (full name required: service alias `api` collides with klemma's api on deploy_default).
-rfm.bolkhovsky.ru {
-	reverse_proxy rfm-admin-api-1:8000 {
-		header_up X-Real-IP {remote_host}
-		header_up X-Forwarded-For {remote_host}
-		header_up X-Forwarded-Proto {scheme}
-	}
-
-	header {
-		X-Content-Type-Options nosniff
-		Referrer-Policy strict-origin-when-cross-origin
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		-Server
-	}
-}
-
-# miz-assist — AI catalog assistant (project: miz-assist). Container miz-assist-miz-assist-1
-miz.bolkhovsky.ru {
-	reverse_proxy miz-assist:8000 {
-		header_up X-Real-IP {remote_host}
-		header_up X-Forwarded-For {remote_host}
-		header_up X-Forwarded-Proto {scheme}
-	}
-
-	header {
-		X-Content-Type-Options nosniff
-		Referrer-Policy strict-origin-when-cross-origin
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		-Server
-	}
-}
+# Сайты НЕ описываются в этом файле. Каждый проект на этой машине владеет
+# своим файлом в /opt/caddy/sites.d/ (в контейнере — /etc/caddy/sites.d/) и
+# кладёт туда только его.
+#
+# Причина: деплой klemma делает `scp -r saas/deploy/ → /opt/klemma/deploy/`,
+# то есть перезаписывает этот файл целиком при каждом пуше в master. Пока
+# сайты жили здесь, любой такой пуш стирал блоки соседних проектов —
+# см. коммит b9ca8ac, где так уже уронили rfm и miz. Каталог sites.d лежит
+# ВНЕ /opt/klemma/, поэтому деплой klemma до него не дотягивается.
+#
+# Добавить сайт: положить <имя>.conf в /opt/caddy/sites.d/ и перезагрузить
+# конфиг: docker exec deploy-caddy-1 caddy reload --config /etc/caddy/Caddyfile
+#
+# Пустой каталог или отсутствующий mount — это warning, а не ошибка
+# (проверено на caddy v2.11.4): Caddy поднимется вообще без сайтов. Поэтому
+# после reload обязательно проверять живость хостов curl'ом, а не только
+# кодом возврата `caddy validate`.
+import /etc/caddy/sites.d/*.conf
