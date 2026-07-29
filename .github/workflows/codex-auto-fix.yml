@@ -36,7 +36,7 @@ jobs:
 
       - name: Checkout failing ref
         if: steps.check-key.outputs.skip != 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.FAILED_HEAD_SHA }}
           fetch-depth: 0
