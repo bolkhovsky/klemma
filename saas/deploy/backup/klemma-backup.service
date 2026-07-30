@@ -1,0 +1,9 @@
+[Unit]
+# C1: снимок SQLite-баз трёх контуров (klemma-mi, litresearch, bonum) в
+# /opt/backups. См. backup.py — там объяснено, почему docker exec/run, а не
+# read-only sqlite3 CLI (не установлен на VPS).
+Description=Klemma daily SQLite backup sweep
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/klemma/deploy/backup/backup.py
