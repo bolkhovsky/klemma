@@ -47,11 +47,17 @@ _INNER_BACKUP_SCRIPT = (
 @dataclass(frozen=True)
 class Source:
     label: str
-    container: str  # для bonum — образ, из которого поднимается одноразовый контейнер
     running: bool
     volume: str
     # (путь внутри контейнера/тома, имя файла в /opt/backups без даты-суффикса)
     dbs: tuple[tuple[str, str], ...]
+    # Ровно одно из двух заполнено — какое, определяет `running`, а не наоборот:
+    # у работающего источника есть процесс для `docker exec`; у остановленного
+    # (bonum) exec недоступен, поэтому база снимается одноразовым `docker run`
+    # на образе. Раздельные поля вместо одного «то ли контейнер, то ли образ»
+    # не дают перепутать семантику при добавлении нового источника.
+    container: str | None = None
+    image: str | None = None
 
 
 SOURCES: tuple[Source, ...] = (
@@ -80,7 +86,7 @@ SOURCES: tuple[Source, ...] = (
     ),
     Source(
         label="bonum",
-        container="bonum-portal:latest",  # образ: контейнер остановлен, exec недоступен
+        image="bonum-portal:latest",  # контейнер остановлен, exec недоступен
         running=False,
         volume="deploy_bonum-data",
         dbs=(
@@ -98,6 +104,7 @@ def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
 
 
 def backup_running(source: Source, date_tag: str) -> list[str]:
+    assert source.container is not None
     written = []
     for src_path, out_name in source.dbs:
         tmp_path = f"/tmp/{out_name}.backup.db"
@@ -115,6 +122,7 @@ def backup_running(source: Source, date_tag: str) -> list[str]:
 
 
 def backup_stopped(source: Source, date_tag: str) -> list[str]:
+    assert source.image is not None
     written = []
     for src_path, out_name in source.dbs:
         out_path = f"{BACKUP_DIR}/{out_name}-{date_tag}.db"
@@ -125,7 +133,7 @@ def backup_stopped(source: Source, date_tag: str) -> list[str]:
                 "-v", f"{source.volume}:/data",
                 "-v", f"{BACKUP_DIR}:/backup-out",
                 "--entrypoint", "python3",
-                source.container,
+                source.image,
                 "-c", _INNER_BACKUP_SCRIPT, src_path, tmp_in_container,
             ]
         )
