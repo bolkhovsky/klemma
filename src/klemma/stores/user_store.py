@@ -528,8 +528,34 @@ class LocalUserStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def revoke_refresh_token(self, user_id: str, token_hash: str) -> int:
+        """Revoke ONE refresh token, plus that user's already-expired ones.
+
+        Rotation must revoke only the token being exchanged. Revoking all of
+        the user's tokens (as rotation used to do) logs out every other
+        device on each refresh: the phone died whenever the browser refreshed
+        and vice versa, and the client could not tell that from a real
+        session expiry.
+
+        Expired rows are swept here because nothing else deletes them once
+        rotation stopped clearing the whole user — without this the table
+        would grow by one row per refresh forever.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._conn() as conn:
+            cursor = conn.execute(
+                """DELETE FROM refresh_tokens
+                   WHERE user_id = ? AND (token_hash = ? OR expires_at <= ?)""",
+                (user_id, token_hash, now),
+            )
+        return cursor.rowcount
+
     def revoke_refresh_tokens(self, user_id: str) -> int:
-        """Revoke all refresh tokens for a user. Returns count revoked."""
+        """Revoke all refresh tokens for a user. Returns count revoked.
+
+        Reserved for token reuse detection and explicit "log out everywhere":
+        for rotation use [revoke_refresh_token].
+        """
         with self._conn() as conn:
             cursor = conn.execute(
                 "DELETE FROM refresh_tokens WHERE user_id = ?", (user_id,)

@@ -239,6 +239,33 @@ def test_refresh_reuse_revokes_all(client):
     assert resp.status_code == 401
 
 
+def test_refresh_keeps_other_sessions_alive(client):
+    """Rotation must not log the user out of their other devices.
+
+    Regression for the bug that sent the mobile client back to the login
+    screen whenever the portal was opened in a browser: rotation revoked
+    every token of the user, so the phone's refresh came back 401 and the
+    client (correctly) treated that as an expired session.
+    """
+    client.post(
+        "/auth/register",
+        json={"email": "multi@example.com", "password": "multipass12"},
+    )
+    creds = {"email": "multi@example.com", "password": "multipass12"}
+    phone = client.post("/auth/login", json=creds).json()["refresh_token"]
+    browser = client.post("/auth/login", json=creds).json()["refresh_token"]
+    assert phone != browser
+
+    # Browser refreshes — the phone's session must survive it.
+    assert client.post(
+        "/auth/refresh", json={"refresh_token": browser}
+    ).status_code == 200
+
+    resp = client.post("/auth/refresh", json={"refresh_token": phone})
+    assert resp.status_code == 200, "phone was logged out by the browser's refresh"
+    assert resp.json()["refresh_token"] != phone
+
+
 def test_refresh_invalid_token(client):
     resp = client.post("/auth/refresh", json={"refresh_token": "garbage"})
     assert resp.status_code == 401

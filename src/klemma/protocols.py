@@ -234,6 +234,19 @@ class UserStore(Protocol):
         """Check if a refresh token hash is valid (exists and not expired)."""
         ...
 
+    def revoke_refresh_token(self, user_id: str, token_hash: str) -> int:
+        """Revoke ONE refresh token (plus that user's expired ones).
+
+        This is what normal rotation must use: revoking every token of the
+        user would log out all their other devices on each refresh.
+        Returns count revoked.
+        """
+        ...
+
     def revoke_refresh_tokens(self, user_id: str) -> int:
-        """Revoke all refresh tokens for a user. Returns count revoked."""
+        """Revoke all refresh tokens for a user. Returns count revoked.
+
+        Reserved for token reuse detection and explicit "log out everywhere":
+        for rotation use [revoke_refresh_token].
+        """
         ...
