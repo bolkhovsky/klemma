@@ -61,22 +61,50 @@ sudo docker compose up -d
    Кнопка **Test** обязана дать сообщение в чат до того, как считать уровень 1
    настроенным.
 
-## Почему в compose прописан прокси
+## Почему рядом живёт `tg-relay`, а не прокси-переменные
 
-`api.telegram.org` с этой машины напрямую не отвечает (01.08.2026: `curl`
-напрямую → `000`, через локальный tinyproxy → `302`), поэтому контейнеру
-заданы `HTTP_PROXY`/`HTTPS_PROXY` на `172.18.0.1:8888` — тот же tinyproxy за
-VPN, которым ходит `dev-proxy`. Без них kuma исправно ловит отказы и молчит о
-них; ровно этот дефект пришлось чинить у пробы с fram (`klemma-stt` #22), где
-он прятался за зелёным таймером.
+`api.telegram.org` с этой машины напрямую не отвечает (01.08.2026: `curl` →
+`000`), и первым решением были `HTTP_PROXY`/`HTTPS_PROXY` на локальный
+tinyproxy. **Это не сработало**, и ошибка выглядела как чужая:
 
-`NO_PROXY` на `.bolkhovsky.ru` и `litresearch.ru` — обязателен вместе с
-прокси: иначе мониторы ходили бы к целям через VPN, то есть маршрутом,
-которым не ходит ни один пользователь, и проверяли бы не то, что показывают
-лиду.
+```
+kuma:       Error: Request failed with status code 502
+              at Telegram.send (server/notification-providers/telegram.js:31)
+tinyproxy:  Request (fd 5): POST https://api.telegram.org/... HTTP/1.1
+tinyproxy:  read_buffer: read() failed on fd 6: Connection reset by peer
+```
 
-После правки `docker-compose.yml` контейнер нужно пересоздать, а не
-перезапустить — переменные окружения читаются только при создании:
+Причина в axios: для `https`-цели он отправляет прокси **абсолютный URI**
+обычным запросом вместо `CONNECT`-туннеля. Tinyproxy передаёт это апстриму,
+тот рвёт соединение, kuma показывает 502. Адрес при этом захардкожен в
+`telegram.js` — поля «Server URL» у провайдера в 1.23.17 нет, подменить
+некуда.
+
+Поэтому путь чинится на уровне сети, а не приложения: `tg-relay` (socat)
+слушает `:443`, сам открывает `CONNECT`-туннель через tinyproxy и прозрачно
+пробрасывает байты. TLS остаётся **сквозным до Telegram** — сертификат
+настоящий, MITM нет, `telegram.js` не патчится. Перенаправление даёт
+docker-DNS: контейнер поднят с сетевым алиасом `api.telegram.org`.
+
+Проверка сквозного пути (ожидается ответ самого Telegram, а не прокси):
+
+```bash
+docker exec uptime-kuma node -e '
+  require("/app/node_modules/axios")
+    .get("https://api.telegram.org/bot0:invalid/getMe")
+    .catch(e => console.log(e.response.status, JSON.stringify(e.response.data)))'
+# → 401 {"ok":false,"error_code":401,"description":"Unauthorized: invalid token specified"}
+```
+
+`401` здесь — успех: значит запрос дошёл до Telegram и тот его разобрал. `502`
+означает, что релей не поднят или у kuma снова появились прокси-переменные.
+
+Побочный эффект, который надо знать: алиас действует на всю сеть
+`deploy_default`, то есть любой соседний контейнер тоже пойдёт в Telegram
+через релей. Это не регресс — напрямую оттуда всё равно не отвечает.
+
+После правки `docker-compose.yml` контейнеры нужно пересоздать, а не
+перезапустить:
 
 ```bash
 sudo docker compose -f /opt/klemma/deploy/kuma/docker-compose.yml up -d --force-recreate

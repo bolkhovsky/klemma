@@ -14,24 +14,45 @@ services:
   uptime-kuma:
     image: louislam/uptime-kuma:1
     container_name: uptime-kuma
-    environment:
-      # api.telegram.org с этой машины напрямую не отвечает (01.08.2026: curl
-      # напрямую → 000, через локальный tinyproxy → 302). Без прокси kuma
-      # исправно ловила бы отказы и молчала о них — ровно тот дефект, который
-      # у пробы с fram пришлось чинить отдельно (klemma-stt #22).
-      HTTP_PROXY: http://172.18.0.1:8888
-      HTTPS_PROXY: http://172.18.0.1:8888
-      # Мониторы обязаны ходить к целям НАПРЯМУЮ: через прокси они проверяли бы
-      # контур маршрутом, которым не ходит ни один пользователь, и отказ витрины
-      # или Caddy мог бы выглядеть здоровым. Тот же довод, что для NO_PROXY на
-      # fram (klemma-stt/deploy/fram/env.monitor.example).
-      NO_PROXY: .bolkhovsky.ru,litresearch.ru,localhost,127.0.0.1
+    # Прокси-переменных здесь СОЗНАТЕЛЬНО нет — они ломали отправку, см. tg-relay
+    # ниже. Мониторы ходят к целям напрямую, как и должны.
     volumes:
       - kuma-data:/app/data
     networks:
       - default
     expose:
       - "3001"
+    restart: unless-stopped
+
+  # Единственный рабочий путь от kuma к Telegram на этой машине.
+  #
+  # api.telegram.org отсюда напрямую не отвечает (01.08.2026: curl → 000), а
+  # прокси-переменные не помогают: kuma 1.23.17 хардкодит адрес
+  # (server/notification-providers/telegram.js) и шлёт запрос через axios,
+  # который для https-цели отправляет прокси АБСОЛЮТНЫЙ URI вместо CONNECT:
+  #
+  #   tinyproxy: Request (fd 5): POST https://api.telegram.org/... HTTP/1.1
+  #   tinyproxy: read_buffer: read() failed on fd 6: Connection reset by peer
+  #   kuma:      Error: Request failed with status code 502
+  #
+  # Поэтому не прокси, а TCP-проброс: socat принимает соединение и открывает
+  # CONNECT-туннель сам. TLS остаётся сквозным до Telegram, сертификат
+  # настоящий, MITM нет, код kuma не патчится.
+  tg-relay:
+    image: alpine/socat:1.8.0.3
+    container_name: tg-relay
+    command:
+      - TCP-LISTEN:443,fork,reuseaddr
+      - PROXY:172.18.0.1:api.telegram.org:443,proxyport=8888
+    networks:
+      default:
+        aliases:
+          # docker-DNS отдаёт этот контейнер вместо реального адреса — иначе
+          # захардкоженный в kuma URL никак не перенаправить. Побочный эффект:
+          # алиас действует на всю сеть deploy_default, то есть любой соседний
+          # контейнер тоже пойдёт в Telegram через релей. Это не регресс —
+          # напрямую оттуда всё равно не отвечает.
+          - api.telegram.org
     restart: unless-stopped
 
 networks:
