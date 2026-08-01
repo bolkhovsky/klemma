@@ -1,0 +1,29 @@
+# uptime-kuma — уровень 1 мониторинга (C3): статусы приложений на VPS.
+#
+# Не ловит смерть самого VPS/сети/Caddy — во всех этих случаях kuma умирает
+# вместе с хостом. Уровень 2 (проба с fram, независимый от этой машины канал
+# уведомлений) живёт в klemma-stt/deploy/fram/. Подробности — README.md рядом.
+#
+# Сеть deploy_default (та же, что у остальных сайтов) — иначе общему Caddy
+# нечем достучаться до контейнера по имени. Коллизии алиасов не будет: имя
+# `uptime-kuma` уникально на этой сети (в отличие от generic `api`, который
+# делили deploy-api-1 и rfm-admin-api-1 — см. фикс litresearch.ru 30.07.2026).
+services:
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    volumes:
+      - kuma-data:/app/data
+    networks:
+      - default
+    expose:
+      - "3001"
+    restart: unless-stopped
+
+networks:
+  default:
+    external: true
+    name: deploy_default
+
+volumes:
+  kuma-data:

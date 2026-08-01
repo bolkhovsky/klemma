@@ -85,14 +85,17 @@ jobs:
           # Transfer compose files
           scp $SCP_OPTS -r saas/deploy/ "${VPS_USER}@${VPS_HOST}:/opt/klemma/"
 
-          # Ship ONLY this repo's own site file into the shared sites.d.
+          # Ship ONLY this repo's own site files into the shared sites.d.
           # This directory lives outside /opt/klemma/, so the scp above cannot
           # reach it — that is the whole point: a klemma deploy must never be
           # able to delete another project's vhost again (см. b9ca8ac, где так
-          # уронили rfm и miz).
+          # уронили rfm и miz). status.conf (uptime-kuma, C3) added 01.08.2026 —
+          # same repo, same reasoning, still just this repo's own sites.
           ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "sudo mkdir -p /opt/caddy/sites.d"
           scp $SCP_OPTS saas/deploy/sites.d/litresearch.ru.conf "${VPS_USER}@${VPS_HOST}:/tmp/"
           ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "sudo mv /tmp/litresearch.ru.conf /opt/caddy/sites.d/"
+          scp $SCP_OPTS saas/deploy/sites.d/status.conf "${VPS_USER}@${VPS_HOST}:/tmp/"
+          ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "sudo mv /tmp/status.conf /opt/caddy/sites.d/"
 
           # Backup current dashboard BEFORE uploading new one (so rollback has the old version)
           ssh $SSH_OPTS "${VPS_USER}@${VPS_HOST}" "\
