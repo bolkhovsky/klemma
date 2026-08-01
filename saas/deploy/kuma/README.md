@@ -32,15 +32,29 @@ sudo docker compose up -d
    status-страницы. Дашборд раскрывает всю топологию контура (какие сайты
    есть, как называются мониторы) — наружу должна быть видна только форма
    входа.
-2. **Add New Monitor** × 2, тип HTTP(s) — Keyword, а не просто «код ответа»:
-   `/v1/health` у `stt.bolkhovsky.ru` отдаёт `200` даже при `degraded`.
+2. **Add New Monitor** × 2, не просто «код ответа»: `/v1/health` у
+   `stt.bolkhovsky.ru` отдаёт `200` даже при `degraded` — нужна проверка
+   именно поля `status` в теле ответа.
+
+   Тип монитора **HTTP(s) - Json Query** (найдено 01.08.2026: текстового
+   `HTTP(s) - Keyword` в актуальной сборке нет — вместо него `Json Query`,
+   который парсит поле через JSONata, а не ищет подстроку; точнее исходного
+   плана, не хуже):
 
    | Поле | Монитор 1 | Монитор 2 |
    |---|---|---|
+   | Friendly Name | klemma portal | stt worker |
    | URL | `https://klemma.bolkhovsky.ru/health` | `https://stt.bolkhovsky.ru/v1/health` |
-   | Keyword | `"status":"ok"` | `"status":"ok"` |
+   | Monitor Type | HTTP(s) - Json Query | HTTP(s) - Json Query |
+   | Json Query | `status` | `status` |
+   | Condition | `==` | `==` |
+   | Expected Value | `ok` | `ok` |
    | Interval | 60s | 60s |
    | Retries | 2 | 2 |
+
+   Если в вашей сборке всё же есть `HTTP(s) - Keyword` — тоже годится,
+   Keyword-поле = `"status":"ok"` (с кавычками, ищет подстроку в сыром теле
+   ответа; менее точно, чем Json Query, но эквивалентно по результату здесь).
 
 3. **Settings → Notifications** — добавить Telegram (тот же бот, что и
    уровень 2 с fram, см. `monitor-probe.py`), привязать к обоим мониторам.
