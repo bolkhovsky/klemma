@@ -93,9 +93,8 @@ def client(tmp_path, monkeypatch):
     app = create_app()
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id="u1")
 
-    # Лимитер /ask — модульный синглтон, ключ = IP клиента ("testclient" у всех
-    # тестов). Без сброса счётчик копится через весь прогон и тесты начинают
-    # зависеть от порядка запуска.
+    # Лимитер /ask — модульный синглтон, ключ = user_id. Без сброса счётчик
+    # копится через весь прогон и тесты начинают зависеть от порядка запуска.
     from klemma.api.rate_limit import _limiter
 
     _limiter._requests.clear()
@@ -495,7 +494,11 @@ def test_ask_query_length_capped(client):
 
 
 def test_ask_is_rate_limited(client):
-    """Без лимита /ask — прямая утечка денег на Anthropic."""
+    """Без лимита /ask — прямая утечка денег на Anthropic.
+
+    Ключ — user_id, а не IP: клиенты сидят за одним офисным NAT, и IP-ключ
+    делил бы бюджет одного человека на весь офис.
+    """
     ok = 0
     for _ in range(12):
         r = client.post("/meetings/ask", json={"query": "что с трубой?"})

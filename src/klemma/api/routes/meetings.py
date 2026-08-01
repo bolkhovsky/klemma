@@ -39,7 +39,7 @@ from klemma.meetings_sites import (
 from klemma.models import UserRecord
 
 from ..auth.deps import get_current_user
-from ..rate_limit import rate_limit
+from ..rate_limit import check_user_rate_limit
 
 router = APIRouter()
 
@@ -282,9 +282,11 @@ async def get_analytics(
 async def post_ask(
     body: AskRequest,
     user: UserRecord = Depends(get_current_user),
-    _rate=Depends(rate_limit(10, 60)),
 ) -> dict:
     """RAG Q&A over the meeting history with cited sources (Вопрос screen)."""
+    # Лимит по пользователю, а не по IP: клиенты сидят за одним офисным NAT,
+    # и IP-ключ делил бы бюджет одного человека на весь офис.
+    check_user_rate_limit(user.user_id, 10, 60)
     state, emb = _state_emb()
     sites = _scope(state, user, body.site)
     ai, model = _ai()

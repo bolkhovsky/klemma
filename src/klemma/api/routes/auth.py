@@ -167,8 +167,12 @@ async def refresh(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
         )
 
-    # Rotate: revoke old, issue new
-    store.revoke_refresh_tokens(user_id)
+    # Rotate: revoke ONLY the token being exchanged, issue new.
+    # Revoking every token of the user (what this did until 01.08.2026) meant
+    # one live session per account: refreshing in the browser logged out the
+    # phone, and the mobile client saw it as an expired session and dropped
+    # the user to the login screen.
+    store.revoke_refresh_token(user_id, old_hash)
     access = create_access_token(user.user_id, user.email)
     new_refresh = create_refresh_token(user.user_id)
     store.store_refresh_token(
