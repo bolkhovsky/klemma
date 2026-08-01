@@ -13,7 +13,8 @@ Click CLI entry point. Defines 18 commands + hidden aliases.
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
 - Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `library duplicates`, `suggest`, `reassign`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`, `migrate-content` (hidden — moves config.yaml content fields to KLEMMA.md frontmatter), `migrate-library` (dry-run by default; `--run` copies monolithic klemma.db → library.db + project.db via three-tier stores)
 - Hidden aliases: `gaps suggest` → `suggest`, `coverage` → `status --verbose`
-- Deprecation warnings: bare `klemma gaps` → use `klemma status --verbose`; `klemma library -s` → use `klemma research -s`
+- `klemma gaps <citekey>` — citation-graph gap discovery (custom `_GapsGroup` router in `commands/analyze.py`: real subcommands dispatch, any other token routes to the hidden `walk` command as a citekey). Walks the seed's OpenAlex graph (`literature/citation_graph.py`), reranks unowned neighbours by bge-m3 cosine (`skills/gaps.py`). Requires an embedding backend. Read-only.
+- Deprecation warnings: bare `klemma gaps` (no citekey) → tip + `klemma status --verbose`; `klemma library -s` → use `klemma research -s`
 - `init --outline` generates an outline after project setup (requires AI backend)
 - `init` non-interactive mode: `--name`, `--description`, `--keywords`, `--language` flags auto-skip wizard; `--non-interactive` is alias for `--no-input`
 - `embed` group: `embed sources [CITEKEYS]` (default), `embed fragments`, `embed sections` (centroid from source vectors), `embed all` (sources→fragments→sections)
@@ -293,6 +294,18 @@ FastAPI application. Install extra: `pip install "klemma[api]"`. Entry point: `u
 - `api/routes/auth.py` — `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `GET /auth/me`
 - `api/auth/` — JWT (python-jose), argon2 passwords, Pydantic schemas, FastAPI deps
 See [api/CLAUDE.md](api/CLAUDE.md) and [api/auth/CLAUDE.md](api/auth/CLAUDE.md) for full detail.
+
+### Meeting portal domain (Bonum B2B)
+Client-facing meeting-analytics portal built on the same store. Meetings are `sources` rows (`source_type='meeting'`, `meeting_meta` JSON column added by guarded ALTER — NOT in `_migrate_schema`); extracted items are `fragments`. Portal tables (`portal_sites`, `portal_access`, `portal_analytics`) are created by guarded `CREATE TABLE IF NOT EXISTS` in the portal project DB only.
+
+#### meetings.py (~1230 lines)
+Protocol parsing (bold-header + pandoc docx→gfm dialects), ingest (`ingest_meeting` idempotent by meeting_id, resolves `site_slug` at write time; **отказывается ингестить пустой протокол** — `source_id` вычислим из даты и заголовка, поэтому пустое тело на угаданный id было примитивом стирания совещания одним запросом), and read aggregations for the portal screens: `list_meetings` / `search_meetings` / `aggregate_tasks` / `answer_question` — all accept `sites: set[str] | None` and `days` filters. Site-filtered search/ask over-retrieve ×12 before post-filtering (global top-k crowds out small sites). `build_state_and_embeddings(root)` / `build_ai(root)` bridge env/project config.
+
+#### meetings_sites.py (~330 lines)
+Sites registry + access control. `parse_sites_webhook` / `upsert_sites` (registry synced from `KLEMMA_BONUM_SITES_WEBHOOK`), layered `resolve_site_slug(site, title, sites)` (name substring > keyword all-words > significant-token overlap), `remap_meeting_sites` (returns visible distribution), `get_access`/`set_access`/`allowed_slugs` — no `portal_access` row → director (full view), leaders see only their `site_slugs`.
+
+#### meetings_analytics.py (~450 lines)
+Cross-meeting analytics (portal killer feature). `compute_metrics` — pure-Python ISO-week buckets (meetings/tasks/escalations/overdue) + top assignees; `build_digest` — compact per-meeting digest, drops oldest first over 90K chars; `generate_analytics` — **LLM runs ONLY on `refresh=True`** (explicit button): plain loads serve the latest cached report for (site, days) whatever its date, or a fast metrics-only preview with `detail=DETAIL_NOT_GENERATED` (not cached). Refresh: cache in `portal_analytics` keyed (site_slug, days, date_to), 60s debounce guard, LLM via `ai.call_json(max_tokens=16000)` → topics/kpis/patterns/summary with enum clamping; timeline entries carry `source` = meeting id validated against the digest set (hallucinated ids stripped → traceable links). Empty generation (no summary + no topics) is flagged `detail` and NOT cached. `site_slug=''` = whole company.
 
 ## Data flows
 

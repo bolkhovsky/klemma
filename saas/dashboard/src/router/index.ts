@@ -1,5 +1,31 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+/** Portal-only build (Bonum) lands on the meeting portal instead of the
+ *  academic library after login. Toggled by VITE_PORTAL_ONLY at build time. */
+export const PORTAL_ONLY =
+  import.meta.env.VITE_PORTAL_ONLY === '1' || import.meta.env.VITE_PORTAL_ONLY === 'true'
+
+export function postLoginPath(projectId: string): string {
+  return PORTAL_ONLY ? `/${projectId}/portal/meetings` : `/${projectId}/library`
+}
+
+/**
+ * Санитайзер для `?redirect=` — возвращает путь только если он ведёт внутрь SPA.
+ *
+ * Страница логина принимает адрес возврата из query, поэтому без проверки она
+ * становится open-redirect: `/login?redirect=https://evil.example` увёл бы
+ * пользователя на чужой домен сразу после ввода пароля. Пропускаем только
+ * абсолютный путь с одним ведущим слэшем: `//host` браузер трактует как
+ * protocol-relative URL на другой хост, а `\` в некоторых движках нормализуется
+ * в `/` — обе формы отсекаем явно.
+ */
+export function safeRedirect(raw: unknown): string | null {
+  if (typeof raw !== 'string' || !raw) return null
+  if (!raw.startsWith('/')) return null
+  if (raw.startsWith('//') || raw.startsWith('/\\')) return null
+  return raw
+}
+
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -18,6 +44,26 @@ const router = createRouter({
       name: 'register',
       component: () => import('../views/RegisterView.vue'),
     },
+    // External deep link to one meeting (mobile app, email). Resolves the
+    // user's project, then replaces itself with the real portal route.
+    //
+    // Path is '/m/', NOT '/meetings/': in the self-contained portal container
+    // (KLEMMA_SERVE_SPA) FastAPI matches its own '/meetings' router first, so a
+    // browser hitting '/meetings/<id>' gets 401 JSON and never reaches the SPA.
+    {
+      path: '/m/:sourceId',
+      name: 'meeting-deeplink',
+      component: () => import('../views/portal/MeetingDeepLinkView.vue'),
+      meta: { requiresAuth: true, standalone: true },
+    },
+    // Kept for links minted before the move to '/m/'. Only reachable where the
+    // SPA is served by a separate front (Caddy), not by the portal container.
+    {
+      path: '/meetings/:sourceId',
+      name: 'meeting-deeplink-legacy',
+      component: () => import('../views/portal/MeetingDeepLinkView.vue'),
+      meta: { requiresAuth: true, standalone: true },
+    },
     // Global library — all sources across projects (top-level, no projectId)
     {
       path: '/library',
@@ -26,6 +72,40 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     // Project-scoped routes
+    {
+      // Bonum meeting-analytics portal — standalone (own shell, no app chrome)
+      path: '/:projectId/portal',
+      component: () => import('../views/portal/PortalLayout.vue'),
+      meta: { requiresAuth: true, standalone: true },
+      children: [
+        { path: '', redirect: (to) => `/${to.params.projectId}/portal/meetings` },
+        {
+          path: 'meetings',
+          name: 'portal-meetings',
+          component: () => import('../views/portal/PortalMeetingsView.vue'),
+        },
+        {
+          path: 'analytics',
+          name: 'portal-analytics',
+          component: () => import('../views/portal/PortalAnalyticsView.vue'),
+        },
+        {
+          path: 'tasks',
+          name: 'portal-tasks',
+          component: () => import('../views/portal/PortalTasksView.vue'),
+        },
+        {
+          path: 'search',
+          name: 'portal-search',
+          component: () => import('../views/portal/PortalSearchView.vue'),
+        },
+        {
+          path: 'question',
+          name: 'portal-question',
+          component: () => import('../views/portal/PortalQuestionView.vue'),
+        },
+      ],
+    },
     {
       path: '/:projectId/map',
       name: 'map',
@@ -96,14 +176,26 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   const token = localStorage.getItem('access_token')
-  if (to.meta.requiresAuth && !token) return { name: 'login' }
+  // Куда пользователь шёл — в query, иначе внешний диплинк (напр. /meetings/<id>
+  // из мобильного приложения) с непрогретой сессией теряется на логине.
+  if (to.meta.requiresAuth && !token) {
+    return { name: 'login', query: { redirect: to.fullPath } }
+  }
   if ((to.name === 'login' || to.name === 'register') && token) {
+    // Строкой, а не { path }: fullPath несёт query (`?open=<id>`), а объектная
+    // форма трактует path как чистый путь.
+    const back = safeRedirect(to.query.redirect)
+    if (back) return back
     try {
       const { userProjects } = await import('../api/client')
       const data = await userProjects.list()
       const first = data.projects[0]
-      if (first) return { path: `/${first.project_id}/library` }
+      // postLoginPath обобщает master'овский `/${id}/library`: при PORTAL_ONLY=0
+      // это ровно он, при PORTAL_ONLY=1 — портальный экран совещаний.
+      if (first) return { path: postLoginPath(first.project_id) }
     } catch {
+      // Токен исчез, пока шёл запрос (протух/разлогинились в другой вкладке) —
+      // не редиректим, даём отрисоваться логину (поведение из master).
       if (!localStorage.getItem('access_token')) return
     }
     return { path: '/library' }

@@ -21,6 +21,8 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 | `insight_curator.md` | `skills/insights.py` | LLM curation of raw insight candidates (multi-objective ranking) |
 | `analyst.md` | `evaluation/reconstruction.py` | Extract ground truth citation map from paper PDF |
 | `reconstruct.md` | `evaluation/reconstruction.py` | AI citation recommendation (blind to paper text) |
+| `meeting_qa.md` | `meetings.py answer_question()` | RAG Q&A over meeting protocols (Bonum portal) |
+| `meeting_analytics.md` | `meetings_analytics.py generate_analytics()` | Cross-meeting analytics report: topics/KPIs/patterns (Bonum portal) |
 
 ## Key variables by template
 
@@ -59,6 +61,12 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 
 ### insight_curator.md
 `language`, `dissertation_context`, `candidates` (formatted text of raw candidates with index numbers), `candidate_count` (int), `feedback_summary` (formatted researcher preferences — liked/disliked types, recent notes)
+
+### meeting_qa.md
+`fragments` (list of {n, text, meeting, type, site, date, time, speaker}), `query`
+
+### meeting_analytics.md
+`site_name`, `period_label`, `meetings_count`, `digest` (per-meeting digest text), `metrics_summary` (compact totals/weekly text). Output: strict JSON {summary, topics, kpis, patterns}; each topics[].timeline entry carries `source` — the exact meeting id echoed from the digest header (validated server-side, hallucinated ids stripped)
 
 ### analyst.md
 `pdf_text`, `library_entries`, `paper_citekey`, `paper_title`

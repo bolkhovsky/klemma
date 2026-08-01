@@ -42,6 +42,18 @@ def test_register_success(client):
     assert data["token_type"] == "bearer"
 
 
+def test_register_disabled_by_env(client, monkeypatch):
+    # Single-tenant portal deployments (Bonum) set KLEMMA_DISABLE_REGISTRATION=1:
+    # self-signup would inherit the portal_access director default.
+    monkeypatch.setenv("KLEMMA_DISABLE_REGISTRATION", "1")
+    resp = client.post(
+        "/auth/register",
+        json={"email": "intruder@example.com", "password": "secret123", "name": "Mallory"},
+    )
+    assert resp.status_code == 403
+    assert "disabled" in resp.json()["detail"]
+
+
 def test_register_duplicate_email(client):
     client.post(
         "/auth/register",

@@ -2515,6 +2515,7 @@ from .commands import (  # noqa: E402, F401
     benchmark,
     bib,
     manage,
+    meetings,
     process,
     research,
     write,

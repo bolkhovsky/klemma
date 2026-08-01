@@ -67,3 +67,17 @@ def rate_limit(max_requests: int, window_seconds: int = 60) -> Callable:
         _limiter.check(_get_client_ip(request), max_requests, window_seconds)
 
     return dependency
+
+
+def check_user_rate_limit(user_id: str, max_requests: int, window_seconds: int = 60) -> None:
+    """Лимит по владельцу токена, а не по адресу.
+
+    Для аутентифицированных эндпоинтов ключ по IP неверен: целый офис выходит в
+    интернет через один NAT, и лимит, рассчитанный на одного человека,
+    делится на всех сразу. У портала совещаний это ровно тот случай — все
+    пользователи клиента приходят с одного адреса.
+
+    Ключ префиксуется, чтобы не столкнуться с IP-ключами в общем словаре
+    `_limiter`: user_id и адрес живут в одном пространстве имён.
+    """
+    _limiter.check(f"user:{user_id}", max_requests, window_seconds)

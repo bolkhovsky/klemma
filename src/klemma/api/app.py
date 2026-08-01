@@ -34,6 +34,7 @@ from .routes import (
     git,
     health,
     library,
+    meetings,
     process,
     projects,
     sync,
@@ -103,15 +104,22 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("Unhandled error on %s %s", request.method, request.url.path)
-        return JSONResponse(
-            status_code=500,
-            content={"detail": f"{type(exc).__name__}: {exc}"},
+        # В проде наружу уходит только общая фраза: текст исключения содержал
+        # имена таблиц SQLite, пути внутри контейнера и куски SQL, и отдавался
+        # в том числе на неаутентифицированных путях. Полный трейс остаётся в
+        # логе выше — диагностика не теряется, теряется только утечка.
+        detail = (
+            "Internal server error"
+            if is_production
+            else f"{type(exc).__name__}: {exc}"
         )
+        return JSONResponse(status_code=500, content={"detail": detail})
 
     # Mount routers
     app.include_router(health.router, prefix="/health")
     app.include_router(auth.router, prefix="/auth", tags=["auth"])
     app.include_router(library.router, prefix="/library", tags=["library"])
+    app.include_router(meetings.router, prefix="/meetings", tags=["meetings"])
     app.include_router(projects.router, prefix="/projects", tags=["projects"])
     app.include_router(drafts.router, prefix="/projects", tags=["drafts"])
     app.include_router(curation.router, prefix="/projects", tags=["curation"])
@@ -122,5 +130,43 @@ def create_app() -> FastAPI:
     app.include_router(sync.router, prefix="/sync", tags=["sync"])
     app.include_router(git.router, tags=["git"])  # no prefix — route itself starts with /git/
     app.include_router(admin.router, prefix="/admin", tags=["admin"])
+
+    # Optional self-contained SPA serving (bonum portal container). When
+    # KLEMMA_SERVE_SPA points at a built dashboard dir, mount it at "/" as a
+    # fallback AFTER all API routers, with SPA history fallback to index.html.
+    # The klemma SaaS leaves this unset (Caddy serves the SPA there).
+    spa_dir = os.environ.get("KLEMMA_SERVE_SPA", "").strip()
+    if spa_dir and Path(spa_dir).is_dir():
+        from starlette.staticfiles import StaticFiles
+
+        # Optional landing override: serve a specific file at exactly "/" (e.g. the
+        # Bonum marketing landing baked into the SPA build) while every other route
+        # keeps the SPA — the portal stays reachable behind login unchanged. This
+        # explicit route is registered BEFORE the "/" mount below, so it wins for
+        # GET "/". Unset (klemma SaaS) → "/" serves the SPA index as before.
+        root_file = os.environ.get("KLEMMA_SPA_ROOT_FILE", "").strip()
+        root_path = Path(spa_dir) / root_file if root_file else None
+        if root_path is not None and root_path.is_file():
+            from starlette.responses import FileResponse
+
+            @app.get("/", include_in_schema=False)
+            async def _spa_root_landing():
+                return FileResponse(root_path)
+
+        class _SPAStatic(StaticFiles):
+            async def get_response(self, path, scope):
+                # Starlette's StaticFiles raises HTTPException(404) for a
+                # missing path rather than returning a 404 response, so the
+                # SPA-history fallback must catch it, not branch on status.
+                from starlette.exceptions import HTTPException
+
+                try:
+                    return await super().get_response(path, scope)
+                except HTTPException as exc:
+                    if exc.status_code != 404:
+                        raise
+                    return await super().get_response("index.html", scope)
+
+        app.mount("/", _SPAStatic(directory=spa_dir, html=True), name="spa")
 
     return app

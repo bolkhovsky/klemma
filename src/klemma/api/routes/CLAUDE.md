@@ -125,6 +125,18 @@ Library-first pivot: users accept/reject fragments, assign them to outline secti
 - Depends on: `user_store`, `paper_store`, `user_library` from `deps.py`
 - Schemas: `PendingFragmentsResponse`, `CurateRequest`, `CuratedBankResponse`, `CuratedFragmentResponse`, `SuggestFragmentsResponse`, `GenerateSentencesRequest`, `GenerateSentencesResponse`. `PendingFragment` / `CuratedFragmentResponse` include optional `suggested_text` + `sentence_model` (ADR-017).
 
+### meetings.py (~300 lines)
+Bonum meeting-portal endpoints — mounted with `prefix="/meetings"`. Backed by the meeting project DB at `KLEMMA_BONUM_PROJECT_ROOT` (not SaaS stores). JWT auth; per-user site scoping via `portal_access` (`_scope` helper: director → all/{site}, leader → own slugs, foreign site → 403).
+- `GET /meetings?site=&days=` — meeting cards + stats (days clamped to {7,14,30,90,180})
+- `GET /meetings/sites` — allowed sites with 90-day counts, `{role, can_view_all, sites}`
+- `POST /meetings/sites/sync` — X-Ingest-Token; fetch sites webhook (`KLEMMA_BONUM_SITES_WEBHOOK` only — body url was an SSRF surface), upsert + remap all meetings, returns distribution
+- `GET /meetings/search?q=&site=` — semantic search, site post-filter
+- `GET /meetings/tasks?site=&days=` — task board aggregate
+- `GET /meetings/analytics?site=&days=30|90|180&refresh=` — cross-meeting report; plain load = latest cache or metrics preview (never LLM), `refresh=1` = synchronous LLM generation; `site=''` = whole company (director only)
+- `POST /meetings/ask` — RAG Q&A `{query, site?}`. `query` ограничен 1–2000 символами и защищён `rate_limit(10, 60)`: эндпоинт ходит в платную LLM от любого аутентифицированного пользователя.
+- `POST /meetings/ingest` — X-Ingest-Token; idempotent by meeting_id. Пустой `protocol_md` на существующий id → **422**, а не затирание совещания (`ValueError` из `ingest_meeting` ловится в route-слое; без этого глобальный обработчик отдал бы 500 и воркер ушёл бы в ретраи). Входные потолки: `protocol_md` ≤ 2 МБ, `speakers` ≤ 200, `tasks` ≤ 1000. Сравнение токена — `compare_digest` над **байтами**: строковая форма принимает только ASCII и на неASCII-заголовке давала неаутентифицированный 500.
+- `GET /meetings/{meeting_id}` — detail (declared last; fixed paths must stay above)
+
 ## Adding a new router
 
 1. Create `<domain>.py` with `router = APIRouter(tags=["<domain>"])` and route handlers.

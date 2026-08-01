@@ -3,7 +3,9 @@
  * Handles JWT token management, refresh, and request formatting.
  */
 
-const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+// `?? '/api'` (not `||`) so an explicitly-empty VITE_API_BASE (portal build,
+// where the bonum container serves both API and SPA at root) is preserved.
+const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
 /** Auth endpoints where 401 means bad credentials, not expired token. */
 const AUTH_PATHS = ['/auth/login', '/auth/register']
@@ -102,6 +104,174 @@ export const auth = {
     }),
 
   me: () => request<{ user_id: string; email: string; name: string }>('/auth/me'),
+}
+
+// Meeting-analytics portal (Bonum B2B)
+export interface MeetingTask {
+  title: string
+  who: string
+  due: string
+  overdue: boolean
+  time: string
+}
+export interface MeetingItem {
+  id: string
+  date: string
+  type: string
+  site: string
+  time: string
+  title: string
+  tasks: number
+  speakers: string[]
+  chips: { label: string; tone: string }[]
+  summary: string
+  decisions: string[]
+  task_list: MeetingTask[]
+}
+export interface MeetingsList {
+  meetings: MeetingItem[]
+  stats: { meetings: number; tasks: number; escalations: number }
+}
+export interface SearchResultItem {
+  quote: string
+  score: number
+  speaker: string
+  meeting: string
+  type: string
+  site: string
+  date: string
+  time: string
+  citekey: string
+  tag: string
+}
+export interface MeetingsSearch {
+  query: string
+  results: SearchResultItem[]
+  semantic_count: number
+  keyword_count: number
+}
+export interface AskSource {
+  n: number
+  quote: string
+  meeting: string
+  date: string
+  time: string
+  speaker: string
+  citekey: string
+}
+export interface AskAnswer {
+  answer: string
+  model: string
+  sources: AskSource[]
+  followups: string[]
+}
+export interface TasksBoard {
+  stats: { n: number; label: string; tone: string }[]
+  themes: {
+    title: string
+    count: number
+    escalated: boolean
+    meetings: { date: string; type: string; site: string }[]
+  }[]
+  overdue_persons: { name: string; n: number; pct: string }[]
+  overdue_sites: { name: string; n: number; pct: string }[]
+  escalations: { title: string; owner: string; site: string; age: string }[]
+}
+export interface SiteInfo {
+  slug: string
+  name: string
+  type: string
+  leader: string
+  meetings: number
+}
+export interface SitesResponse {
+  role: 'director' | 'leader'
+  can_view_all: boolean
+  sites: SiteInfo[]
+}
+export interface AnalyticsWeek {
+  week: string
+  label: string
+  meetings: number
+  tasks: number
+  escalations: number
+  overdue: number
+}
+export interface AnalyticsTopic {
+  title: string
+  status: string
+  first_seen: string
+  last_seen: string
+  meetings: number
+  // source: validated meeting id for deep-linking to the protocol ('' when unknown)
+  timeline: { date: string; note: string; source?: string }[]
+  insight: string
+}
+export interface AnalyticsKpi {
+  name: string
+  trend: string
+  evidence: string
+}
+export interface AnalyticsPattern {
+  observation: string
+  recommendation: string
+  severity: string
+}
+export interface AnalyticsReport {
+  site: string
+  site_name: string
+  days: number
+  window: { from: string; to: string }
+  meetings_analyzed: number
+  truncated: boolean
+  generated_at: string
+  model: string
+  cached: boolean
+  detail?: string
+  metrics: {
+    weeks: AnalyticsWeek[]
+    totals: { meetings: number; tasks: number; escalations: number; overdue: number }
+    top_assignees: { name: string; tasks: number; overdue: number }[]
+  }
+  summary: string
+  topics: AnalyticsTopic[]
+  kpis: AnalyticsKpi[]
+  patterns: AnalyticsPattern[]
+}
+
+export const meetings = {
+  sites: () => request<SitesResponse>('/meetings/sites'),
+  list: (opts?: { site?: string; days?: number }) => {
+    const params = new URLSearchParams()
+    if (opts?.site) params.set('site', opts.site)
+    if (opts?.days) params.set('days', String(opts.days))
+    const qs = params.size ? `?${params}` : ''
+    return request<MeetingsList>(`/meetings${qs}`)
+  },
+  get: (id: string) => request<MeetingItem>(`/meetings/${encodeURIComponent(id)}`),
+  search: (q: string, site?: string) => {
+    const params = new URLSearchParams({ q })
+    if (site) params.set('site', site)
+    return request<MeetingsSearch>(`/meetings/search?${params}`)
+  },
+  tasks: (opts?: { site?: string; days?: number }) => {
+    const params = new URLSearchParams()
+    if (opts?.site) params.set('site', opts.site)
+    if (opts?.days) params.set('days', String(opts.days))
+    const qs = params.size ? `?${params}` : ''
+    return request<TasksBoard>(`/meetings/tasks${qs}`)
+  },
+  ask: (query: string, site?: string) =>
+    request<AskAnswer>('/meetings/ask', {
+      method: 'POST',
+      body: JSON.stringify(site ? { query, site } : { query }),
+    }),
+  analytics: (opts: { site?: string; days: number; refresh?: boolean }) => {
+    const params = new URLSearchParams({ days: String(opts.days) })
+    if (opts.site) params.set('site', opts.site)
+    if (opts.refresh) params.set('refresh', '1')
+    return request<AnalyticsReport>(`/meetings/analytics?${params}`)
+  },
 }
 
 // Library

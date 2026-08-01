@@ -36,7 +36,11 @@ saas/dashboard/
 │   │   │     standalone layout (no AppLayout), topbar, doc-structure sidebar, section cards
 │   │   │     3-state draft machine (0/1-4/5+ sources), prompt+presets, polling draft gen, diff review
 │   │   ├── FileEditorView — /:projectId/edit/:filename — raw markdown editor (fallback)
-│   │   └── GlobalLibraryView — all sources across projects
+│   │   ├── GlobalLibraryView — all sources across projects
+│   │   └── portal/ — Bonum meeting portal (standalone shell, route /:projectId/portal)
+│   │         PortalLayout (sidebar + real site switcher from useSiteFilter), Meetings,
+│   │         Analytics (cross-meeting: topics/KPIs/patterns + SVG weekly trends), Tasks,
+│   │         Search, Question views — all scoped by the shared site filter composable
 │   └── assets/main.css    — Tailwind entry point
 ├── vite.config.ts         — Tailwind plugin + /api proxy
 └── package.json

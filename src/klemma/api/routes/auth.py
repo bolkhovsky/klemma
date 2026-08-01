@@ -60,12 +60,28 @@ def _initial_token_grant() -> int:
     return amount
 
 
+def _registration_disabled() -> bool:
+    """Deployment switch: ``KLEMMA_DISABLE_REGISTRATION=1`` turns /auth/register off.
+
+    Required on single-tenant portal deployments (Bonum): accounts there are
+    created by the operator via ``scripts/bonum_bootstrap.py``, while a
+    self-registered user would inherit the ``portal_access`` director default
+    (``meetings_sites.get_access``) and see the whole meeting project.
+    """
+    return os.getenv("KLEMMA_DISABLE_REGISTRATION", "").strip().lower() in {"1", "true", "yes"}
+
+
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     body: UserCreate,
     _rate=Depends(rate_limit(3, 60)),
 ) -> TokenResponse:
     """Create a new user account and return token pair."""
+    if _registration_disabled():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration is disabled on this deployment",
+        )
     store = get_user_store()
     pw_hash = hash_password(body.password)
     try:
