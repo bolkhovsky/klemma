@@ -422,6 +422,35 @@ def test_wrong_hash_not_valid(store):
     assert not store.verify_refresh_token(user.user_id, "wronghash")
 
 
+def test_revoke_single_token_keeps_the_others(store):
+    user = store.create_user(email="a@b.com", password_hash="h")
+    store.store_refresh_token(user.user_id, "phone", "2099-01-01T00:00:00")
+    store.store_refresh_token(user.user_id, "browser", "2099-01-01T00:00:00")
+
+    assert store.revoke_refresh_token(user.user_id, "browser") == 1
+    assert not store.verify_refresh_token(user.user_id, "browser")
+    assert store.verify_refresh_token(user.user_id, "phone")
+
+
+def test_revoke_single_token_sweeps_expired(store):
+    """Nothing else prunes the table once rotation stopped clearing the user."""
+    user = store.create_user(email="a@b.com", password_hash="h")
+    store.store_refresh_token(user.user_id, "stale", "2000-01-01T00:00:00")
+    store.store_refresh_token(user.user_id, "current", "2099-01-01T00:00:00")
+    other = store.create_user(email="c@d.com", password_hash="h")
+    store.store_refresh_token(other.user_id, "someone-else", "2000-01-01T00:00:00")
+
+    # Revokes "current" plus the expired "stale" — two rows, and only this user's.
+    assert store.revoke_refresh_token(user.user_id, "current") == 2
+    assert not store.verify_refresh_token(user.user_id, "stale")
+    # Another user's expired row is not this call's business.
+    with store._conn() as conn:
+        left = conn.execute(
+            "SELECT COUNT(*) FROM refresh_tokens WHERE user_id = ?", (other.user_id,)
+        ).fetchone()[0]
+    assert left == 1
+
+
 def test_revoke_refresh_tokens(store):
     user = store.create_user(email="a@b.com", password_hash="h")
     store.store_refresh_token(user.user_id, "t1", "2099-01-01T00:00:00")
