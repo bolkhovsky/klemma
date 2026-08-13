@@ -77,6 +77,22 @@ def test_detect_quote_anchor_short_skipped():
     assert len(quotes) == 0
 
 
+def test_detect_quote_anchor_curly():
+    # Curly double quotes (typographic “ ”) must be detected like «» and "
+    sentence = 'The authors state “a sustained period of persistent surface cooling” as the key signature [@lee2018].'
+    anchors = detect_anchors(sentence)
+    quotes = [a for a in anchors if a.kind == "quote"]
+    assert len(quotes) >= 1
+    assert "sustained period" in quotes[0].raw
+
+
+def test_detect_quote_anchor_curly_short_skipped():
+    sentence = 'The phenomenon is termed “drift” in [@test2020].'
+    anchors = detect_anchors(sentence)
+    quotes = [a for a in anchors if a.kind == "quote"]
+    assert len(quotes) == 0
+
+
 def test_anchor_ids_are_unique():
     sentence = "Значение 15.3 °C и ещё 15.3 °C [@dup2021]."
     anchors = detect_anchors(sentence)
