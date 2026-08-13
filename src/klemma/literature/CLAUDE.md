@@ -42,9 +42,12 @@ All Pydantic models for the data layer:
 - `load_entry_lookup()` — citekey → `ZoteroEntry` from BBT JSON
 - CamelCase splitting: `wagnerSeaiceInformation2020` → `[wagner, seaice, information, 2020]`
 
-### sidecar.py (~90 lines)
-Raw PDF text sidecar writer — feynman-style format at `<project_root>/.klemma/pdfs/<citekey>.md`. Introduced in ADR-016 as the on-disk trace of processed PDFs and the primary-source passage store for downstream tooling.
+### sidecar.py (~230 lines)
+Raw PDF text sidecar writer + reader — feynman-style format at `<project_root>/.klemma/pdfs/<citekey>.md`. Introduced in ADR-016 as the on-disk trace of processed PDFs and the primary-source passage store for downstream tooling. Written by `_process_single()` **immediately after text extraction, before the AI call** — the full text survives AI failure or zero-fragment extraction (claim-provenance substrate).
 - `write_pdf_sidecar(project_root, citekey, pages, metadata) -> Path` — atomic write via `tempfile.mkstemp` + `os.fdopen` + `os.replace`; rejects `..`, `/`, `\\`, empty citekeys (pattern mirrors `LocalFileStore._file_path()`); idempotent (reprocessing overwrites cleanly); creates missing `.klemma/pdfs/` directory
+- `SidecarDoc` — dataclass: `text` (canonical text) + `page_spans: list[(page, char_start, char_end)]` (half-open, trimmed to non-whitespace page content) + `page_for(offset) -> int | None`
+- `load_sidecar_doc(project_root, citekey) -> SidecarDoc | None` — parses page markers into per-page character spans at read time (no extra storage). **HARD CONTRACT**: `load_sidecar_doc(...).text` is byte-for-byte equal to `read_pdf_sidecar(...)` — fragment/claim offsets are always in canonical text coordinates
+- `read_pdf_sidecar(project_root, citekey) -> str | None` — delegates to `load_sidecar_doc`; canonical text = frontmatter stripped, each `\n<!-- Page N -->\n` marker replaced by a single `\n`, then `str.strip()`
 
 **Format contracts** (must not drift without a version bump — the planned semantic citation drift checker is the second consumer):
 1. **Path**: always `<project_root>/.klemma/pdfs/<citekey>.md`. No config override. Downstream consumers can hardcode.

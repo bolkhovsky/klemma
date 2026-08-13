@@ -1,8 +1,9 @@
-"""Tests for `klemma.literature.sidecar.write_pdf_sidecar`.
+"""Tests for `klemma.literature.sidecar` — writer and reader sides.
 
 Exercises the three stable format contracts downstream consumers rely on:
 path layout, `<!-- Page N -->` delimiter, frontmatter field set; plus
-atomic-write safety and citekey validation.
+atomic-write safety, citekey validation, and the `load_sidecar_doc`
+canonical-text/page-span contract.
 """
 
 from __future__ import annotations
@@ -14,7 +15,11 @@ from unittest.mock import patch
 
 import pytest
 
-from klemma.literature.sidecar import write_pdf_sidecar
+from klemma.literature.sidecar import (
+    load_sidecar_doc,
+    read_pdf_sidecar,
+    write_pdf_sidecar,
+)
 
 
 def _metadata() -> dict:
@@ -131,3 +136,103 @@ def test_write_pdf_sidecar_file_permissions_preserved(tmp_path: Path) -> None:
     target = write_pdf_sidecar(tmp_path, "perms2020", ["page"], _metadata())
     mode = os.stat(target).st_mode & 0o600
     assert mode == 0o600
+
+
+# ---------------------------------------------------------------------------
+# load_sidecar_doc — canonical text + page spans
+# ---------------------------------------------------------------------------
+
+
+def _legacy_read(target: Path) -> str | None:
+    """Historical read_pdf_sidecar transformation, kept as the equality oracle."""
+    text = target.read_text(encoding="utf-8")
+    parts = text.split("\n---\n", 1)
+    body = parts[1] if len(parts) > 1 else text
+    body = re.sub(r"\n<!-- Page \d+ -->\n", "\n", body)
+    return body.strip() or None
+
+
+def test_load_sidecar_doc_page_spans(tmp_path: Path) -> None:
+    pages = [
+        "First page prose\nsecond line.",
+        "Methods section start.",
+        "Results and discussion.",
+    ]
+    write_pdf_sidecar(tmp_path, "goessling2018", pages, _metadata())
+
+    doc = load_sidecar_doc(tmp_path, "goessling2018")
+    assert doc is not None
+    assert [span[0] for span in doc.page_spans] == [1, 2, 3]
+    # Each span slices out exactly that page's prose (whitespace-trimmed)
+    for (page, start, end), original in zip(doc.page_spans, pages):
+        assert doc.text[start:end] == original.strip()
+    # Spans are ordered and non-overlapping
+    for (_, _, prev_end), (_, next_start, _) in zip(doc.page_spans, doc.page_spans[1:]):
+        assert prev_end <= next_start
+
+
+def test_load_sidecar_doc_text_equals_read_pdf_sidecar(tmp_path: Path) -> None:
+    """HARD CONTRACT: doc.text is byte-for-byte read_pdf_sidecar output."""
+    pages = ["  padded first page  ", "middle\n\nwith blanks", "last page."]
+    target = write_pdf_sidecar(tmp_path, "contract2025", pages, _metadata())
+
+    doc = load_sidecar_doc(tmp_path, "contract2025")
+    assert doc is not None
+    assert doc.text == read_pdf_sidecar(tmp_path, "contract2025")
+    # And both match the historical transformation exactly
+    assert doc.text == _legacy_read(target)
+
+
+def test_load_sidecar_doc_page_for_boundaries(tmp_path: Path) -> None:
+    pages = ["alpha page one", "beta page two", "gamma page three"]
+    write_pdf_sidecar(tmp_path, "bounds2025", pages, _metadata())
+
+    doc = load_sidecar_doc(tmp_path, "bounds2025")
+    assert doc is not None
+    for page, start, end in doc.page_spans:
+        assert doc.page_for(start) == page          # inclusive left edge
+        assert doc.page_for(end - 1) == page        # last char of the page
+        assert doc.page_for(end) != page            # exclusive right edge
+    assert doc.page_for(-1) is None
+    assert doc.page_for(len(doc.text)) is None
+    # Offsets found via search resolve to the right page
+    assert doc.page_for(doc.text.index("beta")) == 2
+    assert doc.page_for(doc.text.index("gamma")) == 3
+
+
+def test_load_sidecar_doc_single_page(tmp_path: Path) -> None:
+    write_pdf_sidecar(tmp_path, "single2025", ["only page text"], _metadata())
+
+    doc = load_sidecar_doc(tmp_path, "single2025")
+    assert doc is not None
+    assert doc.text == "only page text"
+    assert doc.page_spans == [(1, 0, len(doc.text))]
+    assert doc.page_for(0) == 1
+    assert doc.page_for(len(doc.text) - 1) == 1
+
+
+def test_load_sidecar_doc_empty_body_returns_none(tmp_path: Path) -> None:
+    """Whitespace-only sidecar → None, matching read_pdf_sidecar."""
+    write_pdf_sidecar(tmp_path, "empty2025", [""], _metadata())
+
+    assert load_sidecar_doc(tmp_path, "empty2025") is None
+    assert read_pdf_sidecar(tmp_path, "empty2025") is None
+
+
+def test_load_sidecar_doc_blank_middle_page_gets_no_span(tmp_path: Path) -> None:
+    pages = ["page one text", "", "page three text"]
+    write_pdf_sidecar(tmp_path, "blank2025", pages, _metadata())
+
+    doc = load_sidecar_doc(tmp_path, "blank2025")
+    assert doc is not None
+    assert doc.text == read_pdf_sidecar(tmp_path, "blank2025")
+    assert [span[0] for span in doc.page_spans] == [1, 3]
+    assert doc.page_for(doc.text.index("page three")) == 3
+
+
+def test_load_sidecar_doc_missing_file(tmp_path: Path) -> None:
+    assert load_sidecar_doc(tmp_path, "nothere2025") is None
+
+
+def test_load_sidecar_doc_rejects_bad_citekey(tmp_path: Path) -> None:
+    assert load_sidecar_doc(tmp_path, "../../etc/passwd") is None
