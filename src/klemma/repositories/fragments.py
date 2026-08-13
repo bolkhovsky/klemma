@@ -121,6 +121,51 @@ class FragmentRepository(BaseRepository):
             )
             return cur.rowcount > 0
 
+    def update_fragment_provenance(
+        self,
+        fragment_id: int,
+        *,
+        verbatim: Optional[bool] = None,
+        char_start: Optional[int] = None,
+        char_end: Optional[int] = None,
+        source_locator: Optional[str] = None,
+    ) -> bool:
+        """Update provenance fields on a fragment. Returns True if modified.
+
+        ``None`` leaves a column untouched. Passing ``verbatim=False`` also
+        NULLs char_start/char_end/source_locator in the same UPDATE — a
+        non-verbatim fragment cannot carry a verified span, and any span
+        recorded by an earlier repair run is stale by definition.
+        """
+        sets: list[str] = []
+        params: list = []
+        if verbatim is not None:
+            sets.append("verbatim=?")
+            params.append(1 if verbatim else 0)
+            if not verbatim:
+                sets.extend(
+                    ["char_start=NULL", "char_end=NULL", "source_locator=NULL"]
+                )
+        if verbatim is not False:
+            if char_start is not None:
+                sets.append("char_start=?")
+                params.append(char_start)
+            if char_end is not None:
+                sets.append("char_end=?")
+                params.append(char_end)
+            if source_locator is not None:
+                sets.append("source_locator=?")
+                params.append(source_locator)
+        if not sets:
+            return False
+        params.append(fragment_id)
+        with self._conn() as conn:
+            cur = conn.execute(
+                f"UPDATE fragments SET {', '.join(sets)} WHERE id=?",
+                params,
+            )
+            return cur.rowcount > 0
+
     def delete_fragments(self, source_id: str) -> int:
         """Delete all fragments for a source. Returns number of deleted rows."""
         with self._conn() as conn:

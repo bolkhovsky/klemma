@@ -53,6 +53,7 @@ Fragment CRUD, citation intent coverage, fragment-level embeddings.
 - `get_fragment_embedding_stats()` — coverage stats (total, embedded, by model)
 - `get_unembedded_fragments()` — fragments missing embeddings
 - `retrieve_similar_fragments(query_embedding, top_k, model?)` — top-K cosine retrieval
+- `update_fragment_provenance(fragment_id, *, verbatim?, char_start?, char_end?, source_locator?)` — update provenance fields; `None` leaves a column untouched; `verbatim=False` also NULLs the span/locator (a non-verbatim fragment cannot carry a verified span). Writer: `klemma repair`
 - `save_reassign_skip()`, `save_reassign_skips_batch()`, `get_reassign_skips()`, `clear_reassign_skips()` — legacy skip persistence (unused since batch --apply removed)
 
 ### embeddings_store.py (~180 lines)
