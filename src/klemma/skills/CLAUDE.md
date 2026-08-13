@@ -140,6 +140,13 @@ Guided Serendipity briefing — analyzes new sources, finds connections, generat
 - `generate_briefing(source_citekey, config, state, ai, ...)` — renders `prompts/briefing.md` → AI → parse JSON
 - `save_briefing_as_decision(result, state)` — save forks as pending decision
 
+### reference_matcher.py (~200 lines)
+Numbered-reference → citekey matching for `papers/` (claim-provenance PR-3). Journals require "[5]"-style citations, so submitted papers carry no `[@citekey]` markers — this module maps bibliography entry numbers to library citekeys so `check-citations` can verify them.
+- `RefMatch` — dataclass: number, citekey, method ("doi" | "title" | "authors_year"), confidence
+- `RefMap` — dataclass: `number_to_citekey: dict[int, str]`, `unmatched: dict[int, ParsedReference]`, `matches: dict[int, RefMatch]`; `match(n)` / `confidence(n)` accessors
+- `build_ref_map(md_text, sources_meta) -> RefMap` — finds the bibliography via `find_bibliography_section()`, parses entries with `parse_numbered_references()`, matches each against sources_meta: normalized DOI exact (1.0) → fuzzy title (parsed title via `metadata._titles_match` 0.85, or source-title containment in the raw entry 0.75; year agreement when both known) → author surnames + exact year (0.7). Unmatched positions are kept — the checker reports them as soft_warn
+- `collect_sources_meta(state=?, paper_store=?, user_library=?) -> list[dict]` — gathers {citekey, title, authors, year, doi} rows: project state first, then user_library+paper_store for citekeys the project DB lacks; never raises
+
 ### coach.py (~170 lines)
 Contextual research advisor — methodology-driven heuristics (zero AI calls). Thresholds from 21 methodology papers (Pautasso 2013, Cohan 2019, Kallestinova 2011).
 - `CoachFinding` — dataclass: category, section, message, severity
