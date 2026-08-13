@@ -28,7 +28,7 @@ class TestDecisionsMigration:
     def test_db_version_is_current(self, state):
         with state._conn() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            assert version == 15
+            assert version == 16
 
     def test_decisions_columns(self, state):
         with state._conn() as conn:

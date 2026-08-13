@@ -69,6 +69,14 @@ class SourceRepository(BaseRepository):
         with self._conn() as conn:
             conn.execute("UPDATE sources SET pdf_path = ? WHERE id = ?", (path, source_id))
 
+    def set_pdf_text_length(self, source_id: str, length: int):
+        """Record the extracted full-text length (sum of page lengths)."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE sources SET pdf_text_length = ? WHERE id = ?",
+                (length, source_id),
+            )
+
     def get_pending_sources(self, limit: int = 0) -> list[str]:
         with self._conn() as conn:
             if limit > 0:
