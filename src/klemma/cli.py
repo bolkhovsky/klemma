@@ -1612,6 +1612,36 @@ def _process_single(
             state.sources.mark_skipped(citekey, "text too short")
             return (0, "text too short")
 
+        # Full text is an asset: persist its length and the raw sidecar
+        # immediately after successful extraction, BEFORE the AI call, so
+        # the text survives an AI failure or a zero-fragment extraction
+        # (claim-provenance substrate). Online sources never reach this
+        # branch — their `pdf_pages` stays empty.
+        # See literature/sidecar.py for the format contract relied on by
+        # the semantic citation check pipeline.
+        state.sources.set_pdf_text_length(citekey, sum(len(p) for p in pdf_pages))
+        if pdf_pages and pdf_path and klemma_home:
+            try:
+                from .literature.sidecar import write_pdf_sidecar
+
+                write_pdf_sidecar(
+                    klemma_home.parent,
+                    citekey,
+                    pdf_pages,
+                    {
+                        "title": entry.title or "",
+                        "authors": entry.authors_str or "",
+                        "year": entry.year,
+                        "doi": entry.DOI or "",
+                        "source": str(pdf_path),
+                    },
+                )
+            except (OSError, ValueError) as _e:
+                logger.warning("PDF sidecar write failed for %s: %s", citekey, _e)
+                console.print(
+                    f"[dim yellow]  raw sidecar skipped for {citekey}: {_e}[/dim yellow]"
+                )
+
     # If reprocessing, clear old fragments before extracting fresh ones
     if force:
         state.delete_fragments(citekey)
@@ -1666,35 +1696,6 @@ def _process_single(
             console.print(f" → @{citekey}")
         else:
             console.print(" [dim](DB only)[/dim]")
-
-    # Raw PDF sidecar — written once fragments have been saved, so the
-    # dump is a stable artifact aligned with the latest extraction run.
-    # `pdf_pages` was extracted above as part of the AI-bound text flow,
-    # so no second fitz.open is required. Online sources have no PDF —
-    # their `pdf_pages` stays empty and this block is a no-op.
-    # See literature/sidecar.py for the format contract relied on by the
-    # semantic citation check pipeline.
-    if pdf_pages and pdf_path and klemma_home:
-        try:
-            from .literature.sidecar import write_pdf_sidecar
-
-            write_pdf_sidecar(
-                klemma_home.parent,
-                citekey,
-                pdf_pages,
-                {
-                    "title": entry.title or "",
-                    "authors": entry.authors_str or "",
-                    "year": entry.year,
-                    "doi": entry.DOI or "",
-                    "source": str(pdf_path),
-                },
-            )
-        except (OSError, ValueError) as _e:
-            logger.warning("PDF sidecar write failed for %s: %s", citekey, _e)
-            console.print(
-                f"[dim yellow]  raw sidecar skipped for {citekey}: {_e}[/dim yellow]"
-            )
 
     # Phase 1B dual-write: also persist to library.db (ADR-014)
     # online sources have no PDF hash — skip dual-write
