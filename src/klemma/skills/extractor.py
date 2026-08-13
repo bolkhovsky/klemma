@@ -2,6 +2,7 @@
 
 import difflib
 import logging
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
@@ -10,7 +11,7 @@ from ..config import KlemmaConfig, resolve_prompt
 from ..literature.models import DowngradeStats, ExtractionResult, Fragment, ZoteroEntry
 from ..literature.pdf import PDFExtractor
 from ..state import StateManager
-from ..text_normalize import normalize
+from ..text_normalize import normalize, normalize_with_map
 from ..vault import VaultAdapter
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,54 @@ def validate_verbatim_fragments(
             )
 
     return stats
+
+
+def _raw_span(source_text: str, idx_map: list[int], a: int, b: int) -> tuple[int, int]:
+    """Translate a normalized-space half-open span [a, b) into raw coordinates.
+
+    The end is the raw index right after the last matched char's combining
+    sequence, so spans never cut a base char away from its combining marks.
+    """
+    start = idx_map[a]
+    end = idx_map[b - 1] + 1
+    while end < len(source_text) and unicodedata.combining(source_text[end]):
+        end += 1
+    return start, end
+
+
+def locate_fragment_span(
+    fragment_text: str,
+    source_text: str,
+) -> tuple[int, int] | None:
+    """Locate a fragment inside the raw source text; return its span or None.
+
+    Match happens in normalized space (same pipeline as
+    ``validate_verbatim_fragments``: exact substring first, then the difflib
+    window rescue at ``_FUZZY_RESCUE_THRESHOLD``), and the hit is mapped back
+    into raw ``source_text`` coordinates via ``normalize_with_map`` — so the
+    returned span indexes directly into the sidecar canonical text.
+    """
+    norm_frag = normalize(fragment_text)
+    norm_src, idx_map = normalize_with_map(source_text)
+    if not norm_frag or not norm_src:
+        return None
+
+    pos = norm_src.find(norm_frag)
+    if pos >= 0:
+        return _raw_span(source_text, idx_map, pos, pos + len(norm_frag))
+
+    # Fuzzy rescue — mirrors the window logic in validate_verbatim_fragments.
+    matcher = difflib.SequenceMatcher(None, norm_frag, norm_src, autojunk=False)
+    match = matcher.find_longest_match(0, len(norm_frag), 0, len(norm_src))
+    if match.size == 0:
+        return None
+    window_start = max(0, match.b - match.a)
+    window_end = min(window_start + len(norm_frag), len(norm_src))
+    window = norm_src[window_start:window_end]
+    ratio = difflib.SequenceMatcher(None, norm_frag, window, autojunk=False).ratio()
+    if ratio < _FUZZY_RESCUE_THRESHOLD:
+        return None
+    return _raw_span(source_text, idx_map, window_start, window_end)
 
 
 def extract_fragments(
