@@ -10,7 +10,14 @@ verify against. This command retrofits already-processed sources:
 * step ``verbatim`` — recompute the ``verbatim`` flag for EVERY fragment of
   the source against the sidecar canonical text, including the downgrade
   ``true→false`` (honesty over "never downgrade"); confirmed fragments get
-  a char span into the sidecar plus a human-readable source locator.
+  a char span into the sidecar plus a human-readable source locator;
+* step ``embeddings`` — re-embed the source's missing fragment/source
+  vectors; a source that was marked ``degraded`` returns to ``completed``
+  once all its recorded failed steps are verifiably fixed.
+
+``--scan`` audits history instead of repairing: completed sources without a
+sidecar or with unembedded fragments get flagged as ``degraded`` so
+`klemma status` stops presenting them as healthy.
 
 All data mutations are counted and printed — silent repair is not repair.
 """
@@ -18,18 +25,19 @@ All data mutations are counted and printed — silent repair is not repair.
 from __future__ import annotations
 
 import glob as _glob
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
 
-from ..cli import _get_context, console, main
+from ..cli import _auto_embed_after_process, _get_context, console, main
 from ..literature.locator import derive_locator
 from ..literature.sidecar import load_sidecar_doc, write_pdf_sidecar
 from ..skills.citation_checker import _CITE_REF_RE, _extract_citekeys_from_ref
 from ..skills.extractor import locate_fragment_span
 
-_KNOWN_STEPS = ("sidecar", "verbatim")
+_KNOWN_STEPS = ("sidecar", "verbatim", "embeddings")
 
 
 @dataclass
@@ -47,6 +55,9 @@ class RepairStats:
     spans_written: int = 0
     locators_written: int = 0
     sources_no_sidecar: int = 0
+    embeddings_created: int = 0
+    embeddings_failed: int = 0
+    degraded_cleared: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -240,6 +251,104 @@ def repair_verbatim(
     )
 
 
+def repair_embeddings(kctx, citekey: str, stats: RepairStats, dry_run: bool) -> None:
+    """Re-embed the source's missing vectors (fragments + source itself)."""
+    state = kctx.state
+    emb = kctx.embeddings
+
+    fragments = state.get_fragments(source_id=citekey, limit=1_000_000)
+    missing = [f for f in fragments if not f.get("embedding")]
+    source = state.get_source(citekey) or {}
+    source_vec_missing = source.get("embedding") is None and bool(
+        source.get("abstract")
+    )
+
+    if not missing and not source_vec_missing:
+        return
+
+    if dry_run:
+        stats.embeddings_created += len(missing) + (1 if source_vec_missing else 0)
+        console.print(
+            f"  [dim]{citekey}: would embed {len(missing)} fragment(s)"
+            + (" + source vector" if source_vec_missing else "")
+            + "[/dim]"
+        )
+        return
+
+    if source_vec_missing:
+        try:
+            vec = emb.embed(source.get("title") or citekey, source.get("abstract") or "")
+            if vec:
+                state.save_embedding(citekey, vec, emb.model_name)
+                stats.embeddings_created += 1
+            else:
+                stats.embeddings_failed += 1
+        except Exception as exc:  # noqa: BLE001 — счётчик, не тихий отказ
+            stats.embeddings_failed += 1
+            stats.warnings.append(f"{citekey}: source embedding failed: {exc}")
+
+    count, failed = _auto_embed_after_process(
+        citekey,
+        state,
+        emb,
+        quiet=True,
+        paper_store=kctx.paper_store,
+        user_library=kctx.user_library,
+    )
+    stats.embeddings_created += count
+    stats.embeddings_failed += failed
+    console.print(
+        f"  {citekey}: embedded {count} fragment(s)"
+        + (f", [yellow]{failed} failed[/yellow]" if failed else "")
+    )
+
+
+def _sidecar_missing(kctx, citekey: str) -> bool:
+    return not (kctx.project_root / ".klemma" / "pdfs" / f"{citekey}.md").exists()
+
+
+def _unembedded_count(state, citekey: str) -> int:
+    fragments = state.get_fragments(source_id=citekey, limit=1_000_000)
+    return sum(1 for f in fragments if not f.get("embedding"))
+
+
+def reconcile_degraded(kctx, citekey: str, stats: RepairStats) -> None:
+    """Re-check a degraded source's recorded failed steps against reality.
+
+    Clears the ``degraded`` status only when every recorded step is
+    verifiably fixed (sidecar file present / no unembedded fragments);
+    otherwise rewrites ``degraded_steps`` down to what still fails. Trusting
+    the on-disk/DB state instead of "the step ran" keeps repair honest when
+    a step ran but failed again.
+    """
+    state = kctx.state
+    source = state.get_source(citekey) or {}
+    if source.get("status") != "degraded":
+        return
+    try:
+        recorded = json.loads(source.get("degraded_steps") or "[]")
+    except ValueError:
+        recorded = []
+
+    remaining = []
+    for step in recorded:
+        if step == "sidecar":
+            if _sidecar_missing(kctx, citekey):
+                remaining.append(step)
+        elif step == "embeddings":
+            if _unembedded_count(state, citekey) > 0:
+                remaining.append(step)
+        else:
+            remaining.append(step)  # unknown step — keep, never silently drop
+
+    if not remaining:
+        state.clear_degraded(citekey)
+        stats.degraded_cleared += 1
+        console.print(f"  [green]{citekey}: degraded → completed[/green]")
+    elif set(remaining) != set(recorded):
+        state.mark_degraded(citekey, remaining)
+
+
 def run_repair(
     kctx,
     citekeys: tuple[str, ...],
@@ -268,6 +377,13 @@ def run_repair(
             )
         selected &= known
 
+    steps = list(steps)
+    if "embeddings" in steps and kctx.embeddings is None:
+        stats.warnings.append(
+            "no embeddings backend configured — embeddings step skipped"
+        )
+        steps.remove("embeddings")
+
     pdf_extractor = None
     if "sidecar" in steps:
         from ..literature.pdf import PDFExtractor
@@ -280,8 +396,56 @@ def run_repair(
             repair_sidecar(kctx, citekey, pdf_extractor, stats, dry_run)
         if "verbatim" in steps:
             repair_verbatim(kctx, citekey, stats, dry_run)
+        if "embeddings" in steps:
+            repair_embeddings(kctx, citekey, stats, dry_run)
+        if not dry_run:
+            reconcile_degraded(kctx, citekey, stats)
 
     return stats
+
+
+def run_scan(kctx, citekeys: tuple[str, ...], dry_run: bool) -> None:
+    """Audit completed sources for silent degradation and flag them.
+
+    Historical backfill: sources processed before the sidecar/degraded
+    machinery existed look 'completed' while their full text or vectors
+    are missing. The embeddings criterion only applies when an embeddings
+    backend is configured — without one, missing vectors are a config
+    choice, not degradation.
+    """
+    state = kctx.state
+    check_embeddings = kctx.embeddings is not None
+
+    flagged = 0
+    completed = state.get_completed_sources()
+    for citekey in completed:
+        source = state.get_source(citekey) or {}
+        if citekeys and citekey not in citekeys:
+            continue
+        issues: list[str] = []
+        if source.get("source_type") != "online" and _sidecar_missing(kctx, citekey):
+            issues.append("sidecar")
+        if check_embeddings and _unembedded_count(state, citekey) > 0:
+            issues.append("embeddings")
+        if not issues:
+            continue
+        flagged += 1
+        console.print(f"  [yellow]{citekey}[/yellow]: {', '.join(issues)}")
+        if not dry_run:
+            state.mark_degraded(citekey, issues)
+
+    already = len(state.get_degraded_sources())
+    verb = "found" if dry_run else "flagged as degraded"
+    console.print(
+        f"\n[bold]Scan: {flagged} completed source(s) {verb}.[/bold]"
+        + (f" [dim]({already} degraded total)[/dim]" if already else "")
+    )
+    if not check_embeddings:
+        console.print(
+            "[dim]No embeddings backend configured — only sidecar presence was checked.[/dim]"
+        )
+    if flagged and dry_run:
+        console.print("[dim]Re-run without --dry-run to mark them, then 'klemma repair' to fix.[/dim]")
 
 
 def print_repair_summary(stats: RepairStats, steps: list[str], dry_run: bool) -> None:
@@ -308,6 +472,18 @@ def print_repair_summary(stats: RepairStats, steps: list[str], dry_run: bool) ->
         if stats.sources_no_sidecar:
             line += f", [yellow]{stats.sources_no_sidecar} source(s) without sidecar[/yellow]"
         console.print(line)
+    if "embeddings" in steps and (stats.embeddings_created or stats.embeddings_failed):
+        line = (
+            f"  Embeddings: [green]{stats.embeddings_created} "
+            f"{'to create' if dry_run else 'created'}[/green]"
+        )
+        if stats.embeddings_failed:
+            line += f", [red]{stats.embeddings_failed} failed[/red]"
+        console.print(line)
+    if stats.degraded_cleared:
+        console.print(
+            f"  [green]{stats.degraded_cleared} source(s) degraded → completed[/green]"
+        )
     for w in stats.warnings:
         console.print(f"  [yellow]⚠ {w}[/yellow]")
     if dry_run:
@@ -324,25 +500,38 @@ def print_repair_summary(stats: RepairStats, steps: list[str], dry_run: bool) ->
 @click.option(
     "--steps",
     "steps_csv",
-    default="sidecar,verbatim",
+    default="sidecar,verbatim,embeddings",
     show_default=True,
     help="Какие шаги выполнять (через запятую): " + ", ".join(_KNOWN_STEPS),
 )
+@click.option(
+    "--scan",
+    is_flag=True,
+    help="Не чинить, а найти completed-источники без sidecar / с фрагментами без векторов и пометить degraded",
+)
 @click.option("--dry-run", is_flag=True, help="Показать, что будет сделано, ничего не записывая")
 @click.pass_context
-def repair(ctx, citekeys, cited, steps_csv, dry_run):
+def repair(ctx, citekeys, cited, steps_csv, scan, dry_run):
     """Дообработать источники: sidecar с полным текстом, честный verbatim, spans.
 
     CITEKEYS: явный список источников. --cited собирает citekey из цитат
     [@citekey] в markdown-файлах (рукопись/черновики). Без того и другого
-    обрабатываются все источники проектной БД.
+    обрабатываются все источники проектной БД. Источники со статусом
+    degraded возвращаются в completed, когда их шаги реально починены.
 
     \b
     Examples:
       klemma repair gost2025iceservice
       klemma repair --cited draft/ --cited "papers/**/*.md"
       klemma repair --steps verbatim --dry-run
+      klemma repair --scan
     """
+    kctx = _get_context(ctx)
+
+    if scan:
+        run_scan(kctx, citekeys, dry_run)
+        return
+
     steps = [s.strip() for s in steps_csv.split(",") if s.strip()]
     unknown_steps = [s for s in steps if s not in _KNOWN_STEPS]
     if unknown_steps:
@@ -352,6 +541,5 @@ def repair(ctx, citekeys, cited, steps_csv, dry_run):
         )
         raise SystemExit(1)
 
-    kctx = _get_context(ctx)
     stats = run_repair(kctx, citekeys, cited, steps, dry_run)
     print_repair_summary(stats, steps, dry_run)
