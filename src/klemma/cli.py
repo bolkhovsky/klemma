@@ -1300,6 +1300,21 @@ def _coach_section_hint(state, section: str, project_root=None) -> str | None:
     )
 
 
+def _mark_source_degraded(state, citekey, steps):
+    """Mark a source completed-with-defects and say so out loud.
+
+    Overrides the 'completed' status set earlier in the pipeline
+    (note_factory / mark_completed): a source whose embeddings or sidecar
+    silently failed must not look healthy in `klemma status`.
+    """
+    state.sources.mark_degraded(citekey, steps)
+    console.print(
+        f"  [yellow]⚠ @{citekey} degraded — failed step(s): "
+        f"{', '.join(sorted(set(steps)))}. "
+        f"Run 'klemma repair {citekey}' to fix.[/yellow]"
+    )
+
+
 def _auto_embed_after_process(
     citekey,
     state,
@@ -1310,11 +1325,14 @@ def _auto_embed_after_process(
 ):
     """Embed fragments + recompute section centroids for a just-processed source.
 
-    Returns total embeddings created.
+    Returns ``(embeddings_created, fragments_failed)`` — the failure count
+    feeds the ``degraded`` source status: a fragment left without a vector
+    means semantic search over this source silently doesn't work.
     """
     from .hashing import compute_content_hash
 
     count = 0
+    failed = 0
 
     # Resolve library fragment cache for this citekey
     _paper_id = None
@@ -1326,8 +1344,11 @@ def _auto_embed_after_process(
                 _lib_cache = paper_store.get_fragment_embeddings(
                     _paper_id, embeddings.model_name
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            # Cache miss only — the provider below still embeds everything.
+            logger.debug(
+                "Library embedding cache unavailable for %s: %s", citekey, e
+            )
 
     # Fragment embeddings
     fragments = state.get_fragments(source_id=citekey)
@@ -1357,13 +1378,27 @@ def _auto_embed_after_process(
                             _paper_id, frag["fragment_text"], frag.get("page_number")
                         )
                         paper_store.save_fragment_embedding(ch, vec, embeddings.model_name)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                    except Exception as e:
+                        logger.debug(
+                            "Library embedding write-through failed for %s: %s",
+                            citekey, e,
+                        )
+            else:
+                failed += 1
+        except Exception as e:
+            failed += 1
+            logger.warning(
+                "Fragment embedding failed for %s (fragment %s): %s",
+                citekey, frag["id"], e,
+            )
 
     if count and not quiet:
         console.print(f"  [dim]embedded {count} fragments[/dim]")
+    if failed:
+        console.print(
+            f"  [yellow]⚠ {failed} fragment embedding(s) failed for {citekey} — "
+            f"semantic search over this source is incomplete[/yellow]"
+        )
 
     # Section centroid recomputation for sections this source belongs to
     model_name = embeddings.model_name
@@ -1390,7 +1425,7 @@ def _auto_embed_after_process(
         if sections_updated and not quiet:
             console.print(f"  [dim]updated {sections_updated} section centroids[/dim]")
 
-    return count
+    return count, failed
 
 
 def _detect_input_type(value: str) -> str:
@@ -1469,6 +1504,9 @@ def _process_single(
     source_type = source.get("source_type", "") if source else ""
     pdf_path = None
     pdf_pages: list[str] = []
+    # Pipeline steps that failed silently — consumed by the `degraded`
+    # source status at the end of processing (repair step names).
+    _degraded_steps: list[str] = []
     if source_type == "online":
         source_url = source.get("url", "") if source else ""
         if not source_url:
@@ -1526,10 +1564,12 @@ def _process_single(
                                 f"[dim](library cache — skipped PDF)[/dim]"
                             )
                         if embeddings and not no_embed:
-                            _auto_embed_after_process(
+                            _, _embed_failed = _auto_embed_after_process(
                                 citekey, state, embeddings, quiet=quiet,
                                 paper_store=paper_store, user_library=user_library,
                             )
+                            if _embed_failed:
+                                _mark_source_degraded(state, citekey, ["embeddings"])
                         return (n, "ok")
             except Exception as _e:
                 logger.debug("Citekey dedup check failed for %s: %s", citekey, _e)
@@ -1594,10 +1634,12 @@ def _process_single(
                                 f"[dim](library cache — Claude skipped)[/dim]"
                             )
                         if embeddings and not no_embed:
-                            _auto_embed_after_process(
+                            _, _embed_failed = _auto_embed_after_process(
                                 citekey, state, embeddings, quiet=quiet,
                                 paper_store=paper_store, user_library=user_library,
                             )
+                            if _embed_failed:
+                                _mark_source_degraded(state, citekey, ["embeddings"])
                         return (n, "ok")
             except Exception as _e:
                 logger.debug("Library dedup check failed for %s: %s", citekey, _e)
@@ -1641,6 +1683,7 @@ def _process_single(
                 console.print(
                     f"[dim yellow]  raw sidecar skipped for {citekey}: {_e}[/dim yellow]"
                 )
+                _degraded_steps.append("sidecar")
 
     # If reprocessing, clear old fragments before extracting fresh ones
     if force:
@@ -1782,14 +1825,20 @@ def _process_single(
                     if not quiet:
                         console.print(f"  [dim]embedded ({embeddings.model_name})[/dim]")
             except Exception as e:
-                if not quiet:
-                    console.print(f"  [dim]embed failed: {e}[/dim]")
+                console.print(f"  [yellow]⚠ source embedding failed: {e}[/yellow]")
+                _degraded_steps.append("embeddings")
 
         # Fragment embeddings + section centroids
-        _auto_embed_after_process(
+        _, _embed_failed = _auto_embed_after_process(
             citekey, state, embeddings, quiet=quiet,
             paper_store=paper_store, user_library=user_library,
         )
+        if _embed_failed:
+            _degraded_steps.append("embeddings")
+
+    # A silently failed step overrides the 'completed' set by note_factory.
+    if _degraded_steps:
+        _mark_source_degraded(state, citekey, _degraded_steps)
 
     return (len(result.fragments), "ok")
 
