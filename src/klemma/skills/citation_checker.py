@@ -6,7 +6,8 @@ Pattern: LLM-as-judge verifier + isolated judge-provider + evidence model
 Public API
 ----------
 detect_anchors     — heuristic anchor extraction (no AI)
-_parse_claims      — markdown claim extraction with offset-safe masking
+_parse_claims      — markdown claim extraction with offset-safe masking;
+                     numbered-reference mode ("[5]") via RefMap for papers/
 verify_claim       — deterministic verifier (quote + numeric-absent)
 verify_claim_batch — AI verifier (numeric-drift + definitional)
 build_judge_provider — build isolated judge AIProvider
@@ -26,6 +27,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 if TYPE_CHECKING:
     from ..ai import AIProvider
     from ..config import KlemmaConfig
+    from .reference_matcher import RefMap
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ClaimAnchor:
-    kind: Literal["numeric", "definitional", "quote"]
+    # "reference" — synthetic anchor for numbered citations ("[5]"); guarantees
+    # every numbered claim reaches the report even without a content anchor.
+    # Its trigger encodes resolution status: numbered_ref / unmatched_ref / anaphoric_ref.
+    kind: Literal["numeric", "definitional", "quote", "reference"]
     raw: str
     trigger: str
     start_offset: int
@@ -232,6 +237,17 @@ _CITE_REF_RE = re.compile(
     r"\]{1,2}"         # ] or ]]
 )
 
+# Numbered citation marker: [5], [5, 12], [5; 12], [5, п. 3.4].
+# Numbers capped at 3 digits so bracketed years ("[2026]") are not taken for refs.
+_NUMBERED_CITE_RE = re.compile(
+    r"\[(\d{1,3}(?:\s*[,;]\s*\d{1,3})*)"                       # ref numbers
+    r"(?:\s*,\s*((?:п\.|разд\.|табл\.|с\.|гл\.)\s*[^\]]+))?"   # optional locator
+    r"\]"
+)
+
+# Anaphoric citations — flagged for manual resolution, never resolved automatically
+_ANAPHORA_RE = re.compile(r"\b[Тт]ам же\b|\b[Ii]bid\b\.?")
+
 _SENT_TERMINATORS = frozenset(".!?;")
 
 
@@ -328,14 +344,26 @@ def _find_sentence_bounds(masked: str, cite_start: int, cite_end: int) -> tuple[
     return sent_start, sent_end
 
 
-def _parse_claims(md_text: str) -> list[Claim]:
+def _parse_claims(md_text: str, ref_map: "Optional[RefMap]" = None) -> list[Claim]:
     """Parse citation claims from markdown text.
 
     Returns one Claim per (sentence, citekey) pair.
     Regions in frontmatter / code blocks / HTML comments are masked with spaces
     so that offsets remain valid into the original md_text.
+
+    With ref_map, the numbered-reference branch ("[5]" markers, papers/) is
+    tried first — but activates ONLY when the file has a bibliography section
+    AND contains no [@citekey] markers at all (protects against false "[1]"
+    hits in @-mode drafts).
     """
     masked = _mask_excluded_regions(md_text)
+
+    if ref_map is not None and _CITE_REF_RE.search(masked) is None:
+        from ..literature.draft_parser import find_bibliography_section
+        bib_span = find_bibliography_section(md_text)
+        if bib_span is not None:
+            return _parse_numbered_claims(md_text, masked, ref_map, bib_span)
+
     claims: list[Claim] = []
 
     for cite_m in _CITE_REF_RE.finditer(masked):
@@ -361,6 +389,94 @@ def _parse_claims(md_text: str) -> list[Claim]:
                 start_offset=sent_start,
                 end_offset=sent_end,
             ))
+
+    return claims
+
+
+def _parse_numbered_claims(
+    md_text: str,
+    masked: str,
+    ref_map: "RefMap",
+    bib_span: tuple[int, int],
+) -> list[Claim]:
+    """Parse claims from a numbered-reference manuscript ("[5]"-style, papers/).
+
+    One Claim per (sentence, ref number); each carries a synthetic
+    kind="reference" anchor so it reaches the report even without a
+    numeric/quote/definitional anchor. A locator in the marker
+    ("[5, п. 3.4]") lands in Claim.location. Anaphoric citations
+    («Там же», ibid) get their own soft_warn claim — never resolved.
+    """
+    # Blank the bibliography region — its "[1] Author…" entries are not claims.
+    buf = list(masked)
+    for i in range(bib_span[0], min(bib_span[1], len(buf))):
+        buf[i] = " "
+    masked = "".join(buf)
+
+    markers = list(_NUMBERED_CITE_RE.finditer(masked))
+
+    # Sentence bounds and anchors are computed with all markers blanked
+    # (offset-preserving): dots inside locators ("[4, п. 7.3.2.4]") would
+    # otherwise truncate sentence bounds, and the ref digits in "[5]" would
+    # register as false numeric anchors.
+    blanked = _NUMBERED_CITE_RE.sub(lambda mm: " " * len(mm.group(0)), masked)
+
+    claims: list[Claim] = []
+
+    for m in markers:
+        numbers = [int(x) for x in re.split(r"[,;]", m.group(1))]
+        locator = (m.group(2) or "").strip()
+
+        sent_start, sent_end = _find_sentence_bounds(blanked, m.start(), m.end())
+        sentence = md_text[sent_start:sent_end].strip()
+        if len(sentence) < 10:
+            continue
+
+        content_anchors = detect_anchors(
+            blanked[sent_start:sent_end], base_offset=sent_start,
+        )
+
+        for n in numbers:
+            citekey = ref_map.number_to_citekey.get(n, "")
+            ref_anchor = ClaimAnchor(
+                kind="reference",
+                raw=f"[{n}]",
+                trigger="numbered_ref" if citekey else "unmatched_ref",
+                start_offset=m.start(),
+                end_offset=m.end(),
+                anchor_id=f"{m.start()}:{m.end()}",
+            )
+            # Content anchors are only verifiable against a resolved source
+            anchors = [*content_anchors, ref_anchor] if citekey else [ref_anchor]
+            claims.append(Claim(
+                sentence=sentence,
+                citekey=citekey,
+                location=locator,
+                anchors=anchors,
+                start_offset=sent_start,
+                end_offset=sent_end,
+            ))
+
+    for m in _ANAPHORA_RE.finditer(blanked):
+        sent_start, sent_end = _find_sentence_bounds(blanked, m.start(), m.end())
+        sentence = md_text[sent_start:sent_end].strip()
+        if len(sentence) < 10:
+            continue
+        claims.append(Claim(
+            sentence=sentence,
+            citekey="",
+            location="",
+            anchors=[ClaimAnchor(
+                kind="reference",
+                raw=m.group(0),
+                trigger="anaphoric_ref",
+                start_offset=m.start(),
+                end_offset=m.end(),
+                anchor_id=f"{m.start()}:{m.end()}",
+            )],
+            start_offset=sent_start,
+            end_offset=sent_end,
+        ))
 
     return claims
 
@@ -484,6 +600,8 @@ def _resolve_evidence(
 def _needs_ai_check(bundle: EvidenceBundle) -> bool:
     """True when this bundle requires AI to produce a meaningful verdict."""
     anchor = bundle.anchor
+    if anchor.kind == "reference":
+        return False  # ref-map resolution is deterministic
     if anchor.kind == "definitional":
         return True
     if anchor.kind == "numeric" and bundle.anchor_found:
@@ -527,6 +645,17 @@ def verify_claim(bundle: EvidenceBundle) -> CitationVerdict:
             offending_span=span,
             ai_used=False,
         )
+
+    if anchor.kind == "reference":
+        # Checked before source_available: unmatched/anaphoric refs have no
+        # citekey, so "source not available" would mask the real finding.
+        if anchor.trigger == "unmatched_ref":
+            return _v("soft_warn", f"ref {anchor.raw} not matched to library", anchor.raw)
+        if anchor.trigger == "anaphoric_ref":
+            return _v("soft_warn", "anaphoric citation — resolve manually", anchor.raw)
+        if not bundle.source_available:
+            return _v("unverifiable", "source text not available")
+        return _v("ok", f"reference resolved to @{bundle.citekey}")
 
     if not bundle.source_available:
         return _v("unverifiable", "source text not available")
@@ -912,7 +1041,21 @@ def check_citations_file(
             model=None,
         )
 
-    claims = _parse_claims(md_text)
+    # Numbered-reference mode (papers/): map "[N]" markers to citekeys via
+    # the bibliography. Only worth building when there are no [@ markers —
+    # _parse_claims applies the same guard before using it.
+    ref_map: "Optional[RefMap]" = None
+    if "[@" not in md_text:
+        try:
+            from .reference_matcher import build_ref_map, collect_sources_meta
+            sources_meta = collect_sources_meta(
+                state=state, paper_store=paper_store, user_library=user_library,
+            )
+            ref_map = build_ref_map(md_text, sources_meta)
+        except Exception:
+            logger.exception("numbered-reference map build failed for %s", target_path)
+
+    claims = _parse_claims(md_text, ref_map=ref_map)
     if not claims:
         return CitationCheckReport(
             target=str(target_path),
@@ -955,6 +1098,21 @@ def check_citations_file(
     for claim in claims:
         for anchor in claim.anchors:
             try:
+                if anchor.kind == "reference" and anchor.trigger in ("unmatched_ref", "anaphoric_ref"):
+                    # Deterministic verdict straight from the ref map —
+                    # there is no citekey, so evidence resolution is moot.
+                    verdicts.append(verify_claim(EvidenceBundle(
+                        claim_sentence=claim.sentence,
+                        citekey=claim.citekey,
+                        location=claim.location,
+                        anchor=anchor,
+                        passages=[],
+                        source_available=False,
+                        search_complete=False,
+                        anchor_found=False,
+                    )))
+                    continue
+
                 bundle = _resolve_evidence(
                     claim, anchor,
                     project_root=project_root,
@@ -964,7 +1122,12 @@ def check_citations_file(
                 )
 
                 if not bundle.source_available:
-                    verdicts.append(_make_unverifiable(bundle, "source not available"))
+                    if anchor.kind == "reference":
+                        # matched ref without source text — verify_claim
+                        # reports it as unverifiable with the right reason
+                        verdicts.append(verify_claim(bundle))
+                    else:
+                        verdicts.append(_make_unverifiable(bundle, "source not available"))
                     continue
 
                 needs_ai = _needs_ai_check(bundle) and use_ai and judge_ai is not None

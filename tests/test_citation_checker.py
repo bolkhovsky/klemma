@@ -481,6 +481,283 @@ def test_batch_judge_error(prompt_file):
     assert "API timeout" in result.errors[0] or result.errors
 
 
+# ---------------------------------------------------------------------------
+# Numbered-reference mode (papers/, PR-3)
+# ---------------------------------------------------------------------------
+
+def _make_ref_map(matched=None, unmatched=None):
+    from klemma.literature.reference_parser import ParsedReference
+    from klemma.skills.reference_matcher import RefMap
+
+    ref_map = RefMap()
+    for n, ck in (matched or {}).items():
+        ref_map.number_to_citekey[n] = ck
+    for n in unmatched or []:
+        ref_map.unmatched[n] = ParsedReference(raw=f"entry {n}")
+    return ref_map
+
+
+NUMBERED_MD = """# Статья
+
+Точность прогноза составила 85 % [5].
+
+Метод оценки определяется как разность площадей [5, п. 3.4].
+
+Двойная ссылка подтверждает вывод о расхождении оценок [5, 12].
+
+Там же на численном примере показано влияние кромки льда.
+
+## Список литературы
+
+5. Smith J. Sea ice paper with enough length to parse. 2020.
+
+12. Jones K. Another paper with enough length to parse. 2021.
+"""
+
+
+def test_numbered_claims_resolved_via_ref_map():
+    ref_map = _make_ref_map(matched={5: "smith2020", 12: "jones2021"})
+    claims = _parse_claims(NUMBERED_MD, ref_map=ref_map)
+    citekeys = {c.citekey for c in claims}
+    assert "smith2020" in citekeys
+    assert "jones2021" in citekeys
+
+
+def test_numbered_multi_ref_marker_one_claim_per_number():
+    ref_map = _make_ref_map(matched={5: "smith2020", 12: "jones2021"})
+    claims = _parse_claims(NUMBERED_MD, ref_map=ref_map)
+    double = [c for c in claims if "Двойная ссылка" in c.sentence]
+    assert {c.citekey for c in double} == {"smith2020", "jones2021"}
+
+
+def test_numbered_locator_fills_location():
+    ref_map = _make_ref_map(matched={5: "smith2020"})
+    claims = _parse_claims(NUMBERED_MD, ref_map=ref_map)
+    with_locator = [c for c in claims if c.location]
+    assert len(with_locator) == 1
+    assert with_locator[0].location == "п. 3.4"
+    assert "разность площадей" in with_locator[0].sentence
+
+
+def test_numbered_every_claim_has_reference_anchor():
+    ref_map = _make_ref_map(matched={5: "smith2020"}, unmatched=[12])
+    claims = _parse_claims(NUMBERED_MD, ref_map=ref_map)
+    assert claims
+    for c in claims:
+        kinds = [a.kind for a in c.anchors]
+        assert "reference" in kinds
+
+
+def test_numbered_marker_digits_not_numeric_anchor():
+    ref_map = _make_ref_map(matched={5: "smith2020"})
+    md = "Простое утверждение без чисел в тексте [5].\n\n## Список литературы\n\n5. Smith J. Long enough entry to parse correctly. 2020.\n"
+    claims = _parse_claims(md, ref_map=ref_map)
+    assert len(claims) == 1
+    numeric = [a for a in claims[0].anchors if a.kind == "numeric"]
+    assert numeric == []
+
+
+def test_numbered_numeric_anchor_from_sentence_body_kept():
+    ref_map = _make_ref_map(matched={5: "smith2020"})
+    claims = _parse_claims(NUMBERED_MD, ref_map=ref_map)
+    first = [c for c in claims if "85 %" in c.sentence]
+    assert first
+    numeric = [a for a in first[0].anchors if a.kind == "numeric"]
+    assert numeric
+    assert "85" in numeric[0].raw
+
+
+def test_numbered_unmatched_gets_only_reference_anchor():
+    ref_map = _make_ref_map(matched={5: "smith2020"}, unmatched=[12])
+    claims = _parse_claims(NUMBERED_MD, ref_map=ref_map)
+    unmatched = [c for c in claims if c.citekey == "" and c.anchors[0].trigger == "unmatched_ref"]
+    assert unmatched
+    for c in unmatched:
+        assert len(c.anchors) == 1
+        assert c.anchors[0].kind == "reference"
+        assert c.anchors[0].raw == "[12]"
+
+
+def test_numbered_anaphora_detected():
+    ref_map = _make_ref_map(matched={5: "smith2020"})
+    claims = _parse_claims(NUMBERED_MD, ref_map=ref_map)
+    anaphoric = [c for c in claims if c.anchors and c.anchors[0].trigger == "anaphoric_ref"]
+    assert len(anaphoric) == 1
+    assert "Там же" in anaphoric[0].sentence
+    assert anaphoric[0].citekey == ""
+
+
+def test_numbered_mode_off_without_ref_map():
+    claims = _parse_claims(NUMBERED_MD)
+    assert claims == []
+
+
+def test_numbered_mode_off_without_bibliography():
+    md = "Утверждение с нумерованной ссылкой [5].\n"
+    ref_map = _make_ref_map(matched={5: "smith2020"})
+    claims = _parse_claims(md, ref_map=ref_map)
+    assert claims == []
+
+
+def test_numbered_mode_off_when_at_citations_present():
+    md = (
+        "Утверждение с обычной ссылкой [@alpha2020] и ложным маркером [1].\n\n"
+        "## Список литературы\n\n"
+        "1. Smith J. Long enough entry to parse correctly here. 2020.\n"
+    )
+    ref_map = _make_ref_map(matched={1: "smith2020"})
+    claims = _parse_claims(md, ref_map=ref_map)
+    citekeys = {c.citekey for c in claims}
+    assert citekeys == {"alpha2020"}
+    for c in claims:
+        assert all(a.kind != "reference" for a in c.anchors)
+
+
+def test_numbered_bibliography_entries_not_claims():
+    ref_map = _make_ref_map(matched={5: "smith2020"})
+    claims = _parse_claims(NUMBERED_MD, ref_map=ref_map)
+    for c in claims:
+        assert "Список литературы" not in c.sentence
+        assert "Sea ice paper" not in c.sentence
+
+
+def test_verify_claim_reference_unmatched_soft_warn():
+    b = _make_bundle(kind="reference", anchor_raw="[12]", trigger="unmatched_ref",
+                     source_available=False, citekey="")
+    v = verify_claim(b)
+    assert v.severity == "soft_warn"
+    assert "ref [12] not matched to library" in v.reason
+
+
+def test_verify_claim_reference_anaphoric_soft_warn():
+    b = _make_bundle(kind="reference", anchor_raw="Там же", trigger="anaphoric_ref",
+                     source_available=False, citekey="")
+    v = verify_claim(b)
+    assert v.severity == "soft_warn"
+    assert "anaphoric" in v.reason
+
+
+def test_verify_claim_reference_matched_ok():
+    b = _make_bundle(kind="reference", anchor_raw="[5]", trigger="numbered_ref",
+                     source_available=True, citekey="smith2020")
+    v = verify_claim(b)
+    assert v.severity == "ok"
+    assert "smith2020" in v.reason
+
+
+def test_verify_claim_reference_matched_no_source_unverifiable():
+    b = _make_bundle(kind="reference", anchor_raw="[5]", trigger="numbered_ref",
+                     source_available=False, citekey="smith2020")
+    v = verify_claim(b)
+    assert v.severity == "unverifiable"
+
+
+def test_needs_ai_check_reference_false():
+    from klemma.skills.citation_checker import _needs_ai_check
+    b = _make_bundle(kind="reference", anchor_raw="[5]", trigger="numbered_ref",
+                     anchor_found=True)
+    assert _needs_ai_check(b) is False
+
+
+class _FakeState:
+    """Minimal state stub: metadata for ref matching + fragments fallback."""
+
+    def __init__(self, meta, fragments=None):
+        self._meta = meta
+        self._frags = fragments or {}
+
+    def get_all_sources_metadata(self):
+        return self._meta
+
+    def get_fragments(self, citekey):
+        return self._frags.get(citekey, [])
+
+
+def test_check_citations_file_numbered_end_to_end(tmp_path):
+    from klemma.skills.citation_checker import check_citations_file
+
+    md = tmp_path / "paper.md"
+    md.write_text(NUMBERED_MD, encoding="utf-8")
+
+    # Sidecar gives full-text evidence for the matched source
+    sidecar_dir = tmp_path / ".klemma" / "pdfs"
+    sidecar_dir.mkdir(parents=True)
+    (sidecar_dir / "smith2020.md").write_text(
+        "---\ncitekey: smith2020\n---\n\nТочность прогноза составила 85 % на тестовой выборке.\n",
+        encoding="utf-8",
+    )
+
+    state = _FakeState(meta=[
+        {"id": "smith2020", "title": "Sea ice paper", "authors": "Smith, John",
+         "year": 2020, "doi": ""},
+    ])
+
+    cfg = _make_config_mock()
+    cfg.ai.citation_check_max_wall_clock = 120
+    cfg.ai.max_ai_calls_per_draft = 12
+
+    report = check_citations_file(
+        md,
+        config=cfg,
+        state=state,
+        paper_store=None,
+        user_library=None,
+        judge_ai=None,
+        project_root=tmp_path,
+        use_ai=False,
+    )
+
+    assert report.status == "ok"
+    assert report.verdicts, "numbered paper must produce verdicts, not 'no claims found'"
+
+    # Matched refs resolved deterministically
+    ok_refs = [v for v in report.verdicts
+               if v.anchor.kind == "reference" and v.severity == "ok"]
+    assert ok_refs
+    assert all(v.citekey == "smith2020" for v in ok_refs)
+
+    # Unmatched ref [12] → soft_warn
+    unmatched = [v for v in report.verdicts if "not matched to library" in v.reason]
+    assert unmatched
+    assert unmatched[0].severity == "soft_warn"
+    assert "[12]" in unmatched[0].reason
+
+    # Anaphora flagged
+    anaphoric = [v for v in report.verdicts if "anaphoric" in v.reason]
+    assert len(anaphoric) == 1
+    assert anaphoric[0].severity == "soft_warn"
+
+    # Locator from "[5, п. 3.4]" threaded into the verdict
+    located = [v for v in report.verdicts if v.location == "п. 3.4"]
+    assert located
+
+
+def test_check_citations_file_at_mode_unaffected_by_ref_map_build(tmp_path):
+    """@-mode files still parse identically (ref map build is guarded on '[@')."""
+    from klemma.skills.citation_checker import check_citations_file
+
+    md = tmp_path / "chapter.md"
+    md.write_text("Значение 15.5 °C приводится в [@smith2020].\n", encoding="utf-8")
+
+    cfg = _make_config_mock()
+    cfg.ai.citation_check_max_wall_clock = 120
+    cfg.ai.max_ai_calls_per_draft = 12
+
+    report = check_citations_file(
+        md,
+        config=cfg,
+        state=_FakeState(meta=[]),
+        paper_store=None,
+        user_library=None,
+        judge_ai=None,
+        project_root=tmp_path,
+        use_ai=False,
+    )
+
+    assert all(v.anchor.kind != "reference" for v in report.verdicts)
+    assert {v.citekey for v in report.verdicts} == {"smith2020"}
+
+
 def test_batch_sanitizes_delimiters(prompt_file):
     """Injected <<< >>> in claim text should be stripped before rendering."""
     bundle = _make_bundle(
