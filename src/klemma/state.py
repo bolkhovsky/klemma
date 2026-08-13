@@ -25,6 +25,9 @@ class ProcessingStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    # Completed with defects: some pipeline step (embeddings, sidecar) failed
+    # silently; the failed steps are listed in sources.degraded_steps.
+    DEGRADED = "degraded"
 
 
 SCHEMA = """
@@ -627,6 +630,15 @@ class StateManager:
 
     def mark_skipped(self, source_id: str, reason: str):
         return self.sources.mark_skipped(source_id, reason)
+
+    def mark_degraded(self, source_id: str, steps: list[str]):
+        return self.sources.mark_degraded(source_id, steps)
+
+    def clear_degraded(self, source_id: str):
+        return self.sources.clear_degraded(source_id)
+
+    def get_degraded_sources(self) -> list[dict]:
+        return self.sources.get_degraded_sources()
 
     def get_source(self, source_id: str) -> Optional[dict]:
         return self.sources.get_source(source_id)
