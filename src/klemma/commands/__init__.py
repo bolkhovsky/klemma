@@ -10,6 +10,7 @@ from . import (  # noqa: F401
     benchmark,
     bib,
     decisions,
+    find,
     manage,
     process,
     repair,

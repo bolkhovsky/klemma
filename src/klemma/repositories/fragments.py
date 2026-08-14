@@ -389,6 +389,7 @@ class FragmentRepository(BaseRepository):
                 f"""SELECT f.id, f.source_id, f.fragment_text, f.fragment_type,
                            f.chapter, f.section, f.relevance_score, f.usage_hint,
                            f.page_number, f.citation_intent, f.verbatim,
+                           f.source_locator,
                            s.id as citekey
                     FROM fragments f
                     JOIN sources s ON f.source_id = s.id
