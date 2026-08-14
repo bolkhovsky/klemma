@@ -32,6 +32,7 @@ Base class providing shared `_conn` factory.
 ### sources.py (~440 lines)
 Source lifecycle, sections, Zotero key management, vault sync.
 - `register_sources()`, `mark_completed()`, `get_source()`, `get_stats()`, `update_source_info()` (persist title/authors/year/abstract/doi)
+- `mark_degraded(source_id, steps)` / `clear_degraded(source_id)` / `get_degraded_sources()` — `degraded` status lifecycle: completed-with-defects (`degraded_steps` = JSON list of repair step names, e.g. "embeddings", "sidecar"); `clear_degraded` is a no-op unless the source is currently degraded; `get_stats()` counts degraded via `ProcessingStatus.ALL`
 - `set_pdf_text_length()` — record extracted full-text length (sum of sidecar page lengths); called from `_process_single()` right after extraction
 - `get_all_sources()` — includes `year` column for recency filtering
 - `get_all_sources_metadata()` — full metadata (title, authors, year, doi) for dedup checks

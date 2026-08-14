@@ -1,5 +1,6 @@
 """Source management repository — CRUD, status, sections, Zotero keys, vault sync."""
 
+import json
 import logging
 from datetime import date, datetime
 from typing import Optional
@@ -21,7 +22,10 @@ class ProcessingStatus:
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
-    ALL = [PENDING, PROCESSING, COMPLETED, FAILED, SKIPPED]
+    # Completed with defects: some pipeline step (embeddings, sidecar) failed
+    # silently; the failed steps are listed in sources.degraded_steps.
+    DEGRADED = "degraded"
+    ALL = [PENDING, PROCESSING, COMPLETED, FAILED, SKIPPED, DEGRADED]
 
 
 class SourceRepository(BaseRepository):
@@ -196,6 +200,49 @@ class SourceRepository(BaseRepository):
                 "UPDATE sources SET status=?, error_message=? WHERE id=?",
                 (ProcessingStatus.SKIPPED, reason, source_id),
             )
+
+    def mark_degraded(self, source_id: str, steps: list[str]):
+        """Mark a source completed-with-defects.
+
+        ``steps`` lists the pipeline steps that failed silently (repair step
+        names: "embeddings", "sidecar"). Overrides the 'completed' status set
+        earlier in the pipeline — a source whose embeddings are missing must
+        not look healthy in `klemma status`.
+        """
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE sources SET status=?, degraded_steps=? WHERE id=?",
+                (
+                    ProcessingStatus.DEGRADED,
+                    json.dumps(sorted(set(steps))),
+                    source_id,
+                ),
+            )
+
+    def clear_degraded(self, source_id: str):
+        """Return a repaired source to 'completed'; no-op unless degraded."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE sources SET status=?, degraded_steps=NULL "
+                "WHERE id=? AND status=?",
+                (ProcessingStatus.COMPLETED, source_id, ProcessingStatus.DEGRADED),
+            )
+
+    def get_degraded_sources(self) -> list[dict]:
+        """All degraded sources as [{id, degraded_steps: list[str]}]."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, degraded_steps FROM sources WHERE status=? ORDER BY id",
+                (ProcessingStatus.DEGRADED,),
+            ).fetchall()
+        result = []
+        for row in rows:
+            try:
+                steps = json.loads(row["degraded_steps"] or "[]")
+            except ValueError:
+                steps = []
+            result.append({"id": row["id"], "degraded_steps": steps})
+        return result
 
     def update_source_info(
         self,

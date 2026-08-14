@@ -1,5 +1,7 @@
 """Process and embed commands."""
 
+import logging
+
 import click
 from rich.table import Table
 
@@ -12,6 +14,8 @@ from ..cli import (
     main,
 )
 from ..embeddings import SemanticScholarEmbeddings
+
+logger = logging.getLogger(__name__)
 
 
 @main.command()
@@ -325,8 +329,8 @@ def embed_sources(ctx, citekeys, dry_run, backend, backfill, remodel):
             if paper_store and user_library:
                 try:
                     _paper_id = user_library.resolve_paper_id(ck)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Library paper_id lookup failed for %s: %s", ck, e)
 
             # Library cache check: skip API if embedding already in library.db
             if _paper_id:
@@ -338,8 +342,8 @@ def embed_sources(ctx, citekeys, dry_run, backend, backfill, remodel):
                         lib_hits += 1
                         progress.advance(task)
                         continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Library embedding cache check failed for %s: %s", ck, e)
 
             entry = entries.get(ck)
             title = entry.title if entry else ck
@@ -359,8 +363,10 @@ def embed_sources(ctx, citekeys, dry_run, backend, backfill, remodel):
                     if _paper_id:
                         try:
                             paper_store.save_paper_embedding(_paper_id, vec, emb.model_name)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(
+                                "Library embedding write-through failed for %s: %s", ck, e
+                            )
                 else:
                     api_miss += 1
             except Exception as e:
@@ -441,7 +447,10 @@ def embed_fragments(ctx, dry_run, backend, remodel):
                 _lib_cache[paper_id] = paper_store.get_fragment_embeddings(
                     paper_id, emb.model_name
                 )
-            except Exception:
+            except Exception as e:
+                logger.debug(
+                    "Library fragment-embedding cache failed for %s: %s", paper_id, e
+                )
                 _lib_cache[paper_id] = {}
         return _lib_cache[paper_id]
 
@@ -466,8 +475,11 @@ def embed_fragments(ctx, dry_run, backend, remodel):
                             embedded += 1
                             lib_hits += 1
                             lib_hit = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(
+                        "Library cache check failed for fragment %s: %s",
+                        frag["id"], e,
+                    )
 
             if not lib_hit:
                 try:
@@ -488,8 +500,11 @@ def embed_fragments(ctx, dry_run, backend, remodel):
                                     paper_store.save_fragment_embedding(
                                         ch, vec, emb.model_name
                                     )
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(
+                                    "Library write-through failed for fragment %s: %s",
+                                    frag["id"], e,
+                                )
                     else:
                         failed += 1
                 except Exception as e:

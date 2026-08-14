@@ -17,12 +17,23 @@ from ..cli import (
 @main.command()
 @click.option("--verbose", "-v", is_flag=True, help="Show full detailed tables")
 @click.option("--chapter", "-ch", type=int, help="Filter by chapter")
+@click.option(
+    "--degraded",
+    "show_degraded",
+    is_flag=True,
+    help="Показать деградированные источники и их непройденные шаги",
+)
 @click.pass_context
-def status(ctx, verbose, chapter):
+def status(ctx, verbose, chapter, show_degraded):
     """Unified status: processing, coverage, gaps, reference gaps."""
     kctx = _get_context(ctx)
     cfg, state = kctx.config, kctx.state
     project = kctx.project
+
+    if show_degraded:
+        _print_degraded_sources(state)
+        return
+
     _sync_sections(kctx, quiet=True)
 
     proc_stats = state.get_stats()
@@ -40,8 +51,11 @@ def status(ctx, verbose, chapter):
     pending = proc_stats.get("pending", 0)
     failed = proc_stats.get("failed", 0)
     skipped = proc_stats.get("skipped", 0)
+    degraded = proc_stats.get("degraded", 0)
     total = proc_stats.get("total", 0)
     parts = [f"[green]{completed} completed[/green]"]
+    if degraded:
+        parts.append(f"[yellow]{degraded} degraded[/yellow]")
     if skipped:
         parts.append(f"[dim]{skipped} skipped[/dim]")
     if pending:
@@ -51,6 +65,11 @@ def status(ctx, verbose, chapter):
     console.print(
         f"Processing: {' | '.join(parts)}  [dim]({total} total, {frag_stats.get('total', 0)} fragments)[/dim]"
     )
+    if degraded:
+        console.print(
+            "[dim]Run 'klemma status --degraded' for details, "
+            "'klemma repair' to fix.[/dim]"
+        )
     console.print()
 
     # --- Coverage (chapter-based for dissertation/thesis, simple for paper) ---
@@ -302,6 +321,26 @@ def status(ctx, verbose, chapter):
     _prune = state.get_prune_summary()
     _ref = state.get_reference_gaps(limit=3, section_weights=_sw)
     _print_recommended_actions(proc_stats, _emb, gaps_data, _ref, _prune)
+
+
+def _print_degraded_sources(state) -> None:
+    """List degraded sources with their silently-failed pipeline steps."""
+    degraded = state.get_degraded_sources()
+    if not degraded:
+        console.print("[green]No degraded sources.[/green]")
+        return
+
+    table = Table(
+        title=f"Degraded sources ({len(degraded)})",
+        show_edge=False,
+        pad_edge=False,
+    )
+    table.add_column("Source", style="cyan")
+    table.add_column("Failed steps", style="yellow")
+    for row in degraded:
+        table.add_row(f"@{row['id']}", ", ".join(row["degraded_steps"]) or "—")
+    console.print(table)
+    console.print("\n[dim]Fix with: klemma repair <CITEKEY> (or bare 'klemma repair')[/dim]")
 
 
 # Backward-compatible aliases
