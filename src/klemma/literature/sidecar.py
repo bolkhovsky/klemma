@@ -17,6 +17,13 @@ Three format contracts that downstream consumers may rely on:
 * Frontmatter lines for ``Citekey``, ``Authors``, ``Year``, ``DOI``,
   ``Pages``, and ``Source`` form the stable set. Additions are allowed;
   renames or removals require a version bump note.
+
+Reading contract: ``read_pdf_sidecar`` returns the *canonical text* —
+frontmatter stripped, each page marker replaced by a single ``\\n``, then
+``str.strip()``. ``load_sidecar_doc`` returns the same text byte-for-byte
+plus per-page character spans derived from the markers at read time (no
+extra storage): fragment/claim offsets are always expressed in canonical
+text coordinates.
 """
 
 from __future__ import annotations
@@ -24,8 +31,11 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+
+_PAGE_MARKER_RE = re.compile(r"\n<!-- Page (\d+) -->\n")
 
 
 def _validate_citekey(citekey: str) -> None:
@@ -69,8 +79,29 @@ def _render_body(pages: list[str]) -> str:
     return "\n\n".join(chunks) + "\n"
 
 
-def read_pdf_sidecar(project_root: Path, citekey: str) -> str | None:
-    """Return the prose body of a PDF sidecar, stripped of frontmatter and page markers.
+@dataclass
+class SidecarDoc:
+    """Canonical sidecar text plus per-page character spans.
+
+    ``text`` is byte-for-byte identical to ``read_pdf_sidecar()`` output.
+    ``page_spans`` holds ``(page, char_start, char_end)`` half-open
+    intervals into ``text``, trimmed to each page's non-whitespace
+    content; whitespace-only pages get no span.
+    """
+
+    text: str
+    page_spans: list[tuple[int, int, int]]
+
+    def page_for(self, offset: int) -> int | None:
+        """Return the page containing ``offset``, or None (gap / out of range)."""
+        for page, start, end in self.page_spans:
+            if start <= offset < end:
+                return page
+        return None
+
+
+def load_sidecar_doc(project_root: Path, citekey: str) -> SidecarDoc | None:
+    """Load a PDF sidecar as canonical text with page offsets.
 
     Applies ``_validate_citekey`` before building the path (anti-traversal).
     Returns ``None`` when the citekey is invalid, the file does not exist,
@@ -85,13 +116,63 @@ def read_pdf_sidecar(project_root: Path, citekey: str) -> str | None:
     if not path.exists():
         return None
 
-    text = path.read_text(encoding="utf-8")
+    raw = path.read_text(encoding="utf-8")
     # Strip the frontmatter header — everything up to the first "---" divider line
-    parts = text.split("\n---\n", 1)
-    body = parts[1] if len(parts) > 1 else text
-    # Remove page markers: "\n<!-- Page N -->\n"
-    body = re.sub(r"\n<!-- Page \d+ -->\n", "\n", body)
-    return body.strip() or None
+    parts = raw.split("\n---\n", 1)
+    body = parts[1] if len(parts) > 1 else raw
+
+    # Rebuild the canonical text exactly as the historical read path did —
+    # each "\n<!-- Page N -->\n" marker becomes a single "\n" — while
+    # remembering which page each inter-marker segment belongs to.
+    pieces: list[str] = []
+    raw_spans: list[tuple[int, int, int]] = []  # (page, start, end) pre-strip
+    cursor = 0
+    page = 1
+    last = 0
+    for m in _PAGE_MARKER_RE.finditer(body):
+        segment = body[last:m.start()]
+        pieces.append(segment)
+        raw_spans.append((page, cursor, cursor + len(segment)))
+        cursor += len(segment)
+        pieces.append("\n")
+        cursor += 1
+        page = int(m.group(1))
+        last = m.end()
+    segment = body[last:]
+    pieces.append(segment)
+    raw_spans.append((page, cursor, cursor + len(segment)))
+
+    text = "".join(pieces)
+    lead = len(text) - len(text.lstrip())
+    stripped = text.strip()
+    if not stripped:
+        return None
+
+    # Shift spans into stripped coordinates and trim each to the page's
+    # non-whitespace content; whitespace-only pages are dropped.
+    page_spans: list[tuple[int, int, int]] = []
+    for pg, start, end in raw_spans:
+        segment = text[start:end]
+        left = len(segment) - len(segment.lstrip())
+        right = len(segment) - len(segment.rstrip())
+        s = start + left - lead
+        e = end - right - lead
+        if s < e:
+            page_spans.append((pg, max(s, 0), min(e, len(stripped))))
+
+    return SidecarDoc(text=stripped, page_spans=page_spans)
+
+
+def read_pdf_sidecar(project_root: Path, citekey: str) -> str | None:
+    """Return the prose body of a PDF sidecar, stripped of frontmatter and page markers.
+
+    Delegates to ``load_sidecar_doc`` — the returned string is byte-for-byte
+    the canonical text that page spans are expressed in. Returns ``None``
+    when the citekey is invalid, the file does not exist, or the body is
+    empty after stripping.
+    """
+    doc = load_sidecar_doc(project_root, citekey)
+    return doc.text if doc else None
 
 
 def write_pdf_sidecar(

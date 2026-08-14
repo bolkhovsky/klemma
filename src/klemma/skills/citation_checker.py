@@ -152,7 +152,7 @@ _NUMERIC_RE = re.compile(
     r"(?![А-Яа-яA-Za-z\d])",
 )
 
-_QUOTE_RE = re.compile(r'[«"](.*?)[»"]', re.DOTALL)
+_QUOTE_RE = re.compile(r'[«"“](.*?)[»"”]', re.DOTALL)
 _QUOTE_MIN_WORDS = 5
 _QUOTE_MIN_CHARS = 30
 

@@ -82,16 +82,17 @@ Semantic section vocabulary — cross-project labels for dissertation/paper sect
 - `auto_assign_section(intent, outline, ai_predicted_section?)` — AI-prediction-first section assignment: uses AI's per-fragment section prediction first, falls back to intent→SectionType mapping
 
 ### state.py (~965 lines)
-SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v14), auto-migrates via `_migrate_schema()`. All 70+ public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
+SQLite state manager — **facade** over 8 domain repositories in `repositories/`. Schema versioned via `PRAGMA user_version` (currently v16), auto-migrates via `_migrate_schema()`. All 70+ public methods delegate to repos; repos accessible via `state.sources`, `state.fragments`, `state.benchmarks`, etc. See [Repositories](repositories/CLAUDE.md).
 
 **Three-tier library (ADR-014):** Shared `library.db` replaces the old parent-child DB inheritance (#55). Papers and fragments are stored globally in `~/.klemma/library.db` via `LocalPaperStore` + `LocalUserLibrary`; per-project data (sections, gaps, plans) lives in `project/.klemma/data/project.db` via `LocalProjectStore`. StateManager is a pure facade over domain repositories with no cross-DB merging.
 
 **Section type sync (#67):** `sync_section_types(config)` populates `section_type_map` table from config + chapter name inference, then backfills `section_type` columns on `source_sections`, `fragments`, and `reference_gaps`. Called from `_sync_sections()` in CLI.
 
 Tables:
-- `sources` — Zotero entries (citekey, title, authors, year, abstract, doi, status, chapter, quality, pdf_path, `embedding` BLOB float32, `embedding_model` TEXT)
+- `sources` — Zotero entries (citekey, title, authors, year, abstract, doi, status, chapter, quality, pdf_path, `pdf_text_length` — sum of sidecar page lengths, set by `_process_single()`, `degraded_steps` TEXT — JSON array of silently-failed pipeline steps (v16, consumer: future `degraded` status), `embedding` BLOB float32, `embedding_model` TEXT)
 - `source_sections` — junction table: source_id × section × `section_type` (multi-section support)
-- `fragments` — extracted citation fragments (text, type, chapter, section, `section_type`, relevance, page, `citation_intent`: background/method/result_comparison/extends/contrasts/uses_data, `embedding` BLOB float32, `embedding_model` TEXT, `UNIQUE(source_id, fragment_text)`)
+- `fragments` — extracted citation fragments (text, type, chapter, section, `section_type`, relevance, page, `citation_intent`: background/method/result_comparison/extends/contrasts/uses_data, `embedding` BLOB float32, `embedding_model` TEXT, `char_start`/`char_end` — span into the sidecar canonical text, `source_locator` — human-readable source locator like «п. 3.4»/«табл. 2» (v16; `section` is the *dissertation* section, not the source's), `UNIQUE(source_id, fragment_text)`)
+- `claims` — manuscript claims registry for incremental citation audit (v16): manuscript_path + claim_hash + anchor_key (UNIQUE), sentence, citekey/ref_number, char_start/char_end into the manuscript, anchor_kind/anchor_raw, verdict/reason/ai_used/judge_model, evidence span + locator into the source sidecar, verified_at, `stale` flag; index `idx_claims_manuscript(manuscript_path, stale)`
 - `reference_gaps` — missing references from bibliographies (status: open/resolved, score, `citation_intent`, `section_type`, intent-weighted scoring)
 - `section_type_map` — lookup table: numeric section → semantic type + chapter (populated from config)
 - `citation_links` — citation graph: source_id → target (title_hash MD5 for dedup, citation_intent, in_library flag)

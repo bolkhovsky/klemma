@@ -127,6 +127,33 @@ CREATE TABLE IF NOT EXISTS prune_verdicts (
     reason TEXT,
     updated_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    manuscript_path TEXT NOT NULL,
+    claim_hash TEXT NOT NULL,
+    anchor_key TEXT NOT NULL DEFAULT '',
+    sentence TEXT NOT NULL,
+    citekey TEXT NOT NULL DEFAULT '',
+    ref_number INTEGER,
+    location TEXT,
+    char_start INTEGER NOT NULL,
+    char_end INTEGER NOT NULL,
+    anchor_kind TEXT,
+    anchor_raw TEXT,
+    verdict TEXT,
+    reason TEXT,
+    ai_used INTEGER NOT NULL DEFAULT 0,
+    judge_model TEXT,
+    evidence_start INTEGER,
+    evidence_end INTEGER,
+    evidence_locator TEXT,
+    verified_at TEXT,
+    stale INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(manuscript_path, claim_hash, anchor_key)
+);
+CREATE INDEX IF NOT EXISTS idx_claims_manuscript ON claims(manuscript_path, stale);
 """
 
 PRUNE_EXPIRY_DAYS = 14
@@ -189,7 +216,7 @@ class StateManager:
         # library.db (stores/paper_store.py) has its own independent
         # PRAGMA user_version chain — do not merge the two sequences.
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 15  # bump this when adding new migrations
+        target = 16  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -481,6 +508,65 @@ class StateManager:
                     "ALTER TABLE fragments ADD COLUMN verbatim INTEGER NOT NULL DEFAULT 0"
                 )
 
+        if version < 16:
+            # Claim-provenance substrate: fragment spans into the sidecar
+            # canonical text + human-readable source locator ("п. 3.4",
+            # "табл. 2"). `section` is NOT reused — it holds the
+            # dissertation section, not the source's.
+            existing_frag = {
+                row[1] for row in conn.execute("PRAGMA table_info(fragments)")
+            }
+            for col, col_type in [
+                ("char_start", "INTEGER"),
+                ("char_end", "INTEGER"),
+                ("source_locator", "TEXT"),
+            ]:
+                if col not in existing_frag:
+                    conn.execute(
+                        f"ALTER TABLE fragments ADD COLUMN {col} {col_type}"
+                    )
+
+            # JSON array of pipeline steps that silently failed (embeddings
+            # down, sidecar write failed, ...) — consumer is the future
+            # `degraded` source status.
+            existing_src = {
+                row[1] for row in conn.execute("PRAGMA table_info(sources)")
+            }
+            if "degraded_steps" not in existing_src:
+                conn.execute(
+                    "ALTER TABLE sources ADD COLUMN degraded_steps TEXT"
+                )
+
+            conn.execute("""CREATE TABLE IF NOT EXISTS claims (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                manuscript_path TEXT NOT NULL,
+                claim_hash TEXT NOT NULL,
+                anchor_key TEXT NOT NULL DEFAULT '',
+                sentence TEXT NOT NULL,
+                citekey TEXT NOT NULL DEFAULT '',
+                ref_number INTEGER,
+                location TEXT,
+                char_start INTEGER NOT NULL,
+                char_end INTEGER NOT NULL,
+                anchor_kind TEXT,
+                anchor_raw TEXT,
+                verdict TEXT,
+                reason TEXT,
+                ai_used INTEGER NOT NULL DEFAULT 0,
+                judge_model TEXT,
+                evidence_start INTEGER,
+                evidence_end INTEGER,
+                evidence_locator TEXT,
+                verified_at TEXT,
+                stale INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(manuscript_path, claim_hash, anchor_key)
+            )""")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_claims_manuscript "
+                "ON claims(manuscript_path, stale)"
+            )
+
         conn.execute(f"PRAGMA user_version = {target}")
 
     # ── Source delegation ─────────────────────────────────────────────────
@@ -503,6 +589,9 @@ class StateManager:
 
     def set_pdf_path(self, source_id: str, path: str):
         return self.sources.set_pdf_path(source_id, path)
+
+    def set_pdf_text_length(self, source_id: str, length: int):
+        return self.sources.set_pdf_text_length(source_id, length)
 
     def get_pending_sources(self, limit: int = 0) -> list[str]:
         return self.sources.get_pending_sources(limit)
