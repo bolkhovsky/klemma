@@ -74,6 +74,10 @@ Layout:
 <page 2 prose>
 ```
 
+### locator.py (~80 lines)
+Human-readable source locators from sidecar text — pure string heuristics, advisory-only (never gate a verdict).
+- `derive_locator(text, span_start, page=None) -> str | None` — scan lines upward from the span: numbered clause `^\d+(\.\d+)+` → «п. X.Y», «Таблица N» → «табл. N», «Приложение X»; fallback «с. {page}», else None. Consumer: `klemma repair` (fragment `source_locator` backfill)
+
 ### note_factory.py (470 lines)
 Vault note creation pipeline — largest module in the package:
 1. `auto_classify()` — regex-based chapter/section/tag assignment from title+abstract; returns `matched: bool` (True when any chapter_mapping pattern matched)

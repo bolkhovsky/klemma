@@ -12,6 +12,7 @@ from . import (  # noqa: F401
     decisions,
     manage,
     process,
+    repair,
     research,
     verify,
     write,

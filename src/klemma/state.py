@@ -721,6 +721,23 @@ class StateManager:
     def update_fragment_section(self, fragment_id: int, section: str) -> bool:
         return self.fragments.update_fragment_section(fragment_id, section)
 
+    def update_fragment_provenance(
+        self,
+        fragment_id: int,
+        *,
+        verbatim: Optional[bool] = None,
+        char_start: Optional[int] = None,
+        char_end: Optional[int] = None,
+        source_locator: Optional[str] = None,
+    ) -> bool:
+        return self.fragments.update_fragment_provenance(
+            fragment_id,
+            verbatim=verbatim,
+            char_start=char_start,
+            char_end=char_end,
+            source_locator=source_locator,
+        )
+
     def get_fragment_embedding_stats(self) -> dict:
         return self.fragments.get_fragment_embedding_stats()
 
