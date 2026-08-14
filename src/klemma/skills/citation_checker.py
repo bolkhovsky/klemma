@@ -12,9 +12,12 @@ verify_claim       — deterministic verifier (quote + numeric-absent)
 verify_claim_batch — AI verifier (numeric-drift + definitional)
 build_judge_provider — build isolated judge AIProvider
 check_citations_file — standalone orchestrator
+compute_claim_hash / compute_anchor_key — content identity for the claims ledger
+build_claim_entries — flatten a check run into claims-ledger rows
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -58,6 +61,10 @@ class Claim:
     anchors: list[ClaimAnchor]
     start_offset: int
     end_offset: int
+    # Bibliography entry number in numbered-reference mode ("[5]"); part of
+    # the claim's ledger identity — the same sentence citing [5] and [12] is
+    # two distinct claims.
+    ref_number: Optional[int] = None
 
 
 @dataclass
@@ -70,6 +77,10 @@ class EvidenceBundle:
     source_available: bool
     search_complete: bool  # True only for sidecar (full untruncated PDF text)
     anchor_found: bool
+    # Optional provenance into the sidecar canonical text (advisory only —
+    # never gates a verdict): span of the located anchor + derived locator.
+    evidence_span: Optional[tuple[int, int]] = None
+    evidence_locator: Optional[str] = None
 
 
 @dataclass
@@ -82,6 +93,8 @@ class CitationVerdict:
     reason: str
     offending_span: str
     ai_used: bool
+    evidence_span: Optional[tuple[int, int]] = None
+    evidence_locator: Optional[str] = None
 
 
 @dataclass
@@ -103,6 +116,9 @@ class CitationCheckReport:
     input_tokens: int
     output_tokens: int
     model: Optional[str]
+    # Parsed claims (including anchorless ones that produced no verdict) —
+    # the substrate for the claims ledger (build_claim_entries).
+    claims: list[Claim] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +152,89 @@ def _normalize_text(text: str) -> str:
     text = _DASH_RE.sub("-", text)
     text = _SPACE_RE.sub(" ", text)
     return text.lower().strip()
+
+
+# ---------------------------------------------------------------------------
+# Claims ledger identity
+# ---------------------------------------------------------------------------
+
+
+def compute_claim_hash(
+    sentence: str, citekey: str, ref_number: Optional[int] = None
+) -> str:
+    """Content identity of a claim for the ledger.
+
+    Normalization makes the hash stable under whitespace/dash/case
+    reformatting; any real edit of the sentence changes it — that IS the
+    staleness mechanism (the old ledger row goes stale, the new one starts
+    unchecked). ref_number keeps "[5]" and "[12]" claims of one sentence
+    distinct in numbered-reference mode.
+    """
+    payload = f"{_normalize_text(sentence)}|{citekey}|{ref_number}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def compute_anchor_key(anchor: ClaimAnchor) -> str:
+    """Position-independent anchor identity within a claim.
+
+    Anchorless ledger rows use "" — the anchor_key column defaults to the
+    empty string so UNIQUE(manuscript, claim_hash, anchor_key) still applies.
+    """
+    digest = hashlib.sha1(
+        _normalize_text(anchor.raw).encode("utf-8")
+    ).hexdigest()[:12]
+    return f"{anchor.kind}:{digest}"
+
+
+def build_claim_entries(
+    claims: list[Claim], verdicts: list[CitationVerdict]
+) -> list[dict]:
+    """Flatten a check run into claims-ledger entries (one per claim × anchor).
+
+    Anchorless claims (a cited sentence with no numeric/quote/definitional
+    anchor in @-mode) are registered too — with anchor_key="" and verdict
+    NULL — so `klemma claims status` counts them as unchecked instead of
+    silently dropping them; without that the submission gate is meaningless.
+    Duplicate (hash, anchor) pairs collapse to one entry (the same sentence
+    cited twice hashes identically by design).
+    """
+    verdict_by_key: dict[tuple[str, str, str], CitationVerdict] = {}
+    for v in verdicts:
+        verdict_by_key.setdefault((v.citekey, v.claim_sentence, v.anchor.anchor_id), v)
+
+    entries: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for claim in claims:
+        claim_hash = compute_claim_hash(claim.sentence, claim.citekey, claim.ref_number)
+        for anchor in claim.anchors or [None]:
+            anchor_key = compute_anchor_key(anchor) if anchor is not None else ""
+            if (claim_hash, anchor_key) in seen:
+                continue
+            seen.add((claim_hash, anchor_key))
+            v = (
+                verdict_by_key.get((claim.citekey, claim.sentence, anchor.anchor_id))
+                if anchor is not None
+                else None
+            )
+            entries.append({
+                "claim_hash": claim_hash,
+                "anchor_key": anchor_key,
+                "sentence": claim.sentence,
+                "citekey": claim.citekey,
+                "ref_number": claim.ref_number,
+                "location": claim.location,
+                "char_start": claim.start_offset,
+                "char_end": claim.end_offset,
+                "anchor_kind": anchor.kind if anchor is not None else None,
+                "anchor_raw": anchor.raw if anchor is not None else None,
+                "verdict": v.severity if v is not None else None,
+                "reason": v.reason if v is not None else None,
+                "ai_used": bool(v.ai_used) if v is not None else False,
+                "evidence_start": v.evidence_span[0] if v is not None and v.evidence_span else None,
+                "evidence_end": v.evidence_span[1] if v is not None and v.evidence_span else None,
+                "evidence_locator": v.evidence_locator if v is not None else None,
+            })
+    return entries
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +554,7 @@ def _parse_numbered_claims(
                 anchors=anchors,
                 start_offset=sent_start,
                 end_offset=sent_end,
+                ref_number=n,
             ))
 
     for m in _ANAPHORA_RE.finditer(blanked):
@@ -520,15 +620,19 @@ def _resolve_evidence(
     citekey = claim.citekey
     source_text: Optional[str] = None
     search_complete = False
+    sidecar_doc = None
 
-    # 1. Sidecar — full PDF text (ADR-016); _validate_citekey inside guards traversal.
+    # 1. Sidecar — full PDF text (ADR-016), loaded as SidecarDoc so a found
+    # anchor can be pinned to a span + page-aware locator below.
+    # _validate_citekey inside guards traversal.
     # ADR-018 exception: sidecar is pure file I/O (no storage layer);
     # same pattern rationale as ADR-008 (shared helpers in skills/).
     try:
-        from ..literature.sidecar import read_pdf_sidecar
-        sidecar = read_pdf_sidecar(project_root, citekey)
-        if sidecar:
-            source_text = sidecar
+        from ..literature.sidecar import load_sidecar_doc
+        doc = load_sidecar_doc(project_root, citekey)
+        if doc is not None and doc.text:
+            sidecar_doc = doc
+            source_text = doc.text
             search_complete = True
     except Exception:
         logger.debug("sidecar lookup failed for citekey=%s", citekey)
@@ -573,12 +677,34 @@ def _resolve_evidence(
             anchor_found=False,
         )
 
-    # Search for anchor in source
-    norm_anchor = _normalize_text(anchor.raw)
+    # Search for anchor in source. Quote anchors search for their inner
+    # text — the guillemets belong to the manuscript, not the source, so
+    # matching the raw anchor would always miss (and _build_passages would
+    # fall back to the head of the document, hiding the actual quote).
+    needle = anchor.raw.strip("«»\"“”'") if anchor.kind == "quote" else anchor.raw
+    norm_anchor = _normalize_text(needle)
     norm_source = _normalize_text(source_text)
     anchor_found = bool(norm_anchor and norm_anchor in norm_source)
 
-    passages = _build_passages(source_text, anchor.raw)
+    passages = _build_passages(source_text, needle)
+
+    # Optional provenance (repair-line machinery): pin the found anchor to
+    # sidecar coordinates and derive a human locator («п. 3.4»). Advisory
+    # only — a failed lookup never changes the verdict.
+    evidence_span: Optional[tuple[int, int]] = None
+    evidence_locator: Optional[str] = None
+    if anchor_found and sidecar_doc is not None:
+        try:
+            from ..literature.locator import derive_locator
+            from .extractor import locate_fragment_span
+            span = locate_fragment_span(needle, sidecar_doc.text)
+            if span is not None:
+                evidence_span = span
+                evidence_locator = derive_locator(
+                    sidecar_doc.text, span[0], page=sidecar_doc.page_for(span[0]),
+                )
+        except Exception:
+            logger.debug("evidence span derivation failed for citekey=%s", citekey)
 
     return EvidenceBundle(
         claim_sentence=claim.sentence,
@@ -589,6 +715,8 @@ def _resolve_evidence(
         source_available=True,
         search_complete=search_complete,
         anchor_found=anchor_found,
+        evidence_span=evidence_span,
+        evidence_locator=evidence_locator,
     )
 
 
@@ -623,6 +751,8 @@ def _make_unverifiable(
         reason=reason,
         offending_span="",
         ai_used=ai_used,
+        evidence_span=bundle.evidence_span,
+        evidence_locator=bundle.evidence_locator,
     )
 
 
@@ -644,6 +774,8 @@ def verify_claim(bundle: EvidenceBundle) -> CitationVerdict:
             reason=reason,
             offending_span=span,
             ai_used=False,
+            evidence_span=bundle.evidence_span,
+            evidence_locator=bundle.evidence_locator,
         )
 
     if anchor.kind == "reference":
@@ -887,6 +1019,8 @@ def verify_claim_batch(
             reason=reason,
             offending_span=item.get("offending_span", ""),
             ai_used=True,
+            evidence_span=b.evidence_span,
+            evidence_locator=b.evidence_locator,
         ))
 
     return BatchResult(
@@ -1006,6 +1140,36 @@ def build_judge_provider(config: "KlemmaConfig") -> Optional["AIProvider"]:
 # ---------------------------------------------------------------------------
 
 
+def _replay_verdict(
+    saved: Optional[dict], bundle: EvidenceBundle
+) -> Optional[CitationVerdict]:
+    """Rebuild a CitationVerdict from a live ledger row (--incremental).
+
+    Only definitive verdicts are replayed — unverifiable/error stay
+    re-runnable so a newly available judge can retry them.
+    """
+    if not saved or saved.get("verdict") not in ("ok", "soft_warn", "hard_warn"):
+        return None
+    reason = saved.get("reason") or "replayed verdict"
+    if not reason.startswith("[cached] "):
+        reason = f"[cached] {reason}"
+    evidence_span = None
+    if saved.get("evidence_start") is not None and saved.get("evidence_end") is not None:
+        evidence_span = (saved["evidence_start"], saved["evidence_end"])
+    return CitationVerdict(
+        citekey=bundle.citekey,
+        claim_sentence=bundle.claim_sentence,
+        location=bundle.location,
+        anchor=bundle.anchor,
+        severity=saved["verdict"],
+        reason=reason,
+        offending_span="",
+        ai_used=bool(saved.get("ai_used")),
+        evidence_span=evidence_span,
+        evidence_locator=saved.get("evidence_locator"),
+    )
+
+
 def check_citations_file(
     target_path: Path,
     *,
@@ -1019,12 +1183,18 @@ def check_citations_file(
     project_chain=None,
     use_ai: bool = True,
     fail_on: str = "hard_warn",
+    replay: Optional[dict] = None,
 ) -> CitationCheckReport:
     """Verify citation integrity in a draft markdown file.
 
     judge_ai must be pre-built by the caller (one judge per command invocation,
     shared across all files). Pass None for no-AI mode.
     Per-file deadline and call-budget are created fresh here.
+
+    replay maps (claim_hash, anchor_key) → saved ledger row (--incremental):
+    anchors that would need the AI judge but already carry a live definitive
+    verdict are replayed into the report instead of re-judged, saving the
+    max_ai_calls_per_draft budget for genuinely new/edited claims.
     """
     # Read target
     try:
@@ -1067,6 +1237,7 @@ def check_citations_file(
             output_tokens=0,
             model=None,
         )
+    replay = replay or {}
 
     # Per-file budget
     ai_cfg = config.ai
@@ -1096,6 +1267,7 @@ def check_citations_file(
         status = "degraded"
 
     for claim in claims:
+        claim_hash = compute_claim_hash(claim.sentence, claim.citekey, claim.ref_number)
         for anchor in claim.anchors:
             try:
                 if anchor.kind == "reference" and anchor.trigger in ("unmatched_ref", "anaphoric_ref"):
@@ -1130,7 +1302,17 @@ def check_citations_file(
                         verdicts.append(_make_unverifiable(bundle, "source not available"))
                     continue
 
-                needs_ai = _needs_ai_check(bundle) and use_ai and judge_ai is not None
+                wants_ai = _needs_ai_check(bundle)
+
+                if wants_ai and replay:
+                    replayed = _replay_verdict(
+                        replay.get((claim_hash, compute_anchor_key(anchor))), bundle,
+                    )
+                    if replayed is not None:
+                        verdicts.append(replayed)
+                        continue
+
+                needs_ai = wants_ai and use_ai and judge_ai is not None
 
                 if needs_ai:
                     if ai_calls_remaining <= 0 or deadline.remaining() <= 0:
@@ -1189,6 +1371,7 @@ def check_citations_file(
         input_tokens=total_in,
         output_tokens=total_out,
         model=report_model,
+        claims=claims,
     )
 
 

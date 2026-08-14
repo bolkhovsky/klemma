@@ -782,3 +782,91 @@ def test_batch_sanitizes_delimiters(prompt_file):
         for b in bundles_arg:
             assert "<<<" not in b.get("anchor_raw", "")
             assert "<<<" not in b.get("claim_sentence", "")
+
+
+# ---------------------------------------------------------------------------
+# Evidence span + locator provenance (claims ledger, PR-4)
+# ---------------------------------------------------------------------------
+
+def test_resolve_evidence_pins_quote_to_sidecar_span(tmp_path):
+    """A quote anchor found in the sidecar carries span + «п. X.Y» locator."""
+    from klemma.skills.citation_checker import Claim, _resolve_evidence, detect_anchors
+
+    sidecar_dir = tmp_path / ".klemma" / "pdfs"
+    sidecar_dir.mkdir(parents=True)
+    (sidecar_dir / "gost2025.md").write_text(
+        "# ГОСТ\n\n> Citekey: gost2025\n\n---\n\n"
+        "3.4 Определение требуемой обеспеченности и эффективности метода "
+        "на основе оперативных независимых данных.\n",
+        encoding="utf-8",
+    )
+
+    quote = "«определение требуемой обеспеченности и эффективности метода»"
+    sentence = f"В стандарте закреплено {quote} согласно [@gost2025]."
+    anchors = [a for a in detect_anchors(sentence) if a.kind == "quote"]
+    assert anchors, "test sentence must produce a quote anchor"
+
+    claim = Claim(
+        sentence=sentence, citekey="gost2025", location="",
+        anchors=anchors, start_offset=0, end_offset=len(sentence),
+    )
+    bundle = _resolve_evidence(claim, anchors[0], project_root=tmp_path)
+
+    assert bundle.anchor_found
+    assert bundle.evidence_span is not None
+    start, end = bundle.evidence_span
+    assert start < end
+    assert bundle.evidence_locator == "п. 3.4"
+
+
+def test_resolve_evidence_no_span_when_anchor_missing(tmp_path):
+    """Anchor absent from the sidecar → no advisory provenance attached."""
+    from klemma.skills.citation_checker import Claim, _resolve_evidence, detect_anchors
+
+    sidecar_dir = tmp_path / ".klemma" / "pdfs"
+    sidecar_dir.mkdir(parents=True)
+    (sidecar_dir / "smith2020.md").write_text(
+        "---\ncitekey: smith2020\n---\n\nСовсем другой текст без цитаты.\n",
+        encoding="utf-8",
+    )
+
+    quote = "«длинная дословная цитата которой в источнике заведомо нет»"
+    sentence = f"Авторы пишут {quote} согласно [@smith2020]."
+    anchors = [a for a in detect_anchors(sentence) if a.kind == "quote"]
+    claim = Claim(
+        sentence=sentence, citekey="smith2020", location="",
+        anchors=anchors, start_offset=0, end_offset=len(sentence),
+    )
+    bundle = _resolve_evidence(claim, anchors[0], project_root=tmp_path)
+
+    assert not bundle.anchor_found
+    assert bundle.evidence_span is None
+    assert bundle.evidence_locator is None
+
+
+def test_verdict_carries_evidence_provenance(tmp_path):
+    """verify_claim propagates bundle evidence span/locator into the verdict."""
+    from klemma.skills.citation_checker import Claim, _resolve_evidence, detect_anchors
+
+    sidecar_dir = tmp_path / ".klemma" / "pdfs"
+    sidecar_dir.mkdir(parents=True)
+    (sidecar_dir / "gost2025.md").write_text(
+        "---\ncitekey: gost2025\n---\n\n"
+        "7.1.3 Инерционный прогноз принимается стандартом сравнения "
+        "для заблаговременности до трёх суток включительно.\n",
+        encoding="utf-8",
+    )
+
+    quote = "«инерционный прогноз принимается стандартом сравнения»"
+    sentence = f"Норма гласит {quote} согласно [@gost2025]."
+    anchors = [a for a in detect_anchors(sentence) if a.kind == "quote"]
+    claim = Claim(
+        sentence=sentence, citekey="gost2025", location="",
+        anchors=anchors, start_offset=0, end_offset=len(sentence),
+    )
+    bundle = _resolve_evidence(claim, anchors[0], project_root=tmp_path)
+    verdict = verify_claim(bundle)
+
+    assert verdict.severity == "ok"
+    assert verdict.evidence_span == bundle.evidence_span
+    assert verdict.evidence_locator == "п. 7.1.3"

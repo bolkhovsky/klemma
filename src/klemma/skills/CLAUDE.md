@@ -147,6 +147,17 @@ Numbered-reference → citekey matching for `papers/` (claim-provenance PR-3). J
 - `build_ref_map(md_text, sources_meta) -> RefMap` — finds the bibliography via `find_bibliography_section()`, parses entries with `parse_numbered_references()`, matches each against sources_meta: normalized DOI exact (1.0) → fuzzy title (parsed title via `metadata._titles_match` 0.85, or source-title containment in the raw entry 0.75; year agreement when both known) → author surnames + exact year (0.7). Unmatched positions are kept — the checker reports them as soft_warn
 - `collect_sources_meta(state=?, paper_store=?, user_library=?) -> list[dict]` — gathers {citekey, title, authors, year, doi} rows: project state first, then user_library+paper_store for citekeys the project DB lacks; never raises
 
+### citation_checker.py (~1650 lines)
+Citation integrity verification engine (ADR-018): LLM-as-judge verifier + isolated judge provider + evidence model + claims-ledger substrate.
+- `detect_anchors(sentence, base_offset)` — numeric/quote/definitional anchor extraction (no AI)
+- `_parse_claims(md_text, ref_map?)` — ALL cited sentences become claims (anchorless too — the ledger counts them as unchecked); numbered-reference mode ("[5]", papers/) via `RefMap` with synthetic kind="reference" anchors
+- `compute_claim_hash(sentence, citekey, ref_number?)` / `compute_anchor_key(anchor)` — content identity for the claims ledger; normalization makes hashes stable under whitespace/dash/case reformatting, any real edit changes the hash (staleness by design)
+- `build_claim_entries(claims, verdicts)` — flatten a check run into ledger rows (one per claim × anchor, anchorless → anchor_key="")
+- `_resolve_evidence(...)` — sidecar (`SidecarDoc`) → paper_store raw_text → legacy fragments; quote anchors search for their inner text (guillemets stripped); a found anchor is pinned to an advisory evidence span + locator via `locate_fragment_span` + `derive_locator`
+- `verify_claim` / `verify_claim_batch` — deterministic and AI verifiers; verdicts carry `evidence_span`/`evidence_locator`
+- `check_citations_file(..., replay?)` — orchestrator; `replay` maps (claim_hash, anchor_key) → live ledger row and replays definitive verdicts instead of re-judging (--incremental)
+- `check_draft_inline(...)` — writer/verifier-split inline path (never touches the ledger)
+
 ### coach.py (~170 lines)
 Contextual research advisor — methodology-driven heuristics (zero AI calls). Thresholds from 21 methodology papers (Pautasso 2013, Cohan 2019, Kallestinova 2011).
 - `CoachFinding` — dataclass: category, section, message, severity
