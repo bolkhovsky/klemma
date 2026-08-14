@@ -9,6 +9,7 @@ from typing import Optional
 from .repositories import (
     BenchmarkRepository,
     CitationsRepository,
+    ClaimsRepository,
     DecisionsRepository,
     EmbeddingsStoreRepository,
     FragmentRepository,
@@ -191,6 +192,7 @@ class StateManager:
         self.prune = PruneRepository(self._conn)
         self.benchmarks = BenchmarkRepository(self._conn)
         self.decisions = DecisionsRepository(self._conn)
+        self.claims = ClaimsRepository(self._conn)
 
     @contextmanager
     def _conn(self):
@@ -931,6 +933,21 @@ class StateManager:
 
     def get_benchmarked_citekeys(self) -> set[str]:
         return self.benchmarks.get_benchmarked_citekeys()
+
+    # ── Claims ledger delegation ────────────────────────────────────────
+
+    def record_claim_check(self, manuscript_path: str, entries: list[dict],
+                           judge_model: Optional[str] = None) -> int:
+        return self.claims.record_check(manuscript_path, entries, judge_model)
+
+    def mark_claims_stale(self, manuscript_path: str, live_hashes: set[str]) -> int:
+        return self.claims.mark_stale(manuscript_path, live_hashes)
+
+    def get_claims(self, manuscript_path: str, include_stale: bool = True) -> list[dict]:
+        return self.claims.get_claims(manuscript_path, include_stale)
+
+    def get_claims_status_summary(self, manuscript_path: Optional[str] = None) -> list[dict]:
+        return self.claims.get_status_summary(manuscript_path)
 
     def get_sections_for_type(self, section_type: str) -> list[str]:
         """Return numeric section IDs mapped to a semantic type."""

@@ -3,6 +3,7 @@
 from .base import BaseRepository
 from .benchmarks import BenchmarkRepository
 from .citations import CitationsRepository
+from .claims import ClaimsRepository
 from .decisions import DecisionsRepository
 from .embeddings_store import EmbeddingsStoreRepository
 from .fragments import FragmentRepository
@@ -15,6 +16,7 @@ __all__ = [
     "BaseRepository",
     "BenchmarkRepository",
     "CitationsRepository",
+    "ClaimsRepository",
     "DecisionsRepository",
     "EmbeddingsStoreRepository",
     "FragmentRepository",
