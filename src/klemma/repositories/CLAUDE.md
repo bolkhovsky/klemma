@@ -1,6 +1,6 @@
 # Repositories
 
-Domain repositories decomposed from `StateManager` (1599 lines -> 8 focused modules). StateManager remains as backward-compatible facade.
+Domain repositories decomposed from `StateManager` (10 focused modules). StateManager remains as backward-compatible facade.
 
 ## Architecture
 
@@ -18,7 +18,8 @@ StateManager (facade)
     ├── PlansRepository       — daily plans, reading queue, writing streak
     ├── PruneRepository       — prune verdicts, protection logic
     ├── BenchmarkRepository   — benchmark run history, comparison
-    └── DecisionsRepository   — Guided Serendipity decisions, notes, feedback
+    ├── DecisionsRepository   — Guided Serendipity decisions, notes, feedback
+    └── ClaimsRepository      — manuscript claims ledger, incremental citation audit
 ```
 
 All repos receive `StateManager._conn` as their connection factory via `BaseRepository.__init__`.
@@ -112,6 +113,14 @@ Guided Serendipity decisions: branching points, research notes, retrospective fe
 - `add_note(decision_id, note)` — add/update research note on a decision
 - `set_feedback(decision_id, feedback)` — set 'like' or 'dislike' retrospective feedback
 - `get_feedback_summary()` — aggregate feedback for prompt injection (liked_types, disliked_types, recent_notes)
+
+### claims.py (~170 lines)
+Manuscript claims ledger — durable state of the citation audit (claim-provenance PR-4). One row per (manuscript_path, claim_hash, anchor_key); identity is content-based (`citation_checker.compute_claim_hash`), so editing a sentence retires the old row (stale) and starts the new one unchecked — staleness by design, no diffing.
+- `record_check(manuscript_path, entries, judge_model?)` — UPSERT on UNIQUE(manuscript_path, claim_hash, anchor_key); refreshes char range/verdict/reason/evidence_*/verified_at, revives stale rows; `judge_model` lands only on AI verdicts and is COALESCE-preserved when a replayed verdict arrives without a fresh model name
+- `mark_stale(manuscript_path, live_hashes)` — mark rows whose hash vanished from the fresh parse; returns newly-marked count
+- `get_claims(manuscript_path, include_stale=True)` — ledger rows in manuscript order
+- `get_status_summary(manuscript_path?)` — per-manuscript counters (ok/soft_warn/hard_warn/unverifiable/unchecked/stale, last_verified) backing `klemma claims status --gate`
+Writers: `klemma check-citations` (every run); readers: `--incremental` replay + `klemma claims status`.
 
 ## Cross-repo dependencies
 

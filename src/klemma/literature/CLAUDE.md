@@ -86,18 +86,20 @@ Vault note creation pipeline — largest module in the package:
 4. `create_vault_note()` — renders structured note with frontmatter + sections
 5. Reference gap extraction — bibliography cross-check against library
 
-### draft_parser.py (~170 lines)
+### draft_parser.py (~200 lines)
 Parse structure and bibliography from draft PDFs for Klemma `--from-draft` onboarding (#76). Uses PyMuPDF.
 - `DraftParseResult` — dataclass: title, sections, references, full_text, page_count
 - `DetectedSection` — dataclass: heading, level (1-3), text, page_start
 - `parse_draft_pdf(pdf_path) -> DraftParseResult` — extract title (font-size heuristic), numbered sections, bibliography entries
-- `_extract_bibliography(full_text)` — find bib section marker (EN/RU), parse entries via `reference_parser.parse_references()`
+- `find_bibliography_section(text) -> tuple[int, int] | None` — char span of the bibliography content: starts after the marker line (EN/RU, plain or markdown heading), ends at the next markdown heading or EOF. Reused by `skills/reference_matcher.py` and the numbered-mode claim parser
+- `_extract_bibliography(full_text)` — `find_bibliography_section()` + `reference_parser.parse_references()`
 
-### reference_parser.py (~140 lines)
+### reference_parser.py (~170 lines)
 Parse bibliography strings into structured `ParsedReference` dataclass. Pure string processing, no AI, no external deps. Foundation for Klemma `--from-draft` onboarding (#76).
 - `ParsedReference` — dataclass: raw, authors, year, title, journal, doi, url
 - `parse_reference(raw) -> ParsedReference` — parse single entry (APA, numbered, DOI/URL extraction)
 - `parse_references(text) -> list[ParsedReference]` — split bibliography section into entries, filter short
+- `parse_numbered_references(text) -> list[tuple[int, ParsedReference]]` — like `parse_references()` but PRESERVES entry numbers ([1] / 1. / 1) markers, ≤3 digits so wrapped year lines don't split entries); feeds the `[N] → citekey` ref map for numbered manuscripts
 
 ## Data flows
 
