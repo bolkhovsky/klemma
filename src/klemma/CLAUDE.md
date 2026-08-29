@@ -13,7 +13,8 @@ Click CLI entry point. Defines 18 commands + hidden aliases.
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
 - Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `library duplicates`, `suggest`, `reassign`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`, `migrate-content` (hidden — moves config.yaml content fields to KLEMMA.md frontmatter), `migrate-library` (dry-run by default; `--run` copies monolithic klemma.db → library.db + project.db via three-tier stores)
 - Hidden aliases: `gaps suggest` → `suggest`, `coverage` → `status --verbose`
-- Deprecation warnings: bare `klemma gaps` → use `klemma status --verbose`; `klemma library -s` → use `klemma research -s`
+- `klemma gaps <citekey>` — citation-graph gap discovery (custom `_GapsGroup` router in `commands/analyze.py`: real subcommands dispatch, any other token routes to the hidden `walk` command as a citekey). Walks the seed's OpenAlex graph (`literature/citation_graph.py`), reranks unowned neighbours by bge-m3 cosine (`skills/gaps.py`). Requires an embedding backend. Read-only.
+- Deprecation warnings: bare `klemma gaps` (no citekey) → tip + `klemma status --verbose`; `klemma library -s` → use `klemma research -s`
 - `init --outline` generates an outline after project setup (requires AI backend)
 - `init` non-interactive mode: `--name`, `--description`, `--keywords`, `--language` flags auto-skip wizard; `--non-interactive` is alias for `--no-input`
 - `embed` group: `embed sources [CITEKEYS]` (default), `embed fragments`, `embed sections` (centroid from source vectors), `embed all` (sources→fragments→sections)

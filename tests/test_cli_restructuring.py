@@ -45,13 +45,19 @@ class TestGapsSuggestBackwardCompat:
         assert len(command_lines) == 0
 
 
-class TestBareGapsDeprecation:
-    def test_bare_gaps_shows_deprecation(self):
-        """Running bare `klemma gaps` should show deprecation warning."""
+class TestBareGaps:
+    def test_bare_gaps_shows_tip_or_forwards(self):
+        """Bare `klemma gaps` now hints at `gaps <citekey>` / `suggest` and
+        forwards to `status --verbose` (the namespace is no longer deprecated —
+        it hosts the citation-graph walk)."""
         runner = CliRunner()
         result = runner.invoke(main, ["gaps"], catch_exceptions=False)
-        # May fail due to missing config, but deprecation warning should appear
-        assert "deprecated" in result.output.lower() or result.exit_code != 0
+        # May fail due to missing config; otherwise the tip should appear.
+        assert (
+            "citekey" in result.output.lower()
+            or "status --verbose" in result.output.lower()
+            or result.exit_code != 0
+        )
 
 
 class TestLibraryRecommendDeprecation:

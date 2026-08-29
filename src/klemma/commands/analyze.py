@@ -8,6 +8,7 @@ from ..cli import (
     _lookup_section_type,
     _print_recommended_actions,
     _print_ref_gaps_table,
+    _resolve_emb,
     _sync_sections,
     console,
     main,
@@ -424,14 +425,37 @@ def suggest(ctx, limit, section):
     console.print()
 
 
-# Backward-compat: `klemma gaps` group with `suggest` subcommand
-@main.group(invoke_without_command=True)
+class _GapsGroup(click.Group):
+    """`klemma gaps` router.
+
+    Real subcommands (``suggest``) dispatch normally. Any other first token is
+    treated as a ``<citekey>`` and routed to the hidden citation-graph ``walk``
+    command — so ``klemma gaps <citekey>`` works without shadowing ``suggest``.
+    """
+
+    def resolve_command(self, ctx, args):
+        try:
+            return super().resolve_command(ctx, args)
+        except click.UsageError:
+            # Unknown token → treat it as a citekey for the graph walk.
+            cmd = self.get_command(ctx, "walk")
+            return "walk", cmd, args
+
+
+@main.group(cls=_GapsGroup, invoke_without_command=True)
 @click.pass_context
 def gaps(ctx):
-    """Reference gaps and acquisition suggestions."""
+    """Citation-graph gap discovery and reference-gap suggestions.
+
+    `klemma gaps <citekey>` walks the paper's OpenAlex citation graph and ranks
+    relevant neighbours not yet in your library by embedding similarity.
+    `klemma gaps suggest` lists library-wide reference gaps.
+    """
     if ctx.invoked_subcommand is None:
         console.print(
-            "[yellow]Warning: `klemma gaps` is deprecated. Use `klemma status --verbose`.[/yellow]"
+            "[yellow]Tip: `klemma gaps <citekey>` walks a paper's citation graph; "
+            "`klemma gaps suggest` lists reference gaps. "
+            "(bare `klemma gaps` → `klemma status --verbose`)[/yellow]"
         )
         ctx.invoke(status, verbose=True)
 
@@ -447,6 +471,116 @@ main.add_command(gaps)
 def gaps_suggest(ctx, limit, section):
     """[alias] -> suggest"""
     ctx.invoke(suggest, limit=limit, section=section)
+
+
+_REL_LABEL = {"cites": "cite→", "ref": "←ref", "both": "both"}
+
+
+@gaps.command(name="walk", hidden=True)
+@click.argument("citekey")
+@click.option("-k", "--top", "top", type=int, default=15, help="Number of gaps to show")
+@click.option("--deep", is_flag=True, help="Embed abstracts too (slower, sharper ranking)")
+@click.option("--backend", default=None, help="Override embedding backend")
+@click.option("--mailto", default=None, help="OpenAlex polite-pool email")
+@click.pass_context
+def gaps_walk(ctx, citekey, top, deep, backend, mailto):
+    """Walk a paper's OpenAlex citation graph for missing neighbours."""
+    from ..literature.citation_graph import fetch_citation_graph, fetch_seed_work
+    from ..literature.metadata import _crossref_mailto
+    from ..skills.gaps import find_citation_gaps
+
+    kctx = _get_context(ctx)
+    state = kctx.state
+
+    # `gaps` embeds candidates, so an embedding backend is mandatory
+    # (unlike `similar`, it cannot work from stored vectors alone).
+    emb = _resolve_emb(kctx, backend, dry_run=False)
+    if not emb:
+        return
+
+    _sync_sections(kctx, quiet=True)
+
+    seed = state.get_source(citekey)
+    if not seed:
+        console.print(f"[red]Source @{citekey} not found in this project.[/red]")
+        return
+
+    # Seed embedding must come from the SAME model as the candidates (RC-2):
+    # reuse the stored vector only if its model matches; else re-embed now.
+    seed_vector = None
+    stored = state.get_embedding(citekey)
+    if stored and stored[1] == emb.model_name:
+        seed_vector = stored[0]
+    else:
+        seed_vector = emb.embed(seed.get("title") or citekey, seed.get("abstract") or "")
+        if seed_vector:
+            state.save_embedding(citekey, seed_vector, emb.model_name)
+            console.print(f"[dim]Embedded @{citekey} with {emb.model_name} on the fly[/dim]")
+    if not seed_vector:
+        console.print(f"[red]Could not obtain an embedding for @{citekey}.[/red]")
+        return
+
+    mailto = mailto or _crossref_mailto()
+    seed_work = fetch_seed_work(
+        doi=seed.get("doi") or "", title=seed.get("title") or "", mailto=mailto
+    )
+    if not seed_work:
+        console.print(f"[red]Could not resolve @{citekey} on OpenAlex.[/red]")
+        return
+
+    candidates = fetch_citation_graph(seed_work, mailto=mailto)
+    if not candidates:
+        console.print("[yellow]No citation-graph neighbours found on OpenAlex.[/yellow]")
+        return
+
+    owned = state.get_all_sources_metadata()
+    result = find_citation_gaps(
+        citekey,
+        candidates=candidates,
+        owned_dois=[s.get("doi") for s in owned],
+        owned_titles=[s.get("title") for s in owned],
+        seed_vector=seed_vector,
+        embeddings=emb,
+        deep=deep,
+        limit=top,
+    )
+
+    console.print(
+        f"\n[bold]Citation-graph gaps for @{citekey}[/bold]  "
+        f"[dim]{result.n_neighbours} neighbours · "
+        f"{result.n_owned_suppressed} already in library · "
+        f"{len(result.gaps)} shown[/dim]\n"
+    )
+    if not result.gaps:
+        console.print(
+            "[green]No missing neighbours — your library already covers "
+            "this paper's citation graph.[/green]"
+        )
+        return
+
+    table = Table(show_edge=False, pad_edge=False)
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Sim", justify="right", width=5)
+    table.add_column("Year", width=5)
+    table.add_column("Author", style="cyan", width=18, no_wrap=True)
+    table.add_column("Title", style="white")
+    table.add_column("DOI", style="dim", width=24, no_wrap=True)
+    table.add_column("Rel", width=5)
+    for i, g in enumerate(result.gaps, 1):
+        style = "green" if g.similarity > 0.7 else "yellow" if g.similarity > 0.5 else "dim"
+        table.add_row(
+            str(i),
+            f"[{style}]{g.similarity:.2f}[/{style}]",
+            str(g.year or "?"),
+            (g.first_author or "?")[:18],
+            (g.title or "")[:62],
+            g.doi or "—",
+            _REL_LABEL.get(g.relation, g.relation),
+        )
+    console.print(table)
+    console.print(
+        "\n[dim]Acquire a gap:[/dim] klemma acquire https://doi.org/<DOI>"
+    )
 
 
 # Source group with role subcommand

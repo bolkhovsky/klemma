@@ -15,6 +15,13 @@ Auto-extract paper metadata from PDF properties + CrossRef lookup.
 - `resolve_metadata(pdf_path, cli_title?, cli_authors?, cli_year?, cli_doi?)` — orchestrator: CLI flags → PDF metadata → CrossRef enrichment → empty fallback. **CLI only** — not called from SaaS worker (CrossRef moved to user-triggered `enrich-metadata` endpoint)
 - `_titles_match(query, candidate)` — fuzzy word-overlap comparison (>0.6 threshold)
 
+### citation_graph.py (~200 lines)
+OpenAlex citation-graph client for `klemma gaps <citekey>` discovery (separate from the `citation_links` *storage* in `state.py`). Standalone and SaaS-importable — does **not** reuse `search.OpenAlexSearchProvider` (which exposes neither the work id nor `referenced_works`).
+- `SeedWork` — dataclass: `openalex_id`, `doi`, `title`, `referenced_works` (bare `W…` ids)
+- `Candidate` — dataclass: `openalex_id`, `doi`, `title`, `abstract`, `year`, `venue`, `cited_by`, `first_author`, `relation` (`cites`/`ref`/`both`)
+- `fetch_seed_work(*, doi?, title?, mailto?, timeout=10)` — resolve seed on OpenAlex: exact DOI lookup, else top-5 title search gated by `_titles_match` (reused from `metadata.py`); returns `SeedWork` with `referenced_works`
+- `fetch_citation_graph(seed, *, mailto?, timeout=10)` — references via `referenced_works` batch-fetched with `filter=openalex:<W1|W2|…>` (chunks of 50) + citers via `filter=cites:<id>`; both `type:article`; URL→bare-`W` normalization; merge dedupes by id (`relation="both"` when on both sides). Graceful empty/None on network error.
+
 ### zotero_api.py (~80 lines)
 Zotero local API integration via Connector + Better BibTeX JSON-RPC.
 - `is_zotero_running()` — checks BBT `api.ready` on localhost:23119 (2s timeout)
