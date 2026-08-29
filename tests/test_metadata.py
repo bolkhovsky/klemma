@@ -170,6 +170,125 @@ class TestLookupS2:
 
 
 # ---------------------------------------------------------------------------
+# lookup_openalex  (replaces dead S2 metadata path)
+# ---------------------------------------------------------------------------
+
+
+class TestReconstructOAAbstract:
+    def test_reconstruct_in_order(self):
+        from klemma.literature.metadata import _reconstruct_oa_abstract
+
+        assert _reconstruct_oa_abstract({"Hello": [0], "world": [1]}) == "Hello world"
+        # positions, not dict order, decide the sequence
+        assert _reconstruct_oa_abstract({"b": [1], "a": [0]}) == "a b"
+
+    def test_empty(self):
+        from klemma.literature.metadata import _reconstruct_oa_abstract
+
+        assert _reconstruct_oa_abstract(None) == ""
+        assert _reconstruct_oa_abstract({}) == ""
+
+
+class TestLookupOpenAlex:
+    def test_success(self):
+        """OpenAlex returns matching work → metadata + reconstructed abstract."""
+        from klemma.literature.metadata import lookup_openalex
+
+        oa_response = {
+            "results": [
+                {
+                    "title": "Deep Learning for NLP: A Survey",
+                    "publication_year": 2024,
+                    "doi": "https://doi.org/10.1234/test",
+                    "authorships": [
+                        {"author": {"display_name": "John Smith"}},
+                        {"author": {"display_name": "Kate Jones"}},
+                    ],
+                    "abstract_inverted_index": {"We": [0], "survey": [1], "methods": [2]},
+                }
+            ]
+        }
+
+        with patch("klemma.literature.metadata.requests") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = oa_response
+            mock_resp.raise_for_status = MagicMock()
+            mock_req.get.return_value = mock_resp
+            result = lookup_openalex("Deep Learning for NLP", mailto="me@test.org")
+
+        assert result is not None
+        assert result["year"] == 2024
+        assert "Smith" in result["authors"] and "Jones" in result["authors"]
+        assert result["doi"] == "10.1234/test"  # https://doi.org/ prefix stripped
+        assert result["abstract"] == "We survey methods"
+        # polite-pool mailto reaches the User-Agent header
+        ua = mock_req.get.call_args.kwargs["headers"]["User-Agent"]
+        assert "me@test.org" in ua
+
+    def test_no_match(self):
+        """Result title fails the fuzzy match gate → None."""
+        from klemma.literature.metadata import lookup_openalex
+
+        oa_response = {
+            "results": [
+                {
+                    "title": "Completely Unrelated Paper on Chemistry",
+                    "publication_year": 2020,
+                    "doi": "",
+                    "authorships": [],
+                    "abstract_inverted_index": None,
+                }
+            ]
+        }
+        with patch("klemma.literature.metadata.requests") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = oa_response
+            mock_resp.raise_for_status = MagicMock()
+            mock_req.get.return_value = mock_resp
+            result = lookup_openalex("Deep Learning for NLP")
+
+        assert result is None
+
+    def test_api_error(self):
+        """Requests raises → None (graceful)."""
+        from klemma.literature.metadata import lookup_openalex
+
+        with patch("klemma.literature.metadata.requests") as mock_req:
+            mock_req.get.side_effect = Exception("Connection timeout")
+            result = lookup_openalex("Deep Learning for NLP")
+
+        assert result is None
+
+    def test_empty_title(self):
+        from klemma.literature.metadata import lookup_openalex
+
+        assert lookup_openalex("") is None
+
+
+class TestEnrichMetadataUsesOpenAlex:
+    def test_openalex_fills_abstract_and_doi(self):
+        """_enrich_metadata calls OpenAlex by title and fills abstract/doi/year."""
+        from klemma.skills.acquirer import PaperMetadata, _enrich_metadata
+
+        meta = PaperMetadata(url="", title="Integrated ice edge error verification")
+        with patch("klemma.literature.metadata.lookup_openalex") as mock_oa:
+            mock_oa.return_value = {
+                "title": "Integrated ice edge error verification",
+                "authors": "Goessling H.",
+                "year": 2016,
+                "abstract": "A verification metric for the sea ice edge.",
+                "doi": "10.1002/grl.x",
+            }
+            resolved = _enrich_metadata(meta)
+
+        mock_oa.assert_called_once_with("Integrated ice edge error verification")
+        assert resolved["abstract"] == "A verification metric for the sea ice edge."
+        assert meta.year == 2016
+        assert meta.doi == "10.1002/grl.x"
+        assert meta.authors == "Goessling H."
+
+
+# ---------------------------------------------------------------------------
 # resolve_metadata
 # ---------------------------------------------------------------------------
 

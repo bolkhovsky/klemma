@@ -330,6 +330,75 @@ def lookup_crossref(title: str, mailto: Optional[str] = None, timeout: int = 10)
     return None
 
 
+def _reconstruct_oa_abstract(inverted_index: Optional[dict]) -> str:
+    """Reconstruct abstract text from OpenAlex inverted-index format.
+
+    Format: ``{word: [pos1, pos2, ...], ...}``. Returns ``""`` when absent.
+    """
+    if not inverted_index:
+        return ""
+    words: list[tuple[int, str]] = []
+    for word, positions in inverted_index.items():
+        for pos in positions:
+            words.append((pos, word))
+    words.sort()
+    return " ".join(w for _, w in words)
+
+
+def lookup_openalex(title: str, mailto: Optional[str] = None, timeout: int = 10) -> Optional[dict]:
+    """Look up paper metadata on OpenAlex by title.
+
+    Returns ``{"title", "authors", "year", "abstract", "doi"}`` or ``None``.
+
+    OpenAlex replaces the dead Semantic Scholar metadata path: ``lookup_s2``
+    returns HTTP 429 without an API key. OpenAlex is free, needs no auth, and —
+    like CrossRef — enters a polite pool via a ``mailto`` in the ``User-Agent``.
+    Unlike CrossRef it reliably carries abstracts (as an inverted index, which
+    :func:`_reconstruct_oa_abstract` rebuilds here). Title match is gated by the
+    same ``_titles_match`` fuzzy comparison used by CrossRef.
+    """
+    if not title:
+        return None
+
+    mailto = mailto or _crossref_mailto()
+    url = (
+        "https://api.openalex.org/works"
+        f"?search={quote_plus(title)}&per-page=3"
+    )
+    try:
+        resp = requests.get(
+            url,
+            timeout=timeout,
+            headers={"User-Agent": f"klemma/1.0 (mailto:{mailto})"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        logger.warning("OpenAlex lookup failed for '%s': %s", title[:60], e)
+        return None
+
+    for work in data.get("results", []):
+        work_title = work.get("title") or ""
+        if not _titles_match(title, work_title):
+            continue
+
+        authors = ", ".join(
+            (a.get("author") or {}).get("display_name", "")
+            for a in work.get("authorships", [])
+            if (a.get("author") or {}).get("display_name")
+        )
+
+        return {
+            "title": work_title,
+            "authors": authors,
+            "year": work.get("publication_year"),
+            "abstract": _reconstruct_oa_abstract(work.get("abstract_inverted_index")),
+            "doi": (work.get("doi") or "").replace("https://doi.org/", ""),
+        }
+
+    return None
+
+
 def _titles_match(query: str, candidate: str) -> bool:
     """Fuzzy title comparison: normalize and check word overlap (>0.6)."""
     def normalize(s: str) -> set[str]:
