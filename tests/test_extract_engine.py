@@ -1,0 +1,392 @@
+"""Pure chunked-extraction engine (plan C1): skills/extract_engine.py.
+
+All AI calls are scripted MagicMocks; no network, no DB, no vault.
+"""
+
+import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from klemma.ai import AICallResult, normalize_finish_reason
+from klemma.literature.models import Fragment, ZoteroEntry
+from klemma.literature.pdf import ChunkRecord
+from klemma.skills.extract_engine import (
+    Budget,
+    ChunkOutcome,
+    ExtractedFragment,
+    build_full_text,
+    compute_coverage,
+    dedup_by_text_and_span,
+    estimate_cost_usd,
+    extract_from_pages,
+)
+
+ENTRY = ZoteroEntry(id="paper2025", title="Test paper")
+
+
+def _result(payload, *, finish="stop", tin=10, tout=5, text=None) -> AICallResult:
+    return AICallResult(
+        text=text if text is not None else json.dumps(payload),
+        input_tokens=tin,
+        output_tokens=tout,
+        model="test-model",
+        finish_reason=finish,
+    )
+
+
+def _ai(script):
+    """AI mock whose call_with_meta pops scripted results in order."""
+    ai = MagicMock()
+    ai.model = "test-model"
+    ai.render_prompt.return_value = "prompt"
+    queue = list(script)
+    calls = []
+
+    def _call(system, user, **kw):
+        calls.append((system, user, kw))
+        item = queue.pop(0)
+        return item(len(calls)) if callable(item) else item
+
+    ai.call_with_meta.side_effect = _call
+    ai._calls = calls
+    return ai
+
+
+def _pages(n=3, size=1200):
+    return [f"Page {i + 1} body. " * (size // 14) for i in range(n)]
+
+
+# ---------------------------------------------------------------------------
+# finish_reason normalisation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("stop", "stop"), ("end_turn", "stop"), ("length", "max_tokens"),
+        ("max_tokens", "max_tokens"), ("content_filter", "error"), (None, "unknown"),
+        ("", "unknown"), (MagicMock(), "unknown"), ("weird", "unknown"),
+    ],
+)
+def test_normalize_finish_reason(raw, expected):
+    assert normalize_finish_reason(raw) == expected
+
+
+# ---------------------------------------------------------------------------
+# Coverage by interval union
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_union_never_exceeds_100_percent():
+    chunks = [
+        ChunkOutcome(index=0, char_start=0, char_end=60, status="ok"),
+        ChunkOutcome(index=1, char_start=50, char_end=100, status="ok"),  # overlap
+        ChunkOutcome(index=2, char_start=0, char_end=100, status="split"),  # parent, ignored
+    ]
+    cov = compute_coverage(chunks, 100)
+    assert cov.covered_chars == 100
+    assert cov.ratio == 1.0
+    assert cov.complete
+    assert cov.uncovered == []
+
+
+def test_coverage_reports_gaps_from_failed_chunks():
+    chunks = [
+        ChunkOutcome(index=0, char_start=0, char_end=40, status="ok"),
+        ChunkOutcome(index=1, char_start=40, char_end=70, status="failed"),
+        ChunkOutcome(index=2, char_start=70, char_end=100, status="ok"),
+    ]
+    cov = compute_coverage(chunks, 100)
+    assert cov.covered_chars == 70
+    assert cov.uncovered == [(40, 70)]
+    assert not cov.complete
+
+
+# ---------------------------------------------------------------------------
+# Accumulation across chunks, prompt hash, tokens
+# ---------------------------------------------------------------------------
+
+
+def test_accumulates_fragments_and_tokens_across_chunks(tmp_path):
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("{{ pdf_text }}")
+    pages = _pages(3)
+    full = build_full_text(pages)
+    quote0 = pages[0][:40]
+    quote2 = pages[2][:40]
+    ai = _ai([
+        _result({"fragments": [{"text": quote0, "verbatim": True, "page": 1}],
+                 "key_references": [{"title": "R1"}], "summary": "short"}, tin=100, tout=20),
+        _result({"fragments": [{"text": quote2, "verbatim": True, "page": 3}],
+                 "summary": "a much longer summary"}, tin=120, tout=30),
+    ])
+    chunks = [
+        ChunkRecord(0, full[:len(full) // 2], 1, 2, 0, len(full) // 2),
+        ChunkRecord(1, "[Page 2]\n" + full[len(full) // 2:], 2, 3, len(full) // 2, len(full)),
+    ]
+    out = extract_from_pages(None, ENTRY, prompt, {}, ai, chunks=chunks, full_text=full)
+
+    assert len(out.fragments) == 2
+    assert out.tokens_in == 220 and out.tokens_out == 50
+    assert out.key_refs == [{"title": "R1"}]
+    assert out.summary == "a much longer summary"
+    assert out.failed_chunks == 0 and out.leaf_chunks == 2
+    assert out.coverage.complete
+    assert all(ef.verbatim_status == "confirmed" for ef in out.fragments)
+    assert all(ef.char_start is not None for ef in out.fragments)
+    assert full[out.fragments[0].char_start:out.fragments[0].char_end] == quote0
+    assert len(out.prompt_hash) == 16
+    assert len(ai._calls) == 2
+
+
+def test_prompt_hash_is_stable_and_depends_on_template(tmp_path):
+    p1 = tmp_path / "a.md"
+    p1.write_text("one")
+    p2 = tmp_path / "b.md"
+    p2.write_text("two")
+    ai = _ai([_result({"fragments": [{"text": "x"}]})] * 3)
+    h1 = extract_from_pages(None, ENTRY, p1, {}, ai, text="x" * 50).prompt_hash
+    h2 = extract_from_pages(None, ENTRY, p1, {}, ai, text="x" * 50).prompt_hash
+    h3 = extract_from_pages(None, ENTRY, p2, {}, ai, text="x" * 50).prompt_hash
+    assert h1 == h2 != h3
+
+
+def test_pages_path_uses_patched_chunk_builder(tmp_path):
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    pages = _pages(2)
+    full = build_full_text(pages)
+    one = [ChunkRecord(0, full, 1, 2, 0, len(full))]
+    ai = _ai([_result({"fragments": [{"text": pages[1][:30], "verbatim": True}]})])
+    with patch("klemma.literature.pdf.build_chunks_from_pages", return_value=one) as bc:
+        out = extract_from_pages(pages, ENTRY, prompt, {}, ai, chunk_size=10, overlap=2)
+    bc.assert_called_once()
+    assert len(out.fragments) == 1
+    assert out.full_text_length == len(full)
+
+
+# ---------------------------------------------------------------------------
+# Truncation → split → success; failure below min_chunk_chars
+# ---------------------------------------------------------------------------
+
+
+def test_truncated_chunk_is_split_and_children_succeed(tmp_path):
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    pages = _pages(2, size=6000)
+    full = build_full_text(pages)
+    left_quote = full[20:60]
+    right_quote = full[len(full) // 2 + 20: len(full) // 2 + 60]
+    ai = _ai([
+        _result({"fragments": [{"text": "cut off"}]}, finish="max_tokens"),  # parent → split
+        _result({"fragments": [{"text": left_quote, "verbatim": True}]}),   # left child
+        _result({"fragments": [{"text": right_quote, "verbatim": True}]}),  # right child
+    ])
+    chunks = [ChunkRecord(0, full, 1, 2, 0, len(full))]
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai, chunks=chunks, full_text=full, min_chunk_chars=1000,
+    )
+    statuses = [(c.index, c.status, c.parent_index) for c in out.chunks]
+    assert statuses[0] == (0, "split", None)
+    assert [s[1] for s in statuses[1:]] == ["ok", "ok"]
+    assert all(s[2] == 0 for s in statuses[1:])
+    assert out.failed_chunks == 0 and out.leaf_chunks == 2
+    assert out.coverage.complete
+    # The truncated parent's fragment must not survive
+    assert {ef.fragment.text for ef in out.fragments} == {left_quote, right_quote}
+    assert len(ai._calls) == 3
+
+
+def test_unsplittable_failure_is_recorded_not_raised(tmp_path):
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(1, size=800))
+    ai = _ai([
+        _result({}, text="{not json"),   # extract → parse failure
+        _result({}, text="still {bad"),  # repair → still failure
+    ])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full, min_chunk_chars=4000,
+    )
+    assert out.failed_chunks == 1
+    assert out.chunks[0].status == "failed"
+    assert out.chunks[0].error == "unparseable"
+    assert not out.coverage.complete
+    assert out.fragments == []
+    assert len(ai._calls) == 2  # extract + one repair, no split below min size
+
+
+def test_repair_retry_recovers_json(tmp_path):
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(1))
+    ai = _ai([
+        _result({}, text="{oops"),
+        _result({"fragments": [{"text": "ok fragment"}]}),
+    ])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full,
+    )
+    assert out.failed_chunks == 0
+    assert [ef.fragment.text for ef in out.fragments] == ["ok fragment"]
+    assert ai._calls[1][0].startswith("You receive malformed JSON")
+
+
+# ---------------------------------------------------------------------------
+# Budget reservation before the call
+# ---------------------------------------------------------------------------
+
+
+def test_budget_reserved_before_call_blocks_remaining_chunks(tmp_path):
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(2))
+    half = len(full) // 2
+    chunks = [
+        ChunkRecord(0, full[:half], 1, 1, 0, half),
+        ChunkRecord(1, "[Page 2]\n" + full[half:], 2, 2, half, len(full)),
+    ]
+    ai = _ai([_result({"fragments": [{"text": "first"}]}, tout=2048)])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai, chunks=chunks, full_text=full,
+        budget=Budget(max_output_tokens=3000),  # second call would reserve 2048 more
+    )
+    assert len(ai._calls) == 1
+    assert out.chunks[1].status == "failed" and out.chunks[1].error == "budget"
+    assert out.failed_chunks == 1
+    assert not out.coverage.complete
+
+
+def test_cost_estimate_uses_pricing_and_prefix_match():
+    pricing = {"claude-x": {"input": 3.0, "output": 15.0}}
+    assert estimate_cost_usd("anthropic/claude-x", 1_000_000, 1_000_000, pricing) == 18.0
+    assert estimate_cost_usd("other", 10, 10, pricing) is None
+    assert estimate_cost_usd("claude-x", 10, 10, None) is None
+
+
+# ---------------------------------------------------------------------------
+# Exhaustive mode refuses a backend without finish_reason
+# ---------------------------------------------------------------------------
+
+
+def test_exhaustive_refuses_unknown_finish_reason(tmp_path):
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(1))
+    ai = _ai([_result({"fragments": [{"text": "x"}]}, finish=None)])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full, mode="exhaustive",
+    )
+    assert out.error and "finish_reason" in out.error
+    assert out.fragments == []
+
+
+def test_standard_mode_accepts_unknown_finish_reason_with_valid_json(tmp_path):
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(1))
+    ai = _ai([_result({"fragments": [{"text": "x"}]}, finish=None)])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full,
+    )
+    assert out.error is None and len(out.fragments) == 1
+
+
+# ---------------------------------------------------------------------------
+# Verbatim validation + span location on the full text; validation cap
+# ---------------------------------------------------------------------------
+
+
+def test_fabricated_verbatim_is_downgraded_with_status(tmp_path):
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(1))
+    ai = _ai([_result({"fragments": [
+        {"text": "Not anywhere in the document at all.", "verbatim": True},
+        {"text": "plain paraphrase", "verbatim": False},
+    ]})])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full,
+    )
+    by_text = {ef.fragment.text: ef for ef in out.fragments}
+    fab = by_text["Not anywhere in the document at all."]
+    assert fab.fragment.verbatim is False and fab.verbatim_status == "downgraded"
+    assert by_text["plain paraphrase"].verbatim_status == "unclaimed"
+    assert out.downgrade_stats.downgraded == 1
+
+
+def test_validation_incomplete_flag_above_cap(tmp_path, monkeypatch):
+    import klemma.skills.extract_engine as eng
+
+    monkeypatch.setattr(eng, "VERBATIM_VALIDATION_CAP_LARGE", 500)
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(2, size=600))
+    assert len(full) > 500
+    ai = _ai([_result({"fragments": [{"text": full[20:50], "verbatim": True}]})])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 2, 0, len(full))], full_text=full,
+    )
+    assert out.validation_incomplete is True
+    assert out.fragments[0].verbatim_status == "confirmed"
+
+
+# ---------------------------------------------------------------------------
+# Dedup by text and span (not by prefix)
+# ---------------------------------------------------------------------------
+
+
+def _ef(text, start=None, end=None):
+    return ExtractedFragment(fragment=Fragment(text=text), char_start=start, char_end=end)
+
+
+def test_dedup_keeps_distinct_claims_with_shared_prefix():
+    prefix = "A" * 120
+    a = _ef(prefix + " first distinct conclusion.", 0, 150)
+    b = _ef(prefix + " second, unrelated result.", 300, 450)
+    assert len(dedup_by_text_and_span([a, b])) == 2
+
+
+def test_dedup_drops_exact_normalized_duplicates_without_spans():
+    a = _ef("Sea ice  extent declines.")
+    b = _ef("Sea ice extent declines.")
+    assert len(dedup_by_text_and_span([a, b])) == 1
+
+
+def test_dedup_fuzzy_only_when_spans_overlap():
+    base = "The integrated ice edge error decomposes into extent and misplacement components"
+    near = base + "."
+    overlapping = [_ef(base, 100, 180), _ef(near, 100, 181)]
+    disjoint = [_ef(base, 100, 180), _ef(near, 900, 981)]
+    assert len(dedup_by_text_and_span(overlapping)) == 1
+    assert len(dedup_by_text_and_span(disjoint)) == 2
+
+
+# ---------------------------------------------------------------------------
+# Parsing robustness
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_citation_intent_does_not_drop_fragment(tmp_path):
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(1))
+    ai = _ai([_result({"fragments": [
+        {"text": "kept", "citation_intent": "nonsense", "relevance": "9", "section": "2.4.1"},
+        {"text": "   "},
+    ]})])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full,
+    )
+    assert len(out.fragments) == 1
+    f = out.fragments[0].fragment
+    assert f.text == "kept" and f.citation_intent is None and f.relevance == 5

@@ -312,7 +312,22 @@ class ObsidianConfig(BaseModel):
 class AIConfig(BaseModel):
     backend: str = "litellm"  # "claude" | "litellm" | "openai" (deprecated)
     model: str = "opus"
+    # Text cap for single-shot prompts (annotate, online sources). Extraction
+    # is chunked over the full text and is NOT limited by this value.
     max_pdf_chars: int = 50000
+    # Chunked extraction (plan C1). Overlapping windows over the full text;
+    # a truncated/unparseable chunk is split in half down to min_chunk_chars.
+    chunk_size: int = 25000
+    chunk_overlap: int = 2000
+    min_chunk_chars: int = 4000
+    max_tokens_cap: int = 8192
+    # Per-source budget. 0 = unlimited tokens; None = no dollar cap.
+    budget_max_input_tokens: int = 0
+    budget_max_output_tokens: int = 0
+    budget_max_cost_usd: Optional[float] = None
+    # Price table: {"anthropic/claude-sonnet-5": {"input": 3.0, "output": 15.0}}
+    # in USD per 1M tokens. Unknown model → cost_usd is None (warned once).
+    pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
     timeout: int = 300
     retries: int = 2
     base_url: Optional[str] = None  # URL for OpenAI-compatible endpoints

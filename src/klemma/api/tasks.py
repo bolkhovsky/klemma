@@ -138,11 +138,13 @@ def _run_chunked_extraction(
     user_id: str = "",
     full_text: str = "",
 ) -> dict | None:
-    """Run chunked AI extraction over a list of ChunkRecords.
+    """Run chunked AI extraction over a list of ChunkRecords (SaaS wrapper).
 
-    Renders the extraction prompt once per chunk, calls the AI, accumulates
-    fragments across all chunks, then validates verbatim claims once against
-    the full document text (capped via VERBATIM_VALIDATION_CAP_*).
+    Thin adapter over the pure engine ``skills.extract_engine.extract_from_pages``
+    (plan C1): the engine owns per-chunk calls, JSON repair, truncation splits
+    and full-text verbatim validation; this wrapper owns token accounting
+    (``user_store.record_usage``) and converts the outcome into the legacy
+    ``FragmentRecord`` dict that ``process_source`` / ``reprocess_paper`` expect.
 
     Args:
         ai: AI provider instance (must implement render_prompt + call_with_meta).
@@ -157,200 +159,102 @@ def _run_chunked_extraction(
         user_store: LocalUserStore instance for recording per-chunk token usage, or None.
         user_id: User id string for token recording (ignored when user_store is None).
         full_text: Concatenated page text used for verbatim validation. Empty
-            string disables validation (older callers / tests).
+            string falls back to the joined chunk text.
 
     Returns:
         dict with keys: fragments, key_refs, fragment_ai_sections, predicted_sections,
-        predicted_chapters, chunks_processed, failed_chunks, downgrade_stats
-        — or None if every chunk produced zero fragments.
+        predicted_chapters, chunks_processed, failed_chunks, downgrade_stats,
+        coverage_ratio, validation_incomplete — or None if every chunk produced
+        zero fragments.
     """
-    from klemma.ai import extract_json
     from klemma.hashing import compute_content_hash
-    from klemma.literature.models import DowngradeStats, Fragment
     from klemma.models import FragmentRecord
-    from klemma.skills.extractor import validate_verbatim_fragments
+    from klemma.skills.extract_engine import extract_from_pages
 
-    from .constants import VERBATIM_VALIDATION_CAP_LARGE, VERBATIM_VALIDATION_CAP_SMALL
+    def _record(result, operation: str) -> None:
+        if not (user_store and user_id and result):
+            return
+        user_store.record_usage(
+            user_id=user_id,
+            operation="process_source" if operation == "extract" else "process_source_repair",
+            model=ai_config.model,
+            input_tokens=getattr(result, "input_tokens", 0) or 0,
+            output_tokens=getattr(result, "output_tokens", 0) or 0,
+            citekey=source_label,
+        )
 
-    system = (
-        "You are a research assistant extracting citation-worthy fragments from scientific papers. "
-        "Output only valid JSON with fragments array and key_references array."
+    outcome = extract_from_pages(
+        None,
+        entry,
+        prompt_path,
+        {
+            "dissertation_context": dissertation_context,
+            "available_tags": available_tags,
+            "language": "ru",
+            "project_type": "research",
+        },
+        ai,
+        chunks=chunks,
+        full_text=full_text or None,
+        # SaaS chunks are prebuilt at 25k; a truncated chunk splits down to 4k.
+        min_chunk_chars=4_000,
+        max_tokens_cap=8_192,
+        on_call=_record,
     )
 
+    if not outcome.fragments:
+        return None
+
+    if outcome.failed_chunks > 0:
+        logger.warning(
+            "%s: %d/%d chunk(s) failed AI extraction — result covers only part of the PDF",
+            source_label, outcome.failed_chunks, outcome.leaf_chunks,
+        )
+    if outcome.downgrade_stats.downgraded:
+        logger.warning(
+            "verbatim validator (%s): %d/%d downgraded across %d chunk(s)",
+            source_label, outcome.downgrade_stats.downgraded,
+            outcome.downgrade_stats.verbatim_claimed, outcome.leaf_chunks,
+        )
+
     fragments: list[FragmentRecord] = []
-    all_pydantic: list[Fragment] = []
     fragment_ai_sections: dict[str, str | None] = {}
     predicted_sections: set[str] = set()
     predicted_chapters: set[int] = set()
-    all_key_refs: list[dict] = []
-    chunk_total = len(chunks)
-    failed_chunks = 0
+    for ef in outcome.fragments:
+        f = ef.fragment
+        fragment_id = compute_content_hash(paper_id, f.text, f.page)
+        fragments.append(FragmentRecord(
+            fragment_id=fragment_id,
+            paper_id=paper_id,
+            fragment_text=f.text,
+            fragment_type=f.type,
+            page_number=f.page,
+            citation_intent=f.citation_intent,
+            verbatim=f.verbatim,
+            content_hash=fragment_id,
+        ))
+        fragment_ai_sections[fragment_id] = f.section or None
+        if f.section:
+            predicted_sections.add(f.section)
+        if isinstance(f.chapter, int):
+            predicted_chapters.add(f.chapter)
 
-    for chunk in chunks:
-        user_prompt = ai.render_prompt(
-            prompt_path,
-            title=entry.title or "Unknown",
-            authors=entry.authors_str,
-            year=entry.year or "Unknown",
-            journal=entry.container_title or "N/A",
-            doi=entry.DOI or "N/A",
-            abstract=entry.abstract or "Not available",
-            pdf_text=chunk.text,
-            chunk_index=chunk.index,
-            chunk_total=chunk_total,
-            char_start=chunk.char_start,
-            char_end=chunk.char_end,
-            dissertation_context=dissertation_context,
-            available_tags=available_tags,
-            language="ru",
-            project_type="research",
-        )
-        chunk_chars = len(chunk.text)
-        adaptive_max_tokens = max(2048, min(8192, chunk_chars // 4))
-        chunk_result = ai.call_with_meta(system, user_prompt, max_tokens=adaptive_max_tokens)
-
-        if not chunk_result or not chunk_result.text:
-            logger.warning(
-                "Chunk %d/%d returned no AI response for %s — skipping",
-                chunk.index + 1, chunk_total, source_label,
-            )
-            failed_chunks += 1
-            continue
-
-        # Record token usage per chunk
-        if user_store and user_id:
-            user_store.record_usage(
-                user_id=user_id,
-                operation="process_source",
-                model=ai_config.model,
-                input_tokens=chunk_result.input_tokens or 0,
-                output_tokens=chunk_result.output_tokens or 0,
-                citekey=source_label,
-            )
-
-        data = extract_json(chunk_result.text)
-        if not data:
-            # Repair retry (#381): ask the AI to repair its own malformed JSON.
-            # Tracks tokens separately as `process_source_repair` for visibility.
-            repair_system = (
-                "You receive malformed JSON. Output ONLY a valid JSON object that "
-                "preserves every field and value exactly. Do not add commentary, "
-                "do not change content, do not drop fragments. Fix only the syntax."
-            )
-            repair_user = f"Repair this malformed JSON:\n\n{chunk_result.text}"
-            repair_result = ai.call_with_meta(
-                repair_system, repair_user,
-                max_tokens=min(8192, adaptive_max_tokens * 2),
-            )
-            if repair_result and repair_result.text:
-                if user_store and user_id:
-                    user_store.record_usage(
-                        user_id=user_id,
-                        operation="process_source_repair",
-                        model=ai_config.model,
-                        input_tokens=repair_result.input_tokens or 0,
-                        output_tokens=repair_result.output_tokens or 0,
-                        citekey=source_label,
-                    )
-                data = extract_json(repair_result.text)
-                if data:
-                    logger.info(
-                        "Chunk %d/%d: AI repair retry recovered JSON for %s",
-                        chunk.index + 1, chunk_total, source_label,
-                    )
-            if not data:
-                logger.warning(
-                    "Chunk %d/%d: failed to parse AI JSON for %s "
-                    "(repair retry also failed) — skipping",
-                    chunk.index + 1, chunk_total, source_label,
-                )
-                failed_chunks += 1
-                continue
-
-        # Collect key_references (bibliography; last chunk usually has the most)
-        all_key_refs.extend(data.get("key_references", []))
-
-        # Parse fragments from this chunk into parallel record/pydantic arrays.
-        # Validation is deferred until after all chunks are processed so the
-        # validator can match against the full document text (#379).
-        for f_data in data.get("fragments", []):
-            text = f_data.get("text", "").strip()
-            if not text:
-                continue
-            fragment_id = compute_content_hash(paper_id, text, f_data.get("page"))
-            claimed_verbatim = bool(f_data.get("verbatim", False))
-            all_pydantic.append(Fragment(text=text, verbatim=claimed_verbatim))
-            fragments.append(FragmentRecord(
-                fragment_id=fragment_id,
-                paper_id=paper_id,
-                fragment_text=text,
-                fragment_type=f_data.get("type", "key_idea"),
-                page_number=f_data.get("page"),
-                citation_intent=f_data.get("citation_intent"),
-                verbatim=claimed_verbatim,
-                content_hash=fragment_id,
-            ))
-            sec = str(f_data.get("section", "")).strip()
-            fragment_ai_sections[fragment_id] = sec or None
-            if sec:
-                predicted_sections.add(sec)
-            chap = f_data.get("chapter")
-            if isinstance(chap, int):
-                predicted_chapters.add(chap)
-
-    if not fragments:
-        return None
-
-    if failed_chunks > 0:
-        logger.warning(
-            "%s: %d/%d chunk(s) failed AI extraction — result covers only part of the PDF",
-            source_label, failed_chunks, chunk_total,
-        )
-
-    # Single full-text verbatim validation (#379). Per-chunk slices cause
-    # false-negative downgrades when the AI quotes text from outside its
-    # own chunk window (boundary text, cross-chunk quotes, prompt context).
-    downgrade_stats = DowngradeStats()
-    if all_pydantic:
-        # Production callers (process_source, reprocess_paper) pass the same
-        # full_text they cache in papers.raw_text. Direct callers (helper-level
-        # tests, future callers) that pass full_text="" fall back to the
-        # joined chunk text — broader than any single chunk, so cross-chunk
-        # quotes still validate cleanly even without an explicit full_text.
-        source_text = full_text or "\n\n".join(chunk.text for chunk in chunks)
-        if len(source_text) >= VERBATIM_VALIDATION_CAP_SMALL:
-            validation_text = source_text[:VERBATIM_VALIDATION_CAP_LARGE]
-            if len(source_text) > VERBATIM_VALIDATION_CAP_LARGE:
-                logger.warning(
-                    "verbatim validator (%s): source text %d chars truncated to %d for "
-                    "validation; fragments quoting beyond the cap may be downgraded",
-                    source_label, len(source_text), VERBATIM_VALIDATION_CAP_LARGE,
-                )
-        else:
-            validation_text = source_text
-        downgrade_stats = validate_verbatim_fragments(
-            all_pydantic, validation_text, source_label,
-        )
-        for record, pyd in zip(fragments, all_pydantic):
-            record.verbatim = pyd.verbatim
-        if downgrade_stats.downgraded:
-            logger.warning(
-                "verbatim validator (%s): %d/%d downgraded across %d chunk(s)",
-                source_label, downgrade_stats.downgraded,
-                downgrade_stats.verbatim_claimed, chunk_total,
-            )
-
+    # Legacy prefix dedup kept for the SaaS path (tests patch this symbol);
+    # the engine already applied exact-text + span dedup.
     fragments = dedup_fragments_by_prefix(fragments, min_prefix=100)
 
     return {
         "fragments": fragments,
-        "key_refs": all_key_refs,
+        "key_refs": outcome.key_refs,
         "fragment_ai_sections": fragment_ai_sections,
         "predicted_sections": predicted_sections,
         "predicted_chapters": predicted_chapters,
-        "chunks_processed": chunk_total - failed_chunks,
-        "failed_chunks": failed_chunks,
-        "downgrade_stats": downgrade_stats,
+        "chunks_processed": outcome.leaf_chunks - outcome.failed_chunks,
+        "failed_chunks": outcome.failed_chunks,
+        "downgrade_stats": outcome.downgrade_stats,
+        "coverage_ratio": outcome.coverage.ratio,
+        "validation_incomplete": outcome.validation_incomplete,
     }
 
 

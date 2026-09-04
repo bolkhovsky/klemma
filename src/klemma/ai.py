@@ -221,6 +221,24 @@ def extract_json(text: str) -> Optional[dict]:
     return result
 
 
+def normalize_finish_reason(value: object) -> str:
+    """Map a provider stop reason onto ``stop | max_tokens | error | unknown``.
+
+    Anything that is not a non-empty string (MagicMock in tests, None from
+    backends that do not report it) is ``unknown``.
+    """
+    if not isinstance(value, str) or not value:
+        return "unknown"
+    v = value.lower()
+    if v in ("stop", "end_turn", "stop_sequence", "end"):
+        return "stop"
+    if v in ("length", "max_tokens", "max_output_tokens"):
+        return "max_tokens"
+    if v in ("error", "content_filter", "refusal"):
+        return "error"
+    return "unknown"
+
+
 @dataclass
 class AICallResult:
     """Result of an AI call with metadata for observability."""
@@ -232,6 +250,10 @@ class AICallResult:
     retries_used: int = 0
     model: str = ""
     error: Optional[str] = None
+    # Why the model stopped: "stop" | "max_tokens" | "error" | "unknown".
+    # Backends that cannot observe it (Claude CLI) report "unknown"; the
+    # chunked extraction engine treats "max_tokens" as truncation and splits.
+    finish_reason: Optional[str] = None
 
     def __bool__(self) -> bool:
         return self.text is not None
@@ -354,6 +376,7 @@ class AIProviderBase:
             duration_ms=elapsed,
             model=effective_model,
             error=None if text else "all retries exhausted",
+            finish_reason="unknown" if text else "error",
         )
 
     def render_prompt(self, template_path: Path, **kwargs) -> str:
@@ -477,9 +500,12 @@ class ClaudeClient(AIProviderBase):
                     )
                     continue
                 elapsed = int((time.monotonic() - t0) * 1000)
+                # The CLI does not expose the stop reason — "unknown" is honest;
+                # the extraction engine refuses exhaustive mode on it.
                 return AICallResult(
                     text=result.stdout, duration_ms=elapsed,
                     retries_used=retries_used, model=effective_model,
+                    finish_reason="unknown",
                 )
             except subprocess.TimeoutExpired:
                 retries_used = attempt + 1

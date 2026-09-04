@@ -1689,7 +1689,8 @@ def _process_single(
     if force:
         state.delete_fragments(citekey)
 
-    # Extract fragments
+    # Extract fragments over the FULL text (chunked engine, plan C1); the
+    # truncated `pdf_text` is kept only for annotate/vault below.
     result = extract_fragments(
         entry,
         pdf_text,
@@ -1700,6 +1701,7 @@ def _process_single(
         available_tags=available_tags,
         klemma_home=klemma_home,
         project_type=project_type,
+        pages=pdf_pages or None,
     )
 
     if not result or not result.fragments:
@@ -1709,7 +1711,22 @@ def _process_single(
         return (0, "no fragments")
 
     if not quiet:
-        console.print(f"  [green]{len(result.fragments)} fragments[/green]", end="")
+        _chunks = getattr(result, "chunk_total", 1) or 1
+        _chunk_note = f" across {_chunks} chunk(s)" if _chunks > 1 else ""
+        console.print(f"  [green]{len(result.fragments)} fragments{_chunk_note}[/green]", end="")
+        _failed = getattr(result, "failed_chunks", 0) or 0
+        if _failed:
+            console.print(
+                f"\n  [yellow]\u26a0 {_failed}/{_chunks} chunk(s) failed — "
+                f"coverage {getattr(result, 'coverage_ratio', 1.0) * 100:.1f}%[/yellow]",
+                end="",
+            )
+        if getattr(result, "validation_incomplete", False):
+            console.print(
+                "\n  [yellow]\u26a0 text exceeds the verbatim validation cap; "
+                "run `klemma repair --steps verbatim` for full spans[/yellow]",
+                end="",
+            )
         ds = result.downgrade_stats
         if ds.downgraded:
             console.print(

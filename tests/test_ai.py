@@ -313,3 +313,41 @@ def test_claude_call_with_meta_cli_error(mock_check):
 
     assert result.text is None
     assert result.error is not None
+
+
+# ---------------------------------------------------------------------------
+# finish_reason (plan C1)
+# ---------------------------------------------------------------------------
+
+
+def test_aicallresult_finish_reason_defaults_to_none():
+    from klemma.ai import AICallResult
+
+    assert AICallResult(text="x").finish_reason is None
+
+
+def test_base_call_with_meta_reports_unknown_finish_reason():
+    from klemma.ai import AIProviderBase
+    from klemma.config import AIConfig
+
+    class _Echo(AIProviderBase):
+        def call(self, system, user, **kw):
+            return "hi"
+
+    r = _Echo(AIConfig(backend="litellm", model="m")).call_with_meta("s", "u")
+    assert r.text == "hi" and r.finish_reason == "unknown"
+
+
+def test_claude_cli_call_with_meta_reports_unknown_finish_reason(monkeypatch):
+    from types import SimpleNamespace
+
+    from klemma import ai as ai_mod
+    from klemma.config import AIConfig
+
+    monkeypatch.setattr(ai_mod.ClaudeClient, "check_cli_available", staticmethod(lambda: True))
+    monkeypatch.setattr(
+        ai_mod.subprocess, "run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout="ok", stderr=""),
+    )
+    r = ai_mod.ClaudeClient(AIConfig(backend="claude", model="opus")).call_with_meta("s", "u")
+    assert r.text == "ok" and r.finish_reason == "unknown"

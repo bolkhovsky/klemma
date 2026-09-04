@@ -32,9 +32,20 @@ instance:
 
 ai:
   language: "ru"                       # AI response language: "en", "ru", "de", etc.
-  max_pdf_chars: 50000
+  max_pdf_chars: 50000                 # single-shot prompts only (annotate, online); extraction is chunked
   timeout: 300
   retries: 2
+  # Chunked extraction over the full text (plan C1)
+  chunk_size: 25000                    # chars per window
+  chunk_overlap: 2000
+  min_chunk_chars: 4000                # truncated/unparseable chunks split down to this size
+  max_tokens_cap: 8192                 # max output tokens per chunk
+  # Per-source budget: 0 = unlimited tokens, omit = no dollar cap
+  budget_max_input_tokens: 0
+  budget_max_output_tokens: 0
+  # budget_max_cost_usd: 2.0           # only enforced when the model has a price below
+  # pricing:                           # USD per 1M tokens; unknown model → cost_usd is null
+  #   "anthropic/claude-sonnet-5": {input: 3.0, output: 15.0}
 
   # ===========================================================================
   # Choose ONE backend preset below. Uncomment the one you need.

@@ -35,7 +35,7 @@ Async task definitions for rq worker. Tasks receive primitive args (worker runs 
 - `generate_draft(section, data_dir, ...)` — section draft via drafter.py in headless mode
 
 ### constants.py
-Shared numeric constants for the API layer.
+Shared numeric constants for the API layer. The verbatim caps are defined in `skills/extract_engine.py` (plan C1) and re-exported here.
 - `VERBATIM_VALIDATION_CAP_SMALL = 100_000` — `full_text` shorter than this → validator sees the whole document
 - `VERBATIM_VALIDATION_CAP_LARGE = 1_000_000` — pathological-input backstop only (#382). Raised from 150K after measuring abuzyarov2011 (339K) had 62.8% downgrades caused entirely by the old cap. Covers academic papers + book-length normative documents; difflib's substring + Ratcliff-Obershelp fuzzy match keep RAM under ~50 MB on 1 MB text.
 - `EMBEDDINGS_REQUIRED_BACKEND = "litellm"`, `EMBEDDINGS_REQUIRED_MODEL_PREFIX = "ollama/"` — enforcement values for `_validate_embeddings_config()`

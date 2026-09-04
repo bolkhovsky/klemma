@@ -13,6 +13,12 @@ from ..literature.pdf import PDFExtractor
 from ..state import StateManager
 from ..text_normalize import normalize, normalize_with_map
 from ..vault import VaultAdapter
+from .extract_engine import (  # noqa: F401  (re-exported)
+    VERBATIM_VALIDATION_CAP_LARGE,
+    VERBATIM_VALIDATION_CAP_SMALL,
+    ExtractedFragment,
+    ExtractionOutcome,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,74 +175,76 @@ def extract_fragments(
     available_tags: list[str] | None = None,
     klemma_home: Optional[Path] = None,
     project_type: str = "dissertation",
+    *,
+    pages: Optional[list[str]] = None,
+    outline_digest: str = "",
+    mode: str = "standard",
 ) -> Optional[ExtractionResult]:
-    """Extract citation fragments from a paper's PDF text."""
+    """Extract citation fragments from a paper and persist them (CLI path).
 
-    prompt_path = resolve_prompt("extract.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "extract.md"
-    user_prompt = ai.render_prompt(
-        prompt_path,
-        title=entry.title or "Unknown",
-        authors=entry.authors_str,
-        year=entry.year or "Unknown",
-        journal=entry.container_title or "N/A",
-        doi=entry.DOI or "N/A",
-        abstract=entry.abstract or "Not available",
-        pdf_text=pdf_text,
-        dissertation_context=dissertation_context,
-        available_tags=", ".join(available_tags) if available_tags else "",
-        language=config.ai.language,
-        project_type=project_type,
-    )
+    Thin wrapper over the pure engine (``extract_engine.extract_from_pages``):
+    when ``pages`` is given the full text is chunked and every chunk goes to
+    the model — ``config.ai.max_pdf_chars`` no longer limits extraction.
+    Without ``pages`` (online sources, legacy callers) ``pdf_text`` is sent as a
+    single chunk. Persistence stays here: fragments are saved to the project
+    state exactly as before; run lifecycle/publication arrives with plan C2.
+    """
+    from .extract_engine import Budget, extract_from_pages
 
-    system = (
-        "You are a research assistant extracting citation-worthy fragments from scientific papers. "
-        "Output only valid JSON with fragments array."
+    prompt_path = (
+        resolve_prompt("extract.md", klemma_home)
+        if klemma_home
+        else Path(__file__).parent.parent.parent.parent / "prompts" / "extract.md"
     )
+    prompt_vars = {
+        "dissertation_context": dissertation_context,
+        "available_tags": ", ".join(available_tags) if available_tags else "",
+        "language": config.ai.language,
+        "project_type": project_type,
+        "outline_digest": outline_digest,
+    }
 
     from klemma.ai import resolve_task_model
 
-    data = ai.call_json(
-        system, user_prompt, max_tokens=4096,
-        model_override=resolve_task_model("extract", config.ai),
+    ai_cfg = config.ai
+    outcome = extract_from_pages(
+        pages,
+        entry,
+        prompt_path,
+        prompt_vars,
+        ai,
+        text=None if pages else pdf_text,
+        chunk_size=getattr(ai_cfg, "chunk_size", 25_000),
+        overlap=getattr(ai_cfg, "chunk_overlap", 2_000),
+        min_chunk_chars=getattr(ai_cfg, "min_chunk_chars", 4_000),
+        max_tokens_cap=getattr(ai_cfg, "max_tokens_cap", 8_192),
+        mode=mode,
+        budget=Budget(
+            max_input_tokens=int(getattr(ai_cfg, "budget_max_input_tokens", 0) or 0),
+            max_output_tokens=int(getattr(ai_cfg, "budget_max_output_tokens", 0) or 0),
+            max_cost_usd=getattr(ai_cfg, "budget_max_cost_usd", None),
+        ),
+        model_override=resolve_task_model("extract", ai_cfg),
+        pricing=getattr(ai_cfg, "pricing", None) or None,
     )
-    if not data:
-        logger.error("Failed to extract fragments for %s", entry.id)
+
+    if outcome.error:
+        logger.error("Extraction aborted for %s: %s", entry.id, outcome.error)
         return None
-
-    # Parse fragments
-    fragments = []
-    for f_data in data.get("fragments", []):
-        try:
-            fragment = Fragment(
-                text=f_data.get("text", ""),
-                type=f_data.get("type", "key_idea"),
-                chapter=f_data.get("chapter"),
-                section=f_data.get("section"),
-                relevance=max(1, min(5, f_data.get("relevance", 3))),
-                usage_hint=f_data.get("usage_hint", ""),
-                page=f_data.get("page"),
-                citation_intent=f_data.get("citation_intent"),
-                verbatim=bool(f_data.get("verbatim", False)),
-            )
-            if fragment.text:
-                fragments.append(fragment)
-        except Exception as e:
-            logger.warning("Invalid fragment: %s", e)
-
-    if not fragments:
+    if not outcome.fragments:
         logger.warning("No valid fragments extracted for %s", entry.id)
         return None
+    if outcome.failed_chunks:
+        logger.warning(
+            "%s: %d/%d chunk(s) failed — coverage %.1f%%",
+            entry.id, outcome.failed_chunks, outcome.leaf_chunks, outcome.coverage.ratio * 100,
+        )
 
-    # Post-AI integrity check: confirm every `verbatim=true` claim against the
-    # paper text and downgrade the ones that don't hold up. Mutates fragments
-    # in place; stats surface via ExtractionResult → CLI warning and SaaS
-    # job metadata.
-    downgrade_stats = validate_verbatim_fragments(fragments, pdf_text, entry.id)
+    fragments = outcome.plain_fragments
 
     # Compute content hashes for future content-addressable storage (ADR-014)
     from ..hashing import compute_content_hash
 
-    # Save to database
     fragment_dicts = [
         {
             "text": f.text,
@@ -258,8 +266,22 @@ def extract_fragments(
     return ExtractionResult(
         source_id=entry.id,
         fragments=fragments,
-        summary=data.get("summary", ""),
-        downgrade_stats=downgrade_stats,
+        summary=outcome.summary,
+        downgrade_stats=outcome.downgrade_stats,
+        chunk_total=outcome.leaf_chunks,
+        failed_chunks=outcome.failed_chunks,
+        coverage_ratio=outcome.coverage.ratio,
+        validation_incomplete=outcome.validation_incomplete,
+        prompt_hash=outcome.prompt_hash,
+        model=outcome.model,
+        tokens_in=outcome.tokens_in,
+        tokens_out=outcome.tokens_out,
+        cost_usd=outcome.cost_usd,
+        key_references=outcome.key_refs,
+        spans=[
+            (ef.char_start, ef.char_end) if ef.char_start is not None else None
+            for ef in outcome.fragments
+        ],
     )
 
 
