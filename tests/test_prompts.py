@@ -45,6 +45,7 @@ TEMPLATE_CONTEXTS = {
         "abstract": "An abstract",
         "pdf_text": "Paper text...",
         "dissertation_context": "Context",
+        "outline_digest": "Глава 1. Анализ\n  1.1 Раздел\n    1.1.1 Пункт",
         "available_tags": ["NLP", "ML"],
     },
     "annotate.md": {

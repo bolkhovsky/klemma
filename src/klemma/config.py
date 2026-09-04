@@ -508,6 +508,10 @@ class ProjectConfig(BaseModel):
     auto_register: str = "mapped"  # "mapped" | "all" — filter new sources by chapter_mapping match
     sections: list[dict] = Field(default_factory=list)
     # ADR-016: [{id: str, title: str}] — draft file manifest; drives draft/ scaffold creation
+    # Plan C3: structure file whose numbered items become the extraction outline
+    # digest (relative to the project root); "" disables the block.
+    outline_file: str = ""
+    outline_max_chars: int = 12000
 
     @property
     def current_chapter(self) -> int:

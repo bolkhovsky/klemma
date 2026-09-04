@@ -190,6 +190,7 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
                         project_store=project_store,
                         replace=replace,
                         mode=mode,
+                        outline_digest=kctx.outline_digest,
                     ): ck
                     for ck in keys
                 }
@@ -248,6 +249,7 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
                 project_store=project_store,
                 replace=replace,
                 mode=mode,
+                outline_digest=kctx.outline_digest,
             )
             if n_frags > 0:
                 processed += 1
