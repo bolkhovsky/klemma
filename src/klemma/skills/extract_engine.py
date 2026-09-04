@@ -481,6 +481,56 @@ def _split_bounds(full_text: str, start: int, end: int, overlap: int) -> tuple[i
     return left_end, right_start
 
 
+
+def _finalize_notes(notes: dict, source_text: str) -> dict:
+    """Validate note quotes (verbatim/span) and dedup by (item, normalized text, span).
+
+    Quotes that cannot be located are kept but marked ``unverified`` — a note
+    is an opinion of the model about the outline, never a citation.
+    """
+    out: dict = {}
+    for key in ("contradicts", "qualifies"):
+        seen: set[tuple] = set()
+        cleaned: list[dict] = []
+        for n in notes.get(key, []) or []:
+            if not isinstance(n, dict):
+                continue
+            quote = str(n.get("quote", "") or "").strip()
+            item = str(n.get("item", "") or "").strip()
+            if not quote:
+                continue
+            span = locate_fragment_span(quote, source_text)
+            status = "confirmed" if span else "unverified"
+            norm = normalize(quote)
+            dup = False
+            for s_item, s_norm, s_span in seen:
+                if s_item != item:
+                    continue
+                if s_norm == norm:
+                    dup = True
+                    break
+                if span and s_span and span[0] < s_span[1] and s_span[0] < span[1]:
+                    ratio = difflib.SequenceMatcher(None, norm, s_norm, autojunk=False).ratio()
+                    if ratio >= _FUZZY_DEDUP_THRESHOLD:
+                        dup = True
+                        break
+            if dup:
+                continue
+            seen.add((item, norm, span))
+            cleaned.append({
+                "item": item, "quote": quote, "note": str(n.get("note", "") or ""),
+                "status": status,
+                "char_start": span[0] if span else None,
+                "char_end": span[1] if span else None,
+            })
+        if cleaned:
+            out[key] = cleaned
+    for key, value in notes.items():
+        if key not in ("contradicts", "qualifies", "not_covered"):
+            out[key] = value
+    return out
+
+
 def _page_at(full_text: str, offset: int) -> int:
     page = 1
     for m in _PAGE_MARKER_RE.finditer(full_text, 0, max(0, offset) + 1):
@@ -614,6 +664,9 @@ def extract_from_pages(
     from ..ai import extract_json
     from ..literature import pdf as _pdf
 
+    if mode == "exhaustive":
+        # Longer answers per chunk: keep chunks small enough for the output cap.
+        chunk_size = min(chunk_size, 20_000)
     if chunks is not None:
         work = list(chunks)
         source_text = full_text if full_text else _reconstruct_from_chunks(work)
@@ -705,7 +758,12 @@ def extract_from_pages(
             char_end=chunk.char_end,
             **prompt_vars,
         )
-        max_tokens = min(max_tokens_cap, max(2048, len(chunk.text) // 4))
+        # Standard: adaptive to chunk size. Exhaustive: always the full cap — the
+        # answer is expected to be long, and a truncation splits the chunk anyway.
+        max_tokens = (
+            max_tokens_cap if mode == "exhaustive"
+            else min(max_tokens_cap, max(2048, len(chunk.text) // 4))
+        )
 
         def _reserve(prompt_chars: int, out_tokens: int) -> bool:
             """True when the call fits the remaining budget (input, output, cost)."""
@@ -914,6 +972,9 @@ def extract_from_pages(
                 if ef.fragment.page is None:
                     ef.fragment.page = _page_at(source_text, ef.char_start)
         fragments = dedup_by_text_and_span(fragments)
+
+    if notes:
+        notes = _finalize_notes(notes, source_text)
 
     coverage = compute_coverage(outcomes, total_chars)
     cost = estimate_cost_usd(model, tokens_in, tokens_out, pricing)

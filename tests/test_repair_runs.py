@@ -150,12 +150,10 @@ def test_repair_run_publishes_attempt_consistently(tmp_path):
     assert len(ps.get_fragments(pid)) == 1
 
 
-def test_process_rejects_replace_without_force_and_exhaustive(tmp_path):
+def test_process_rejects_replace_without_force(tmp_path):
     kctx = _kctx(tmp_path)
     r = _invoke("process", ["k", "--replace"], kctx, "process")
     assert r.exit_code == 2 and "requires --force" in r.output
-    r = _invoke("process", ["k", "--exhaustive"], kctx, "process")
-    assert r.exit_code == 2 and "not available" in r.output
 
 
 def test_process_resume_stale_without_stale_runs_does_nothing(tmp_path):

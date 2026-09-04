@@ -37,8 +37,9 @@ logger = logging.getLogger(__name__)
     help="With --force: drop the legacy (run-less) fragments once the new run is complete",
 )
 @click.option(
-    "--exhaustive", is_flag=True, hidden=True,
-    help="Best-effort exhaustive extraction (arrives with the exhaustive prompt; not yet available)",
+    "--exhaustive", is_flag=True,
+    help="Best-effort exhaustive extraction: every claim-bearing verbatim sentence per outline item, "
+         "structure notes (contradicts/qualifies), not_extracted; refuses backends without finish_reason",
 )
 @click.option(
     "--from-file", "from_file", type=click.Path(exists=True, dir_okay=False),
@@ -98,17 +99,11 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
         except Exception as exc:  # noqa: BLE001
             logger.debug("stale-run cleanup failed: %s", exc)
 
-    if exhaustive:
-        # The engine only gates finish_reason in this mode; the exhaustive
-        # prompt/cap policy is not implemented yet. Recording mode='exhaustive'
-        # for a standard extraction would poison provenance and evals.
-        console.print("[red]--exhaustive is not available yet (plan C4).[/red]")
-        raise SystemExit(2)
     if replace and not force:
         console.print("[red]--replace requires --force (it drops the legacy corpus after a "
                       "complete, validated run).[/red]")
         raise SystemExit(2)
-    mode = "standard"
+    mode = "exhaustive" if exhaustive else "standard"
 
     from ..literature.pdf import PDFExtractor
 

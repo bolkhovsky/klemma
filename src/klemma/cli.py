@@ -1797,6 +1797,20 @@ def _process_single(
         else:
             console.print(" [dim](DB only)[/dim]")
 
+    # Exhaustive mode: mirror the structure notes into the vault note (best effort).
+    _notes = getattr(result, "notes", None) or {}
+    _not_extracted = getattr(result, "not_extracted", None) or []
+    if (_notes or _not_extracted) and saved_path:
+        try:
+            from .skills.extractor import format_structure_notes
+
+            vault.update_section(
+                f"@{citekey}", "## \U0001f9ed Заметки к структуре",
+                format_structure_notes(_notes, _not_extracted),
+            )
+        except Exception as _e:  # noqa: BLE001
+            logger.debug("structure notes mirror failed for %s: %s", citekey, _e)
+
     # A partial extraction (failed chunk / incomplete coverage) must not be
     # published to the shared library cache nor registered as completed:
     # the fast paths would serve it — to other projects too — without ever

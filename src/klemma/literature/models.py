@@ -170,6 +170,10 @@ class ExtractionResult(BaseModel):
     spans: list[Optional[tuple[int, int]]] = Field(default_factory=list)
     verbatim_statuses: list[str] = Field(default_factory=list)
     source_locators: list[Optional[str]] = Field(default_factory=list)
+    # Exhaustive mode (plan C4): validated contradicts/qualifies notes and the
+    # outline ids no fragment/note referenced.
+    notes: dict = Field(default_factory=dict)
+    not_extracted: list[str] = Field(default_factory=list)
 
 
 class DailyPlan(BaseModel):

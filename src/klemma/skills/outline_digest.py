@@ -187,3 +187,19 @@ def load_outline_digest(project_root: Optional[Path], project) -> str:
         )
     max_chars = int(getattr(project, "outline_max_chars", 12_000) or 12_000)
     return render_outline_digest(parsed, max_chars=max_chars)
+
+
+_DIGEST_ID_RE = re.compile(r"^\s*(\d+(?:\.\d+)+)\s", re.M)
+
+
+def digest_ids(digest: str) -> list[str]:
+    """Numbered ids present in a rendered digest (sections and items)."""
+    return _DIGEST_ID_RE.findall(digest or "")
+
+
+def not_extracted(digest: str, covered: set[str]) -> list[str]:
+    """Outline ids no fragment or note referenced: deterministic, computed after
+    all chunks. Named ``not_extracted`` on purpose — at ~90 % recall the absence
+    of an extraction does not prove the paper is silent on the item."""
+    ids = digest_ids(digest)
+    return [i for i in ids if i not in covered]

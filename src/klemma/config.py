@@ -321,6 +321,7 @@ class AIConfig(BaseModel):
     chunk_overlap: int = 2000
     min_chunk_chars: int = 4000
     max_tokens_cap: int = 8192
+    exhaustive_max_tokens: int = 16384  # output cap per chunk in --exhaustive mode
     # Per-source budget. 0 = unlimited tokens; None = no dollar cap.
     budget_max_input_tokens: int = 0
     budget_max_output_tokens: int = 0

@@ -277,6 +277,7 @@ def publish_run(
             "tokens_out": int(getattr(result, "tokens_out", 0) or 0),
             "cost_usd": getattr(result, "cost_usd", None),
             "attempt_id": handle.attempt_id,
+            "notes_json": _notes_json(result),
         },
         verify_fragment=_verify,
         replace_legacy=replace_legacy,
@@ -287,3 +288,12 @@ def publish_run(
         validation_incomplete,
     )
     return status
+
+
+def _notes_json(result: Any) -> Optional[str]:
+    """Exhaustive-mode notes + not_extracted as JSON for the run row; None otherwise."""
+    notes = getattr(result, "notes", None) or {}
+    not_extracted = getattr(result, "not_extracted", None) or []
+    if not notes and not not_extracted:
+        return None
+    return json.dumps({**notes, "not_extracted": list(not_extracted)}, ensure_ascii=False)

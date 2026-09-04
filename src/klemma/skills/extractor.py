@@ -49,10 +49,11 @@ def extract_fragments(
     """
     from .extract_engine import Budget, extract_from_pages
 
+    prompt_name = "extract_exhaustive.md" if mode == "exhaustive" else "extract.md"
     prompt_path = (
-        resolve_prompt("extract.md", klemma_home)
+        resolve_prompt(prompt_name, klemma_home)
         if klemma_home
-        else Path(__file__).parent.parent.parent.parent / "prompts" / "extract.md"
+        else Path(__file__).parent.parent.parent.parent / "prompts" / prompt_name
     )
     prompt_vars = {
         "dissertation_context": dissertation_context,
@@ -75,7 +76,6 @@ def extract_fragments(
         chunk_size=getattr(ai_cfg, "chunk_size", 25_000),
         overlap=getattr(ai_cfg, "chunk_overlap", 2_000),
         min_chunk_chars=getattr(ai_cfg, "min_chunk_chars", 4_000),
-        max_tokens_cap=getattr(ai_cfg, "max_tokens_cap", 8_192),
         mode=mode,
         budget=Budget(
             max_input_tokens=int(getattr(ai_cfg, "budget_max_input_tokens", 0) or 0),
@@ -84,6 +84,10 @@ def extract_fragments(
         ),
         model_override=resolve_task_model("extract", ai_cfg),
         pricing=getattr(ai_cfg, "pricing", None) or None,
+        max_tokens_cap=(
+            int(getattr(ai_cfg, "exhaustive_max_tokens", 16_384) or 16_384)
+            if mode == "exhaustive" else getattr(ai_cfg, "max_tokens_cap", 8_192)
+        ),
     )
 
     if outcome.error:
@@ -155,7 +159,23 @@ def extract_fragments(
         ],
         verbatim_statuses=[ef.verbatim_status for ef in outcome.fragments],
         source_locators=[ef.source_locator for ef in outcome.fragments],
+        notes=outcome.notes if mode == "exhaustive" else {},
+        not_extracted=_not_extracted(outline_digest, outcome) if mode == "exhaustive" else [],
     )
+
+
+def _not_extracted(outline_digest: str, outcome) -> list[str]:
+    from .outline_digest import not_extracted
+
+    covered: set[str] = set()
+    for ef in outcome.fragments:
+        if ef.fragment.section:
+            covered.add(str(ef.fragment.section))
+    for key in ("contradicts", "qualifies"):
+        for n in (outcome.notes or {}).get(key, []) or []:
+            if isinstance(n, dict) and n.get("item"):
+                covered.add(str(n["item"]))
+    return not_extracted(outline_digest, covered)
 
 
 def fragments_from_rows(rows: list[dict]) -> list[Fragment]:
@@ -184,6 +204,21 @@ def fragments_from_rows(rows: list[dict]) -> list[Fragment]:
             verbatim=bool(r.get("verbatim", False)),
         ))
     return out
+
+
+def format_structure_notes(notes: dict, not_extracted: list[str]) -> str:
+    """Render exhaustive-mode notes for the vault («Заметки к структуре»)."""
+    lines: list[str] = []
+    for key, label in (("contradicts", "Противоречит"), ("qualifies", "Ограничивает")):
+        for n in notes.get(key, []) or []:
+            mark = "" if n.get("status") == "confirmed" else " (цитата не подтверждена)"
+            lines.append(f"- **{label} {n.get('item', '?')}**{mark}: «{n.get('quote', '')}»")
+            if n.get("note"):
+                lines.append(f"  - {n['note']}")
+    if not_extracted:
+        lines.append("")
+        lines.append("Пункты структуры без извлечений (not_extracted): " + ", ".join(not_extracted))
+    return "\n".join(lines).rstrip() or "—"
 
 
 def _format_fragments_for_vault(fragments: list[Fragment]) -> str:
