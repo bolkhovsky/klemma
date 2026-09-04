@@ -1440,6 +1440,15 @@ def _detect_input_type(value: str) -> str:
         return "path"
     return "citekey"
 
+
+def _num_attr(obj, name: str, default):
+    """Read a numeric attribute defensively: mocks / None / non-numbers → default."""
+    value = getattr(obj, name, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return value
+
+
 def _process_single(
     citekey,
     cfg,
@@ -1710,17 +1719,17 @@ def _process_single(
         return (0, "no fragments")
 
     if not quiet:
-        _chunks = getattr(result, "chunk_total", 1) or 1
+        _chunks = _num_attr(result, "chunk_total", 1) or 1
         _chunk_note = f" across {_chunks} chunk(s)" if _chunks > 1 else ""
         console.print(f"  [green]{len(result.fragments)} fragments{_chunk_note}[/green]", end="")
-        _failed = getattr(result, "failed_chunks", 0) or 0
+        _failed = _num_attr(result, "failed_chunks", 0)
         if _failed:
             console.print(
                 f"\n  [yellow]\u26a0 {_failed}/{_chunks} chunk(s) failed — "
-                f"coverage {getattr(result, 'coverage_ratio', 1.0) * 100:.1f}%[/yellow]",
+                f"coverage {_num_attr(result, 'coverage_ratio', 1.0) * 100:.1f}%[/yellow]",
                 end="",
             )
-        if getattr(result, "validation_incomplete", False):
+        if getattr(result, "validation_incomplete", False) is True:
             console.print(
                 "\n  [yellow]\u26a0 text exceeds the verbatim validation cap; "
                 "run `klemma repair --steps verbatim` for full spans[/yellow]",
@@ -1738,11 +1747,11 @@ def _process_single(
     # Save to vault. After a partial --force the DB kept the old corpus and
     # merged the new fragments; the note must show that merged set, not the
     # partial new subset (update_section replaces the whole quotation block).
+    _partial = _num_attr(result, "failed_chunks", 0) > 0 or (
+        _num_attr(result, "coverage_ratio", 1.0) < 1.0
+    )
     _vault_fragments = result.fragments
-    if force and (
-        (getattr(result, "failed_chunks", 0) or 0) > 0
-        or (getattr(result, "coverage_ratio", 1.0) or 1.0) < 1.0
-    ):
+    if force and _partial:
         from .skills.extractor import fragments_from_rows
 
         _merged = fragments_from_rows(state.get_fragments(source_id=citekey, limit=100_000))
@@ -1773,9 +1782,6 @@ def _process_single(
     # the fast paths would serve it — to other projects too — without ever
     # retrying. Mark the source degraded so `klemma status --degraded` lists
     # it; `klemma process <citekey> --force` retries.
-    _partial = (getattr(result, "failed_chunks", 0) or 0) > 0 or (
-        (getattr(result, "coverage_ratio", 1.0) or 1.0) < 1.0
-    )
     if _partial:
         _degraded_steps.append("extraction")
 
