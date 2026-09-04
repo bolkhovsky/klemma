@@ -390,3 +390,172 @@ def test_invalid_citation_intent_does_not_drop_fragment(tmp_path):
     assert len(out.fragments) == 1
     f = out.fragments[0].fragment
     assert f.text == "kept" and f.citation_intent is None and f.relevance == 5
+
+
+# ---------------------------------------------------------------------------
+# Codex review on PR-A (#446)
+# ---------------------------------------------------------------------------
+
+
+def test_repair_call_is_budget_reserved(tmp_path):
+    """P1: the JSON-repair call must not bypass the output-token reservation."""
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(1))
+    ai = _ai([_result({}, text="{bad", tout=2048)])  # repair would ask for 4096 more
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full,
+        budget=Budget(max_output_tokens=3000),
+    )
+    assert len(ai._calls) == 1
+    assert out.chunks[0].status == "failed" and out.chunks[0].error == "budget"
+
+
+def test_provider_error_finish_reason_fails_leaf_even_with_valid_json(tmp_path):
+    """P2: content_filter/refusal is not a complete extraction of the chunk."""
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(2, size=6000))
+    ai = _ai([_result({"fragments": [{"text": "partial"}]}, finish="content_filter")])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 2, 0, len(full))], full_text=full, min_chunk_chars=1000,
+    )
+    assert out.chunks[0].status == "failed" and out.chunks[0].error == "provider_error"
+    assert out.fragments == [] and not out.coverage.complete
+    assert len(ai._calls) == 1  # no split on provider errors
+
+
+def test_fragments_beyond_validation_cap_are_checked_against_their_chunk(tmp_path, monkeypatch):
+    """P2: a true quote late in a huge document must not be downgraded."""
+    import klemma.skills.extract_engine as eng
+
+    monkeypatch.setattr(eng, "VERBATIM_VALIDATION_CAP_LARGE", 400)
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    pages = ["alpha " * 100, "omega distinct tail text " * 30]
+    full = build_full_text(pages)
+    half = full.index("[Page 2]")
+    late_quote = "omega distinct tail text omega"
+    assert full.index(late_quote) > 400
+    chunks = [
+        ChunkRecord(0, full[:half], 1, 1, 0, half),
+        ChunkRecord(1, full[half:], 2, 2, half, len(full)),
+    ]
+    ai = _ai([
+        _result({"fragments": []}),
+        _result({"fragments": [
+            {"text": late_quote, "verbatim": True},
+            {"text": "fabricated late claim", "verbatim": True},
+        ]}),
+    ])
+    out = extract_from_pages(None, ENTRY, prompt, {}, ai, chunks=chunks, full_text=full)
+    assert out.validation_incomplete is True
+    by_text = {ef.fragment.text: ef for ef in out.fragments}
+    assert by_text[late_quote].verbatim_status == "confirmed"
+    assert by_text[late_quote].char_start is not None and by_text[late_quote].char_start >= half
+    assert by_text["fabricated late claim"].verbatim_status == "downgraded"
+
+
+def test_span_prefers_originating_chunk_over_earlier_occurrence(tmp_path):
+    """P2: a repeated quotation keeps the span (and page) of the chunk it came from."""
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    repeated = "Sea ice edge position matters more than area."
+    pages = ["intro. " + repeated + " filler " * 50, "later. " + repeated + " more filler " * 50]
+    full = build_full_text(pages)
+    half = full.index("[Page 2]")
+    chunks = [
+        ChunkRecord(0, full[:half], 1, 1, 0, half),
+        ChunkRecord(1, full[half:], 2, 2, half, len(full)),
+    ]
+    ai = _ai([
+        _result({"fragments": []}),
+        _result({"fragments": [{"text": repeated, "verbatim": True}]}),  # no page given
+    ])
+    out = extract_from_pages(None, ENTRY, prompt, {}, ai, chunks=chunks, full_text=full)
+    ef = out.fragments[0]
+    assert ef.char_start >= half
+    assert ef.fragment.page == 2
+
+
+def test_parser_fallback_keeps_chapter_and_section(tmp_path):
+    """P2: an invalid citation_intent must not discard routing metadata."""
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(1))
+    ai = _ai([_result({"fragments": [
+        {"text": "kept", "citation_intent": "nonsense", "chapter": 2, "section": "2.4.1"},
+    ]})])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full,
+    )
+    f = out.fragments[0].fragment
+    assert f.chapter == 2 and f.section == "2.4.1" and f.citation_intent is None
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"chunk_size": 0},
+        {"chunk_size": 1000, "chunk_overlap": 1000},
+        {"chunk_overlap": -1},
+        {"min_chunk_chars": 0},
+        {"max_tokens_cap": 10},
+        {"budget_max_output_tokens": -5},
+        {"budget_max_cost_usd": -1.0},
+    ],
+)
+def test_aiconfig_rejects_bad_chunk_geometry(kw):
+    """P1: a config typo must not become runaway extraction."""
+    from klemma.config import AIConfig
+
+    with pytest.raises(ValueError):
+        AIConfig(backend="litellm", model="m", **kw)
+
+
+def test_aiconfig_defaults_are_valid():
+    from klemma.config import AIConfig
+
+    cfg = AIConfig(backend="litellm", model="m")
+    assert 0 <= cfg.chunk_overlap < cfg.chunk_size and cfg.min_chunk_chars > 0
+
+
+def test_force_reprocess_replaces_only_on_complete_extraction(tmp_path):
+    """P1: a partial --force result merges onto the old corpus instead of replacing it."""
+    from unittest.mock import patch
+
+    from klemma.skills import extractor as ex_mod
+    from klemma.skills.extract_engine import ChunkOutcome, CoverageReport, ExtractionOutcome
+
+    def _outcome(failed: int, covered: int):
+        return ExtractionOutcome(
+            fragments=[ExtractedFragment(fragment=Fragment(text="new fragment"))],
+            key_refs=[], summary="", notes={},
+            chunks=[ChunkOutcome(0, 0, 100, "ok")],
+            coverage=CoverageReport(total_chars=100, covered_chars=covered),
+            prompt_hash="h", model="m", failed_chunks=failed, leaf_chunks=2,
+        )
+
+    state = MagicMock()
+    state.save_fragments.return_value = 1
+    cfg = MagicMock()
+    cfg.ai.language = "ru"
+    cfg.ai.task_classes = {}
+    prompt = tmp_path / ".klemma" / "prompts"
+    prompt.mkdir(parents=True)
+    (prompt / "extract.md").write_text("p")
+
+    with patch("klemma.skills.extract_engine.extract_from_pages", return_value=_outcome(1, 50)):
+        ex_mod.extract_fragments(ENTRY, "text", cfg, state, MagicMock(),
+                                 klemma_home=tmp_path / ".klemma", replace_existing=True)
+    state.delete_fragments.assert_not_called()
+    state.save_fragments.assert_called_once()
+
+    state.reset_mock()
+    with patch("klemma.skills.extract_engine.extract_from_pages", return_value=_outcome(0, 100)):
+        ex_mod.extract_fragments(ENTRY, "text", cfg, state, MagicMock(),
+                                 klemma_home=tmp_path / ".klemma", replace_existing=True)
+    state.delete_fragments.assert_called_once_with("paper2025")

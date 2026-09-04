@@ -1685,10 +1685,6 @@ def _process_single(
                 )
                 _degraded_steps.append("sidecar")
 
-    # If reprocessing, clear old fragments before extracting fresh ones
-    if force:
-        state.delete_fragments(citekey)
-
     # Extract fragments over the FULL text (chunked engine, plan C1); the
     # truncated `pdf_text` is kept only for annotate/vault below.
     result = extract_fragments(
@@ -1702,6 +1698,9 @@ def _process_single(
         klemma_home=klemma_home,
         project_type=project_type,
         pages=pdf_pages or None,
+        # --force replaces the old corpus only when the new extraction is
+        # complete; a partial result is merged, never a lossy replacement.
+        replace_existing=force,
     )
 
     if not result or not result.fragments:

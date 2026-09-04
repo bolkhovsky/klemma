@@ -461,11 +461,17 @@ def _parse_fragments(data: dict, chunk_index: int) -> list[ExtractedFragment]:
                 verbatim=bool(f_data.get("verbatim", False)),
             )
         except Exception as e:  # pydantic validation (e.g. bad citation_intent)
-            logger.warning("Invalid fragment skipped: %s", e)
+            logger.warning("Invalid fragment field sanitised: %s", e)
             try:
+                # Drop only the offending optional field; keep routing metadata
+                # (chapter/section) that downstream section assignment relies on.
                 fragment = Fragment(
                     text=text,
                     type=f_data.get("type", "key_idea") or "key_idea",
+                    chapter=f_data.get("chapter") if isinstance(f_data.get("chapter"), int) else None,
+                    section=(str(f_data.get("section")).strip() or None)
+                    if f_data.get("section") is not None
+                    else None,
                     relevance=max(1, min(5, relevance)),
                     usage_hint=str(f_data.get("usage_hint", "") or ""),
                     page=f_data.get("page") if isinstance(f_data.get("page"), int) else None,
@@ -608,22 +614,26 @@ def extract_from_pages(
         )
         max_tokens = max(2048, min(max_tokens_cap, len(chunk.text) // 4))
 
+        def _reserve(prompt_chars: int, out_tokens: int) -> bool:
+            """True when the call fits the remaining budget (input, output, cost)."""
+            est_in = prompt_chars // 3
+            if budget.max_input_tokens and tokens_in + est_in > budget.max_input_tokens:
+                return False
+            if budget.max_output_tokens and tokens_out + out_tokens > budget.max_output_tokens:
+                return False
+            if budget.max_cost_usd is not None:
+                projected = estimate_cost_usd(
+                    model, tokens_in + est_in, tokens_out + out_tokens, pricing
+                )
+                if projected is not None and projected > budget.max_cost_usd:
+                    return False
+            return True
+
         # Reserve budget before the call: estimated input + requested output.
-        est_in = (len(user_prompt) + len(system_prompt)) // 3
-        if budget.max_input_tokens and tokens_in + est_in > budget.max_input_tokens:
+        if not _reserve(len(user_prompt) + len(system_prompt), max_tokens):
             outcome.error = "budget"
             budget_exhausted = True
             continue
-        if budget.max_output_tokens and tokens_out + max_tokens > budget.max_output_tokens:
-            outcome.error = "budget"
-            budget_exhausted = True
-            continue
-        if budget.max_cost_usd is not None:
-            projected = estimate_cost_usd(model, tokens_in + est_in, tokens_out + max_tokens, pricing)
-            if projected is not None and projected > budget.max_cost_usd:
-                outcome.error = "budget"
-                budget_exhausted = True
-                continue
 
         result = ai.call_with_meta(
             system_prompt, user_prompt, max_tokens=max_tokens, model_override=model_override
@@ -654,12 +664,27 @@ def extract_from_pages(
             )
             continue
 
+        if finish == "error":
+            # content_filter / refusal: even syntactically valid JSON is not a
+            # complete extraction of this chunk — fail the leaf, never split.
+            outcome.error = "provider_error"
+            logger.warning(
+                "Chunk %d finished with provider error for %s", chunk.index, getattr(entry, "id", "?"),
+            )
+            continue
+
         data = extract_json(result.text)
         if not data:
+            repair_user = f"Repair this malformed JSON:\n\n{result.text}"
+            repair_tokens = min(max_tokens_cap, max_tokens * 2)
+            if not _reserve(len(repair_user) + len(_REPAIR_SYSTEM_PROMPT), repair_tokens):
+                outcome.error = "budget"
+                budget_exhausted = True
+                continue
             repair = ai.call_with_meta(
                 _REPAIR_SYSTEM_PROMPT,
-                f"Repair this malformed JSON:\n\n{result.text}",
-                max_tokens=min(max_tokens_cap, max_tokens * 2),
+                repair_user,
+                max_tokens=repair_tokens,
                 model_override=model_override,
             )
             if on_call is not None:
@@ -724,26 +749,59 @@ def extract_from_pages(
     validation_incomplete = False
     downgrade_stats = DowngradeStats()
     if fragments:
+        interval_of = {o.index: (o.char_start, o.char_end) for o in outcomes if o.status == "ok"}
+        source_id = getattr(entry, "id", "?")
         if total_chars > VERBATIM_VALIDATION_CAP_LARGE:
             validation_text = source_text[:VERBATIM_VALIDATION_CAP_LARGE]
             validation_incomplete = True
             logger.warning(
-                "verbatim validator (%s): %d chars truncated to %d; validation incomplete",
-                getattr(entry, "id", "?"), total_chars, VERBATIM_VALIDATION_CAP_LARGE,
+                "verbatim validator (%s): %d chars exceed the %d cap; fragments beyond it are "
+                "validated against their own chunk only",
+                source_id, total_chars, VERBATIM_VALIDATION_CAP_LARGE,
             )
         else:
             validation_text = source_text
-        plain = [ef.fragment for ef in fragments]
-        claimed = [ef.fragment.verbatim for ef in fragments]
-        downgrade_stats = validate_verbatim_fragments(plain, validation_text, getattr(entry, "id", "?"))
-        for ef, was_claimed in zip(fragments, claimed):
-            if not was_claimed:
+
+        # Fragments from chunks inside the validated window go through the
+        # full-text pass (cross-chunk quotes still validate); fragments whose
+        # chunk starts beyond the cap are checked against their originating
+        # chunk text so a genuine quote is never downgraded for being late
+        # in a very long document.
+        claimed = {id(ef): ef.fragment.verbatim for ef in fragments}
+        in_window = [
+            ef for ef in fragments
+            if interval_of.get(ef.chunk_index, (0, 0))[0] < len(validation_text)
+        ]
+        in_ids = {id(ef) for ef in in_window}
+        beyond = [ef for ef in fragments if id(ef) not in in_ids]
+        downgrade_stats = validate_verbatim_fragments(
+            [ef.fragment for ef in in_window], validation_text, source_id,
+        )
+        for ef in beyond:
+            a, b = interval_of.get(ef.chunk_index, (0, 0))
+            stats = validate_verbatim_fragments([ef.fragment], source_text[a:b], source_id)
+            downgrade_stats.verbatim_claimed += stats.verbatim_claimed
+            downgrade_stats.verbatim_confirmed += stats.verbatim_confirmed
+            downgrade_stats.fuzzy_rescued += stats.fuzzy_rescued
+            downgrade_stats.downgraded += stats.downgraded
+
+        for ef in fragments:
+            if not claimed[id(ef)]:
                 ef.verbatim_status = "unclaimed"
             elif ef.fragment.verbatim:
                 ef.verbatim_status = "confirmed"
             else:
                 ef.verbatim_status = "downgraded"
-            span_hit = locate_fragment_span(ef.fragment.text, validation_text)
+            # Locate inside the originating chunk first: a quotation repeated
+            # earlier in the document must not steal the span (and the page).
+            a, b = interval_of.get(ef.chunk_index, (0, 0))
+            span_hit = None
+            if b > a:
+                local = locate_fragment_span(ef.fragment.text, source_text[a:b])
+                if local:
+                    span_hit = (a + local[0], a + local[1])
+            if span_hit is None:
+                span_hit = locate_fragment_span(ef.fragment.text, validation_text)
             if span_hit:
                 ef.char_start, ef.char_end = span_hit
                 if ef.fragment.page is None:

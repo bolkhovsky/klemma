@@ -36,6 +36,7 @@ def extract_fragments(
     pages: Optional[list[str]] = None,
     outline_digest: str = "",
     mode: str = "standard",
+    replace_existing: bool = False,
 ) -> Optional[ExtractionResult]:
     """Extract citation fragments from a paper and persist them (CLI path).
 
@@ -117,6 +118,18 @@ def extract_fragments(
         }
         for f in fragments
     ]
+    # Destructive replacement only when the new extraction is complete: a
+    # partial result (failed chunk / incomplete coverage) is merged on top of
+    # the old corpus instead of replacing it (Codex P1 on PR-A).
+    if replace_existing:
+        if outcome.failed_chunks == 0 and outcome.coverage.complete:
+            state.delete_fragments(entry.id)
+        else:
+            logger.warning(
+                "%s: reprocess is partial (%d failed chunk(s), coverage %.1f%%) — "
+                "existing fragments preserved, new ones merged",
+                entry.id, outcome.failed_chunks, outcome.coverage.ratio * 100,
+            )
     saved = state.save_fragments(entry.id, fragment_dicts)
     logger.info("Saved %d fragments for %s", saved, entry.id)
 
