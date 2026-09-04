@@ -351,3 +351,71 @@ def test_claude_cli_call_with_meta_reports_unknown_finish_reason(monkeypatch):
     )
     r = ai_mod.ClaudeClient(AIConfig(backend="claude", model="opus")).call_with_meta("s", "u")
     assert r.text == "ok" and r.finish_reason == "unknown"
+
+
+def test_claude_cli_json_result_reports_stop_reason_and_usage(monkeypatch):
+    """CLI `--output-format json` exposes stop_reason + usage → honest finish_reason,
+    so the exhaustive engine can run on a subscription backend."""
+    import json as _json
+    from types import SimpleNamespace
+
+    from klemma import ai as ai_mod
+    from klemma.config import AIConfig
+
+    monkeypatch.setattr(ai_mod.ClaudeClient, "check_cli_available", staticmethod(lambda: True))
+    seen = {}
+
+    def _run(cmd, **kw):
+        seen["cmd"] = cmd
+        payload = {"type": "result", "subtype": "success", "is_error": False,
+                   "result": '{"fragments": []}', "stop_reason": "max_tokens",
+                   "usage": {"input_tokens": 120, "output_tokens": 40, "cache_read_input_tokens": 10}}
+        return SimpleNamespace(returncode=0, stdout=_json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(ai_mod.subprocess, "run", _run)
+    r = ai_mod.ClaudeClient(AIConfig(backend="claude", model="opus")).call_with_meta("s", "u")
+    assert "--output-format" in seen["cmd"] and "json" in seen["cmd"]
+    assert r.text == '{"fragments": []}' and r.finish_reason == "max_tokens"
+    assert r.input_tokens == 130 and r.output_tokens == 40
+
+
+def test_claude_cli_json_error_result_is_retried_then_reported(monkeypatch):
+    import json as _json
+    from types import SimpleNamespace
+
+    from klemma import ai as ai_mod
+    from klemma.config import AIConfig
+
+    monkeypatch.setattr(ai_mod.ClaudeClient, "check_cli_available", staticmethod(lambda: True))
+    payload = {"type": "result", "is_error": True, "result": "rate limited", "stop_reason": None,
+               "usage": {}, "api_error_status": 429}
+    monkeypatch.setattr(ai_mod.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(returncode=0, stdout=_json.dumps(payload), stderr=""))
+    r = ai_mod.ClaudeClient(AIConfig(backend="claude", model="opus", retries=1)).call_with_meta("s", "u")
+    assert r.text is None and "429" in (r.error or "") and r.retries_used == 2
+
+
+def test_claude_cli_plain_stdout_still_accepted(monkeypatch):
+    from types import SimpleNamespace
+
+    from klemma import ai as ai_mod
+    from klemma.config import AIConfig
+
+    monkeypatch.setattr(ai_mod.ClaudeClient, "check_cli_available", staticmethod(lambda: True))
+    monkeypatch.setattr(ai_mod.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(returncode=0, stdout="plain answer", stderr=""))
+    r = ai_mod.ClaudeClient(AIConfig(backend="claude", model="opus")).call_with_meta("s", "u")
+    assert r.text == "plain answer" and r.finish_reason == "unknown"
+
+
+def test_claude_cli_strips_api_key_unless_opted_in(monkeypatch):
+    from klemma import ai as ai_mod
+    from klemma.config import AIConfig
+
+    monkeypatch.setattr(ai_mod.ClaudeClient, "check_cli_available", staticmethod(lambda: True))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    c = ai_mod.ClaudeClient(AIConfig(backend="claude", model="opus"))
+    assert "ANTHROPIC_API_KEY" not in c._clean_env and not c._has_api_key
+    assert "--model" not in c._build_cmd("opus")
+    c2 = ai_mod.ClaudeClient(AIConfig(backend="claude", model="opus", claude_cli_use_api_key=True))
+    assert c2._clean_env.get("ANTHROPIC_API_KEY") == "sk-test" and c2._has_api_key
