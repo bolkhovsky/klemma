@@ -238,6 +238,15 @@ def repair_verbatim(
                     f"{citekey}: library.db verbatim dual-write failed: {exc}"
                 )
 
+    # Three-tier substrate (plan C2): the same verdicts go to the library
+    # attempt links so the new source of truth carries spans too. Legacy
+    # fragments belong to the synthetic legacy attempt of (paper, citekey).
+    if paper_id and not dry_run and kctx.paper_store is not None:
+        try:
+            _write_attempt_provenance(kctx, citekey, paper_id, fragments, doc, stats)
+        except Exception as exc:  # noqa: BLE001
+            stats.warnings.append(f"{citekey}: library attempt provenance failed: {exc}")
+
     stats.verbatim_confirmed += confirmed
     stats.verbatim_upgraded += upgraded
     stats.verbatim_downgraded += downgraded
@@ -250,6 +259,124 @@ def repair_verbatim(
         f"{confirmed} verbatim confirmed{arrow_up}{arrow_down}, {spans} spans"
     )
 
+
+
+def _write_attempt_provenance(kctx, citekey: str, paper_id: str, fragments, doc, stats: RepairStats) -> None:
+    """Mirror verbatim/span/locator verdicts into ``extraction_attempt_fragments``.
+
+    Every attempt of the paper that links a fragment gets the fresh verdict
+    (spans are only valid for the sidecar generation they were computed
+    against, so all links are refreshed together). Fragments without any
+    attempt link are attached to the legacy attempt of (paper, citekey).
+    """
+    from ..hashing import compute_content_hash
+    from ..migration import legacy_attempt_id
+    from ..models import FragmentRecord
+
+    ps = kctx.paper_store
+    legacy = legacy_attempt_id(paper_id, citekey)
+    linked_by_attempt: dict[str, set[str]] = {}
+    for att in ps.get_attempts(paper_id):
+        linked_by_attempt[att["attempt_id"]] = {
+            r["fragment_id"] for r in ps.get_attempt_fragments(att["attempt_id"])
+        }
+    legacy_records: list[FragmentRecord] = []
+    legacy_links: list[dict] = []
+    for frag in fragments:
+        fid = compute_content_hash(paper_id, frag["fragment_text"], frag.get("page_number"))
+        span = locate_fragment_span(frag["fragment_text"], doc.text)
+        if span is not None:
+            page = doc.page_for(span[0]) or frag.get("page_number")
+            link = {
+                "char_start": span[0], "char_end": span[1],
+                "source_locator": derive_locator(doc.text, span[0], page=page),
+                "verbatim_status": "confirmed",
+            }
+        else:
+            link = {"char_start": None, "char_end": None, "source_locator": None,
+                    "verbatim_status": "downgraded" if frag.get("verbatim") else "unverified"}
+        owners = [a for a, ids in linked_by_attempt.items() if fid in ids]
+        if not owners:
+            legacy_records.append(FragmentRecord(
+                fragment_id=fid, paper_id=paper_id, fragment_text=frag["fragment_text"],
+                fragment_type=frag.get("fragment_type") or "key_idea",
+                page_number=frag.get("page_number"), citation_intent=frag.get("citation_intent"),
+                verbatim=span is not None, content_hash=fid,
+            ))
+            legacy_links.append(link)
+            continue
+        for att in owners:
+            ps.update_attempt_fragment_provenance(att, fid, **link)
+    if legacy_records:
+        if ps.get_attempt(legacy) is None:
+            ps.start_attempt(legacy, paper_id, prompt_name="legacy", ai_model="legacy",
+                             mode="legacy", extractor_version="0")
+            ps.finish_attempt(legacy, status="published")
+        ps.save_attempt_fragments(legacy, paper_id, legacy_records, legacy_links)
+
+
+def repair_run(kctx, run_id: int, stats: RepairStats, dry_run: bool) -> None:
+    """``--run N``: full verbatim/span check for one (possibly unpublished) run.
+
+    Validates every fragment linked to the run's attempt against the sidecar,
+    refreshes the attempt links and, when nothing is partial, lets the
+    project store publish the run (``clear_validation_incomplete``).
+    """
+    from ..hashing import compute_content_hash  # noqa: F401  (kept for symmetry)
+
+    pj, ps = kctx.project_store, kctx.paper_store
+    if pj is None or ps is None:
+        stats.warnings.append("--run needs the three-tier stores")
+        return
+    run = pj.get_run(run_id)
+    if run is None:
+        stats.warnings.append(f"run {run_id} not found")
+        return
+    citekey = run["citekey"]
+    doc = load_sidecar_doc(kctx.project_root, citekey)
+    if doc is None:
+        stats.sources_no_sidecar += 1
+        console.print(f"  [yellow]{citekey}: no sidecar — run {run_id} not validated[/yellow]")
+        return
+    attempt_id = run.get("attempt_id")
+    if not attempt_id:
+        stats.warnings.append(f"run {run_id}: no attempt_id (failed before library write)")
+        return
+    linked = ps.get_attempt_fragments(attempt_id)
+    confirmed = downgraded = 0
+    for row in linked:
+        stats.fragments_checked += 1
+        span = locate_fragment_span(row["fragment_text"], doc.text)
+        if span is not None:
+            page = doc.page_for(span[0]) or row.get("page_number")
+            confirmed += 1
+            if not dry_run:
+                ps.update_attempt_fragment_provenance(
+                    attempt_id, row["fragment_id"], char_start=span[0], char_end=span[1],
+                    source_locator=derive_locator(doc.text, span[0], page=page),
+                    verbatim_status="confirmed",
+                )
+                stats.spans_written += 1
+        else:
+            if row.get("verbatim_status") == "confirmed":
+                downgraded += 1
+            if not dry_run:
+                ps.update_attempt_fragment_provenance(
+                    attempt_id, row["fragment_id"], char_start=None, char_end=None,
+                    source_locator=None, verbatim_status="downgraded",
+                )
+    stats.verbatim_confirmed += confirmed
+    stats.verbatim_downgraded += downgraded
+    if dry_run:
+        console.print(f"  [dim]run {run_id} (@{citekey}): would validate {len(linked)} fragment(s)[/dim]")
+        return
+    ps.finish_attempt(attempt_id, status=run["status"], validation_incomplete=False,
+                      coverage_json=run.get("coverage_json") or "")
+    new_status = pj.clear_validation_incomplete(run_id)
+    console.print(
+        f"  run {run_id} (@{citekey}): {confirmed} confirmed, {downgraded} downgraded → "
+        f"[{'green' if new_status == 'published' else 'yellow'}]{new_status}[/]"
+    )
 
 def repair_embeddings(kctx, citekey: str, stats: RepairStats, dry_run: bool) -> None:
     """Re-embed the source's missing vectors (fragments + source itself)."""
@@ -434,6 +561,21 @@ def run_scan(kctx, citekeys: tuple[str, ...], dry_run: bool) -> None:
         if not dry_run:
             state.mark_degraded(citekey, issues)
 
+    # Orphan attempts: library rows no project run references — leftovers of
+    # a crash between the library write and the project publish (plan C2).
+    pj, ps = getattr(kctx, "project_store", None), getattr(kctx, "paper_store", None)
+    if pj is not None and ps is not None:
+        try:
+            orphans = ps.find_orphan_attempts(pj.referenced_attempt_ids())
+            orphans = [o for o in orphans if o.get("mode") != "legacy"]
+            if orphans:
+                console.print(
+                    f"  [dim]{len(orphans)} orphan extraction attempt(s) in library.db "
+                    f"(unreferenced by any run; harmless)[/dim]"
+                )
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"  [dim]orphan scan skipped: {exc}[/dim]")
+
     already = len(state.get_degraded_sources())
     verb = "found" if dry_run else "flagged as degraded"
     console.print(
@@ -510,8 +652,10 @@ def print_repair_summary(stats: RepairStats, steps: list[str], dry_run: bool) ->
     help="Не чинить, а найти completed-источники без sidecar / с фрагментами без векторов и пометить degraded",
 )
 @click.option("--dry-run", is_flag=True, help="Показать, что будет сделано, ничего не записывая")
+@click.option("--run", "run_id", type=int, default=None,
+              help="Полная проверка дословности одного прогона (в т. ч. неопубликованного) по sidecar")
 @click.pass_context
-def repair(ctx, citekeys, cited, steps_csv, scan, dry_run):
+def repair(ctx, citekeys, cited, steps_csv, scan, dry_run, run_id):
     """Дообработать источники: sidecar с полным текстом, честный verbatim, spans.
 
     CITEKEYS: явный список источников. --cited собирает citekey из цитат
@@ -530,6 +674,11 @@ def repair(ctx, citekeys, cited, steps_csv, scan, dry_run):
 
     if scan:
         run_scan(kctx, citekeys, dry_run)
+        return
+    if run_id is not None:
+        stats = RepairStats()
+        repair_run(kctx, run_id, stats, dry_run)
+        print_repair_summary(stats, ["verbatim"], dry_run)
         return
 
     steps = [s.strip() for s in steps_csv.split(",") if s.strip()]

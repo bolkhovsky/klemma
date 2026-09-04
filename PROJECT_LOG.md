@@ -186,3 +186,35 @@ See CLAUDE.md for full project structure.
 - TUI reader and sources screens
 - ChromaDB semantic search (Iteration 3)
 - Telegram bot delivery (Iteration 3)
+
+
+## v0.19.0 (в работе) — 2026-09-04: движок извлечения и прогоны (план докфудинга C1–C2)
+
+### Что сделано
+- PR-A (#446, смержен в `feat/verify-find-source`): чистый чанкованный движок
+  `skills/extract_engine.py` по всему тексту (интервальное покрытие, деление при обрыве,
+  бюджет до вызова, дедуп по тексту и span), `AICallResult.finish_reason` во всех
+  бэкендах, `AIConfig.chunk_*`/`budget_*`/`pricing`, три раунда замечаний Codex.
+- PR-B (`feat/extraction-runs`): `extraction_attempts` в library.db без изменения
+  `user_version`; ProjectStore v6 (`project_extraction_runs`, `project_run_fragments`,
+  `project_fragments` с PK `(user_id, citekey, fragment_id)`, `active_run_id`);
+  протокол публикации `extraction_runs.py` (шаг 0 до вызова модели, одна транзакция
+  project.db, проверка целостности); `klemma.migration.migrate_monolith` с реестром и
+  dry-run; `repair --run`, зеркало вердиктов в попытки; `source show --all-runs`,
+  `source select`; `process --replace/--exhaustive/--from-file/--resume-stale/
+  --activate-partial`. ADR-020.
+
+### Стек и схемы
+- Python 3.11+, uv (`uv.lock` в репозитории), venv `~/.venvs/klemma`, pytest (2385 тестов), ruff.
+- БД: монолит `.klemma/data/klemma.db` (state.py v16), `~/.klemma/library.db`
+  (PaperStore идемпотентные таблицы + UserLibrary v7, sqlite-vec опционально),
+  `.klemma/data/project.db` (ProjectStore v6).
+- Конфиг: `~/.klemmarc.yaml` + `.klemma/config.yaml` + frontmatter `KLEMMA.md`.
+
+### Следующие цели
+- PR-C: дайджест `Структура_диссертации_v2.md` в промпт (`outline_digest.py`,
+  `ProjectConfig.outline_file`).
+- PR-D: режим `--exhaustive` best-effort с gold-eval (`klemma eval extract`),
+  `extract_exhaustive.md`, `not_extracted`.
+- Долг: перевод читающих команд (research, RAG, draft, check-citations) с монолита на
+  активный набор ProjectStore; SaaS-путь без lifecycle прогонов (#372).

@@ -167,6 +167,8 @@ class ExtractionResult(BaseModel):
     # Parallel to ``fragments``: (char_start, char_end) into the page-marked
     # full text, or None when the span could not be located.
     spans: list[Optional[tuple[int, int]]] = Field(default_factory=list)
+    verbatim_statuses: list[str] = Field(default_factory=list)
+    source_locators: list[Optional[str]] = Field(default_factory=list)
 
 
 class DailyPlan(BaseModel):

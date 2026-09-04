@@ -160,6 +160,45 @@ CREATE INDEX IF NOT EXISTS idx_rec_cache_user_project
 """
 
 
+_CREATE_ATTEMPTS = """
+CREATE TABLE IF NOT EXISTS extraction_attempts (
+    attempt_id          TEXT PRIMARY KEY,
+    request_fingerprint TEXT,
+    paper_id            TEXT NOT NULL REFERENCES papers(paper_id),
+    prompt_name         TEXT,
+    prompt_hash         TEXT,
+    template_hash       TEXT,
+    ai_model            TEXT,
+    extractor_version   TEXT,
+    klemma_version      TEXT,
+    mode                TEXT NOT NULL DEFAULT 'standard',
+    source_content_hash TEXT,
+    chunk_size          INTEGER,
+    chunk_overlap       INTEGER,
+    min_chunk_chars     INTEGER,
+    config_json         TEXT,
+    coverage_json       TEXT,
+    validation_incomplete INTEGER NOT NULL DEFAULT 0,
+    started_at          TEXT DEFAULT (datetime('now')),
+    finished_at         TEXT,
+    status              TEXT NOT NULL DEFAULT 'running'
+);
+CREATE INDEX IF NOT EXISTS idx_attempts_paper ON extraction_attempts(paper_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_fingerprint ON extraction_attempts(request_fingerprint);
+
+CREATE TABLE IF NOT EXISTS extraction_attempt_fragments (
+    attempt_id      TEXT NOT NULL REFERENCES extraction_attempts(attempt_id),
+    fragment_id     TEXT NOT NULL REFERENCES fragments(fragment_id),
+    char_start      INTEGER,
+    char_end        INTEGER,
+    source_locator  TEXT,
+    verbatim_status TEXT,
+    PRIMARY KEY (attempt_id, fragment_id)
+);
+CREATE INDEX IF NOT EXISTS idx_attempt_frags_fragment ON extraction_attempt_fragments(fragment_id);
+"""
+
+
 class LocalPaperStore:
     """SQLite-backed PaperStore at ~/.klemma/library.db.
 
@@ -256,6 +295,25 @@ class LocalPaperStore:
                 CREATE INDEX IF NOT EXISTS idx_rec_cache_user_project
                     ON recommendations_cache(user_id, project_id);
             """)
+
+        # ── extraction attempts (plan C2 / ADR-020) ───────────────────────
+        # The legacy `extractions` table cannot represent repeated attempts
+        # (UNIQUE(paper_id, prompt_hash, ai_model); one extraction_id per
+        # fragment). Attempts + attempt↔fragment links live in their own
+        # tables; created idempotently (no user_version bump — co-owned).
+        if "extraction_attempts" not in existing_tables:
+            conn.executescript(_CREATE_ATTEMPTS)
+        attempt_cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(extraction_attempts)").fetchall()
+        }
+        for col, typ in (
+            ("request_fingerprint", "TEXT"),
+            ("extractor_version", "TEXT"),
+            ("validation_incomplete", "INTEGER NOT NULL DEFAULT 0"),
+            ("coverage_json", "TEXT"),
+        ):
+            if attempt_cols and col not in attempt_cols:
+                conn.execute(f"ALTER TABLE extraction_attempts ADD COLUMN {col} {typ}")
 
         # ── vec index tables (M1) ─────────────────────────────────────────
         # Created only when sqlite-vec is available. All three tables must be
@@ -584,6 +642,24 @@ class LocalPaperStore:
             )
         return paper_id
 
+    def set_pdf_hash(self, paper_id: str, pdf_hash: str) -> bool:
+        """Replace a synthetic/missing pdf_hash with a real one (migration merge).
+
+        Refuses when another paper already owns ``pdf_hash`` (UNIQUE) — the
+        caller reports the conflict instead of silently merging papers.
+        """
+        with self._conn() as conn:
+            other = conn.execute(
+                "SELECT paper_id FROM papers WHERE pdf_hash = ? AND paper_id != ?",
+                (pdf_hash, paper_id),
+            ).fetchone()
+            if other:
+                return False
+            cur = conn.execute(
+                "UPDATE papers SET pdf_hash = ? WHERE paper_id = ?", (pdf_hash, paper_id)
+            )
+            return cur.rowcount > 0
+
     def update_paper_raw_text(self, paper_id: str, raw_text: str) -> bool:
         """Persist the PDF's extracted text for the verbatim validator + future
         raw-text search. Idempotent: overwrites on repeated calls.
@@ -792,6 +868,170 @@ class LocalPaperStore:
     # ------------------------------------------------------------------ #
     # Citation graph                                                       #
     # ------------------------------------------------------------------ #
+
+
+    # ------------------------------------------------------------------ #
+    # Extraction attempts (plan C2 / ADR-020)                              #
+    # ------------------------------------------------------------------ #
+
+    def start_attempt(
+        self,
+        attempt_id: str,
+        paper_id: str,
+        *,
+        request_fingerprint: str = "",
+        prompt_name: str = "",
+        prompt_hash: str = "",
+        template_hash: str = "",
+        ai_model: str = "",
+        extractor_version: str = "",
+        klemma_version: str = "",
+        mode: str = "standard",
+        source_content_hash: str = "",
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        min_chunk_chars: Optional[int] = None,
+        config_json: str = "",
+    ) -> None:
+        """Record an attempt as ``running`` before the first AI call (idempotent)."""
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO extraction_attempts
+                   (attempt_id, request_fingerprint, paper_id, prompt_name, prompt_hash,
+                    template_hash, ai_model, extractor_version, klemma_version, mode,
+                    source_content_hash, chunk_size, chunk_overlap, min_chunk_chars,
+                    config_json, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running')""",
+                (
+                    attempt_id, request_fingerprint, paper_id, prompt_name, prompt_hash,
+                    template_hash, ai_model, extractor_version, klemma_version, mode,
+                    source_content_hash, chunk_size, chunk_overlap, min_chunk_chars,
+                    config_json,
+                ),
+            )
+
+    def finish_attempt(
+        self,
+        attempt_id: str,
+        *,
+        status: str,
+        coverage_json: str = "",
+        validation_incomplete: bool = False,
+    ) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute(
+                """UPDATE extraction_attempts
+                   SET status=?, coverage_json=?, validation_incomplete=?,
+                       finished_at=datetime('now')
+                   WHERE attempt_id=?""",
+                (status, coverage_json, 1 if validation_incomplete else 0, attempt_id),
+            )
+            return cur.rowcount > 0
+
+    def save_attempt_fragments(
+        self,
+        attempt_id: str,
+        paper_id: str,
+        fragments: list["FragmentRecord"],
+        links: list[dict],
+    ) -> int:
+        """Idempotently store canonical fragments and link them to the attempt.
+
+        ``links`` are parallel to ``fragments``: dicts with ``char_start``,
+        ``char_end``, ``source_locator``, ``verbatim_status``. Canonical rows
+        are never deleted; a re-extracted text re-links to the same
+        content-hash row. Returns the number of link rows written/updated.
+        """
+        written = 0
+        with self._conn() as conn:
+            for f, link in zip(fragments, links):
+                conn.execute(
+                    """INSERT OR IGNORE INTO fragments
+                       (fragment_id, paper_id, extraction_id, fragment_text, fragment_type,
+                        page_number, citation_intent, verbatim)
+                       VALUES (?, ?, NULL, ?, ?, ?, ?, ?)""",
+                    (
+                        f.fragment_id, paper_id, f.fragment_text, f.fragment_type,
+                        f.page_number, f.citation_intent, 1 if f.verbatim else 0,
+                    ),
+                )
+                # Canonical verbatim flag follows the latest attempt for this text.
+                conn.execute(
+                    "UPDATE fragments SET verbatim=? WHERE fragment_id=?",
+                    (1 if f.verbatim else 0, f.fragment_id),
+                )
+                cur = conn.execute(
+                    """INSERT INTO extraction_attempt_fragments
+                       (attempt_id, fragment_id, char_start, char_end, source_locator,
+                        verbatim_status)
+                       VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(attempt_id, fragment_id) DO UPDATE SET
+                         char_start=excluded.char_start, char_end=excluded.char_end,
+                         source_locator=excluded.source_locator,
+                         verbatim_status=excluded.verbatim_status""",
+                    (
+                        attempt_id, f.fragment_id, link.get("char_start"),
+                        link.get("char_end"), link.get("source_locator"),
+                        link.get("verbatim_status"),
+                    ),
+                )
+                written += cur.rowcount
+        return written
+
+    def get_attempt(self, attempt_id: str) -> Optional[dict]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM extraction_attempts WHERE attempt_id=?", (attempt_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_attempts(self, paper_id: str) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM extraction_attempts WHERE paper_id=? ORDER BY started_at, rowid",
+                (paper_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_attempt_fragments(self, attempt_id: str) -> list[dict]:
+        """Fragments linked to an attempt with their span/locator snapshot."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT f.fragment_id, f.paper_id, f.fragment_text, f.fragment_type,
+                          f.page_number, f.citation_intent, f.verbatim,
+                          l.char_start, l.char_end, l.source_locator, l.verbatim_status
+                   FROM extraction_attempt_fragments l
+                   JOIN fragments f ON f.fragment_id = l.fragment_id
+                   WHERE l.attempt_id=? ORDER BY l.rowid""",
+                (attempt_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_attempt_fragment_provenance(
+        self,
+        attempt_id: str,
+        fragment_id: str,
+        *,
+        char_start: Optional[int],
+        char_end: Optional[int],
+        source_locator: Optional[str],
+        verbatim_status: str,
+    ) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute(
+                """UPDATE extraction_attempt_fragments
+                   SET char_start=?, char_end=?, source_locator=?, verbatim_status=?
+                   WHERE attempt_id=? AND fragment_id=?""",
+                (char_start, char_end, source_locator, verbatim_status, attempt_id, fragment_id),
+            )
+            return cur.rowcount > 0
+
+    def find_orphan_attempts(self, referenced_attempt_ids: set[str]) -> list[dict]:
+        """Attempts not referenced by any project run — safe leftovers of a
+        failure between the library write and the project publish."""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM extraction_attempts").fetchall()
+        return [dict(r) for r in rows if r["attempt_id"] not in referenced_attempt_ids]
 
     def save_citation_links(self, paper_id: str, references: list[dict]) -> int:
         """Save citation links from a paper's bibliography to citation_graph.

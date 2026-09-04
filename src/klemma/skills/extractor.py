@@ -152,6 +152,8 @@ def extract_fragments(
             (ef.char_start, ef.char_end) if ef.char_start is not None else None
             for ef in outcome.fragments
         ],
+        verbatim_statuses=[ef.verbatim_status for ef in outcome.fragments],
+        source_locators=[ef.source_locator for ef in outcome.fragments],
     )
 
 
