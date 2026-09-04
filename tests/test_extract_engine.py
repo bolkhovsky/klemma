@@ -559,3 +559,153 @@ def test_force_reprocess_replaces_only_on_complete_extraction(tmp_path):
         ex_mod.extract_fragments(ENTRY, "text", cfg, state, MagicMock(),
                                  klemma_home=tmp_path / ".klemma", replace_existing=True)
     state.delete_fragments.assert_called_once_with("paper2025")
+
+
+# ---------------------------------------------------------------------------
+# Codex review round 2 on PR-A (#446)
+# ---------------------------------------------------------------------------
+
+
+def test_truncated_malformed_response_splits_without_repair_call(tmp_path):
+    """P1: max_tokens + malformed JSON → split directly, no paid repair, budget intact."""
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(2, size=6000))
+    left, right = full[20:60], full[len(full) // 2 + 20: len(full) // 2 + 60]
+    ai = _ai([
+        _result({}, text='{"fragments": [{"text": "cut', finish="max_tokens", tout=2048),
+        _result({"fragments": [{"text": left, "verbatim": True}]}, tout=500),
+        _result({"fragments": [{"text": right, "verbatim": True}]}, tout=500),
+    ])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 2, 0, len(full))], full_text=full,
+        min_chunk_chars=1000, budget=Budget(max_output_tokens=2048 + 2 * 2048 + 10),
+    )
+    assert len(ai._calls) == 3
+    assert all("malformed JSON" not in c[0] for c in ai._calls)
+    assert out.failed_chunks == 0 and out.coverage.complete
+
+
+def test_repair_truncated_result_is_split_not_accepted(tmp_path):
+    """P2: a repair answer cut by max_tokens is partial → split, not accepted."""
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(2, size=6000))
+    ai = _ai([
+        _result({}, text="{bad"),
+        _result({"fragments": [{"text": "partial"}]}, finish="max_tokens"),  # repair, truncated
+        _result({"fragments": [{"text": full[20:50], "verbatim": True}]}),
+        _result({"fragments": [{"text": full[-50:-20], "verbatim": True}]}),
+    ])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 2, 0, len(full))], full_text=full, min_chunk_chars=1000,
+    )
+    assert out.chunks[0].status == "split"
+    assert "partial" not in {ef.fragment.text for ef in out.fragments}
+    assert out.failed_chunks == 0
+
+
+def test_repair_refused_by_provider_fails_leaf(tmp_path):
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(1))
+    ai = _ai([
+        _result({}, text="{bad"),
+        _result({"fragments": [{"text": "x"}]}, finish="content_filter"),
+    ])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full,
+    )
+    assert out.chunks[0].status == "failed" and out.chunks[0].error == "provider_error"
+    assert out.fragments == []
+
+
+def test_max_tokens_cap_below_2048_is_honoured(tmp_path):
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(3))
+    ai = _ai([_result({"fragments": [{"text": "x"}]})])
+    extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 3, 0, len(full))], full_text=full, max_tokens_cap=512,
+    )
+    assert ai._calls[0][2]["max_tokens"] == 512
+
+
+def test_fallback_full_text_is_reconstructed_from_offsets(tmp_path):
+    """P2: overlapping chunks without full_text must not inflate total_chars or shift spans."""
+    from klemma.literature.pdf import build_chunks_from_pages
+
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    pages = _pages(3, size=3000)
+    full = build_full_text(pages)
+    chunks = build_chunks_from_pages(pages, chunk_size=2500, overlap=400)
+    assert len(chunks) >= 3
+    quote = full[len(full) - 200: len(full) - 160]
+    script = [_result({"fragments": []}) for _ in chunks[:-1]]
+    script.append(_result({"fragments": [{"text": quote, "verbatim": True}]}))
+    ai = _ai(script)
+    out = extract_from_pages(None, ENTRY, prompt, {}, ai, chunks=chunks)  # no full_text
+    assert out.full_text_length == len(full)
+    assert out.coverage.complete
+    ef = out.fragments[0]
+    assert ef.verbatim_status == "confirmed"
+    assert full[ef.char_start:ef.char_end] == quote
+
+
+def test_budget_charges_reservation_when_usage_unreported(tmp_path):
+    """P1: a backend without token counts (Claude CLI) still consumes the budget."""
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(3))
+    third = len(full) // 3
+    chunks = [
+        ChunkRecord(0, full[:third], 1, 1, 0, third),
+        ChunkRecord(1, "[Page 2]\n" + full[third:2 * third], 2, 2, third, 2 * third),
+        ChunkRecord(2, "[Page 3]\n" + full[2 * third:], 3, 3, 2 * third, len(full)),
+    ]
+    ai = _ai([_result({"fragments": [{"text": "a"}]}, tin=0, tout=0, finish=None)] * 3)
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai, chunks=chunks, full_text=full,
+        budget=Budget(max_output_tokens=2048 * 2),  # room for two reservations only
+    )
+    assert len(ai._calls) == 2
+    assert out.chunks[2].error == "budget"
+    assert out.tokens_out == 2 * 2048
+
+
+def test_extract_from_citekey_passes_full_pages(tmp_path):
+    """P2: the research pre-extraction path must not send a truncated single chunk."""
+    from klemma.skills import extractor as ex_mod
+
+    pdf_extractor = MagicMock()
+    pdf_extractor.find_pdf.return_value = tmp_path / "x.pdf"
+    pages = ["page one text " * 50, "page two text " * 50]
+    pdf_extractor.extract_pages.return_value = pages
+    pdf_extractor.format_for_ai.return_value = "truncated"
+    state = MagicMock()
+    state.get_source.return_value = {"pdf_path": None}
+    cfg = MagicMock()
+    cfg.processing.min_pdf_length = 1
+    with patch("klemma.skills.extractor.extract_fragments") as mock_extract:
+        ex_mod.extract_from_citekey("k", cfg, state, MagicMock(), pdf_extractor, [tmp_path])
+    assert mock_extract.call_args.kwargs["pages"] == pages
+
+
+def test_fragments_from_rows_roundtrip():
+    from klemma.skills.extractor import fragments_from_rows
+
+    rows = [
+        {"fragment_text": "a", "fragment_type": "quote", "chapter": 2, "section": "2.4",
+         "relevance_score": 9, "usage_hint": "h", "page_number": 3, "verbatim": 1},
+        {"fragment_text": "  ", "fragment_type": "quote"},
+        {"fragment_text": "b", "relevance_score": None, "page_number": "x"},
+    ]
+    out = fragments_from_rows(rows)
+    assert [f.text for f in out] == ["a", "b"]
+    assert out[0].relevance == 5 and out[0].page == 3 and out[0].section == "2.4"
+    assert out[1].relevance == 3 and out[1].page is None

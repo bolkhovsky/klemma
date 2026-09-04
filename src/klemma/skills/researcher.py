@@ -309,8 +309,10 @@ def pre_extract_sources(
                 on_progress(ck, "PDF не найден", i, len(to_extract))
             continue
 
-        # Извлечь текст
-        pdf_text = pdf_extractor.extract(pdf_path)
+        # Извлечь текст: страницы целиком идут в чанкованный движок,
+        # усечённая строка нужна только для vault-заметки
+        pdf_pages = pdf_extractor.extract_pages(pdf_path)
+        pdf_text = pdf_extractor.format_for_ai(pdf_pages) if pdf_pages else None
         if not pdf_text or len(pdf_text) < config.processing.min_pdf_length:
             failed.append(ck)
             if on_progress:
@@ -327,6 +329,7 @@ def pre_extract_sources(
             dissertation_context=dissertation_context,
             available_tags=available_tags,
             klemma_home=klemma_home,
+            pages=pdf_pages or None,
         )
 
         if result and result.fragments:

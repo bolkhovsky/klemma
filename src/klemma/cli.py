@@ -1735,10 +1735,22 @@ def _process_single(
                 end="",
             )
 
-    # Save to vault
+    # Save to vault. After a partial --force the DB kept the old corpus and
+    # merged the new fragments; the note must show that merged set, not the
+    # partial new subset (update_section replaces the whole quotation block).
+    _vault_fragments = result.fragments
+    if force and (
+        (getattr(result, "failed_chunks", 0) or 0) > 0
+        or (getattr(result, "coverage_ratio", 1.0) or 1.0) < 1.0
+    ):
+        from .skills.extractor import fragments_from_rows
+
+        _merged = fragments_from_rows(state.get_fragments(source_id=citekey, limit=100_000))
+        if _merged:
+            _vault_fragments = _merged
     saved_path = save_fragments_to_vault(
         citekey,
-        result.fragments,
+        _vault_fragments,
         vault,
         entry=entry,
         config=cfg,

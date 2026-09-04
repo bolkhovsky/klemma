@@ -155,6 +155,34 @@ def extract_fragments(
     )
 
 
+def fragments_from_rows(rows: list[dict]) -> list[Fragment]:
+    """Rebuild ``Fragment`` models from ``state.get_fragments()`` rows.
+
+    Used to render the *merged* stored corpus into the vault after a partial
+    ``--force`` reprocess, so the note never shows a lossy subset.
+    """
+    out: list[Fragment] = []
+    for r in rows:
+        text = (r.get("fragment_text") or "").strip()
+        if not text:
+            continue
+        try:
+            relevance = int(r.get("relevance_score") or 3)
+        except (TypeError, ValueError):
+            relevance = 3
+        out.append(Fragment(
+            text=text,
+            type=r.get("fragment_type") or "key_idea",
+            chapter=r.get("chapter") if isinstance(r.get("chapter"), int) else None,
+            section=r.get("section") or None,
+            relevance=max(1, min(5, relevance)),
+            usage_hint=r.get("usage_hint") or "",
+            page=r.get("page_number") if isinstance(r.get("page_number"), int) else None,
+            verbatim=bool(r.get("verbatim", False)),
+        ))
+    return out
+
+
 def _format_fragments_for_vault(fragments: list[Fragment]) -> str:
     """Format fragments as Obsidian callouts matching zobsidian note style."""
     lines = []
@@ -258,7 +286,8 @@ def extract_from_citekey(
         logger.error("PDF not found for %s", citekey)
         return None
 
-    pdf_text = pdf_extractor.extract(pdf_path)
+    pages = pdf_extractor.extract_pages(pdf_path)
+    pdf_text = pdf_extractor.format_for_ai(pages) if pages else None
     if not pdf_text or len(pdf_text) < config.processing.min_pdf_length:
         logger.error("PDF text too short or extraction failed for %s", citekey)
         return None
@@ -269,4 +298,5 @@ def extract_from_citekey(
         available_tags=available_tags,
         klemma_home=klemma_home,
         project_type=project_type,
+        pages=pages,
     )

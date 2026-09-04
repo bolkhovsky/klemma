@@ -408,6 +408,45 @@ def dedup_by_text_and_span(fragments: list[ExtractedFragment]) -> list[Extracted
     return kept
 
 
+
+def _charge(result: Any, est_in: int, requested_out: int) -> tuple[int, int]:
+    """Tokens to charge for a call: measured usage, or the reserved estimate.
+
+    Backends that cannot observe usage (Claude CLI) leave both counters at
+    zero; charging nothing would let every later chunk see an untouched
+    budget, so the reservation itself is charged instead.
+    """
+    tin = int(getattr(result, "input_tokens", 0) or 0) if result else 0
+    tout = int(getattr(result, "output_tokens", 0) or 0) if result else 0
+    if tin == 0 and tout == 0:
+        return est_in, requested_out
+    return tin, tout
+
+
+def _reconstruct_from_chunks(chunks: list) -> str:
+    """Rebuild the canonical text from overlapping ChunkRecords by offsets.
+
+    Chunk texts may carry a synthetic ``[Page N]`` prefix (longer than their
+    interval) and overlap their neighbours; a plain join would inflate
+    ``total_chars`` and shift every span. Each chunk body is written at its
+    recorded ``[char_start, char_end)``; uncovered gaps become spaces.
+    """
+    if not chunks:
+        return ""
+    total = max(int(c.char_end) for c in chunks)
+    buf = [" "] * total
+    for c in sorted(chunks, key=lambda c: c.char_start):
+        start, end = int(c.char_start), int(c.char_end)
+        body = c.text
+        span = end - start
+        if len(body) > span:  # synthetic page marker prepended → drop it
+            body = body[len(body) - span:]
+        elif len(body) < span:
+            span = len(body)
+        buf[start:start + span] = list(body[:span])
+    return "".join(buf)
+
+
 def _page_at(full_text: str, offset: int) -> int:
     page = 1
     for m in _PAGE_MARKER_RE.finditer(full_text, 0, max(0, offset) + 1):
@@ -543,7 +582,7 @@ def extract_from_pages(
 
     if chunks is not None:
         work = list(chunks)
-        source_text = full_text if full_text else "\n\n".join(c.text for c in work)
+        source_text = full_text if full_text else _reconstruct_from_chunks(work)
     elif pages:
         source_text = full_text if full_text else build_full_text(pages)
         work = list(_pdf.build_chunks_from_pages(pages, chunk_size=chunk_size, overlap=overlap))
@@ -612,7 +651,7 @@ def extract_from_pages(
             char_end=chunk.char_end,
             **prompt_vars,
         )
-        max_tokens = max(2048, min(max_tokens_cap, len(chunk.text) // 4))
+        max_tokens = min(max_tokens_cap, max(2048, len(chunk.text) // 4))
 
         def _reserve(prompt_chars: int, out_tokens: int) -> bool:
             """True when the call fits the remaining budget (input, output, cost)."""
@@ -640,8 +679,8 @@ def extract_from_pages(
         )
         if on_call is not None:
             on_call(result, "extract")
-        tin = int(getattr(result, "input_tokens", 0) or 0) if result else 0
-        tout = int(getattr(result, "output_tokens", 0) or 0) if result else 0
+        est_in = (len(user_prompt) + len(system_prompt)) // 3
+        tin, tout = _charge(result, est_in, max_tokens)
         tokens_in += tin
         tokens_out += tout
         outcome.tokens_in += tin
@@ -673,10 +712,16 @@ def extract_from_pages(
             )
             continue
 
-        data = extract_json(result.text)
-        if not data:
+        truncated = finish == _FINISH_MAX_TOKENS
+        # A truncated answer is (almost always) also malformed JSON: repairing
+        # it would spend a paid call on data we discard anyway, and a failed
+        # repair reservation would wrongly exhaust the budget before the
+        # split gets its chance. Go straight to splitting.
+        data = None if truncated else extract_json(result.text)
+        if not data and not truncated:
             repair_user = f"Repair this malformed JSON:\n\n{result.text}"
             repair_tokens = min(max_tokens_cap, max_tokens * 2)
+            repair_est_in = (len(repair_user) + len(_REPAIR_SYSTEM_PROMPT)) // 3
             if not _reserve(len(repair_user) + len(_REPAIR_SYSTEM_PROMPT), repair_tokens):
                 outcome.error = "budget"
                 budget_exhausted = True
@@ -689,22 +734,29 @@ def extract_from_pages(
             )
             if on_call is not None:
                 on_call(repair, "repair")
-            if repair:
-                rin = int(getattr(repair, "input_tokens", 0) or 0)
-                rout = int(getattr(repair, "output_tokens", 0) or 0)
-                tokens_in += rin
-                tokens_out += rout
-                outcome.tokens_in += rin
-                outcome.tokens_out += rout
-                if getattr(repair, "text", None):
-                    data = extract_json(repair.text)
-                    if data:
-                        logger.info(
-                            "Chunk %d: AI repair retry recovered JSON for %s",
-                            chunk.index, getattr(entry, "id", "?"),
-                        )
+            rin, rout = _charge(repair, repair_est_in, repair_tokens)
+            tokens_in += rin
+            tokens_out += rout
+            outcome.tokens_in += rin
+            outcome.tokens_out += rout
+            repair_finish = normalize_finish_reason(getattr(repair, "finish_reason", None))
+            if repair_finish == "error":
+                outcome.error = "provider_error"
+                logger.warning(
+                    "Chunk %d: JSON repair refused by provider for %s",
+                    chunk.index, getattr(entry, "id", "?"),
+                )
+                continue
+            if repair_finish == _FINISH_MAX_TOKENS:
+                truncated = True  # repaired object is partial → split, not accept
+            elif repair and getattr(repair, "text", None):
+                data = extract_json(repair.text)
+                if data:
+                    logger.info(
+                        "Chunk %d: AI repair retry recovered JSON for %s",
+                        chunk.index, getattr(entry, "id", "?"),
+                    )
 
-        truncated = finish == _FINISH_MAX_TOKENS
         if data and not truncated:
             outcome.status = "ok"
             parsed = _parse_fragments(data, chunk.index)
