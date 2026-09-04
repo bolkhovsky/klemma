@@ -11,7 +11,7 @@ Click CLI entry point. Defines 18 commands + hidden aliases.
 - `_get_context(ctx)` — returns cached `KlemmaContext` from `ctx.obj` or initializes fresh
 - `_init_ai()` — creates AI client (separated for commands that don't need API key)
 - `_sync_sections()` — auto-sync vault frontmatter → DB on every `research`/`library`/`status` command
-- Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `library duplicates`, `suggest`, `reassign`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`, `migrate-content` (hidden — moves config.yaml content fields to KLEMMA.md frontmatter), `migrate-library` (dry-run by default; `--run` copies monolithic klemma.db → library.db + project.db via three-tier stores)
+- Commands: `init`, `plan`, `status`, `process`, `embed`, `similar`, `acquire`, `research`, `library`, `library prune`, `library duplicates`, `suggest`, `reassign`, `outline`, `ask`, `info`, `tree`, `benchmark`, `migrate`, `migrate-content` (hidden — moves config.yaml content fields to KLEMMA.md frontmatter), `migrate-library` (dry-run by default; `--apply` runs `klemma.migration.migrate_monolith` — every field, legacy attempts, embeddings, `--ledger` CSV; dry-run reports the same N_* numbers without creating library.db)
 - Hidden aliases: `gaps suggest` → `suggest`, `coverage` → `status --verbose`
 - Deprecation warnings: bare `klemma gaps` → use `klemma status --verbose`; `klemma library -s` → use `klemma research -s`
 - `init --outline` generates an outline after project setup (requires AI backend)
@@ -148,6 +148,7 @@ SQLite backends implementing the three-tier library protocols.
 - `get_paper_embeddings_batch(paper_ids, model=None) -> dict[str, list[float]]` — bulk embedding fetch for semantic factor calculation
 - `update_citation_intents(paper_id, refs) -> int` — backfill: UPDATE only where intent IS NULL or 'background'; skips non-null valid intents; validates whitelist
 - `get_papers_for_user_backfill(user_id, batch_size, cursor) -> tuple[list[dict], int]` — cursor-based pagination of papers needing backfill (have NULL/background intents)
+- Extraction attempts (ADR-020, idempotent tables, **no `user_version` bump**): `start_attempt()`, `finish_attempt()`, `save_attempt_fragments(attempt_id, paper_id, records, links)` (canonical `fragments` INSERT OR IGNORE + attempt links with span/locator/verbatim_status), `get_attempt()`, `get_attempts(paper_id)`, `get_attempt_fragments()`, `update_attempt_fragment_provenance()`, `find_orphan_attempts(referenced_ids)`, `set_pdf_hash()` (migration merge; refuses when another paper owns the hash). The legacy `extractions` table is not written by the run path.
 - `get_cached_recommendations(*, user_id, project_id, library_state_hash, outline_hash, model) -> dict | None` / `save_cached_recommendations(...)` / `invalidate_recommendations_cache(user_id, project_id=None) -> int` — LLM-curated recommendations cache (#332). **Does NOT bump `_SCHEMA_VERSION`** — library.db user_version is co-owned with LocalUserLibrary (see comment block at `paper_store.py:31`); table created via idempotent `CREATE TABLE IF NOT EXISTS`.
 - Tables: `papers`, `extractions`, `fragments`, `paper_embeddings`, `fragment_embeddings`, `citation_graph`, `recommendations_cache` (PK: user_id, project_id, library_state_hash, outline_hash, model)
 - Used by: `_init_components()` in `cli.py` (always created); `_process_single()` in `cli.py` (dedup check + dual-write); `GET /library/recommendations` (cache); `POST /library/upload`, `DELETE /library/sources/{citekey}`, `PATCH /projects/{id}/outline` (cache invalidation)
@@ -172,8 +173,10 @@ SQLite backends implementing the three-tier library protocols.
 - `save/read/exists/delete/get_path` — CRUD operations; `delete` cleans up empty parent dir
 - `get_paper_dir(paper_id)` / `delete_paper_files(paper_id)` — bulk paper-level operations
 
-#### stores/project_store.py (~310 lines)
-`LocalProjectStore` — SQLite-backed `ProjectStore` at `project/.klemma/data/project.db`. Per-project section assignments, coverage stats, and prune verdicts (schema v5). Composite PK `(user_id, citekey)` for multi-user SaaS isolation.
+#### stores/project_store.py (~900 lines)
+`LocalProjectStore` — SQLite-backed `ProjectStore` at `project/.klemma/data/project.db`. Per-project section assignments, coverage stats, prune verdicts, and — since **schema v6 (ADR-020)** — extraction runs and the active fragment set. Composite PK `(user_id, citekey)` for multi-user SaaS isolation.
+- v6 tables: `project_extraction_runs` (launch conditions duplicated for reproducibility: attempt_id UUID, request_fingerprint, prompt/template hash, model, klemma/extractor version, config_json, coverage_json, `is_partial`, `validation_incomplete`, `activation_reason`, status `running|pending|published|published_partial|failed|discarded`), `project_run_fragments` (per-run snapshot), `project_fragments` rebuilt with PK `(user_id, citekey, fragment_id)` + `curated_section` / `legacy_section` / `section_origin` (`curated|model|legacy_unknown`), `project_sources.active_run_id`.
+- Run API: `start_run()` (step 0, before any AI call), `publish_run()` (ONE transaction: links, project rows without touching `curated_section`, run row, integrity check via `verify_fragment`, active-set switch only for `published`; rollback → `failed, error=integrity`), `fail_run()`, `activate_partial(run_id, reason)`, `clear_validation_incomplete()`, `mark_stale_runs()`, `get_stale_running_citekeys()`, `get_runs()`, `get_run()`, `get_active_run_id()`, `get_run_fragments()`, `get_project_fragments(citekey, run_id=, all_runs=)` (default = active set; legacy rows when no run is active), `set_curated_section()`, `upsert_legacy_fragment()`, `count_project_fragments()`, `referenced_attempt_ids()`.
 - `_uid(user_id) -> str` — normalizes `None` → `""` for composite PK compatibility
 - `set_source_sections(citekey, paper_id, sections, chapters, user_id=None) -> None` — upsert + replace section assignments; user-scoped
 - `get_coverage_stats(user_id=None) -> dict` — `{total_sources, by_section: {section: count}}`; user-scoped
@@ -296,6 +299,12 @@ FastAPI application. Install extra: `pip install "klemma[api]"`. Entry point: `u
 - `api/routes/auth.py` — `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `GET /auth/me`
 - `api/auth/` — JWT (python-jose), argon2 passwords, Pydantic schemas, FastAPI deps
 See [api/CLAUDE.md](api/CLAUDE.md) and [api/auth/CLAUDE.md](api/auth/CLAUDE.md) for full detail.
+
+### extraction_runs.py (~230 lines)
+Run lifecycle across the three stores (ADR-020): `start_run()` (step 0: `attempt_id = uuid4()`, `request_fingerprint`, `running` row + library attempt before the first AI call), `publish_run(project_store, paper_store, handle, result, replace_legacy)` (step 1 library.db idempotent → step 2 project.db transaction with cross-DB integrity check), `fail_run()`, helpers `canonical_config_json()`, `request_fingerprint()`, `source_content_hash()`; `EXTRACTOR_VERSION` is part of the fingerprint. Called from `cli._process_single` (online sources stay on the run-less legacy path).
+
+### migration.py (~330 lines)
+`migrate_monolith(mono_db, paper_store, user_library, project_store, apply, pdf_resolver, ledger_path, user_id)` — single implementation behind `klemma migrate-library` and the auto-migration in `_init_components`. Paper identity: real pdf_hash → DOI → citekey in user_sources → `migrated:<citekey>` → new. Transfers every fragment field, spans/locators, embeddings; one legacy attempt per (paper, citekey) (`legacy_attempt_id`); `project_sources` for all sources; `MigrationReport` with N_input / N_unique_fragments / N_attempt_fragment / N_project_fragment / N_embedding, per-field transfer counts, conflicts, post-apply `verified`; CSV ledger per input row (`migrated | merged-duplicate | failed`). Dry-run computes the same numbers without writes.
 
 ## Data flows
 

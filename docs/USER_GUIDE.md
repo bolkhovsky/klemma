@@ -407,6 +407,27 @@ klemma ask -ch 1 "Найди пробелы в литературном обзо
 klemma repair --cited draft --cited 'papers/**/paper_draft*.md'   # sidecar + verbatim + embeddings
 klemma repair --scan                                              # найти источники с тихо упавшими шагами
 klemma status --degraded                                          # очередь дообработки
+klemma repair --run 12                                            # проверить один прогон по sidecar и опубликовать
+```
+
+### Прогоны извлечения и активный набор (ADR-020)
+
+Начиная с 0.19 каждое извлечение — это **прогон** (`project_extraction_runs` в
+`project.db`) с попыткой в `library.db`. `klemma process <citekey> --force`
+больше ничего не удаляет: новый прогон становится активным набором только
+если он полный (все чанки, покрытие 100 %) и проверенный; частичный или
+непроверенный прогон остаётся `pending`, старые выписки продолжают работать.
+
+```bash
+klemma process key --force                       # переизвлечь, старый корпус сохранить
+klemma process key --force --replace             # после полного прогона убрать legacy-строки проекта
+klemma process --from-file reprocess.txt --exhaustive
+klemma process --activate-partial 12 --reason "просмотрено вручную"   # published_partial
+klemma process --resume-stale                    # зависшие running > 2 ч → failed и повтор
+klemma source show key --all-runs                # прогоны, активный набор, происхождение секций
+klemma source select --include-zero --max-fragments 10 --min-quality 4 --with-pdf > reprocess.txt
+klemma migrate-library --ledger notes/library/migration_ledger.csv   # dry-run с числами N_*
+klemma migrate-library --apply --ledger notes/library/migration_ledger.csv
 ```
 
 `repair` пересчитывает `verbatim` у всех фрагментов источника, включая даунгрейд
