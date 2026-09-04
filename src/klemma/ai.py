@@ -406,19 +406,56 @@ class ClaudeClient(AIProviderBase):
             raise RuntimeError(
                 "'claude' command not found. Install Claude Code CLI: https://claude.ai/code"
             )
+        use_key = bool(getattr(config, "claude_cli_use_api_key", False))
         # --model flag requires ANTHROPIC_API_KEY (Max subscriptions don't support it)
-        self._has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-        # Sanitize env to avoid nested Claude Code session detection (#131)
-        self._clean_env = {
-            k: v for k, v in os.environ.items() if k != "CLAUDECODE"
-        }
+        self._has_api_key = use_key and bool(os.environ.get("ANTHROPIC_API_KEY"))
+        # Sanitize env: no nested Claude Code session detection (#131); and unless
+        # the user opted into API billing, strip the API key so the CLI runs on
+        # the claude.ai login instead of silently charging the API.
+        drop = {"CLAUDECODE"}
+        if not use_key:
+            drop |= {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
+        self._clean_env = {k: v for k, v in os.environ.items() if k not in drop}
 
-    def _build_cmd(self, model: str) -> list[str]:
-        """Build claude CLI command, omitting --model when no API key."""
+    def _build_cmd(self, model: str, json_output: bool = False) -> list[str]:
+        """Build claude CLI command, omitting --model when no API key.
+
+        ``json_output`` asks for ``--output-format json``: the result object
+        carries ``stop_reason`` and ``usage`` (input/output tokens), which is
+        what ``call_with_meta`` needs to report ``finish_reason`` honestly and
+        lets the chunked engine run its exhaustive mode on a subscription
+        backend without an API key.
+        """
         cmd = ["claude", "-p"]
+        if json_output:
+            cmd += ["--output-format", "json"]
         if self._has_api_key:
             cmd += ["--model", model]
         return cmd
+
+    @staticmethod
+    def _parse_json_result(stdout: str) -> tuple[Optional[str], int, int, str, Optional[str]]:
+        """(text, input_tokens, output_tokens, finish_reason, error) from JSON output.
+
+        Falls back to treating stdout as plain text when it is not the CLI's
+        result object (older CLI, --output-format unsupported).
+        """
+        try:
+            data = json.loads(stdout)
+        except (json.JSONDecodeError, TypeError):
+            return stdout, 0, 0, "unknown", None
+        if not isinstance(data, dict) or data.get("type") != "result":
+            return stdout, 0, 0, "unknown", None
+        usage = data.get("usage") or {}
+        tin = int(usage.get("input_tokens") or 0) + int(usage.get("cache_read_input_tokens") or 0) \
+            + int(usage.get("cache_creation_input_tokens") or 0)
+        tout = int(usage.get("output_tokens") or 0)
+        finish = normalize_finish_reason(data.get("stop_reason"))
+        text = data.get("result")
+        if data.get("is_error"):
+            err = str(data.get("api_error_status") or data.get("result") or "cli error")[:300]
+            return None, tin, tout, "error", err
+        return (str(text) if text is not None else None), tin, tout, finish, None
 
     def call(
         self,
@@ -476,7 +513,7 @@ class ClaudeClient(AIProviderBase):
         """Call Claude CLI with structured error tracking."""
         effective_timeout = timeout or self.timeout
         effective_model = model_override or self.model
-        cmd = self._build_cmd(effective_model)
+        cmd = self._build_cmd(effective_model, json_output=True)
         prompt = f"{system}\n\n---\n\n{user}"
 
         t0 = time.monotonic()
@@ -500,12 +537,19 @@ class ClaudeClient(AIProviderBase):
                     )
                     continue
                 elapsed = int((time.monotonic() - t0) * 1000)
-                # The CLI does not expose the stop reason — "unknown" is honest;
-                # the extraction engine refuses exhaustive mode on it.
+                text, tin, tout, finish, err = self._parse_json_result(result.stdout)
+                if err is not None:
+                    retries_used = attempt + 1
+                    last_error = f"cli_error: {err}"
+                    logger.warning(
+                        "Claude CLI result error (attempt %d/%d): %s",
+                        attempt + 1, self.retries + 1, err,
+                    )
+                    continue
                 return AICallResult(
-                    text=result.stdout, duration_ms=elapsed,
+                    text=text, duration_ms=elapsed, input_tokens=tin, output_tokens=tout,
                     retries_used=retries_used, model=effective_model,
-                    finish_reason="unknown",
+                    finish_reason=finish,
                 )
             except subprocess.TimeoutExpired:
                 retries_used = attempt + 1

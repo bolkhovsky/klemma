@@ -312,6 +312,10 @@ class ObsidianConfig(BaseModel):
 class AIConfig(BaseModel):
     backend: str = "litellm"  # "claude" | "litellm" | "openai" (deprecated)
     model: str = "opus"
+    # Claude CLI backend: by default the child process runs on the claude.ai login
+    # (subscription) — ANTHROPIC_API_KEY from the shell is NOT forwarded, because
+    # the CLI prefers the key over the login. Set true to bill the API instead.
+    claude_cli_use_api_key: bool = False
     # Text cap for single-shot prompts (annotate, online sources). Extraction
     # is chunked over the full text and is NOT limited by this value.
     max_pdf_chars: int = 50000
