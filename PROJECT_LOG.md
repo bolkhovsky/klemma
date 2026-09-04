@@ -201,8 +201,8 @@ See CLAUDE.md for full project structure.
   протокол публикации `extraction_runs.py` (шаг 0 до вызова модели, одна транзакция
   project.db, проверка целостности); `klemma.migration.migrate_monolith` с реестром и
   dry-run; `repair --run`, зеркало вердиктов в попытки; `source show --all-runs`,
-  `source select`; `process --replace/--exhaustive/--from-file/--resume-stale/
-  --activate-partial`. ADR-020.
+  `source select`; `process --replace/--from-file/--resume-stale/--activate-partial`
+  (`--exhaustive` в PR-B был скрытой заглушкой). ADR-020.
 
 ### Стек и схемы
 - Python 3.11+, uv (`uv.lock` в репозитории), venv `~/.venvs/klemma`, pytest (2385 тестов), ruff.
@@ -211,10 +211,14 @@ See CLAUDE.md for full project structure.
   `.klemma/data/project.db` (ProjectStore v6).
 - Конфиг: `~/.klemmarc.yaml` + `.klemma/config.yaml` + frontmatter `KLEMMA.md`.
 
+- PR-C (#449, `feat/outline-digest`): дайджест структуры в промпт (`skills/outline_digest.py`,
+  `ProjectConfig.outline_file`, `KlemmaContext.outline_digest`, приёмка на 101 пункте).
+- PR-D (#450, `feat/exhaustive-mode`): `--exhaustive` best-effort с `extract_exhaustive.md`,
+  заметки contradicts/qualifies, `not_extracted`, `klemma eval extract` (gold вне git),
+  `source show --notes`; правки по внутреннему многоагентному ревью (42 находки).
+
 ### Следующие цели
-- PR-C: дайджест `Структура_диссертации_v2.md` в промпт (`outline_digest.py`,
-  `ProjectConfig.outline_file`).
-- PR-D: режим `--exhaustive` best-effort с gold-eval (`klemma eval extract`),
-  `extract_exhaustive.md`, `not_extracted`.
+- Пилот exhaustive в полигоне заблокирован кредитом API Anthropic; после пополнения —
+  B5 (5 источников), затем B6 на рабочей библиотеке.
 - Долг: перевод читающих команд (research, RAG, draft, check-citations) с монолита на
   активный набор ProjectStore; SaaS-путь без lifecycle прогонов (#372).

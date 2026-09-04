@@ -481,6 +481,58 @@ def _split_bounds(full_text: str, start: int, end: int, overlap: int) -> tuple[i
     return left_end, right_start
 
 
+
+def _finalize_notes(notes: dict, source_text: str, valid_ids: Optional[set[str]] = None) -> dict:
+    """Validate note quotes (verbatim/span) and dedup by (item, normalized text, span).
+
+    Quotes that cannot be located are kept but marked ``unverified`` — a note
+    is an opinion of the model about the outline, never a citation.
+    """
+    out: dict = {}
+    for key in ("contradicts", "qualifies"):
+        seen: set[tuple] = set()
+        cleaned: list[dict] = []
+        for n in notes.get(key, []) or []:
+            if not isinstance(n, dict):
+                continue
+            quote = str(n.get("quote", "") or "").strip()
+            item = normalize_section_id(n.get("item"), valid_ids) or ""
+            if not quote or (valid_ids is not None and not item):
+                continue  # no quotable basis / item outside the outline → omitted
+            span = locate_fragment_span(quote, source_text)
+            if span is None:
+                status = "unverified"
+            elif normalize(quote) in normalize(source_text):
+                status = "confirmed"
+            else:
+                status = "fuzzy"
+            norm = normalize(quote)
+            dup = False
+            for s_item, s_norm, s_span in seen:
+                if s_item != item:
+                    continue
+                if s_norm == norm:
+                    dup = True
+                    break
+                if span and s_span and span[0] < s_span[1] and s_span[0] < span[1]:
+                    ratio = difflib.SequenceMatcher(None, norm, s_norm, autojunk=False).ratio()
+                    if ratio >= _FUZZY_DEDUP_THRESHOLD:
+                        dup = True
+                        break
+            if dup:
+                continue
+            seen.add((item, norm, span))
+            cleaned.append({
+                "item": item, "quote": quote, "note": str(n.get("note", "") or ""),
+                "status": status,
+                "char_start": span[0] if span else None,
+                "char_end": span[1] if span else None,
+            })
+        if cleaned:
+            out[key] = cleaned
+    return out
+
+
 def _page_at(full_text: str, offset: int) -> int:
     page = 1
     for m in _PAGE_MARKER_RE.finditer(full_text, 0, max(0, offset) + 1):
@@ -507,7 +559,37 @@ def _make_child_chunk(full_text: str, start: int, end: int, index: int):
     )
 
 
-def _parse_fragments(data: dict, chunk_index: int) -> list[ExtractedFragment]:
+_SECTION_ID_RE = re.compile(r"(\d+(?:\.\d+)*)")
+
+
+def normalize_section_id(value: Any, valid_ids: Optional[set[str]] = None) -> Optional[str]:
+    """Reduce a model-supplied section to a bare id (`2.4.1.` / `§2.4.1` /
+    `2.4.1 Title` → `2.4.1`); when ``valid_ids`` is given, ids outside the
+    outline are rejected (None) so not_extracted and stored sections agree."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    ids = _SECTION_ID_RE.findall(raw)
+    if not ids:
+        # No numeric id at all: keep the model's label unless an outline is enforced.
+        return None if valid_ids is not None else (raw or None)
+    # Prefer the deepest id in the string («Глава 2, п. 2.4.1» → 2.4.1).
+    sid = max(ids, key=lambda s: (s.count("."), len(s))).rstrip(".")
+    if valid_ids is not None and sid not in valid_ids:
+        # tolerate a too-deep id by walking up to the nearest known ancestor
+        parts = sid.split(".")
+        while len(parts) > 1:
+            parts.pop()
+            if ".".join(parts) in valid_ids:
+                return ".".join(parts)
+        return None
+    return sid
+
+
+def _parse_fragments(
+    data: dict, chunk_index: int, *, default_verbatim: bool = False,
+    valid_ids: Optional[set[str]] = None,
+) -> list[ExtractedFragment]:
     out: list[ExtractedFragment] = []
     for f_data in data.get("fragments", []) or []:
         if not isinstance(f_data, dict):
@@ -524,14 +606,12 @@ def _parse_fragments(data: dict, chunk_index: int) -> list[ExtractedFragment]:
                 text=text,
                 type=f_data.get("type", "key_idea") or "key_idea",
                 chapter=f_data.get("chapter") if isinstance(f_data.get("chapter"), int) else None,
-                section=(str(f_data.get("section")).strip() or None)
-                if f_data.get("section") is not None
-                else None,
+                section=normalize_section_id(f_data.get("section"), valid_ids),
                 relevance=max(1, min(5, relevance)),
                 usage_hint=str(f_data.get("usage_hint", "") or ""),
                 page=f_data.get("page") if isinstance(f_data.get("page"), int) else None,
                 citation_intent=f_data.get("citation_intent"),
-                verbatim=bool(f_data.get("verbatim", False)),
+                verbatim=bool(f_data.get("verbatim", default_verbatim)),
             )
         except Exception as e:  # pydantic validation (e.g. bad citation_intent)
             logger.warning("Invalid fragment field sanitised: %s", e)
@@ -542,13 +622,11 @@ def _parse_fragments(data: dict, chunk_index: int) -> list[ExtractedFragment]:
                     text=text,
                     type=f_data.get("type", "key_idea") or "key_idea",
                     chapter=f_data.get("chapter") if isinstance(f_data.get("chapter"), int) else None,
-                    section=(str(f_data.get("section")).strip() or None)
-                    if f_data.get("section") is not None
-                    else None,
+                    section=normalize_section_id(f_data.get("section"), valid_ids),
                     relevance=max(1, min(5, relevance)),
                     usage_hint=str(f_data.get("usage_hint", "") or ""),
                     page=f_data.get("page") if isinstance(f_data.get("page"), int) else None,
-                    verbatim=bool(f_data.get("verbatim", False)),
+                    verbatim=bool(f_data.get("verbatim", default_verbatim)),
                 )
             except Exception:
                 continue
@@ -563,14 +641,19 @@ def _parse_fragments(data: dict, chunk_index: int) -> list[ExtractedFragment]:
 
 
 def _merge_notes(target: dict, incoming: Any) -> None:
-    """Accumulate per-chunk ``notes`` (lists concatenated, scalars kept first)."""
+    """Accumulate per-chunk ``notes``: only the contract keys, always as lists.
+
+    A chunk may legitimately send ``"contradicts": null`` for an empty category;
+    scalars/None are ignored, anything else the model invents under ``notes`` is
+    dropped (the prompt forbids listing uncovered items under any name)."""
     if not isinstance(incoming, dict):
         return
-    for key, value in incoming.items():
+    for key in ("contradicts", "qualifies"):
+        value = incoming.get(key)
         if isinstance(value, list):
-            target.setdefault(key, []).extend(value)
-        elif key not in target:
-            target[key] = value
+            target.setdefault(key, []).extend(v for v in value if isinstance(v, dict))
+        elif isinstance(value, dict):
+            target.setdefault(key, []).append(value)
 
 
 # ---------------------------------------------------------------------------
@@ -614,6 +697,9 @@ def extract_from_pages(
     from ..ai import extract_json
     from ..literature import pdf as _pdf
 
+    if mode == "exhaustive":
+        # Longer answers per chunk: keep chunks small enough for the output cap.
+        chunk_size = min(chunk_size, 20_000)
     if chunks is not None:
         work = list(chunks)
         source_text = full_text if full_text else _reconstruct_from_chunks(work)
@@ -635,6 +721,12 @@ def extract_from_pages(
 
     total_chars = len(source_text)
     budget = budget or Budget()
+    valid_ids: Optional[set[str]] = None
+    _digest = prompt_vars.get("outline_digest") if isinstance(prompt_vars, dict) else None
+    if _digest:
+        from .outline_digest import digest_ids
+
+        valid_ids = set(digest_ids(str(_digest))) or None
     model = model_override or getattr(ai, "model", "") or ""
     try:
         prompt_hash = compute_prompt_hash(Path(prompt_path).read_text(encoding="utf-8"))
@@ -705,7 +797,12 @@ def extract_from_pages(
             char_end=chunk.char_end,
             **prompt_vars,
         )
-        max_tokens = min(max_tokens_cap, max(2048, len(chunk.text) // 4))
+        # Standard: adaptive to chunk size. Exhaustive: always the full cap — the
+        # answer is expected to be long, and a truncation splits the chunk anyway.
+        max_tokens = (
+            max_tokens_cap if mode == "exhaustive"
+            else min(max_tokens_cap, max(2048, len(chunk.text) // 4))
+        )
 
         def _reserve(prompt_chars: int, out_tokens: int) -> bool:
             """True when the call fits the remaining budget (input, output, cost)."""
@@ -742,20 +839,25 @@ def extract_from_pages(
         finish = normalize_finish_reason(getattr(result, "finish_reason", None))
         outcome.finish_reason = finish
 
+        if not result or not getattr(result, "text", None):
+            # A provider failure (auth, credits, timeout) is reported as such —
+            # it says nothing about whether the backend reports finish_reason.
+            outcome.error = getattr(result, "error", None) or "no response"
+            logger.warning(
+                "Chunk %d returned no AI response for %s — %s",
+                chunk.index, getattr(entry, "id", "?"), outcome.error,
+            )
+            if mode == "exhaustive" and first_call:
+                engine_error = f"provider error on first call: {outcome.error}"
+                break
+            continue
+
         if mode == "exhaustive" and first_call and finish == _FINISH_UNKNOWN:
             engine_error = "backend does not report finish_reason; refuse exhaustive mode"
             outcome.error = engine_error
             logger.error("%s: %s", getattr(entry, "id", "?"), engine_error)
             break
         first_call = False
-
-        if not result or not getattr(result, "text", None):
-            outcome.error = getattr(result, "error", None) or "no response"
-            logger.warning(
-                "Chunk %d returned no AI response for %s — %s",
-                chunk.index, getattr(entry, "id", "?"), outcome.error,
-            )
-            continue
 
         if finish == "error":
             # content_filter / refusal: even syntactically valid JSON is not a
@@ -813,7 +915,10 @@ def extract_from_pages(
 
         if data and not truncated:
             outcome.status = "ok"
-            parsed = _parse_fragments(data, chunk.index)
+            parsed = _parse_fragments(
+                data, chunk.index, default_verbatim=(mode == "exhaustive"),
+                valid_ids=valid_ids,
+            )
             outcome.fragments = len(parsed)
             fragments.extend(parsed)
             refs = data.get("key_references")
@@ -914,6 +1019,9 @@ def extract_from_pages(
                 if ef.fragment.page is None:
                     ef.fragment.page = _page_at(source_text, ef.char_start)
         fragments = dedup_by_text_and_span(fragments)
+
+    if notes:
+        notes = _finalize_notes(notes, source_text, valid_ids)
 
     coverage = compute_coverage(outcomes, total_chars)
     cost = estimate_cost_usd(model, tokens_in, tokens_out, pricing)

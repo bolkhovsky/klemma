@@ -40,6 +40,7 @@ ai:
   chunk_overlap: 2000
   min_chunk_chars: 4000                # truncated/unparseable chunks split down to this size
   max_tokens_cap: 8192                 # max output tokens per chunk
+  exhaustive_max_tokens: 16384         # output cap per chunk in --exhaustive mode
   # Per-source budget: 0 = unlimited tokens, omit = no dollar cap
   budget_max_input_tokens: 0
   budget_max_output_tokens: 0

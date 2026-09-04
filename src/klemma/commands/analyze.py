@@ -536,8 +536,9 @@ def role(ctx, citekey, role):
 @click.argument("citekey")
 @click.option("--run", "run_id", type=int, default=None, help="Show the snapshot of one extraction run")
 @click.option("--all-runs", is_flag=True, help="Show every project fragment with the runs that produced it")
+@click.option("--notes", "show_notes", is_flag=True, help="Show the latest run's structure notes (exhaustive mode)")
 @click.pass_context
-def show(ctx, citekey, run_id, all_runs):
+def show(ctx, citekey, run_id, all_runs, show_notes):
     """Display full source card: metadata, sections, fragments, extraction runs."""
     kctx = _get_context(ctx)
     src = kctx.state.get_source(citekey)
@@ -612,6 +613,28 @@ def show(ctx, citekey, run_id, all_runs):
                     + (f" [{', '.join(flags)}]" if flags else "")
                     + (f" — {r['error']}" if r.get("error") else "")
                 )
+        if show_notes and runs:
+            import json as _json
+
+            target = next((r for r in runs if r["run_id"] == active and r.get("notes_json")), None)
+            fallback = target is None
+            if fallback:
+                target = next((r for r in reversed(runs) if r.get("notes_json")), None)
+            if target is None:
+                console.print("\n  [dim]No structure notes recorded (run with --exhaustive)[/dim]")
+            else:
+                notes = _json.loads(target["notes_json"])
+                mark = "" if not fallback else f" [yellow](not the active run: status {target['status']})[/yellow]"
+                console.print(f"\n  [bold]Structure notes[/bold] (run #{target['run_id']}){mark}")
+                for key, label in (("contradicts", "contradicts"), ("qualifies", "qualifies")):
+                    for n in notes.get(key, []) or []:
+                        st = "" if n.get("status") == "confirmed" else " [dim](unverified)[/dim]"
+                        console.print(f"   {label} {n.get('item', '?')}{st}: «{(n.get('quote') or '')[:100]}»")
+                        if n.get("note"):
+                            console.print(f"      {n['note'][:160]}")
+                ne = notes.get("not_extracted") or []
+                if ne:
+                    console.print(f"   not_extracted ({len(ne)}): {', '.join(ne[:40])}{' …' if len(ne) > 40 else ''}")
         if run_id is not None or all_runs:
             rows = pj.get_project_fragments(citekey, run_id=run_id, all_runs=all_runs)
             label = f"run #{run_id}" if run_id is not None else "all runs"
