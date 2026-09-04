@@ -534,9 +534,11 @@ def role(ctx, citekey, role):
 
 @source.command()
 @click.argument("citekey")
+@click.option("--run", "run_id", type=int, default=None, help="Show the snapshot of one extraction run")
+@click.option("--all-runs", is_flag=True, help="Show every project fragment with the runs that produced it")
 @click.pass_context
-def show(ctx, citekey):
-    """Display full source card: metadata, sections, fragments."""
+def show(ctx, citekey, run_id, all_runs):
+    """Display full source card: metadata, sections, fragments, extraction runs."""
     kctx = _get_context(ctx)
     src = kctx.state.get_source(citekey)
     if not src:
@@ -586,6 +588,47 @@ def show(ctx, citekey):
     if note:
         console.print(f"  Note: {note}")
 
+    # Extraction runs (plan C2): active set lives in project.db
+    pj = getattr(kctx, "project_store", None)
+    if pj is not None:
+        try:
+            runs = pj.get_runs(citekey)
+            active = pj.get_active_run_id(citekey)
+        except Exception:  # noqa: BLE001 — stores may be absent in tests
+            runs, active = [], None
+        if runs:
+            console.print(f"\n  [bold]Runs[/bold] (active: {active if active is not None else 'legacy'})")
+            for r in runs:
+                mark = "*" if r["run_id"] == active else " "
+                flags = []
+                if r.get("is_partial"):
+                    flags.append("partial")
+                if r.get("validation_incomplete"):
+                    flags.append("unvalidated")
+                console.print(
+                    f"   {mark} #{r['run_id']} {r.get('started_at', '')[:16]} {r.get('mode', '')} "
+                    f"{r.get('ai_model', '')} chunks={r.get('chunk_count', 0)} "
+                    f"frags={r.get('fragment_count', 0)} {r['status']}"
+                    + (f" [{', '.join(flags)}]" if flags else "")
+                    + (f" — {r['error']}" if r.get("error") else "")
+                )
+        if run_id is not None or all_runs:
+            rows = pj.get_project_fragments(citekey, run_id=run_id, all_runs=all_runs)
+            label = f"run #{run_id}" if run_id is not None else "all runs"
+            console.print(f"\n  [bold]Project fragments[/bold] ({label}): {len(rows)}")
+            tbl = Table(show_header=True, box=None, padding=(0, 1))
+            tbl.add_column("fragment_id", style="dim", width=12)
+            tbl.add_column("section", width=8)
+            tbl.add_column("origin", width=14)
+            tbl.add_column("runs", width=10)
+            for row in rows:
+                eff = row.get("curated_section") or row.get("run_model_section") or row.get("section") or row.get("legacy_section") or "-"
+                tbl.add_row(
+                    str(row.get("fragment_id", ""))[:12], eff, row.get("section_origin") or "-",
+                    str(row.get("run_ids") or (run_id if run_id is not None else "")),
+                )
+            console.print(tbl)
+
     # Fragments
     frag_count = src.get("fragment_count", 0) or len(fragments)
     console.print(f"\n  [bold]Fragments[/bold]: {frag_count}")
@@ -607,3 +650,69 @@ def show(ctx, citekey):
             )
         console.print(tbl)
     console.print()
+
+
+@source.command(name="select")
+@click.option("--max-fragments", type=int, default=None, help="Sources with at most N fragments (the 1..N band)")
+@click.option("--min-quality", type=int, default=None, help="Quality score ≥ Q applies to the 1..N band")
+@click.option("--include-zero/--no-include-zero", default=True, help="Include sources with zero fragments")
+@click.option("--exclude-prune-drop/--no-exclude-prune-drop", default=True)
+@click.option("--with-pdf", is_flag=True, help="Only sources whose PDF is resolvable")
+@click.option("--status", "statuses", default="completed,incomplete,skipped,pending",
+              help="Comma-separated source statuses")
+@click.option("--exclude-title-regex", default=None, help="Drop sources whose title matches")
+@click.option("--format", "fmt", type=click.Choice(["citekeys", "table"]), default="citekeys")
+@click.pass_context
+def select(ctx, max_fragments, min_quality, include_zero, exclude_prune_drop, with_pdf,
+           statuses, exclude_title_regex, fmt):
+    """Select sources for (re)processing — feeds `klemma process --from-file`."""
+    import re as _re
+    from pathlib import Path
+
+    kctx = _get_context(ctx)
+    state = kctx.state
+    wanted = {s.strip() for s in statuses.split(",") if s.strip()}
+    drop_ids: set[str] = set()
+    if exclude_prune_drop:
+        try:
+            drop_ids = set(state.prune.get_prune_drop_ids())
+        except Exception:  # noqa: BLE001
+            drop_ids = set()
+    title_re = _re.compile(exclude_title_regex, _re.IGNORECASE) if exclude_title_regex else None
+    pdf_lookup = dict(getattr(kctx.library, "pdf_paths", {}) or {}) if kctx.library else {}
+
+    rows = []
+    for src in state.get_sources_for_selection():
+        ck = src["id"]
+        if src.get("status") not in wanted or ck in drop_ids:
+            continue
+        title = src.get("title") or ""
+        if title_re and title_re.search(title):
+            continue
+        n = int(src.get("fragment_count") or 0)
+        q = src.get("quality_score")
+        if n == 0:
+            if not include_zero:
+                continue
+        else:
+            if max_fragments is None or n > max_fragments:
+                continue
+            if min_quality is not None and (q is None or int(q) < min_quality):
+                continue
+        if with_pdf:
+            p = src.get("pdf_path") or pdf_lookup.get(ck)
+            if not p or not Path(str(p)).exists():
+                continue
+        rows.append((ck, n, q, src.get("status"), title[:60]))
+
+    if fmt == "citekeys":
+        for ck, *_ in rows:
+            click.echo(ck)
+        return
+    tbl = Table(show_header=True, box=None, padding=(0, 1))
+    for col in ("citekey", "frags", "q", "status", "title"):
+        tbl.add_column(col)
+    for ck, n, q, st, title in rows:
+        tbl.add_row(ck, str(n), str(q if q is not None else "-"), st or "-", title)
+    console.print(tbl)
+    console.print(f"[dim]{len(rows)} source(s)[/dim]")

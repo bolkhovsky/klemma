@@ -679,6 +679,9 @@ class StateManager:
     def get_all_sources(self) -> list[dict]:
         return self.sources.get_all_sources()
 
+    def get_sources_for_selection(self) -> list[dict]:
+        return self.sources.get_sources_for_selection()
+
     def get_all_sources_metadata(self) -> list[dict]:
         return self.sources.get_all_sources_metadata()
 
