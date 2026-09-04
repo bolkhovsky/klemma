@@ -658,7 +658,7 @@ def show(ctx, citekey, run_id, all_runs):
 @click.option("--include-zero/--no-include-zero", default=True, help="Include sources with zero fragments")
 @click.option("--exclude-prune-drop/--no-exclude-prune-drop", default=True)
 @click.option("--with-pdf", is_flag=True, help="Only sources whose PDF is resolvable")
-@click.option("--status", "statuses", default="completed,incomplete,skipped,pending",
+@click.option("--status", "statuses", default="completed,degraded,skipped,pending,failed",
               help="Comma-separated source statuses")
 @click.option("--exclude-title-regex", default=None, help="Drop sources whose title matches")
 @click.option("--format", "fmt", type=click.Choice(["citekeys", "table"]), default="citekeys")
@@ -678,6 +678,12 @@ def select(ctx, max_fragments, min_quality, include_zero, exclude_prune_drop, wi
             drop_ids = set(state.prune.get_prune_drop_ids())
         except Exception:  # noqa: BLE001
             drop_ids = set()
+        pj = getattr(kctx, "project_store", None)
+        if pj is not None:
+            try:  # the librarian writes verdicts to project.db when it is available
+                drop_ids |= set(pj.get_prune_drop_ids())
+            except Exception:  # noqa: BLE001
+                pass
     title_re = _re.compile(exclude_title_regex, _re.IGNORECASE) if exclude_title_regex else None
     pdf_lookup = dict(getattr(kctx.library, "pdf_paths", {}) or {}) if kctx.library else {}
 

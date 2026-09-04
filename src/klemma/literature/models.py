@@ -159,6 +159,7 @@ class ExtractionResult(BaseModel):
     coverage_ratio: float = 1.0
     validation_incomplete: bool = False
     prompt_hash: str = ""
+    rendered_prompt_hash: str = ""
     model: str = ""
     tokens_in: int = 0
     tokens_out: int = 0

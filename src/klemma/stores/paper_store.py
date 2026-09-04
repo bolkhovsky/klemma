@@ -790,15 +790,36 @@ class LocalPaperStore:
             conn.execute("DELETE FROM extractions WHERE paper_id = ?", (paper_id,))
         return count
 
-    def get_fragments(self, paper_id: str) -> list["FragmentRecord"]:
-        """Return all fragments stored for paper_id."""
+    def get_fragments(
+        self, paper_id: str, *, published_only: bool = True,
+    ) -> list["FragmentRecord"]:
+        """Return fragments stored for paper_id.
+
+        With ``published_only`` (default) a fragment written by the run path
+        (``extraction_id IS NULL``) is visible only when at least one of its
+        attempts is ``published`` — so a pending partial/unvalidated attempt
+        never leaks into the shared cache other projects read (ADR-020).
+        Legacy rows (``extraction_id`` set) are always visible.
+        """
         from ..models import FragmentRecord
 
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM fragments WHERE paper_id = ? ORDER BY rowid",
-                (paper_id,),
-            ).fetchall()
+            if published_only:
+                rows = conn.execute(
+                    """SELECT f.* FROM fragments f
+                       WHERE f.paper_id = ? AND (
+                         f.extraction_id IS NOT NULL OR EXISTS (
+                           SELECT 1 FROM extraction_attempt_fragments l
+                           JOIN extraction_attempts a ON a.attempt_id = l.attempt_id
+                           WHERE l.fragment_id = f.fragment_id AND a.status = 'published'))
+                       ORDER BY f.rowid""",
+                    (paper_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM fragments WHERE paper_id = ? ORDER BY rowid",
+                    (paper_id,),
+                ).fetchall()
         return [
             FragmentRecord(
                 fragment_id=row["fragment_id"],
@@ -977,6 +998,17 @@ class LocalPaperStore:
                 )
                 written += cur.rowcount
         return written
+
+    def set_attempt_identity(
+        self, attempt_id: str, *, prompt_hash: str, ai_model: str, request_fingerprint: str,
+    ) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE extraction_attempts SET prompt_hash=?, ai_model=?, request_fingerprint=? "
+                "WHERE attempt_id=?",
+                (prompt_hash, ai_model, request_fingerprint, attempt_id),
+            )
+            return cur.rowcount > 0
 
     def get_attempt(self, attempt_id: str) -> Optional[dict]:
         with self._conn() as conn:

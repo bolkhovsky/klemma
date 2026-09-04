@@ -156,6 +156,9 @@ class ExtractionOutcome:
     downgrade_stats: DowngradeStats = field(default_factory=DowngradeStats)
     error: Optional[str] = None
     full_text_length: int = 0
+    # Hash of the prompt as actually rendered (context, tags, metadata) with the
+    # paper text blanked — the identity input for request_fingerprint.
+    rendered_prompt_hash: str = ""
 
     @property
     def plain_fragments(self) -> list[Fragment]:
@@ -638,6 +641,26 @@ def extract_from_pages(
     except (OSError, TypeError):
         prompt_hash = compute_prompt_hash(str(prompt_path))
 
+    try:
+        _rendered = ai.render_prompt(
+            prompt_path,
+            title=entry.title or "Unknown",
+            authors=entry.authors_str,
+            year=entry.year or "Unknown",
+            journal=entry.container_title or "N/A",
+            doi=entry.DOI or "N/A",
+            abstract=entry.abstract or "Not available",
+            pdf_text="",
+            chunk_index=0,
+            chunk_total=len(work),
+            char_start=0,
+            char_end=0,
+            **prompt_vars,
+        )
+        rendered_prompt_hash = compute_prompt_hash(str(_rendered))
+    except Exception:  # noqa: BLE001 — identity only; never blocks extraction
+        rendered_prompt_hash = prompt_hash
+
     outcomes: list[ChunkOutcome] = []
     fragments: list[ExtractedFragment] = []
     key_refs: list[dict] = []
@@ -913,4 +936,5 @@ def extract_from_pages(
         downgrade_stats=downgrade_stats,
         error=engine_error,
         full_text_length=total_chars,
+        rendered_prompt_hash=rendered_prompt_hash,
     )
