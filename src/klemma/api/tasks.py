@@ -123,6 +123,12 @@ def _create_embeddings_provider():
     return create_embeddings(config)
 
 
+def _cfg_int(cfg, name: str, default: int) -> int:
+    """Read an int field from a config-like object; non-int (mock/None) → default."""
+    value = getattr(cfg, name, None)
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+
 def _run_chunked_extraction(
     ai,
     ai_config,
@@ -196,9 +202,10 @@ def _run_chunked_extraction(
         ai,
         chunks=chunks,
         full_text=full_text or None,
-        # SaaS chunks are prebuilt at 25k; a truncated chunk splits down to 4k.
-        min_chunk_chars=4_000,
-        max_tokens_cap=8_192,
+        # SaaS chunks are prebuilt; split/cap limits follow AIConfig when present
+        # (ai_config is a MagicMock in tests → fall back to the config defaults).
+        min_chunk_chars=_cfg_int(ai_config, "min_chunk_chars", 4_000),
+        max_tokens_cap=_cfg_int(ai_config, "max_tokens_cap", 8_192),
         on_call=_record,
     )
 

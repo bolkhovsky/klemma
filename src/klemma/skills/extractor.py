@@ -1,169 +1,26 @@
 """Fragment extraction skill — extracts citation fragments from PDFs."""
 
-import difflib
 import logging
-import unicodedata
 from pathlib import Path
 from typing import Optional
 
 from ..ai import AIProvider
 from ..config import KlemmaConfig, resolve_prompt
-from ..literature.models import DowngradeStats, ExtractionResult, Fragment, ZoteroEntry
+from ..literature.models import ExtractionResult, Fragment, ZoteroEntry
 from ..literature.pdf import PDFExtractor
 from ..state import StateManager
-from ..text_normalize import normalize, normalize_with_map
 from ..vault import VaultAdapter
-from .extract_engine import (  # noqa: F401  (re-exported)
+from .extract_engine import (  # noqa: F401  (re-exported: public API lives in the engine)
+    _FUZZY_RESCUE_THRESHOLD,
     VERBATIM_VALIDATION_CAP_LARGE,
     VERBATIM_VALIDATION_CAP_SMALL,
     ExtractedFragment,
     ExtractionOutcome,
+    locate_fragment_span,
+    validate_verbatim_fragments,
 )
 
 logger = logging.getLogger(__name__)
-
-# Fuzzy-match rescue threshold. Fragments whose AI-claimed verbatim text fails
-# an exact substring check but matches a window of the paper at this ratio or
-# above keep `verbatim=true` with a logged warning — this covers PDF extraction
-# noise (OCR char swaps, dropped diacritics) without giving cover to
-# fabrication. Below this ratio, the fragment is downgraded to
-# `verbatim=false`. Revisit after dogfooding the rescue count distribution.
-_FUZZY_RESCUE_THRESHOLD = 0.95
-
-
-def validate_verbatim_fragments(
-    fragments: list[Fragment],
-    pdf_text: str,
-    source_id: str,
-) -> DowngradeStats:
-    """Enforce the `verbatim=true` claim against the paper text.
-
-    Two-stage match: (1) exact substring after NFKC + PDF-noise normalization;
-    (2) difflib ratio fallback for OCR/extractor artifacts. Below the fuzzy
-    threshold, flip the flag to `false` instead of dropping the fragment —
-    a paraphrase is still useful, we just don't let it masquerade as a quote.
-
-    Caller must pass the full normalized PDF text. Under chunked extraction,
-    `process_source` / `reprocess_paper` build it from `extract_pages()` and
-    cap it via ``VERBATIM_VALIDATION_CAP_LARGE`` before passing here.
-    """
-    stats = DowngradeStats()
-    if not fragments:
-        return stats
-
-    norm_pdf = normalize(pdf_text)
-    if not norm_pdf:
-        # Nothing to validate against — leave flags as-is and warn once.
-        logger.warning(
-            "verbatim validator: empty normalized pdf_text for %s; skipping",
-            source_id,
-        )
-        return stats
-
-    for frag in fragments:
-        if not frag.verbatim:
-            continue  # paraphrases are unverifiable by substring — out of scope
-        stats.verbatim_claimed += 1
-
-        norm_frag = normalize(frag.text)
-        if not norm_frag:
-            frag.verbatim = False
-            stats.downgraded += 1
-            logger.warning(
-                "verbatim downgrade (%s): empty normalized fragment", source_id,
-            )
-            continue
-
-        if norm_frag in norm_pdf:
-            stats.verbatim_confirmed += 1
-            continue
-
-        # Stage 2: fuzzy rescue against a sliding window sized to the fragment.
-        # SequenceMatcher.find_longest_match on the full text is O(n) and fast
-        # enough at 50K chars × a handful of fragments; cheaper than chopping
-        # windows manually and avoids boundary-miss edge cases.
-        matcher = difflib.SequenceMatcher(None, norm_frag, norm_pdf, autojunk=False)
-        match = matcher.find_longest_match(0, len(norm_frag), 0, len(norm_pdf))
-        if match.size == 0:
-            frag.verbatim = False
-            stats.downgraded += 1
-            logger.warning(
-                "verbatim downgrade (%s, substring_match_failed): %s…",
-                source_id, norm_frag[:80],
-            )
-            continue
-
-        # Align the window so the fragment-start (position 0) lines up with
-        # the best-match anchor in the PDF. Without this, noise near the
-        # fragment's start pushes the anchor forward and the window
-        # mis-aligns, under-reporting the true similarity.
-        window_start = max(0, match.b - match.a)
-        window = norm_pdf[window_start : window_start + len(norm_frag)]
-        ratio = difflib.SequenceMatcher(None, norm_frag, window, autojunk=False).ratio()
-        if ratio >= _FUZZY_RESCUE_THRESHOLD:
-            stats.fuzzy_rescued += 1
-            logger.info(
-                "verbatim fuzzy-rescue (%s, ratio=%.3f): %s… ↔ %s…",
-                source_id, ratio, norm_frag[:60], window[:60],
-            )
-        else:
-            frag.verbatim = False
-            stats.downgraded += 1
-            logger.warning(
-                "verbatim downgrade (%s, fuzzy_match_below_threshold:%.3f): %s…",
-                source_id, ratio, norm_frag[:80],
-            )
-
-    return stats
-
-
-def _raw_span(source_text: str, idx_map: list[int], a: int, b: int) -> tuple[int, int]:
-    """Translate a normalized-space half-open span [a, b) into raw coordinates.
-
-    The end is the raw index right after the last matched char's combining
-    sequence, so spans never cut a base char away from its combining marks.
-    """
-    start = idx_map[a]
-    end = idx_map[b - 1] + 1
-    while end < len(source_text) and unicodedata.combining(source_text[end]):
-        end += 1
-    return start, end
-
-
-def locate_fragment_span(
-    fragment_text: str,
-    source_text: str,
-) -> tuple[int, int] | None:
-    """Locate a fragment inside the raw source text; return its span or None.
-
-    Match happens in normalized space (same pipeline as
-    ``validate_verbatim_fragments``: exact substring first, then the difflib
-    window rescue at ``_FUZZY_RESCUE_THRESHOLD``), and the hit is mapped back
-    into raw ``source_text`` coordinates via ``normalize_with_map`` — so the
-    returned span indexes directly into the sidecar canonical text.
-    """
-    norm_frag = normalize(fragment_text)
-    norm_src, idx_map = normalize_with_map(source_text)
-    if not norm_frag or not norm_src:
-        return None
-
-    pos = norm_src.find(norm_frag)
-    if pos >= 0:
-        return _raw_span(source_text, idx_map, pos, pos + len(norm_frag))
-
-    # Fuzzy rescue — mirrors the window logic in validate_verbatim_fragments.
-    matcher = difflib.SequenceMatcher(None, norm_frag, norm_src, autojunk=False)
-    match = matcher.find_longest_match(0, len(norm_frag), 0, len(norm_src))
-    if match.size == 0:
-        return None
-    window_start = max(0, match.b - match.a)
-    window_end = min(window_start + len(norm_frag), len(norm_src))
-    window = norm_src[window_start:window_end]
-    ratio = difflib.SequenceMatcher(None, norm_frag, window, autojunk=False).ratio()
-    if ratio < _FUZZY_RESCUE_THRESHOLD:
-        return None
-    return _raw_span(source_text, idx_map, window_start, window_end)
-
 
 def extract_fragments(
     entry: ZoteroEntry,
