@@ -1464,7 +1464,7 @@ def _process_single(
     else:
         # Phase 1C citekey fast-path dedup: check user_library before reading PDF (ADR-014)
         # Faster than pdf_hash check: no PDF read needed when same citekey already processed.
-        if user_library and paper_store and not force:
+        if user_library and paper_store and not force and mode != "exhaustive":
             try:
                 _fast_paper_id = user_library.resolve_paper_id(citekey)
                 if _fast_paper_id:
@@ -1531,7 +1531,7 @@ def _process_single(
         # Phase 1B dedup: check library.db before extracting (ADR-014)
         _pdf_hash = None
         _paper_id = None
-        if paper_store and not force:
+        if paper_store and not force and mode != "exhaustive":
             try:
                 from .hashing import compute_pdf_hash
 
@@ -1650,7 +1650,8 @@ def _process_single(
             from .config import resolve_prompt as _resolve_prompt
             from .hashing import compute_prompt_hash as _cph
 
-            _prompt_path = _resolve_prompt("extract.md", klemma_home) if klemma_home else None
+            _prompt_name = "extract_exhaustive.md" if mode == "exhaustive" else "extract.md"
+            _prompt_path = _resolve_prompt(_prompt_name, klemma_home) if klemma_home else None
             _template_hash = (
                 _cph(_prompt_path.read_text(encoding="utf-8")) if _prompt_path else ""
             )
@@ -1661,7 +1662,7 @@ def _process_single(
                 paper_id=_paper_id or f"citekey:{citekey}",
                 pages=pdf_pages,
                 config_ai=cfg.ai,
-                prompt_name="extract.md",
+                prompt_name=_prompt_name,
                 template_hash=_template_hash,
                 mode=mode,
                 klemma_version=str(_kv),
@@ -1701,12 +1702,13 @@ def _process_single(
         raise
 
     if not result or not result.fragments:
+        _reason = (getattr(result, "error", "") or "no fragments") if result else "no fragments"
         if _run_handle is not None:
             from .extraction_runs import fail_run as _fail_run
 
-            _fail_run(project_store, paper_store, _run_handle, "no fragments")
+            _fail_run(project_store, paper_store, _run_handle, _reason[:500])
         if not quiet:
-            console.print("  [red]No fragments extracted[/red]")
+            console.print(f"  [red]No fragments extracted[/red] [dim]{_reason}[/dim]")
         # A source that already has fragments keeps its status: a failed
         # re-run must not flip a completed source to skipped.
         if not (state.get_fragments(source_id=citekey, limit=1)):
@@ -1796,6 +1798,27 @@ def _process_single(
             console.print(f" → @{citekey}")
         else:
             console.print(" [dim](DB only)[/dim]")
+
+    # Exhaustive mode: mirror the structure notes into the vault note (best effort).
+    _notes = getattr(result, "notes", None) or {}
+    _not_extracted = getattr(result, "not_extracted", None) or []
+    if (_notes or _not_extracted) and saved_path:
+        try:
+            from .skills.extractor import format_structure_notes
+
+            _heading = "## \U0001f9ed Заметки к структуре"
+            _body = format_structure_notes(_notes, _not_extracted)
+            _written = vault.update_section(f"@{citekey}", _heading, _body)
+            if _written is None:
+                # note_factory templates carry no such heading — append it once.
+                _written = vault.append_to_note(f"@{citekey}", f"\n{_heading}\n\n{_body}\n")
+            if _written is None:
+                _degraded_steps.append("vault_notes")
+                if not quiet:
+                    console.print("  [yellow]⚠ structure notes not written to the vault note[/yellow]")
+        except Exception as _e:  # noqa: BLE001
+            _degraded_steps.append("vault_notes")
+            logger.warning("structure notes mirror failed for %s: %s", citekey, _e)
 
     # A partial extraction (failed chunk / incomplete coverage) must not be
     # published to the shared library cache nor registered as completed:

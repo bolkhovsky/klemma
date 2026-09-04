@@ -425,6 +425,26 @@ outline_max_chars: 12000                    # бюджет блока; сокр�
 неразобранные нумерованные строки попадают в предупреждение. Хэш дайджеста входит
 в отпечаток запроса прогона.
 
+### Режим --exhaustive и его приёмка
+
+`klemma process key --exhaustive` — best-effort полнота: каждое дословное
+утверждение по любому пункту структуры, плюс заметки `contradicts`/`qualifies`
+с дословными цитатами и список `not_extracted` (пункты, к которым ничего не
+привязано; это не доказательство отсутствия материала). Требует бэкенд с
+`finish_reason` (LiteLLM); Claude CLI отвергается. Заметки видны в
+`klemma source show key --notes` и в vault-разделе «Заметки к структуре».
+
+Качество режима измеряется отдельно, не unit-тестами:
+
+```bash
+klemma eval extract --gold ~/research/data/klemma_evals/exhaustive_gold --runs 3 \
+  --out docs/evals/exhaustive-2026-09.md --manifest notes/evals/exhaustive_gold.manifest.json
+```
+
+Gold-файлы `<citekey>.json` (`frame_pages`, все утверждения frame с `quote` и `item`)
+и метки `<citekey>.labels.json` живут вне git; в отчёт попадают только метрики и
+хэши. Порог: min recall ≥ 0,9 и min precision ≥ 0,8 по трём прогонам.
+
 ### Прогоны извлечения и активный набор (ADR-020)
 
 Начиная с 0.19 каждое извлечение — это **прогон** (`project_extraction_runs` в

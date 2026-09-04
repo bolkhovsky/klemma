@@ -155,6 +155,7 @@ def acquire(
                             dissertation_context=kctx.dissertation_context,
                             available_tags=kctx.available_tags,
                             klemma_home=kctx.klemma_home,
+                            outline_digest=getattr(kctx, "outline_digest", ""),
                             project_type=(
                                 kctx.project.type if kctx.project else "dissertation"
                             ),

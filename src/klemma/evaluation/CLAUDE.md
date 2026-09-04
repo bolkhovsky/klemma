@@ -153,3 +153,6 @@ klemma benchmark --compare <id1> <id2>
 Update when: adding new metric functions, changing runner logic, adding new benchmark types, or modifying dataset schema.
 
 See: [Core infrastructure](../CLAUDE.md) | [Tests](../../../tests/CLAUDE.md) | [Root](../../../CLAUDE.md)
+
+### extract_eval.py (~190 lines)
+Gold-frame evaluation of the extraction engine (plan C4; command `klemma eval extract`, `commands/evaluate.py`). `load_gold_dir()` reads `<citekey>.json` (`frame_pages`, exhaustively annotated `claims` with `quote`/`item`) and optional `<citekey>.labels.json` (sha256 of normalized fragment text → relevant/irrelevant/not_verbatim). `claim_found()` = normalized containment OR ≥ 80 % span overlap; `evaluate(docs, runner, runs=3)` → `DocResult` with `min_recall`/`mean_recall` and per-run precision; `render_report()` prints metrics + identity hashes only (no quotes; gold lives outside git, `manifest()` gives names + sha256 for the repo). Thresholds apply to the MINIMUM over runs.
