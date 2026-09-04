@@ -235,6 +235,7 @@ def pre_extract_sources(
     dissertation_context: str = "",
     available_tags: list[str] | None = None,
     klemma_home: Optional[Path] = None,
+    outline_digest: str = "",
 ) -> dict:
     """Извлечь фрагменты из источников раздела, если ещё не извлечены.
 
@@ -330,6 +331,7 @@ def pre_extract_sources(
             available_tags=available_tags,
             klemma_home=klemma_home,
             pages=pdf_pages or None,
+            outline_digest=outline_digest,
         )
 
         if result and result.fragments:

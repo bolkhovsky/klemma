@@ -28,7 +28,7 @@ Jinja2 templates rendered by skills via `ai.render_prompt()`. Each template rece
 `dissertation_context`, `current_chapter`, `chapter_name`, `current_deadline`, `days_until_deadline`, `days_without_progress`, `streak`, `yesterday_plan`, `chapter_plan`, `library_digest`, `coverage`, `gaps`, `ref_gaps`
 
 ### extract.md
-`title`, `authors`, `year`, `journal`, `doi`, `abstract`, `pdf_text`, `dissertation_context`, `available_tags`
+`title`, `authors`, `year`, `journal`, `doi`, `abstract`, `pdf_text`, `dissertation_context`, `available_tags`, `outline_digest` (optional; `## Project Outline` block, plan C3), `chunk_index`/`chunk_total`/`char_start`/`char_end` (chunked mode), `language`, `project_type`, `section_types`
 
 ### annotate.md
 `title`, `authors`, `year`, `journal`, `abstract`, `pdf_text`, `library_context`, `dissertation_context`, `available_tags`

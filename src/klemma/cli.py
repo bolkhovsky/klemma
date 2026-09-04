@@ -138,6 +138,9 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
 
     dissertation_context = load_project_context(project_chain, cfg)
     available_tags = load_available_tags(klemma_home, cfg, project_chain=project_chain)
+    from .skills.outline_digest import load_outline_digest
+
+    outline_digest = load_outline_digest(project_root, project)
 
     # Three-tier library (ADR-014 Phase 1B/1C): shared stores at ~/.klemma/library.db
     from .stores import LocalPaperStore, LocalProjectStore, LocalUserLibrary
@@ -183,6 +186,7 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
         project_name=project_root.name,
         klemma_home=klemma_home,
         dissertation_context=dissertation_context,
+        outline_digest=outline_digest,
         available_tags=available_tags,
         project_root=project_root,
         project_chain=project_chain,
@@ -1391,6 +1395,7 @@ def _process_single(
     project_store=None,
     replace=False,
     mode="standard",
+    outline_digest="",
 ):
     """Process a single source: find PDF, extract fragments, save to vault.
 
@@ -1626,6 +1631,7 @@ def _process_single(
     if project_store is not None and pdf_pages and source_type != "online":
         try:
             from .extraction_runs import start_run as _start_run
+            from .skills.outline_digest import outline_hash as _outline_hash
 
             if _pdf_hash is None and pdf_path:
                 from .hashing import compute_pdf_hash
@@ -1659,6 +1665,7 @@ def _process_single(
                 template_hash=_template_hash,
                 mode=mode,
                 klemma_version=str(_kv),
+                outline_hash=_outline_hash(outline_digest) if outline_digest else "",
             )
         except Exception as _e:  # noqa: BLE001 — the run substrate must not block extraction
             logger.warning("run lifecycle start failed for %s: %s", citekey, _e)
@@ -1684,6 +1691,7 @@ def _process_single(
             # complete and validated; --force alone merges (plan C2).
             replace_existing=replace,
             mode=mode,
+            outline_digest=outline_digest,
         )
     except Exception as _e:
         if _run_handle is not None:
