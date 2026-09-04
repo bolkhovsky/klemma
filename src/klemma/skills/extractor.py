@@ -92,10 +92,14 @@ def extract_fragments(
 
     if outcome.error:
         logger.error("Extraction aborted for %s: %s", entry.id, outcome.error)
-        return None
+        return ExtractionResult(source_id=entry.id, error=outcome.error,
+                                prompt_hash=outcome.prompt_hash, model=outcome.model)
     if not outcome.fragments:
         logger.warning("No valid fragments extracted for %s", entry.id)
-        return None
+        failed = [c.error for c in outcome.chunks if c.status == "failed" and c.error]
+        return ExtractionResult(source_id=entry.id, error=("; ".join(dict.fromkeys(failed))[:300]
+                                                            if failed else ""),
+                                prompt_hash=outcome.prompt_hash, model=outcome.model)
     if outcome.failed_chunks:
         logger.warning(
             "%s: %d/%d chunk(s) failed — coverage %.1f%%",

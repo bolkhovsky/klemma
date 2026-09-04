@@ -1701,12 +1701,13 @@ def _process_single(
         raise
 
     if not result or not result.fragments:
+        _reason = (getattr(result, "error", "") or "no fragments") if result else "no fragments"
         if _run_handle is not None:
             from .extraction_runs import fail_run as _fail_run
 
-            _fail_run(project_store, paper_store, _run_handle, "no fragments")
+            _fail_run(project_store, paper_store, _run_handle, _reason[:500])
         if not quiet:
-            console.print("  [red]No fragments extracted[/red]")
+            console.print(f"  [red]No fragments extracted[/red] [dim]{_reason}[/dim]")
         # A source that already has fragments keeps its status: a failed
         # re-run must not flip a completed source to skipped.
         if not (state.get_fragments(source_id=citekey, limit=1)):

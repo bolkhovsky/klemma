@@ -783,3 +783,18 @@ def test_cap_straddling_chunk_quote_validated_against_chunk(tmp_path, monkeypatc
     assert by_text[quote].char_start == full.index(quote)
     assert by_text["nowhere fabricated"].verbatim_status == "downgraded"
     assert out.validation_incomplete is True
+
+
+def test_provider_failure_is_not_reported_as_missing_finish_reason(tmp_path):
+    """Pilot 04.09: an auth/credit error must not masquerade as 'no finish_reason'."""
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(1))
+    ai = _ai([AICallResult(text=None, error="auth: credit balance too low", model="m")])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full, mode="exhaustive",
+    )
+    assert out.error and "provider error" in out.error and "credit" in out.error
+    assert "finish_reason" not in out.error
+    assert out.chunks[0].error == "auth: credit balance too low"

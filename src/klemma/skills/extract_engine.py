@@ -829,20 +829,25 @@ def extract_from_pages(
         finish = normalize_finish_reason(getattr(result, "finish_reason", None))
         outcome.finish_reason = finish
 
+        if not result or not getattr(result, "text", None):
+            # A provider failure (auth, credits, timeout) is reported as such —
+            # it says nothing about whether the backend reports finish_reason.
+            outcome.error = getattr(result, "error", None) or "no response"
+            logger.warning(
+                "Chunk %d returned no AI response for %s — %s",
+                chunk.index, getattr(entry, "id", "?"), outcome.error,
+            )
+            if mode == "exhaustive" and first_call:
+                engine_error = f"provider error on first call: {outcome.error}"
+                break
+            continue
+
         if mode == "exhaustive" and first_call and finish == _FINISH_UNKNOWN:
             engine_error = "backend does not report finish_reason; refuse exhaustive mode"
             outcome.error = engine_error
             logger.error("%s: %s", getattr(entry, "id", "?"), engine_error)
             break
         first_call = False
-
-        if not result or not getattr(result, "text", None):
-            outcome.error = getattr(result, "error", None) or "no response"
-            logger.warning(
-                "Chunk %d returned no AI response for %s — %s",
-                chunk.index, getattr(entry, "id", "?"), outcome.error,
-            )
-            continue
 
         if finish == "error":
             # content_filter / refusal: even syntactically valid JSON is not a
