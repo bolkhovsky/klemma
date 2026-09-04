@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
     help="With --force: drop the legacy (run-less) fragments once the new run is complete",
 )
 @click.option(
-    "--exhaustive", is_flag=True,
-    help="Best-effort exhaustive extraction (no per-chunk cap; refuses backends without finish_reason)",
+    "--exhaustive", is_flag=True, hidden=True,
+    help="Best-effort exhaustive extraction (arrives with the exhaustive prompt; not yet available)",
 )
 @click.option(
     "--from-file", "from_file", type=click.Path(exists=True, dir_okay=False),
@@ -82,20 +82,33 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
     stale_keys: list[str] = []
     if project_store is not None:
         try:
+            stale_rows = project_store.mark_stale_runs_detailed(2.0)
             if resume_stale:
-                stale_keys = project_store.get_stale_running_citekeys(2.0)
-            n_stale = project_store.mark_stale_runs(2.0)
-            if n_stale:
-                console.print(f"[yellow]{n_stale} stale run(s) marked failed (error=stale)[/yellow]")
+                stale_keys = list(dict.fromkeys(r["citekey"] for r in stale_rows))
+            if stale_rows:
+                console.print(f"[yellow]{len(stale_rows)} stale run(s) marked failed (error=stale)[/yellow]")
+                # Close the matching library attempts so both stores agree.
+                if kctx.paper_store is not None:
+                    for r in stale_rows:
+                        if r.get("attempt_id"):
+                            try:
+                                kctx.paper_store.finish_attempt(r["attempt_id"], status="failed")
+                            except Exception as exc:  # noqa: BLE001
+                                logger.debug("finish stale attempt %s: %s", r["attempt_id"], exc)
         except Exception as exc:  # noqa: BLE001
             logger.debug("stale-run cleanup failed: %s", exc)
 
-    if model:
-        cfg.ai.model = model
-    ai = _init_ai(cfg)
-    mode = "exhaustive" if exhaustive else "standard"
+    if exhaustive:
+        # The engine only gates finish_reason in this mode; the exhaustive
+        # prompt/cap policy is not implemented yet. Recording mode='exhaustive'
+        # for a standard extraction would poison provenance and evals.
+        console.print("[red]--exhaustive is not available yet (plan C4).[/red]")
+        raise SystemExit(2)
     if replace and not force:
-        console.print("[yellow]--replace has no effect without --force[/yellow]")
+        console.print("[red]--replace requires --force (it drops the legacy corpus after a "
+                      "complete, validated run).[/red]")
+        raise SystemExit(2)
+    mode = "standard"
 
     from ..literature.pdf import PDFExtractor
 
@@ -115,9 +128,15 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
                 if ln.strip() and not ln.strip().startswith("#")
             ]
         citekeys = tuple(citekeys) + tuple(file_keys)
-    if resume_stale and stale_keys:
+    if resume_stale:
+        if not stale_keys:
+            console.print("[green]No stale runs to resume.[/green]")
+            return
         citekeys = tuple(citekeys) + tuple(k for k in stale_keys if k not in citekeys)
         force = True
+    if model:
+        cfg.ai.model = model
+    ai = _init_ai(cfg)
     if citekeys:
         keys = list(dict.fromkeys(citekeys))
     elif force:

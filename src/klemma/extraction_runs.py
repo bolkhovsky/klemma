@@ -210,6 +210,34 @@ def publish_run(
             "verbatim_status": vstatus,
         })
 
+    # Finalize identity from the ACTUAL request: rendered prompt (context, tags,
+    # metadata) and the model the task routing used (Codex P1 on PR-B).
+    rendered_hash = getattr(result, "rendered_prompt_hash", "") or getattr(result, "prompt_hash", "")
+    actual_model = getattr(result, "model", "") or ""
+    run_row = project_store.get_run(handle.run_id) or {}
+    fp = request_fingerprint(
+        paper_id=handle.paper_id,
+        source_content_hash=run_row.get("source_content_hash") or "",
+        rendered_prompt_hash=rendered_hash,
+        outline_hash=run_row.get("outline_hash") or "",
+        ai_model=actual_model,
+        klemma_version=run_row.get("klemma_version") or "",
+        extractor_version=EXTRACTOR_VERSION,
+        config_json=run_row.get("config_json") or "",
+    )
+    project_store.set_run_identity(
+        handle.run_id, prompt_hash=rendered_hash, ai_model=actual_model, request_fingerprint=fp,
+    )
+    handle.fingerprint = fp
+    if paper_store is not None:
+        try:
+            paper_store.set_attempt_identity(
+                handle.attempt_id, prompt_hash=rendered_hash, ai_model=actual_model,
+                request_fingerprint=fp,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("set_attempt_identity failed for %s: %s", handle.citekey, exc)
+
     is_partial = bool(getattr(result, "failed_chunks", 0)) or (
         float(getattr(result, "coverage_ratio", 1.0) or 1.0) < 1.0
     )

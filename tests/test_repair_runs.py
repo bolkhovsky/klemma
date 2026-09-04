@@ -126,3 +126,56 @@ def test_source_show_lists_runs(tmp_path):
     assert result.exit_code == 0, result.output
     assert f"#{r}" in result.output and "published" in result.output
     assert "Project fragments" in result.output and "2.4" in result.output
+
+
+def test_repair_run_publishes_attempt_consistently(tmp_path):
+    """Codex P1: after --run the library attempt mirrors the project status."""
+    kctx = _kctx(tmp_path)
+    ps, pj, ul = kctx.paper_store, kctx.project_store, kctx.user_library
+    kctx.state.register_sources(["gost2025"])
+    write_pdf_sidecar(tmp_path, "gost2025", [PAGE], {"title": "ГОСТ"})
+    pid = ps.register_paper(title="ГОСТ", pdf_hash="h")
+    ul.add_source(pid, "gost2025", status="completed")
+    quote = "Оценка оправдываемости положения кромки льда."
+    fid = compute_content_hash(pid, quote, 1)
+    ps.start_attempt("att", pid)
+    ps.save_attempt_fragments("att", pid, [FragmentRecord(fragment_id=fid, paper_id=pid, fragment_text=quote, page_number=1, verbatim=True)], [{"verbatim_status": "confirmed"}])
+    ps.finish_attempt("att", status="pending", validation_incomplete=True)
+    run_id = pj.start_run("gost2025", paper_id=pid, attempt_id="att")
+    pj.publish_run(run_id, [{"fragment_id": fid}], is_partial=False, validation_incomplete=True)
+    assert ps.get_fragments(pid) == []  # hidden while pending
+    result = _invoke("repair", ["--run", str(run_id)], kctx, "repair")
+    assert result.exit_code == 0, result.output
+    assert ps.get_attempt("att")["status"] == "published"
+    assert len(ps.get_fragments(pid)) == 1
+
+
+def test_process_rejects_replace_without_force_and_exhaustive(tmp_path):
+    kctx = _kctx(tmp_path)
+    r = _invoke("process", ["k", "--replace"], kctx, "process")
+    assert r.exit_code == 2 and "requires --force" in r.output
+    r = _invoke("process", ["k", "--exhaustive"], kctx, "process")
+    assert r.exit_code == 2 and "not available" in r.output
+
+
+def test_process_resume_stale_without_stale_runs_does_nothing(tmp_path):
+    kctx = _kctx(tmp_path)
+    with patch("klemma.commands.process._init_ai") as init_ai, \
+         patch("klemma.commands.process._process_single") as ps_single:
+        r = _invoke("process", ["--resume-stale"], kctx, "process")
+    assert r.exit_code == 0 and "No stale runs" in r.output
+    ps_single.assert_not_called()
+    init_ai.assert_not_called()
+
+
+def test_source_select_default_includes_degraded_and_project_prune(tmp_path):
+    kctx = _kctx(tmp_path)
+    state = kctx.state
+    state.register_sources(["deg", "dropped"])
+    with state._conn() as conn:
+        conn.execute("UPDATE sources SET status='degraded' WHERE id='deg'")
+        conn.execute("UPDATE sources SET status='completed' WHERE id='dropped'")
+    kctx.project_store.save_prune_verdicts([{"citekey": "dropped", "reason": "x"}], [])
+    r = _invoke("source", ["select"], kctx, "analyze")
+    keys = {ln.strip() for ln in r.output.splitlines() if ln.strip() and " " not in ln.strip()}
+    assert "deg" in keys and "dropped" not in keys

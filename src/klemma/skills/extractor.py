@@ -122,7 +122,7 @@ def extract_fragments(
     # partial result (failed chunk / incomplete coverage) is merged on top of
     # the old corpus instead of replacing it (Codex P1 on PR-A).
     if replace_existing:
-        if outcome.failed_chunks == 0 and outcome.coverage.complete:
+        if outcome.failed_chunks == 0 and outcome.coverage.complete and not outcome.validation_incomplete:
             state.delete_fragments(entry.id)
         else:
             logger.warning(
@@ -143,7 +143,8 @@ def extract_fragments(
         coverage_ratio=outcome.coverage.ratio,
         validation_incomplete=outcome.validation_incomplete,
         prompt_hash=outcome.prompt_hash,
-        model=outcome.model,
+        rendered_prompt_hash=outcome.rendered_prompt_hash,
+        model=outcome.model or (resolve_task_model("extract", ai_cfg) or ai_cfg.model or ""),
         tokens_in=outcome.tokens_in,
         tokens_out=outcome.tokens_out,
         cost_usd=outcome.cost_usd,

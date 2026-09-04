@@ -370,9 +370,15 @@ def repair_run(kctx, run_id: int, stats: RepairStats, dry_run: bool) -> None:
     if dry_run:
         console.print(f"  [dim]run {run_id} (@{citekey}): would validate {len(linked)} fragment(s)[/dim]")
         return
-    ps.finish_attempt(attempt_id, status=run["status"], validation_incomplete=False,
-                      coverage_json=run.get("coverage_json") or "")
     new_status = pj.clear_validation_incomplete(run_id)
+    # The library attempt mirrors the post-repair project status, so an active
+    # run never references a still-pending attempt.
+    ps.finish_attempt(
+        attempt_id,
+        status="published" if new_status in ("published", "published_partial") else new_status,
+        validation_incomplete=False,
+        coverage_json=run.get("coverage_json") or "",
+    )
     console.print(
         f"  run {run_id} (@{citekey}): {confirmed} confirmed, {downgraded} downgraded → "
         f"[{'green' if new_status == 'published' else 'yellow'}]{new_status}[/]"
@@ -572,6 +578,14 @@ def run_scan(kctx, citekeys: tuple[str, ...], dry_run: bool) -> None:
                 console.print(
                     f"  [dim]{len(orphans)} orphan extraction attempt(s) in library.db "
                     f"(unreferenced by any run; harmless)[/dim]"
+                )
+            # Attempts referenced by runs that never published (failed/running):
+            # library rows exist, project links do not.
+            stranded = [s for s in pj.stranded_attempt_ids() if ps.get_attempt(s["attempt_id"])]
+            if stranded:
+                console.print(
+                    f"  [yellow]{len(stranded)} stranded attempt(s): run failed/running after the "
+                    f"library write — {', '.join(sorted({s['citekey'] for s in stranded}))}[/yellow]"
                 )
         except Exception as exc:  # noqa: BLE001
             console.print(f"  [dim]orphan scan skipped: {exc}[/dim]")

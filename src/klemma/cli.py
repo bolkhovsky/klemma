@@ -1665,23 +1665,32 @@ def _process_single(
             _run_handle = None
 
     # Extract fragments over the FULL text (chunked engine, plan C1); the
-    # truncated `pdf_text` is kept only for annotate/vault below.
-    result = extract_fragments(
-        entry,
-        pdf_text,
-        cfg,
-        state,
-        ai,
-        dissertation_context=dissertation_context,
-        available_tags=available_tags,
-        klemma_home=klemma_home,
-        project_type=project_type,
-        pages=pdf_pages or None,
-        # --replace drops the legacy corpus only when the new extraction is
-        # complete; --force alone merges (non-destructive, plan C2).
-        replace_existing=replace,
-        mode=mode,
-    )
+    # truncated `pdf_text` is kept only for annotate/vault below. Any exception
+    # (provider, renderer, persistence) finalizes the run as failed so it can
+    # be retried at once instead of sitting in `running` for the stale timeout.
+    try:
+        result = extract_fragments(
+            entry,
+            pdf_text,
+            cfg,
+            state,
+            ai,
+            dissertation_context=dissertation_context,
+            available_tags=available_tags,
+            klemma_home=klemma_home,
+            project_type=project_type,
+            pages=pdf_pages or None,
+            # --replace drops the legacy corpus only when the new extraction is
+            # complete and validated; --force alone merges (plan C2).
+            replace_existing=replace,
+            mode=mode,
+        )
+    except Exception as _e:
+        if _run_handle is not None:
+            from .extraction_runs import fail_run as _fail_run
+
+            _fail_run(project_store, paper_store, _run_handle, f"exception: {_e}"[:500])
+        raise
 
     if not result or not result.fragments:
         if _run_handle is not None:

@@ -524,11 +524,23 @@ class LocalProjectStore:
     def fail_run(self, run_id: int, error: str, **counters) -> None:
         self._update_run(run_id, status="failed", error=error, **counters)
 
+    def set_run_identity(
+        self, run_id: int, *, prompt_hash: str, ai_model: str, request_fingerprint: str,
+    ) -> None:
+        """Finalize identity from the actual rendered request and routed model."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE project_extraction_runs SET prompt_hash=?, ai_model=?, "
+                "request_fingerprint=? WHERE run_id=?",
+                (prompt_hash, ai_model, request_fingerprint, run_id),
+            )
+
     def _update_run(self, run_id: int, **fields) -> None:
         allowed = {
             "status", "error", "coverage_json", "is_partial", "validation_incomplete",
             "chunk_count", "failed_chunks", "fragment_count", "tokens_in", "tokens_out",
             "cost_usd", "notes_json", "activation_reason", "attempt_id",
+            "prompt_hash", "ai_model", "request_fingerprint",
         }
         sets = [f"{k}=?" for k in fields if k in allowed]
         vals = [fields[k] for k in fields if k in allowed]
@@ -664,11 +676,17 @@ class LocalProjectStore:
             raise RuntimeError(f"run {run_id} is {row['status'] if row else 'missing'}, not activatable")
         if row["status"] == "published_partial" and not row["activation_reason"]:
             raise RuntimeError("published_partial without activation_reason")
+        run_paper = conn.execute(
+            "SELECT paper_id FROM project_extraction_runs WHERE run_id=?", (run_id,)
+        ).fetchone()[0] or ""
+        real_paper = run_paper if run_paper and not run_paper.startswith("citekey:") else None
         conn.execute(
             """INSERT INTO project_sources (citekey, paper_id, user_id, active_run_id)
-               VALUES (?, COALESCE((SELECT paper_id FROM project_extraction_runs WHERE run_id=?), ''), ?, ?)
-               ON CONFLICT(user_id, citekey) DO UPDATE SET active_run_id=excluded.active_run_id""",
-            (citekey, run_id, uid, run_id),
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id, citekey) DO UPDATE SET
+                 active_run_id=excluded.active_run_id,
+                 paper_id=COALESCE(?, project_sources.paper_id)""",
+            (citekey, real_paper or "", uid, run_id, real_paper),
         )
 
     def activate_partial(
@@ -726,15 +744,43 @@ class LocalProjectStore:
 
     def mark_stale_runs(self, older_than_hours: float = 2.0) -> int:
         """``running`` rows older than the timeout → ``failed, error=stale``."""
+        return len(self.mark_stale_runs_detailed(older_than_hours))
+
+    def mark_stale_runs_detailed(self, older_than_hours: float = 2.0) -> list[dict]:
+        """Like ``mark_stale_runs`` but returns the affected rows (run_id, citekey,
+        attempt_id) so the caller can close the matching library attempts."""
         with self._conn() as conn:
-            cur = conn.execute(
-                """UPDATE project_extraction_runs
-                   SET status='failed', error='stale', finished_at=datetime('now')
-                   WHERE status='running'
-                     AND started_at < datetime('now', ?)""",
+            rows = [dict(r) for r in conn.execute(
+                """SELECT run_id, citekey, attempt_id FROM project_extraction_runs
+                   WHERE status='running' AND started_at < datetime('now', ?)""",
                 (f"-{older_than_hours * 60:.0f} minutes",),
+            )]
+            if rows:
+                conn.executemany(
+                    "UPDATE project_extraction_runs SET status='failed', error='stale', "
+                    "finished_at=datetime('now') WHERE run_id=?",
+                    [(r["run_id"],) for r in rows],
+                )
+        return rows
+
+    def ensure_source(self, citekey: str, paper_id: str, user_id: Optional[str] = None) -> None:
+        """Register a project source without touching its section assignments."""
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO project_sources (citekey, paper_id, user_id) VALUES (?, ?, ?)
+                   ON CONFLICT(user_id, citekey) DO UPDATE SET paper_id=excluded.paper_id""",
+                (citekey, paper_id, self._uid(user_id)),
             )
-            return cur.rowcount
+
+    def stranded_attempt_ids(self) -> list[dict]:
+        """Runs that hold an attempt id but never published (failed/running):
+        their library attempts may carry fragments no project row references."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT run_id, citekey, attempt_id, status FROM project_extraction_runs
+                   WHERE attempt_id IS NOT NULL AND status IN ('failed', 'running', 'discarded')"""
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def get_run(self, run_id: int) -> Optional[dict]:
         with self._conn() as conn:
@@ -809,24 +855,43 @@ class LocalProjectStore:
                 return [dict(r) for r in rows]
             active = self.get_active_run_id(citekey, uid)
             if active is None:
+                # Legacy set: every project row not owned by an ACTIVE run. Links
+                # to pending/failed runs must not hide a legacy fragment.
                 rows = conn.execute(
                     """SELECT pf.* FROM project_fragments pf
                        WHERE pf.user_id=? AND pf.citekey=? AND pf.fragment_id NOT IN (
                          SELECT prf.fragment_id FROM project_run_fragments prf
                          JOIN project_extraction_runs r ON r.run_id = prf.run_id
-                         WHERE r.user_id=? AND r.citekey=?)
+                         WHERE r.user_id=? AND r.citekey=?
+                           AND r.status IN ('published', 'published_partial'))
                        ORDER BY pf.rowid""",
                     (uid, citekey, uid, citekey),
                 ).fetchall()
                 return [dict(r) for r in rows]
+            # Active set: metadata comes from the active run's SNAPSHOT, so a
+            # pending rerun that touched the shared project row cannot change
+            # what the active corpus reports (curated_section still wins).
             rows = conn.execute(
-                """SELECT pf.*, prf.verbatim_status FROM project_run_fragments prf
+                """SELECT pf.*, prf.verbatim_status,
+                          prf.model_section AS run_model_section,
+                          prf.relevance_score AS run_relevance,
+                          prf.usage_hint AS run_usage_hint,
+                          prf.chapter AS run_chapter
+                   FROM project_run_fragments prf
                    JOIN project_fragments pf
                      ON pf.fragment_id = prf.fragment_id AND pf.user_id=? AND pf.citekey=?
                    WHERE prf.run_id=? ORDER BY prf.rowid""",
                 (uid, citekey, active),
             ).fetchall()
-            return [dict(r) for r in rows]
+            out = []
+            for r in rows:
+                d = dict(r)
+                d["section"] = d.get("curated_section") or d.get("run_model_section")
+                d["relevance_score"] = d.get("run_relevance") if d.get("run_relevance") is not None else d.get("relevance_score")
+                d["usage_hint"] = d.get("run_usage_hint") if d.get("run_usage_hint") is not None else d.get("usage_hint")
+                d["chapter"] = d.get("run_chapter") if d.get("run_chapter") is not None else d.get("chapter")
+                out.append(d)
+            return out
 
     def set_curated_section(
         self, citekey: str, fragment_id: str, section: Optional[str],

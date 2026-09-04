@@ -240,7 +240,12 @@ def migrate_monolith(
         secs = sections.get(citekey, [])
         chaps = [c for c in (_section_chapter(s) for s in secs) if c is not None]
         if apply:
-            project_store.set_source_sections(citekey, paper_id, secs, chaps, user_id=user_id)
+            if secs:
+                project_store.set_source_sections(citekey, paper_id, secs, chaps, user_id=user_id)
+            else:
+                # Register without replacing assignments: a rerun must not wipe
+                # sections curated in project.db after the first migration.
+                project_store.ensure_source(citekey, paper_id, user_id=user_id)
 
         rows = by_source.get(citekey, [])
         seen_in_source: set[str] = set()

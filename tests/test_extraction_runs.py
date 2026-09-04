@@ -217,7 +217,9 @@ def test_curated_section_survives_reruns_and_is_user_scoped(pstore):
     assert row["curated_section"] == "3.2.2" and row["section_origin"] == "curated"
     _publish(pstore, "k1", ["f1"])  # rerun rewrites model section, not the curated one
     row = pstore.get_project_fragments("k1")[0]
-    assert row["curated_section"] == "3.2.2" and row["section"] == "2.4"
+    # effective section = curated; the model's own value is exposed separately
+    assert row["curated_section"] == "3.2.2" and row["section"] == "3.2.2"
+    assert row["run_model_section"] == "2.4"
     assert row["section_origin"] == "curated"
     # another user of the same project.db does not see the curation
     r_other = pstore.start_run("k1", user_id="u2", paper_id="p1", attempt_id="b")
@@ -332,3 +334,103 @@ def test_process_single_publishes_run_and_switches_active_set(tmp_path):
     ids = {x["fragment_id"] for x in project_store.get_project_fragments("k1", all_runs=True)}
     assert "legacy-only" not in ids
     assert [x["fragment_text"] for x in paper_store.get_attempt_fragments(project_store.get_run(run3)["attempt_id"])] == ["delta"]
+
+
+# ---------------------------------------------------------------------------
+# Codex review on PR-B (#447)
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_set_keeps_fragments_linked_to_pending_runs(pstore):
+    """P1: a pending rerun overlapping legacy rows must not hide them."""
+    pstore.upsert_legacy_fragment("k1", "f1")
+    pstore.upsert_legacy_fragment("k1", "f2")
+    _publish(pstore, "k1", ["f1", "f9"], partial=True)  # pending, links f1
+    ids = {r["fragment_id"] for r in pstore.get_project_fragments("k1")}
+    assert {"f1", "f2"} <= ids
+
+
+def test_active_set_reports_active_run_snapshot_not_pending_overwrite(pstore):
+    """P1: a pending rerun rewriting the shared project row must not change
+    what the active corpus reports."""
+    r1 = pstore.start_run("k1", paper_id="p1", attempt_id="a1")
+    pstore.publish_run(r1, [{"fragment_id": "f1", "model_section": "2.4", "relevance_score": 5,
+                              "usage_hint": "orig"}], is_partial=False, validation_incomplete=False)
+    r2 = pstore.start_run("k1", paper_id="p1", attempt_id="a2")
+    pstore.publish_run(r2, [{"fragment_id": "f1", "model_section": "9.9", "relevance_score": 1,
+                              "usage_hint": "changed"}], is_partial=True, validation_incomplete=False)
+    assert pstore.get_active_run_id("k1") == r1
+    row = pstore.get_project_fragments("k1")[0]
+    assert row["section"] == "2.4" and row["relevance_score"] == 5 and row["usage_hint"] == "orig"
+    pstore.set_curated_section("k1", "f1", "3.2.2")
+    assert pstore.get_project_fragments("k1")[0]["section"] == "3.2.2"
+
+
+def test_activation_updates_project_source_paper_id(pstore):
+    pstore.ensure_source("k1", "synthetic-paper")
+    r = pstore.start_run("k1", paper_id="real-paper", attempt_id="a")
+    pstore.publish_run(r, [{"fragment_id": "f1"}], is_partial=False, validation_incomplete=False)
+    with pstore._conn() as conn:
+        pid = conn.execute("SELECT paper_id FROM project_sources WHERE citekey='k1'").fetchone()[0]
+    assert pid == "real-paper"
+
+
+def test_ensure_source_keeps_sections(pstore):
+    pstore.set_source_sections("k1", "p", ["2.4"], [2])
+    pstore.ensure_source("k1", "p2")
+    assert pstore.get_source_sections("k1") == ["2.4"]
+
+
+def test_stale_cleanup_reports_attempts_and_stranded_runs(pstore):
+    run_id = pstore.start_run("k1", paper_id="p1", attempt_id="att-stale")
+    with pstore._conn() as conn:
+        conn.execute("UPDATE project_extraction_runs SET started_at=datetime('now', '-5 hours') WHERE run_id=?", (run_id,))
+    rows = pstore.mark_stale_runs_detailed(2.0)
+    assert rows[0]["attempt_id"] == "att-stale"
+    assert [s["run_id"] for s in pstore.stranded_attempt_ids()] == [run_id]
+
+
+def test_paper_store_hides_pending_attempt_fragments_from_cache(tmp_path):
+    store = LocalPaperStore(tmp_path / "library.db")
+    pid = store.register_paper(title="P", pdf_hash="h")
+    ok, pend = _frag(pid, "published text"), _frag(pid, "pending text")
+    store.start_attempt("a-ok", pid)
+    store.save_attempt_fragments("a-ok", pid, [ok], [{"verbatim_status": "confirmed"}])
+    store.finish_attempt("a-ok", status="published")
+    store.start_attempt("a-pend", pid)
+    store.save_attempt_fragments("a-pend", pid, [pend], [{"verbatim_status": "confirmed"}])
+    store.finish_attempt("a-pend", status="pending")
+    assert {f.fragment_text for f in store.get_fragments(pid)} == {"published text"}
+    assert {f.fragment_text for f in store.get_fragments(pid, published_only=False)} == {"published text", "pending text"}
+    store.finish_attempt("a-pend", status="published")
+    assert len(store.get_fragments(pid)) == 2
+
+
+def test_publish_finalizes_identity_from_rendered_prompt_and_model(tmp_path):
+    from types import SimpleNamespace
+
+    from klemma import extraction_runs as er
+    from klemma.literature.models import Fragment
+
+    lib = tmp_path / "library.db"
+    ps = LocalPaperStore(lib)
+    pj = LocalProjectStore(tmp_path / "project.db")
+    pid = ps.register_paper(title="P", pdf_hash="h")
+    cfg = SimpleNamespace(model="configured-model", chunk_size=25000, chunk_overlap=2000,
+                          min_chunk_chars=4000, max_tokens_cap=8192, budget_max_input_tokens=0,
+                          budget_max_output_tokens=0, budget_max_cost_usd=None, language="ru")
+    h = er.start_run(project_store=pj, paper_store=ps, citekey="k1", paper_id=pid,
+                     pages=["text"], config_ai=cfg, prompt_name="extract.md",
+                     template_hash="tmpl", klemma_version="0.19")
+    before = pj.get_run(h.run_id)["request_fingerprint"]
+    result = SimpleNamespace(fragments=[Fragment(text="x", verbatim=True)], spans=[(0, 1)],
+                             verbatim_statuses=["confirmed"], source_locators=[None],
+                             failed_chunks=0, coverage_ratio=1.0, validation_incomplete=False,
+                             chunk_total=1, tokens_in=1, tokens_out=1, cost_usd=None,
+                             rendered_prompt_hash="rendered123", model="routed-model")
+    assert er.publish_run(project_store=pj, paper_store=ps, handle=h, result=result) == "published"
+    run = pj.get_run(h.run_id)
+    assert run["prompt_hash"] == "rendered123" and run["ai_model"] == "routed-model"
+    assert run["request_fingerprint"] != before
+    att = ps.get_attempt(h.attempt_id)
+    assert att["ai_model"] == "routed-model" and att["request_fingerprint"] == run["request_fingerprint"]
