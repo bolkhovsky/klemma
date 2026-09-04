@@ -1768,9 +1768,20 @@ def _process_single(
         else:
             console.print(" [dim](DB only)[/dim]")
 
+    # A partial extraction (failed chunk / incomplete coverage) must not be
+    # published to the shared library cache nor registered as completed:
+    # the fast paths would serve it — to other projects too — without ever
+    # retrying. Mark the source degraded so `klemma status --degraded` lists
+    # it; `klemma process <citekey> --force` retries.
+    _partial = (getattr(result, "failed_chunks", 0) or 0) > 0 or (
+        (getattr(result, "coverage_ratio", 1.0) or 1.0) < 1.0
+    )
+    if _partial:
+        _degraded_steps.append("extraction")
+
     # Phase 1B dual-write: also persist to library.db (ADR-014)
     # online sources have no PDF hash — skip dual-write
-    if paper_store and not force and source_type != "online":
+    if paper_store and not force and not _partial and source_type != "online":
         try:
             from .hashing import compute_content_hash, compute_prompt_hash
             from .models import FragmentRecord
@@ -1815,7 +1826,7 @@ def _process_single(
             logger.debug("Library dual-write failed for %s: %s", citekey, _e)
 
     # Phase 1C: register citekey → paper_id in user library
-    if user_library and _paper_id:
+    if user_library and _paper_id and not _partial:
         try:
             user_library.add_source(
                 _paper_id,

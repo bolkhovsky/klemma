@@ -447,6 +447,37 @@ def _reconstruct_from_chunks(chunks: list) -> str:
     return "".join(buf)
 
 
+
+def _valid_payload(data: Any) -> Optional[dict]:
+    """Accept only the extraction schema: an object whose ``fragments`` is a list.
+
+    ``{"summary": "..."}`` is syntactically valid JSON but not an extraction;
+    treating it as a successful leaf would report full coverage for a chunk
+    that contributed nothing (Codex P1).
+    """
+    if isinstance(data, dict) and isinstance(data.get("fragments"), list):
+        return data
+    return None
+
+
+def _split_bounds(full_text: str, start: int, end: int, overlap: int) -> tuple[int, int]:
+    """Child intervals for a recursive split: sentence-snapped midpoint plus a
+    bounded overlap, so a claim straddling the cut is complete in one child.
+    Returns ``(left_end, right_start)`` with ``right_start <= left_end``."""
+    from ..literature import pdf as _pdf
+
+    span = end - start
+    mid = start + span // 2
+    lo = max(start + 1, mid - 500)
+    hi = min(end - 1, mid + 500)
+    if hi > lo:
+        mid = _pdf._nearest_sentence_end(full_text, lo, hi)
+    ovl = max(0, min(overlap, span // 8))
+    left_end = min(end, mid + ovl)
+    right_start = max(start, mid - ovl)
+    return left_end, right_start
+
+
 def _page_at(full_text: str, offset: int) -> int:
     page = 1
     for m in _PAGE_MARKER_RE.finditer(full_text, 0, max(0, offset) + 1):
@@ -717,7 +748,7 @@ def extract_from_pages(
         # it would spend a paid call on data we discard anyway, and a failed
         # repair reservation would wrongly exhaust the budget before the
         # split gets its chance. Go straight to splitting.
-        data = None if truncated else extract_json(result.text)
+        data = None if truncated else _valid_payload(extract_json(result.text))
         if not data and not truncated:
             repair_user = f"Repair this malformed JSON:\n\n{result.text}"
             repair_tokens = min(max_tokens_cap, max_tokens * 2)
@@ -750,7 +781,7 @@ def extract_from_pages(
             if repair_finish == _FINISH_MAX_TOKENS:
                 truncated = True  # repaired object is partial → split, not accept
             elif repair and getattr(repair, "text", None):
-                data = extract_json(repair.text)
+                data = _valid_payload(extract_json(repair.text))
                 if data:
                     logger.info(
                         "Chunk %d: AI repair retry recovered JSON for %s",
@@ -774,9 +805,11 @@ def extract_from_pages(
         # Truncated or unparseable → split in half if still large enough.
         span = chunk.char_end - chunk.char_start
         if span >= 2 * min_chunk_chars:
-            mid = chunk.char_start + span // 2
-            left = _make_child_chunk(source_text, chunk.char_start, mid, next_index)
-            right = _make_child_chunk(source_text, mid, chunk.char_end, next_index + 1)
+            left_end, right_start = _split_bounds(
+                source_text, chunk.char_start, chunk.char_end, overlap,
+            )
+            left = _make_child_chunk(source_text, chunk.char_start, left_end, next_index)
+            right = _make_child_chunk(source_text, right_start, chunk.char_end, next_index + 1)
             next_index += 2
             outcome.status = "split"
             outcome.error = "truncated" if truncated else "unparseable"
@@ -814,23 +847,29 @@ def extract_from_pages(
         else:
             validation_text = source_text
 
-        # Fragments from chunks inside the validated window go through the
-        # full-text pass (cross-chunk quotes still validate); fragments whose
-        # chunk starts beyond the cap are checked against their originating
-        # chunk text so a genuine quote is never downgraded for being late
-        # in a very long document.
+        # Step 1: locate every fragment inside its originating chunk first
+        # (a quotation repeated earlier in the document must not steal the
+        # span or the page). Fragments found in their own chunk are validated
+        # against that chunk — this also covers chunks that straddle or lie
+        # beyond the validation cap, so a genuine late quotation is never
+        # downgraded for the cap's sake. Everything else goes through the
+        # full-text pass (cross-chunk quotes still validate).
         claimed = {id(ef): ef.fragment.verbatim for ef in fragments}
-        in_window = [
-            ef for ef in fragments
-            if interval_of.get(ef.chunk_index, (0, 0))[0] < len(validation_text)
-        ]
-        in_ids = {id(ef) for ef in in_window}
-        beyond = [ef for ef in fragments if id(ef) not in in_ids]
-        downgrade_stats = validate_verbatim_fragments(
-            [ef.fragment for ef in in_window], validation_text, source_id,
-        )
-        for ef in beyond:
+        local_hits: dict[int, tuple[int, int]] = {}
+        for ef in fragments:
             a, b = interval_of.get(ef.chunk_index, (0, 0))
+            if b > a:
+                local = locate_fragment_span(ef.fragment.text, source_text[a:b])
+                if local:
+                    local_hits[id(ef)] = (a + local[0], a + local[1])
+        local_efs = [ef for ef in fragments if id(ef) in local_hits]
+        global_efs = [ef for ef in fragments if id(ef) not in local_hits]
+
+        downgrade_stats = validate_verbatim_fragments(
+            [ef.fragment for ef in global_efs], validation_text, source_id,
+        )
+        for ef in local_efs:
+            a, b = interval_of[ef.chunk_index]
             stats = validate_verbatim_fragments([ef.fragment], source_text[a:b], source_id)
             downgrade_stats.verbatim_claimed += stats.verbatim_claimed
             downgrade_stats.verbatim_confirmed += stats.verbatim_confirmed
@@ -844,16 +883,9 @@ def extract_from_pages(
                 ef.verbatim_status = "confirmed"
             else:
                 ef.verbatim_status = "downgraded"
-            # Locate inside the originating chunk first: a quotation repeated
-            # earlier in the document must not steal the span (and the page).
-            a, b = interval_of.get(ef.chunk_index, (0, 0))
-            span_hit = None
-            if b > a:
-                local = locate_fragment_span(ef.fragment.text, source_text[a:b])
-                if local:
-                    span_hit = (a + local[0], a + local[1])
-            if span_hit is None:
-                span_hit = locate_fragment_span(ef.fragment.text, validation_text)
+            span_hit = local_hits.get(id(ef)) or locate_fragment_span(
+                ef.fragment.text, validation_text,
+            )
             if span_hit:
                 ef.char_start, ef.char_end = span_hit
                 if ef.fragment.page is None:

@@ -709,3 +709,77 @@ def test_fragments_from_rows_roundtrip():
     assert [f.text for f in out] == ["a", "b"]
     assert out[0].relevance == 5 and out[0].page == 3 and out[0].section == "2.4"
     assert out[1].relevance == 3 and out[1].page is None
+
+
+# ---------------------------------------------------------------------------
+# Codex review round 3 on PR-A (#446)
+# ---------------------------------------------------------------------------
+
+
+def test_payload_without_fragments_list_is_not_a_successful_leaf(tmp_path):
+    """P1: {"summary": ...} is valid JSON but not an extraction → repair/split, not ok."""
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(_pages(1))
+    ai = _ai([
+        _result({"summary": "no fragments key"}),
+        _result({"fragments": "not a list"}),  # repair also schema-invalid
+    ])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full, min_chunk_chars=4000,
+    )
+    assert out.chunks[0].status == "failed" and out.chunks[0].error == "unparseable"
+    assert not out.coverage.complete
+    assert len(ai._calls) == 2
+
+
+def test_recursive_split_children_overlap_at_sentence_boundary(tmp_path):
+    """P2: a claim straddling the midpoint must be complete in one child."""
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    sentence = "Ice edge misplacement dominates the total error in autumn. "
+    full = build_full_text([sentence * 120])
+    mid = len(full) // 2
+    ai = _ai([
+        _result({}, text="{cut", finish="max_tokens"),
+        _result({"fragments": []}),
+        _result({"fragments": []}),
+    ])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full,
+        min_chunk_chars=1000, overlap=400,
+    )
+    left, right = out.chunks[1], out.chunks[2]
+    assert left.char_end > right.char_start  # bounded overlap
+    assert left.char_end - right.char_start <= 2 * 400
+    cut = (left.char_end + right.char_start) // 2  # snapped midpoint
+    assert full[cut - 2:cut].rstrip().endswith(".")
+    assert abs(cut - mid) <= 500
+    assert out.coverage.complete
+
+
+def test_cap_straddling_chunk_quote_validated_against_chunk(tmp_path, monkeypatch):
+    """P2: a chunk starting before the cap but extending past it keeps genuine quotes."""
+    import klemma.skills.extract_engine as eng
+
+    monkeypatch.setattr(eng, "VERBATIM_VALIDATION_CAP_LARGE", 300)
+    prompt = tmp_path / "extract.md"
+    prompt.write_text("p")
+    full = build_full_text(["alpha " * 60 + "omega straddling quote here " * 20])
+    quote = "omega straddling quote here omega"
+    assert 0 < 300 < full.index(quote)
+    ai = _ai([_result({"fragments": [
+        {"text": quote, "verbatim": True},
+        {"text": "nowhere fabricated", "verbatim": True},
+    ]})])
+    out = extract_from_pages(
+        None, ENTRY, prompt, {}, ai,
+        chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full,
+    )
+    by_text = {ef.fragment.text: ef for ef in out.fragments}
+    assert by_text[quote].verbatim_status == "confirmed"
+    assert by_text[quote].char_start == full.index(quote)
+    assert by_text["nowhere fabricated"].verbatim_status == "downgraded"
+    assert out.validation_incomplete is True
