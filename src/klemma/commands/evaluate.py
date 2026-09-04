@@ -35,10 +35,13 @@ def eval_group():
               help="Write text_key → fragment text of every scored fragment (outside git) to label precision")
 @click.option("--recall-threshold", type=float, default=0.9, show_default=True)
 @click.option("--precision-threshold", type=float, default=0.8, show_default=True)
+@click.option("--allow-unlabelled", is_flag=True,
+              help="Pass on recall alone when precision could not be evaluated (unlabelled fragments)")
 @click.pass_context
 def eval_extract(ctx, gold_dir, mode, runs, out_path, manifest_path, candidates_path,
-                 recall_threshold, precision_threshold):
+                 recall_threshold, precision_threshold, allow_unlabelled):
     """Recall/precision of the extraction engine on exhaustively annotated gold frames."""
+    from ..ai import resolve_task_model
     from ..config import resolve_prompt
     from ..evaluation.extract_eval import (
         GoldError,
@@ -96,6 +99,7 @@ def eval_extract(ctx, gold_dir, mode, runs, out_path, manifest_path, candidates_
             min_chunk_chars=cfg.ai.min_chunk_chars,
             max_tokens_cap=cfg.ai.exhaustive_max_tokens if mode == "exhaustive" else cfg.ai.max_tokens_cap,
             mode=mode, budget=Budget(), pricing=cfg.ai.pricing or None,
+            model_override=resolve_task_model("extract", cfg.ai),
         )
         if outcome.error:
             raise click.ClickException(f"{doc.citekey} run {run_index}: {outcome.error}")
@@ -112,18 +116,28 @@ def eval_extract(ctx, gold_dir, mode, runs, out_path, manifest_path, candidates_
             (ef.fragment.text, (ef.char_start, ef.char_end) if ef.char_start is not None else None)
             for ef in outcome.fragments
         ]
+        # Validated note quotes are extractions too (the prompt routes contradicting /
+        # limiting statements there) — they count for recall, not for precision labels.
+        for key in ("contradicts", "qualifies"):
+            for n in (outcome.notes or {}).get(key, []) or []:
+                if n.get("status") in ("confirmed", "fuzzy") and n.get("char_start") is not None:
+                    frags.append((n["quote"], (n["char_start"], n["char_end"])))
         return frags, frame_text
 
     results = evaluate(gold, _runner, runs=runs)
+    gold_manifest = manifest(Path(gold_dir))
     identity = {
         "mode": mode,
-        "model": cfg.ai.model,
+        "model": resolve_task_model("extract", cfg.ai) or cfg.ai.model,
+        "gold": "; ".join(f"{e['file']}={e['sha256'][:12]}" for e in gold_manifest["files"]),
+        "frames": "; ".join(f"{d.citekey}:{d.frame_pages[0]}-{d.frame_pages[1]}" for d in gold),
         "temperature": "provider default (Claude 5 rejects temperature != 1)",
         "template_hash": compute_prompt_hash(Path(prompt_path).read_text(encoding="utf-8")),
         "outline_hash": outline_hash(kctx.outline_digest) if kctx.outline_digest else "",
-        "config": canonical_config_json(cfg.ai),
+        "config": canonical_config_json(cfg.ai, mode),
         "extractor_version": EXTRACTOR_VERSION,
         "runs": runs,
+        "regime": "frame pages only, renumbered from 1 (not the full-document chunking of klemma process)",
     }
     report = render_report(results, identity=identity, recall_threshold=recall_threshold,
                            precision_threshold=precision_threshold)
@@ -135,7 +149,7 @@ def eval_extract(ctx, gold_dir, mode, runs, out_path, manifest_path, candidates_
     if manifest_path:
         Path(manifest_path).parent.mkdir(parents=True, exist_ok=True)
         Path(manifest_path).write_text(
-            json.dumps(manifest(Path(gold_dir)), ensure_ascii=False, indent=2), encoding="utf-8",
+            json.dumps(gold_manifest, ensure_ascii=False, indent=2), encoding="utf-8",
         )
         console.print(f"[green]Manifest written:[/green] {manifest_path}")
     if candidates_path:
@@ -145,6 +159,10 @@ def eval_extract(ctx, gold_dir, mode, runs, out_path, manifest_path, candidates_
             encoding="utf-8",
         )
         console.print(f"[green]Candidates for labelling written:[/green] {candidates_path}")
-    v = verdict(results, recall_threshold=recall_threshold, precision_threshold=precision_threshold)
+    v = verdict(results, recall_threshold=recall_threshold, precision_threshold=precision_threshold,
+                allow_unlabelled=allow_unlabelled)
     if not v.passed:
+        if v.precision_pass is None and not allow_unlabelled:
+            console.print("[red]Precision not evaluated (unlabelled fragments) — label them via "
+                          "--candidates or pass --allow-unlabelled.[/red]")
         raise SystemExit(1)

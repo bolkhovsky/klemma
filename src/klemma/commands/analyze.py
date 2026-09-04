@@ -616,12 +616,16 @@ def show(ctx, citekey, run_id, all_runs, show_notes):
         if show_notes and runs:
             import json as _json
 
-            target = next((r for r in reversed(runs) if r.get("notes_json")), None)
+            target = next((r for r in runs if r["run_id"] == active and r.get("notes_json")), None)
+            fallback = target is None
+            if fallback:
+                target = next((r for r in reversed(runs) if r.get("notes_json")), None)
             if target is None:
                 console.print("\n  [dim]No structure notes recorded (run with --exhaustive)[/dim]")
             else:
                 notes = _json.loads(target["notes_json"])
-                console.print(f"\n  [bold]Structure notes[/bold] (run #{target['run_id']})")
+                mark = "" if not fallback else f" [yellow](not the active run: status {target['status']})[/yellow]"
+                console.print(f"\n  [bold]Structure notes[/bold] (run #{target['run_id']}){mark}")
                 for key, label in (("contradicts", "contradicts"), ("qualifies", "qualifies")):
                     for n in notes.get(key, []) or []:
                         st = "" if n.get("status") == "confirmed" else " [dim](unverified)[/dim]"

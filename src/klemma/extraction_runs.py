@@ -37,14 +37,24 @@ logger = logging.getLogger(__name__)
 EXTRACTOR_VERSION = "2"  # bump when the engine's algorithm changes (fingerprint input)
 
 
-def canonical_config_json(config_ai: Any) -> str:
-    """Stable JSON of the extraction-relevant AIConfig fields."""
+def canonical_config_json(config_ai: Any, mode: str = "standard") -> str:
+    """Stable JSON of the extraction-relevant AIConfig fields, as EFFECTIVE for the mode
+    (exhaustive clamps chunk_size to 20k and uses exhaustive_max_tokens)."""
     keys = (
         "model", "chunk_size", "chunk_overlap", "min_chunk_chars", "max_tokens_cap",
-        "budget_max_input_tokens", "budget_max_output_tokens", "budget_max_cost_usd",
-        "language",
+        "exhaustive_max_tokens", "budget_max_input_tokens", "budget_max_output_tokens",
+        "budget_max_cost_usd", "language",
     )
     payload = {k: getattr(config_ai, k, None) for k in keys}
+    payload["mode"] = mode
+    if mode == "exhaustive":
+        cs = payload.get("chunk_size")
+        if isinstance(cs, int):
+            payload["effective_chunk_size"] = min(cs, 20_000)
+        payload["effective_max_tokens"] = payload.get("exhaustive_max_tokens")
+    else:
+        payload["effective_chunk_size"] = payload.get("chunk_size")
+        payload["effective_max_tokens"] = payload.get("max_tokens_cap")
     return json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
 
 
@@ -108,7 +118,7 @@ def start_run(
     user_id: Optional[str] = None,
 ) -> RunHandle:
     """Step 0. Insert the ``running`` row (and the library attempt) before any AI call."""
-    config_json = canonical_config_json(config_ai)
+    config_json = canonical_config_json(config_ai, mode)
     content_hash = source_content_hash(pages)
     attempt_id = new_attempt_id()
     fp = request_fingerprint(

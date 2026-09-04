@@ -177,3 +177,84 @@ def test_source_select_default_includes_degraded_and_project_prune(tmp_path):
     r = _invoke("source", ["select"], kctx, "analyze")
     keys = {ln.strip() for ln in r.output.splitlines() if ln.strip() and " " not in ln.strip()}
     assert "deg" in keys and "dropped" not in keys
+
+
+def test_process_exhaustive_reaches_process_single_with_mode_and_digest(tmp_path):
+    kctx = _kctx(tmp_path)
+    kctx.outline_digest = "Глава 2. X\n  2.4 Y\n    2.4.1 Z"
+    kctx.project.type = "dissertation"
+    with patch("klemma.commands.process._init_ai"), \
+         patch("klemma.commands.process._process_single", return_value=(1, "ok")) as ps_single:
+        r = _invoke("process", ["k", "--exhaustive"], kctx, "process")
+    assert r.exit_code == 0, r.output
+    kw = ps_single.call_args.kwargs
+    assert kw["mode"] == "exhaustive" and kw["outline_digest"] == kctx.outline_digest
+
+
+def test_process_single_records_exhaustive_prompt_and_bypasses_cache(tmp_path):
+    """Confirmed review findings: run/attempt identity names extract_exhaustive.md and the
+    library fast paths do not serve cached standard fragments for --exhaustive."""
+    from unittest.mock import MagicMock
+
+    from klemma.cli import _process_single
+    from klemma.literature.models import ExtractionResult, Fragment
+
+    kctx = _kctx(tmp_path)
+    state, ps, ul, pj = kctx.state, kctx.paper_store, kctx.user_library, kctx.project_store
+    state.register_sources(["k1"])
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    # a cached paper with fragments in the library (would be served by the fast path)
+    from klemma.hashing import compute_pdf_hash
+
+    pid = ps.register_paper(title="P", pdf_hash=compute_pdf_hash(pdf))
+    ul.add_source(pid, "k1", status="completed")
+    ps.start_attempt("old", pid)
+    ps.save_attempt_fragments("old", pid, [FragmentRecord(fragment_id="f-old", paper_id=pid, fragment_text="cached")],
+                              [{"verbatim_status": "confirmed"}])
+    ps.finish_attempt("old", status="published")
+    home = tmp_path / ".klemma"
+    (home / "prompts").mkdir(parents=True)
+    (home / "prompts" / "extract_exhaustive.md").write_text("exhaustive template")
+    (home / "prompts" / "extract.md").write_text("standard template")
+    cfg = MagicMock()
+    cfg.ai.max_pdf_chars = 50000
+    cfg.ai.model = "m"
+    cfg.ai.chunk_size, cfg.ai.chunk_overlap, cfg.ai.min_chunk_chars = 25000, 2000, 4000
+    cfg.zotero.storage_path = str(tmp_path / "storage")
+    cfg.processing.min_pdf_length = 10
+    pdf_extractor = MagicMock()
+    pdf_extractor.find_pdf.return_value = pdf
+    pdf_extractor.extract_pages.return_value = ["page text " * 50]
+    pdf_extractor.format_for_ai.return_value = "page text " * 50
+    library = MagicMock()
+    library.entries.get.return_value = None
+    library.pdf_paths = {}
+    res = ExtractionResult(source_id="k1", fragments=[Fragment(text="new", section="2.4", verbatim=True)],
+                           spans=[(0, 3)], verbatim_statuses=["confirmed"],
+                           notes={"qualifies": [{"item": "2.4", "quote": "new", "status": "confirmed"}]},
+                           not_extracted=["2.4.1"])
+    with (
+        patch("klemma.skills.extractor.extract_fragments", return_value=res) as mock_extract,
+        patch("klemma.skills.extractor.save_fragments_to_vault", return_value=str(tmp_path / "note.md")),
+        patch("klemma.literature.metadata.lookup_s2", return_value=None),
+    ):
+        vault = MagicMock()
+        vault.update_section.return_value = None  # heading absent in the template
+        vault.append_to_note.return_value = tmp_path / "note.md"
+        n, status = _process_single(
+            citekey="k1", cfg=cfg, state=state, vault=vault, ai=MagicMock(),
+            pdf_extractor=pdf_extractor, library=library, quiet=True, klemma_home=home,
+            paper_store=ps, user_library=ul, project_store=pj, mode="exhaustive",
+            outline_digest="Глава 2. X\n  2.4 Y\n    2.4.1 Z",
+        )
+    assert (n, status) == (1, "ok")
+    mock_extract.assert_called_once()  # cache fast path did not short-circuit
+    run = pj.get_runs("k1")[-1]
+    assert run["prompt_name"] == "extract_exhaustive.md" and run["mode"] == "exhaustive"
+    assert "not_extracted" in (run["notes_json"] or "")
+    att = ps.get_attempt(run["attempt_id"])
+    assert att["prompt_name"] == "extract_exhaustive.md"
+    vault.append_to_note.assert_called_once()  # mirror fell back to appending the section
+    r = _invoke("source", ["show", "k1", "--notes"], kctx, "analyze")
+    assert "Structure notes" in r.output and "2.4.1" in r.output

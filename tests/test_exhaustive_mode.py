@@ -234,3 +234,78 @@ def test_section_ids_are_normalised_and_validated(tmp_path):
 def test_not_extracted_is_hierarchical():
     assert not_extracted(DIGEST, {"2.4.1", "2.4.2"}) == ["2.5"]  # 2.4 covered through its items
     assert not_extracted(DIGEST, {"2.4"}) == ["2.4.1", "2.4.2", "2.5"]
+
+
+# ---------------------------------------------------------------------------
+# Internal multi-agent review of PR-C/PR-D (confirmed findings)
+# ---------------------------------------------------------------------------
+
+
+def test_merge_notes_tolerates_null_and_dict_categories(tmp_path):
+    prompt = tmp_path / "e.md"
+    prompt.write_text("p")
+    pages = ["alpha beta. " * 400, "gamma delta. " * 400]
+    full = build_full_text(pages)
+    half = full.index("[Page 2]")
+    chunks = [ChunkRecord(0, full[:half], 1, 1, 0, half), ChunkRecord(1, full[half:], 2, 2, half, len(full))]
+    ai = _ai([
+        _res({"fragments": [], "notes": {"contradicts": None, "qualifies": {"item": "2.5", "quote": "gamma delta.", "note": "x"},
+                                          "not_covered": ["2.4"], "invented": ["y"]}}),
+        _res({"fragments": [], "notes": {"contradicts": [{"item": "2.4.1", "quote": "alpha beta.", "note": "n"}], "qualifies": None}}),
+    ])
+    out = extract_from_pages(None, ENTRY, prompt, {"outline_digest": DIGEST}, ai, chunks=chunks,
+                             full_text=full, mode="exhaustive")
+    assert out.error is None
+    assert {n["item"] for n in out.notes["contradicts"]} == {"2.4.1"}
+    assert out.notes["qualifies"][0]["item"] == "2.5"
+    assert set(out.notes) <= {"contradicts", "qualifies"}
+
+
+def test_note_items_outside_outline_are_dropped_and_fuzzy_labelled(tmp_path):
+    prompt = tmp_path / "e.md"
+    prompt.write_text("p")
+    full = build_full_text(["The edge misplace-\nment dominates in autumn. " * 5])
+    ai = _ai([_res({"fragments": [], "notes": {"contradicts": [
+        {"item": "9.9.9", "quote": "The edge misplacement dominates in autumn.", "note": "x"},
+        {"item": "2.4.1", "quote": "The edge misplacement dominates in autumn.", "note": "y"},
+    ]}})])
+    out = extract_from_pages(None, ENTRY, prompt, {"outline_digest": DIGEST}, ai,
+                             chunks=[ChunkRecord(0, full, 1, 1, 0, len(full))], full_text=full, mode="exhaustive")
+    notes = out.notes["contradicts"]
+    assert [n["item"] for n in notes] == ["2.4.1"]
+    assert notes[0]["status"] in ("confirmed", "fuzzy")
+
+
+def test_normalize_section_prefers_deepest_id_and_keeps_labels_without_outline():
+    from klemma.skills.extract_engine import normalize_section_id
+
+    assert normalize_section_id("Глава 2, п. 2.4.1") == "2.4.1"
+    assert normalize_section_id("methodology") == "methodology"
+    assert normalize_section_id("methodology", {"2.4"}) is None
+    assert normalize_section_id("Глава 2, п. 2.4.1", {"2.4", "2.4.1"}) == "2.4.1"
+
+
+def test_verdict_requires_precision_unless_allowed():
+    from klemma.evaluation.extract_eval import DocResult, RunMetrics, verdict
+
+    r = DocResult("d", [RunMetrics(0, found=10, total=10, labelled=1, relevant=1, fragments=2)])
+    assert verdict([r]).passed is False and verdict([r]).precision_pass is None
+    assert verdict([r], allow_unlabelled=True).passed is True
+    full = DocResult("d", [RunMetrics(0, found=10, total=10, labelled=2, relevant=2, fragments=2)])
+    assert verdict([full]).passed is True
+
+
+def test_canonical_config_reflects_mode():
+    import json as _json
+    from types import SimpleNamespace
+
+    from klemma.extraction_runs import canonical_config_json
+
+    cfg = SimpleNamespace(model="m", chunk_size=25000, chunk_overlap=2000, min_chunk_chars=4000,
+                          max_tokens_cap=8192, exhaustive_max_tokens=16384, budget_max_input_tokens=0,
+                          budget_max_output_tokens=0, budget_max_cost_usd=None, language="ru")
+    std = _json.loads(canonical_config_json(cfg))
+    exh = _json.loads(canonical_config_json(cfg, "exhaustive"))
+    assert std["effective_chunk_size"] == 25000 and exh["effective_chunk_size"] == 20000
+    assert exh["effective_max_tokens"] == 16384 and std["effective_max_tokens"] == 8192
+    assert canonical_config_json(cfg) != canonical_config_json(cfg, "exhaustive")

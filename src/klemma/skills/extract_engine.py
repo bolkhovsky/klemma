@@ -482,7 +482,7 @@ def _split_bounds(full_text: str, start: int, end: int, overlap: int) -> tuple[i
 
 
 
-def _finalize_notes(notes: dict, source_text: str) -> dict:
+def _finalize_notes(notes: dict, source_text: str, valid_ids: Optional[set[str]] = None) -> dict:
     """Validate note quotes (verbatim/span) and dedup by (item, normalized text, span).
 
     Quotes that cannot be located are kept but marked ``unverified`` — a note
@@ -496,11 +496,16 @@ def _finalize_notes(notes: dict, source_text: str) -> dict:
             if not isinstance(n, dict):
                 continue
             quote = str(n.get("quote", "") or "").strip()
-            item = normalize_section_id(n.get("item")) or ""
-            if not quote:
-                continue
+            item = normalize_section_id(n.get("item"), valid_ids) or ""
+            if not quote or (valid_ids is not None and not item):
+                continue  # no quotable basis / item outside the outline → omitted
             span = locate_fragment_span(quote, source_text)
-            status = "confirmed" if span else "unverified"
+            if span is None:
+                status = "unverified"
+            elif normalize(quote) in normalize(source_text):
+                status = "confirmed"
+            else:
+                status = "fuzzy"
             norm = normalize(quote)
             dup = False
             for s_item, s_norm, s_span in seen:
@@ -525,9 +530,6 @@ def _finalize_notes(notes: dict, source_text: str) -> dict:
             })
         if cleaned:
             out[key] = cleaned
-    for key, value in notes.items():
-        if key not in ("contradicts", "qualifies", "not_covered"):
-            out[key] = value
     return out
 
 
@@ -566,10 +568,13 @@ def normalize_section_id(value: Any, valid_ids: Optional[set[str]] = None) -> Op
     outline are rejected (None) so not_extracted and stored sections agree."""
     if value is None:
         return None
-    m = _SECTION_ID_RE.search(str(value))
-    if not m:
-        return None
-    sid = m.group(1).rstrip(".")
+    raw = str(value).strip()
+    ids = _SECTION_ID_RE.findall(raw)
+    if not ids:
+        # No numeric id at all: keep the model's label unless an outline is enforced.
+        return None if valid_ids is not None else (raw or None)
+    # Prefer the deepest id in the string («Глава 2, п. 2.4.1» → 2.4.1).
+    sid = max(ids, key=lambda s: (s.count("."), len(s))).rstrip(".")
     if valid_ids is not None and sid not in valid_ids:
         # tolerate a too-deep id by walking up to the nearest known ancestor
         parts = sid.split(".")
@@ -636,14 +641,19 @@ def _parse_fragments(
 
 
 def _merge_notes(target: dict, incoming: Any) -> None:
-    """Accumulate per-chunk ``notes`` (lists concatenated, scalars kept first)."""
+    """Accumulate per-chunk ``notes``: only the contract keys, always as lists.
+
+    A chunk may legitimately send ``"contradicts": null`` for an empty category;
+    scalars/None are ignored, anything else the model invents under ``notes`` is
+    dropped (the prompt forbids listing uncovered items under any name)."""
     if not isinstance(incoming, dict):
         return
-    for key, value in incoming.items():
+    for key in ("contradicts", "qualifies"):
+        value = incoming.get(key)
         if isinstance(value, list):
-            target.setdefault(key, []).extend(value)
-        elif key not in target:
-            target[key] = value
+            target.setdefault(key, []).extend(v for v in value if isinstance(v, dict))
+        elif isinstance(value, dict):
+            target.setdefault(key, []).append(value)
 
 
 # ---------------------------------------------------------------------------
@@ -1011,7 +1021,7 @@ def extract_from_pages(
         fragments = dedup_by_text_and_span(fragments)
 
     if notes:
-        notes = _finalize_notes(notes, source_text)
+        notes = _finalize_notes(notes, source_text, valid_ids)
 
     coverage = compute_coverage(outcomes, total_chars)
     cost = estimate_cost_usd(model, tokens_in, tokens_out, pricing)

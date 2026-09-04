@@ -53,6 +53,7 @@ class RunMetrics:
     run_index: int
     found: int
     total: int
+    unlocatable: int = 0  # gold quotes not found in the frame text (gold/frame defect, not the model)
     labelled: int = 0
     relevant: int = 0
     fragments: int = 0
@@ -101,7 +102,10 @@ def load_gold_dir(gold_dir: Path) -> list[GoldDoc]:
         data = json.loads(path.read_text(encoding="utf-8"))
         labels_path = path.with_name(path.stem + ".labels.json")
         labels = json.loads(labels_path.read_text(encoding="utf-8")) if labels_path.exists() else {}
-        fp = data.get("frame_pages") or [1, 1]
+        fp = data.get("frame_pages")
+        if (not isinstance(fp, list) or len(fp) != 2 or not all(isinstance(x, int) for x in fp)
+                or fp[0] < 1 or fp[1] < fp[0]):
+            raise GoldError(f"{path.name}: frame_pages must be [first, last] with 1 <= first <= last")
         claims = data.get("claims")
         if not isinstance(claims, list) or not claims:
             raise GoldError(f"{path.name}: no claims — an empty frame cannot be evaluated")
@@ -190,6 +194,7 @@ def score_run(
     frame_text: str,
 ) -> RunMetrics:
     found = sum(1 for c in doc.claims if claim_found(c, fragments, frame_text))
+    unlocatable = sum(1 for c in doc.claims if gold_span(c, frame_text) is None)
     labelled = relevant = 0
     candidates: dict[str, str] = {}
     for text, _ in fragments:
@@ -201,8 +206,8 @@ def score_run(
             if label == "relevant":
                 relevant += 1
     return RunMetrics(run_index=run_index, found=found, total=len(doc.claims),
-                      labelled=labelled, relevant=relevant, fragments=len(fragments),
-                      candidates=candidates)
+                      unlocatable=unlocatable, labelled=labelled, relevant=relevant,
+                      fragments=len(fragments), candidates=candidates)
 
 
 def evaluate(
@@ -229,13 +234,22 @@ class Verdict:
     recall_pass: bool
     precision_pass: Optional[bool]  # None = not evaluated (labels incomplete)
 
+    allow_unlabelled: bool = False
+
     @property
     def passed(self) -> bool:
-        return self.recall_pass and self.precision_pass is not False
+        """Both gates must pass. An unevaluated precision (unlabelled fragments)
+        fails the acceptance unless ``allow_unlabelled`` was requested explicitly."""
+        if not self.recall_pass:
+            return False
+        if self.precision_pass is None:
+            return self.allow_unlabelled
+        return self.precision_pass
 
 
 def verdict(
     results: list[DocResult], *, recall_threshold: float = 0.9, precision_threshold: float = 0.8,
+    allow_unlabelled: bool = False,
 ) -> Verdict:
     min_recalls = [r.min_recall for r in results]
     precs = [m.precision for r in results for m in r.runs]
@@ -245,6 +259,7 @@ def verdict(
     return Verdict(
         min_recall=mr, min_precision=min_p, recall_pass=mr >= recall_threshold,
         precision_pass=(min_p >= precision_threshold) if min_p is not None else None,
+        allow_unlabelled=allow_unlabelled,
     )
 
 
@@ -269,8 +284,8 @@ def render_report(
     lines = ["# Exhaustive extraction eval", ""]
     for k, v in identity.items():
         lines.append(f"- {k}: `{v}`")
-    lines += ["", "| citekey | claims | min recall | mean recall | min precision | pooled precision | label coverage | frags/run |",
-              "|---|---|---|---|---|---|---|---|"]
+    lines += ["", "| citekey | claims | unlocatable | min recall | mean recall | min precision | pooled precision | label coverage | frags/run |",
+              "|---|---|---|---|---|---|---|---|---|"]
     for r in results:
         precs = [m.precision for m in r.runs]
         pooled_l = sum(m.labelled for m in r.runs)
@@ -280,11 +295,16 @@ def render_report(
         cov = min(m.label_coverage for m in r.runs)
         frags = "/".join(str(m.fragments) for m in r.runs)
         lines.append(
-            f"| {r.citekey} | {r.runs[0].total} | {r.min_recall:.2f} | {r.mean_recall:.2f} | "
+            f"| {r.citekey} | {r.runs[0].total} | {max(m.unlocatable for m in r.runs)} | "
+            f"{r.min_recall:.2f} | {r.mean_recall:.2f} | "
             f"{'—' if min_p is None else f'{min_p:.2f}'} | {'—' if pooled is None else f'{pooled:.2f}'} | "
             f"{cov:.2f} | {frags} |"
         )
     v = verdict(results, recall_threshold=recall_threshold, precision_threshold=precision_threshold)
+    unloc = sum(max(m.unlocatable for m in r.runs) for r in results)
+    if unloc:
+        lines += ["", f"Warning: {unloc} gold quote(s) could not be located in the frame text — "
+                  "check frame_pages/quotes; they count as misses."]
     lines += ["", f"Acceptance recall: min {v.min_recall:.2f} (threshold {recall_threshold:.2f}) → "
               f"{'pass' if v.recall_pass else 'fail'}"]
     if v.min_precision is not None:
