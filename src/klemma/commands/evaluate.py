@@ -31,14 +31,24 @@ def eval_group():
               help="Write the Markdown report here (metrics and hashes only)")
 @click.option("--manifest", "manifest_path", type=click.Path(dir_okay=False), default=None,
               help="Write a manifest (names + sha256) of the gold files for git")
+@click.option("--candidates", "candidates_path", type=click.Path(dir_okay=False), default=None,
+              help="Write text_key → fragment text of every scored fragment (outside git) to label precision")
 @click.option("--recall-threshold", type=float, default=0.9, show_default=True)
 @click.option("--precision-threshold", type=float, default=0.8, show_default=True)
 @click.pass_context
-def eval_extract(ctx, gold_dir, mode, runs, out_path, manifest_path, recall_threshold,
-                 precision_threshold):
+def eval_extract(ctx, gold_dir, mode, runs, out_path, manifest_path, candidates_path,
+                 recall_threshold, precision_threshold):
     """Recall/precision of the extraction engine on exhaustively annotated gold frames."""
     from ..config import resolve_prompt
-    from ..evaluation.extract_eval import evaluate, load_gold_dir, manifest, render_report
+    from ..evaluation.extract_eval import (
+        GoldError,
+        candidate_labels_template,
+        evaluate,
+        load_gold_dir,
+        manifest,
+        render_report,
+        verdict,
+    )
     from ..extraction_runs import EXTRACTOR_VERSION, canonical_config_json
     from ..hashing import compute_prompt_hash
     from ..literature.models import ZoteroEntry
@@ -49,7 +59,10 @@ def eval_extract(ctx, gold_dir, mode, runs, out_path, manifest_path, recall_thre
     kctx = _get_context(ctx)
     cfg = kctx.config
     ai = _init_ai(cfg)
-    gold = load_gold_dir(Path(gold_dir))
+    try:
+        gold = load_gold_dir(Path(gold_dir))
+    except GoldError as exc:
+        raise click.ClickException(str(exc))
     if not gold:
         console.print("[red]No gold files found[/red]")
         raise SystemExit(1)
@@ -90,6 +103,8 @@ def eval_extract(ctx, gold_dir, mode, runs, out_path, manifest_path, recall_thre
             f"  {doc.citekey} run {run_index + 1}/{runs}: {len(outcome.fragments)} fragments, "
             f"coverage {outcome.coverage.ratio * 100:.0f}%, failed {outcome.failed_chunks}"
         )
+        # Same page-marked text the engine chunked (renumbered from 1 inside the
+        # frame; gold quotes straddling a marker are matched marker-free).
         from ..skills.extract_engine import build_full_text
 
         frame_text = build_full_text(pages)
@@ -123,5 +138,13 @@ def eval_extract(ctx, gold_dir, mode, runs, out_path, manifest_path, recall_thre
             json.dumps(manifest(Path(gold_dir)), ensure_ascii=False, indent=2), encoding="utf-8",
         )
         console.print(f"[green]Manifest written:[/green] {manifest_path}")
-    if "FAIL" in report:
+    if candidates_path:
+        Path(candidates_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(candidates_path).write_text(
+            json.dumps(candidate_labels_template(results), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        console.print(f"[green]Candidates for labelling written:[/green] {candidates_path}")
+    v = verdict(results, recall_threshold=recall_threshold, precision_threshold=precision_threshold)
+    if not v.passed:
         raise SystemExit(1)

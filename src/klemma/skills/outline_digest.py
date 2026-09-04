@@ -202,4 +202,12 @@ def not_extracted(digest: str, covered: set[str]) -> list[str]:
     all chunks. Named ``not_extracted`` on purpose — at ~90 % recall the absence
     of an extraction does not prove the paper is silent on the item."""
     ids = digest_ids(digest)
-    return [i for i in ids if i not in covered]
+    covered = {c for c in covered if c}
+
+    def _is_covered(i: str) -> bool:
+        # A section counts as covered when any of its numbered items is:
+        # the prompt asks for the deepest applicable item, so `X.Y` is used only
+        # when no `X.Y.Z` fits.
+        return i in covered or any(c.startswith(i + ".") for c in covered)
+
+    return [i for i in ids if not _is_covered(i)]
