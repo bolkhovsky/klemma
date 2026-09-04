@@ -642,6 +642,24 @@ class LocalPaperStore:
             )
         return paper_id
 
+    def set_pdf_hash(self, paper_id: str, pdf_hash: str) -> bool:
+        """Replace a synthetic/missing pdf_hash with a real one (migration merge).
+
+        Refuses when another paper already owns ``pdf_hash`` (UNIQUE) — the
+        caller reports the conflict instead of silently merging papers.
+        """
+        with self._conn() as conn:
+            other = conn.execute(
+                "SELECT paper_id FROM papers WHERE pdf_hash = ? AND paper_id != ?",
+                (pdf_hash, paper_id),
+            ).fetchone()
+            if other:
+                return False
+            cur = conn.execute(
+                "UPDATE papers SET pdf_hash = ? WHERE paper_id = ?", (pdf_hash, paper_id)
+            )
+            return cur.rowcount > 0
+
     def update_paper_raw_text(self, paper_id: str, raw_text: str) -> bool:
         """Persist the PDF's extracted text for the verbatim validator + future
         raw-text search. Idempotent: overwrites on repeated calls.

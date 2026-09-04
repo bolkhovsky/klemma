@@ -991,165 +991,104 @@ def _table_exists(conn, name: str) -> bool:
     default=False,
     help="Actually run the migration (default: dry-run only)",
 )
+@click.option(
+    "--ledger",
+    "ledger",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Write a per-row migration ledger CSV (mono fragment id → fragment_id, status)",
+)
 @click.pass_context
-def migrate_library(ctx, do_run):
-    """Migrate monolithic klemma.db → library.db + project.db (ADR-014).
+def migrate_library(ctx, do_run, ledger):
+    """Migrate monolithic klemma.db → library.db + project.db (ADR-014 / ADR-020).
 
-    Reads sources, fragments, and embeddings from the monolithic klemma.db and
-    populates:
-      - ~/.klemma/library.db: papers, fragments, embeddings (shared across projects)
-      - .klemma/data/project.db: source–section assignments for this project
+    Moves EVERY field of every source and fragment: relevance, usage_hint,
+    section (kept as legacy_section, origin 'legacy_unknown'), verbatim, spans,
+    locators and embeddings. Paper identity is resolved by real PDF hash, then
+    DOI, then the citekey already in the user library, then the synthetic
+    'migrated:<citekey>' paper; only then is a new paper created.
 
-    Default is dry-run (shows what would be migrated). Pass --apply to execute.
-    Creates a backup at .klemma/data/klemma.db.bak before writing.
+    Default is a dry run printing the same N_* numbers the live run is
+    checked against. Pass --apply to execute (a .db.bak backup is made first).
     """
     import shutil
-    import sqlite3
+
+    from ..migration import migrate_monolith
+    from ..stores import LocalPaperStore, LocalProjectStore, LocalUserLibrary
 
     kctx = _get_context(ctx)
     mono_db = kctx.klemma_home / "data" / "klemma.db"
-
     if not mono_db.exists():
         console.print(f"[yellow]No monolithic DB found at {mono_db}[/yellow]")
-        console.print("[dim]Nothing to migrate — already on the three-tier layout?[/dim]")
         return
 
-    # ---- Read monolithic DB ------------------------------------------------
-    conn = sqlite3.connect(str(mono_db))
-    conn.row_factory = sqlite3.Row
-
-    sources = conn.execute(
-        "SELECT id, title, authors, year, abstract, doi, status, pdf_path, quality_score FROM sources"
-    ).fetchall()
-    fragments = conn.execute(
-        "SELECT source_id, fragment_text, fragment_type, page_number, citation_intent FROM fragments"
-    ).fetchall()
-    sections = conn.execute(
-        "SELECT source_id, section FROM source_sections"
-    ).fetchall() if _table_exists(conn, "source_sections") else []
-    conn.close()
-
-    n_sources = len(sources)
-    n_frags = len(fragments)
-    n_secs = len(sections)
-
-    _cfg = kctx.config
-    if _cfg.library_db_path:
-        _p = _cfg.library_db_path.expanduser()
-        _lib_db_preview = _p if _p.is_absolute() else (kctx.system_home / _p)
+    # Same store resolution as _init_components: configured library_db_path or
+    # the system home; project.db next to the monolith.
+    cfg = kctx.config
+    if getattr(cfg, "library_db_path", None):
+        _p = Path(cfg.library_db_path).expanduser()
+        lib_db = _p if _p.is_absolute() else (kctx.system_home / _p)
     else:
-        _lib_db_preview = kctx.system_home / "library.db"
-    console.print(f"\n[bold]Three-tier library migration[/bold] — {'DRY RUN' if not do_run else 'LIVE'}")
-    console.print(f"  Source DB   : {mono_db}")
-    console.print(f"  library.db  : {_lib_db_preview}")
-    console.print(f"  project.db  : {kctx.klemma_home / 'data' / 'project.db'}")
-    console.print(f"\n  [cyan]{n_sources}[/cyan] sources · [cyan]{n_frags}[/cyan] fragments · [cyan]{n_secs}[/cyan] section assignments")
+        lib_db = kctx.system_home / "library.db"
+    project_db = kctx.klemma_home / "data" / "project.db"
 
+    console.print(
+        f"\n[bold]Three-tier library migration[/bold] — {'LIVE' if do_run else 'DRY RUN'}"
+    )
+    console.print(f"  Source DB   : {mono_db}")
+    console.print(f"  library.db  : {lib_db}")
+    console.print(f"  project.db  : {project_db}")
+    import tempfile
+
+    _scratch = tempfile.TemporaryDirectory(prefix="klemma-migrate-dry-")
+    if not do_run and not lib_db.exists():
+        # Dry run must not create library.db: use a throwaway empty store.
+        lib_db = Path(_scratch.name) / "library.db"
+    if not do_run and not project_db.exists():
+        project_db = Path(_scratch.name) / "project.db"
+    paper_store = LocalPaperStore(lib_db)
+    user_library = LocalUserLibrary(lib_db)
+    project_store = LocalProjectStore(project_db)
+
+    if do_run:
+        bak = mono_db.with_suffix(".db.bak")
+        shutil.copy2(mono_db, bak)
+        console.print(f"[green]Backup created:[/green] {bak}")
+
+    _lib = getattr(kctx, "library", None)
+    pdf_lookup = dict(getattr(_lib, "pdf_paths", {}) or {}) if _lib is not None else {}
+
+    def _resolve_pdf(src: dict):
+        p = src.get("pdf_path") or pdf_lookup.get(src["id"])
+        return Path(p) if isinstance(p, str) and p else None
+
+    report = migrate_monolith(
+        mono_db,
+        paper_store=paper_store,
+        user_library=user_library,
+        project_store=project_store,
+        apply=do_run,
+        pdf_resolver=_resolve_pdf,
+        ledger_path=Path(ledger) if ledger else None,
+        progress=lambda msg: console.print(f"  [dim]{msg}[/dim]"),
+    )
+    _scratch.cleanup()
+    for line in report.summary_lines():
+        console.print("  " + line)
+    if ledger:
+        console.print(f"  Ledger: {ledger} ({len(report.ledger)} rows)")
     if not do_run:
         console.print("\n[dim]Dry run — pass --apply to execute migration[/dim]")
-        return
-
-    # ---- Backup ------------------------------------------------------------
-    bak = mono_db.with_suffix(".db.bak")
-    shutil.copy2(mono_db, bak)
-    console.print(f"\n[green]Backup created:[/green] {bak}")
-
-    # ---- Migrate to library.db ---------------------------------------------
-    from ..hashing import compute_content_hash, compute_prompt_hash
-    from ..models import FragmentRecord
-    from ..stores import LocalPaperStore, LocalUserLibrary
-
-    # Use configured library_db_path if set, otherwise default to system_home/library.db
-    cfg = kctx.config
-    if cfg.library_db_path:
-        _p = cfg.library_db_path.expanduser()
-        _lib_db = _p if _p.is_absolute() else (kctx.system_home / _p)
     else:
-        _lib_db = kctx.system_home / "library.db"
-    paper_store = LocalPaperStore(_lib_db)
-    user_lib = LocalUserLibrary(_lib_db)
-
-    citekey_to_paper_id: dict[str, str] = {}
-    migrated_papers = 0
-    migrated_frags = 0
-
-    # Build citekey → fragment list index
-    frag_by_citekey: dict[str, list] = {}
-    for f in fragments:
-        frag_by_citekey.setdefault(f["source_id"], []).append(f)
-
-    for src in sources:
-        citekey = src["id"]
-        pdf_hash = f"migrated:{citekey}"  # synthetic hash for migrated sources
-        paper_id = paper_store.register_paper(
-            title=src["title"] or citekey,
-            authors=src["authors"] or "",
-            year=src["year"],
-            doi=src["doi"] or None,
-            abstract=src["abstract"] or "",
-            pdf_hash=pdf_hash,
-        )
-        citekey_to_paper_id[citekey] = paper_id
-        migrated_papers += 1
-
-        # Register in user library
-        user_lib.add_source(
-            paper_id,
-            citekey,
-            status=src["status"] or "pending",
-            pdf_path=src["pdf_path"],
-            quality_score=src["quality_score"],
-        )
-
-        # Migrate fragments
-        ck_frags = frag_by_citekey.get(citekey, [])
-        if ck_frags:
-            records = [
-                FragmentRecord(
-                    fragment_id=compute_content_hash(paper_id, f["fragment_text"], f["page_number"]),
-                    paper_id=paper_id,
-                    fragment_text=f["fragment_text"],
-                    fragment_type=f["fragment_type"] or "key_idea",
-                    page_number=f["page_number"],
-                    citation_intent=f["citation_intent"],
-                    content_hash=compute_content_hash(paper_id, f["fragment_text"], f["page_number"]),
-                )
-                for f in ck_frags
-            ]
-            p_hash = compute_prompt_hash("migrated")
-            migrated_frags += paper_store.save_fragments(paper_id, records, p_hash, "migrated")
-
-    # ---- Migrate to project.db -------------------------------------------
-    from ..stores import LocalProjectStore
-
-    project_store = LocalProjectStore(kctx.klemma_home / "data" / "project.db")
-
-    # Build section assignments
-    secs_by_citekey: dict[str, list[str]] = {}
-    for s in sections:
-        secs_by_citekey.setdefault(s["source_id"], []).append(s["section"])
-
-    for citekey, paper_id in citekey_to_paper_id.items():
-        sec_list = secs_by_citekey.get(citekey, [])
-        if sec_list:
-            project_store.set_source_sections(citekey, paper_id, sec_list, [])
-
-    console.print("\n[green]Migration complete:[/green]")
-    console.print(f"  Papers registered : {migrated_papers}")
-    console.print(f"  Fragments migrated: {migrated_frags}")
-    console.print(f"  Section entries   : {sum(len(v) for v in secs_by_citekey.values())}")
-    console.print(f"\n[dim]Monolithic DB preserved at {mono_db}[/dim]")
-    console.print("[dim]Run 'klemma status' to verify coverage is unchanged.[/dim]")
-    console.print(
-        "\n[yellow]Note:[/yellow] Migrated papers use citekey-based deduplication "
-        "(not PDF SHA256). Same paper under different citekeys in two projects will "
-        "create separate entries. Re-process with [bold]klemma process --force[/bold] "
-        "to upgrade to content-addressable dedup."
-    )
-
-
-# --- Migrate content fields to KLEMMA.md frontmatter ---
-
+        console.print("\n[green]Migration complete.[/green] "
+                      "[dim]Run 'klemma status' and 'klemma repair --scan' to verify.[/dim]")
+        if report.papers_matched.get("new"):
+            console.print(
+                f"\n[yellow]Note:[/yellow] {report.papers_matched['new']} paper(s) without a PDF "
+                "on disk use citekey-based deduplication (synthetic 'migrated:' hash). "
+                "Re-process them with [bold]klemma process --force[/bold] once the PDF is "
+                "available to upgrade to content-addressable dedup."
+            )
 
 @main.command(name="migrate-content", hidden=True)
 @click.option("--dry-run", is_flag=True, help="Preview changes without modifying files")

@@ -247,3 +247,88 @@ def test_stale_running_rows_are_failed(pstore):
     assert pstore.mark_stale_runs(2.0) == 1
     assert pstore.get_run(run_id)["error"] == "stale"
     assert pstore.get_run(fresh)["status"] == "running"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: _process_single publishes a run through the real stores
+# ---------------------------------------------------------------------------
+
+
+def test_process_single_publishes_run_and_switches_active_set(tmp_path):
+    from unittest.mock import MagicMock, patch
+
+    from klemma.cli import _process_single
+    from klemma.literature.models import ExtractionResult, Fragment
+    from klemma.state import StateManager
+    from klemma.stores.user_library import LocalUserLibrary
+
+    state = StateManager(tmp_path / "klemma.db")
+    state.register_sources(["k1"])
+    lib = tmp_path / "library.db"
+    paper_store, user_library = LocalPaperStore(lib), LocalUserLibrary(lib)
+    project_store = LocalProjectStore(tmp_path / "project.db")
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    pages = ["Page one prose. " * 20, "Page two prose. " * 20]
+
+    cfg = MagicMock()
+    cfg.ai.max_pdf_chars = 50000
+    cfg.ai.model = "test-model"
+    cfg.ai.chunk_size, cfg.ai.chunk_overlap, cfg.ai.min_chunk_chars = 25000, 2000, 4000
+    cfg.zotero.storage_path = str(tmp_path / "storage")
+    cfg.processing.min_pdf_length = 10
+    pdf_extractor = MagicMock()
+    pdf_extractor.find_pdf.return_value = pdf
+    pdf_extractor.extract_pages.return_value = pages
+    pdf_extractor.format_for_ai.return_value = "\n".join(pages)
+    library = MagicMock()
+    library.entries.get.return_value = None
+    library.pdf_paths = {}
+
+    def _result(texts, failed=0):
+        return ExtractionResult(
+            source_id="k1", fragments=[Fragment(text=t, section="2.4", verbatim=True) for t in texts],
+            chunk_total=2, failed_chunks=failed, coverage_ratio=1.0 if not failed else 0.5,
+            spans=[(0, 10)] * len(texts), verbatim_statuses=["confirmed"] * len(texts),
+        )
+
+    def _run(result, **kw):
+        with (
+            patch("klemma.skills.extractor.extract_fragments", return_value=result),
+            patch("klemma.skills.extractor.save_fragments_to_vault", return_value=None),
+            patch("klemma.literature.metadata.lookup_s2", return_value=None),
+        ):
+            return _process_single(
+                citekey="k1", cfg=cfg, state=state, vault=MagicMock(), ai=MagicMock(),
+                pdf_extractor=pdf_extractor, library=library, quiet=True, klemma_home=None,
+                paper_store=paper_store, user_library=user_library,
+                project_store=project_store, **kw,
+            )
+
+    assert _run(_result(["alpha", "beta"])) == (2, "ok")
+    run1 = project_store.get_active_run_id("k1")
+    assert run1 is not None
+    r = project_store.get_run(run1)
+    assert r["status"] == "published" and r["attempt_id"] and r["request_fingerprint"]
+    paper_id = user_library.resolve_paper_id("k1")
+    assert paper_id and paper_store.get_attempt(r["attempt_id"])["status"] == "published"
+    assert {x["fragment_text"] for x in paper_store.get_attempt_fragments(r["attempt_id"])} == {"alpha", "beta"}
+    assert len(project_store.get_project_fragments("k1")) == 2
+
+    # partial rerun → pending, active set unchanged, monolith merged not replaced
+    assert _run(_result(["gamma"], failed=1), force=True) == (1, "ok")
+    assert project_store.get_active_run_id("k1") == run1
+    runs = project_store.get_runs("k1")
+    assert runs[-1]["status"] == "pending" and runs[-1]["is_partial"] == 1
+    # (extract_fragments is mocked, so the monolith mirror is not exercised here)
+    all_ids = {x["fragment_id"] for x in project_store.get_project_fragments("k1", all_runs=True)}
+    assert len(all_ids) == 3  # alpha, beta kept; gamma added under the pending run
+
+    # complete rerun with --replace → new active set; legacy-only project rows dropped
+    project_store.upsert_legacy_fragment("k1", "legacy-only")
+    assert _run(_result(["delta"]), force=True, replace=True) == (1, "ok")
+    run3 = project_store.get_active_run_id("k1")
+    assert run3 not in (None, run1)
+    ids = {x["fragment_id"] for x in project_store.get_project_fragments("k1", all_runs=True)}
+    assert "legacy-only" not in ids
+    assert [x["fragment_text"] for x in paper_store.get_attempt_fragments(project_store.get_run(run3)["attempt_id"])] == ["delta"]
