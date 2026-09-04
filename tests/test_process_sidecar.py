@@ -178,7 +178,8 @@ def test_partial_force_renders_merged_corpus_to_vault(tmp_path: Path):
             citekey="k", cfg=cfg, state=state, vault=MagicMock(), ai=MagicMock(),
             pdf_extractor=pdf_extractor, library=library, quiet=True, force=True,
         )
-    assert mock_extract.call_args.kwargs["replace_existing"] is True
+    # --force alone merges (plan C2): the legacy corpus is dropped only with --replace
+    assert mock_extract.call_args.kwargs["replace_existing"] is False
     texts = [f.text for f in mock_vault.call_args.args[1]]
     assert texts == ["old kept", "new one"]
 

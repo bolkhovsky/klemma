@@ -1467,6 +1467,9 @@ def _process_single(
     no_embed=False,
     paper_store=None,
     user_library=None,
+    project_store=None,
+    replace=False,
+    mode="standard",
 ):
     """Process a single source: find PDF, extract fragments, save to vault.
 
@@ -1694,6 +1697,52 @@ def _process_single(
                 )
                 _degraded_steps.append("sidecar")
 
+    # Step 0 of the run lifecycle (plan C2): the paper is registered and the
+    # `running` row exists BEFORE the first AI call, so a crash mid-extraction
+    # still leaves a reproducible failed run. Online sources have no PDF hash
+    # and stay on the legacy (run-less) path.
+    _run_handle = None
+    if project_store is not None and pdf_pages and source_type != "online":
+        try:
+            from .extraction_runs import start_run as _start_run
+
+            if _pdf_hash is None and pdf_path:
+                from .hashing import compute_pdf_hash
+
+                _pdf_hash = compute_pdf_hash(pdf_path)
+            if paper_store is not None and _paper_id is None and _pdf_hash:
+                _paper_id = paper_store.register_paper(
+                    title=entry.title or citekey,
+                    authors=entry.authors_str or "",
+                    year=entry.year,
+                    doi=entry.DOI or None,
+                    abstract=entry.abstract or "",
+                    pdf_hash=_pdf_hash,
+                )
+            from . import __version__ as _kv
+            from .config import resolve_prompt as _resolve_prompt
+            from .hashing import compute_prompt_hash as _cph
+
+            _prompt_path = _resolve_prompt("extract.md", klemma_home) if klemma_home else None
+            _template_hash = (
+                _cph(_prompt_path.read_text(encoding="utf-8")) if _prompt_path else ""
+            )
+            _run_handle = _start_run(
+                project_store=project_store,
+                paper_store=paper_store,
+                citekey=citekey,
+                paper_id=_paper_id or f"citekey:{citekey}",
+                pages=pdf_pages,
+                config_ai=cfg.ai,
+                prompt_name="extract.md",
+                template_hash=_template_hash,
+                mode=mode,
+                klemma_version=str(_kv),
+            )
+        except Exception as _e:  # noqa: BLE001 — the run substrate must not block extraction
+            logger.warning("run lifecycle start failed for %s: %s", citekey, _e)
+            _run_handle = None
+
     # Extract fragments over the FULL text (chunked engine, plan C1); the
     # truncated `pdf_text` is kept only for annotate/vault below.
     result = extract_fragments(
@@ -1707,16 +1756,49 @@ def _process_single(
         klemma_home=klemma_home,
         project_type=project_type,
         pages=pdf_pages or None,
-        # --force replaces the old corpus only when the new extraction is
-        # complete; a partial result is merged, never a lossy replacement.
-        replace_existing=force,
+        # --replace drops the legacy corpus only when the new extraction is
+        # complete; --force alone merges (non-destructive, plan C2).
+        replace_existing=replace,
+        mode=mode,
     )
 
     if not result or not result.fragments:
+        if _run_handle is not None:
+            from .extraction_runs import fail_run as _fail_run
+
+            _fail_run(project_store, paper_store, _run_handle, "no fragments")
         if not quiet:
             console.print("  [red]No fragments extracted[/red]")
-        state.sources.mark_skipped(citekey, "no fragments")
+        # A source that already has fragments keeps its status: a failed
+        # re-run must not flip a completed source to skipped.
+        if not (state.get_fragments(source_id=citekey, limit=1)):
+            state.sources.mark_skipped(citekey, "no fragments")
         return (0, "no fragments")
+
+    # Steps 1–2: publish the run (library attempt + project transaction).
+    _run_status = None
+    if _run_handle is not None:
+        from .extraction_runs import publish_run as _publish_run
+
+        try:
+            _run_status = _publish_run(
+                project_store=project_store,
+                paper_store=paper_store,
+                handle=_run_handle,
+                result=result,
+                replace_legacy=replace,
+            )
+        except Exception as _e:  # noqa: BLE001 — store marked the run failed
+            logger.error("run publish failed for %s: %s", citekey, _e)
+            _run_status = "failed"
+            _degraded_steps.append("run_publish")
+        if not quiet:
+            _label = {
+                "published": "[green]run published[/green]",
+                "pending": "[yellow]run pending (partial or unvalidated — active set unchanged)[/yellow]",
+                "failed": "[red]run failed to publish[/red]",
+            }.get(_run_status, str(_run_status))
+            console.print(f"  {_label} [dim]#{_run_handle.run_id}[/dim]")
 
     if not quiet:
         _chunks = _num_attr(result, "chunk_total", 1) or 1
@@ -1785,9 +1867,13 @@ def _process_single(
     if _partial:
         _degraded_steps.append("extraction")
 
-    # Phase 1B dual-write: also persist to library.db (ADR-014)
-    # online sources have no PDF hash — skip dual-write
-    if paper_store and not force and not _partial and source_type != "online":
+    # Phase 1B dual-write: also persist to library.db (ADR-014). Skipped when the
+    # run lifecycle already wrote the attempt (plan C2) — the legacy
+    # `extractions` table is not fed by the new path.
+    if (
+        paper_store and not force and not _partial and source_type != "online"
+        and _run_handle is None
+    ):
         try:
             from .hashing import compute_content_hash, compute_prompt_hash
             from .models import FragmentRecord

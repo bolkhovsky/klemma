@@ -32,19 +32,70 @@ logger = logging.getLogger(__name__)
 @click.option(
     "--no-embed", is_flag=True, help="Skip auto-embedding after processing"
 )
+@click.option(
+    "--replace", is_flag=True,
+    help="With --force: drop the legacy (run-less) fragments once the new run is complete",
+)
+@click.option(
+    "--exhaustive", is_flag=True,
+    help="Best-effort exhaustive extraction (no per-chunk cap; refuses backends without finish_reason)",
+)
+@click.option(
+    "--from-file", "from_file", type=click.Path(exists=True, dir_okay=False),
+    help="Read citekeys from a file (one per line, # comments)",
+)
+@click.option("--resume-stale", is_flag=True, help="Mark runs stuck in 'running' > 2h as failed and re-run them")
+@click.option("--activate-partial", "activate_run", type=int, default=None,
+              help="Explicitly activate a pending partial run by id (requires --reason)")
+@click.option("--reason", default="", help="Reason recorded with --activate-partial")
 @click.pass_context
-def process(ctx, citekeys, serial, force, model, no_embed):
+def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, from_file,
+            resume_stale, activate_run, reason):
     """Process source(s): extract fragments, annotate, create vault note.
 
     With CITEKEY(s): process specified sources (parallel when >1).
     Without arguments: process all pending sources.
-    With --force: reprocess all completed sources, replacing their fragments.
+    With --force: re-extract completed sources; old fragments are kept and the
+    new run becomes the active set only when complete (plan C2). Add
+    --replace to drop the legacy corpus after a complete run.
     """
     kctx = _get_context(ctx)
     cfg, state, vault = kctx.config, kctx.state, kctx.vault
+    project_store = kctx.project_store
+
+    if activate_run is not None:
+        if project_store is None:
+            console.print("[red]No project store — cannot activate runs[/red]")
+            raise SystemExit(1)
+        try:
+            project_store.activate_partial(activate_run, reason)
+        except (ValueError, RuntimeError) as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise SystemExit(1)
+        run = project_store.get_run(activate_run)
+        console.print(
+            f"[green]Run #{activate_run} for @{run['citekey']} activated as published_partial[/green] "
+            f"[dim]({reason.strip()})[/dim]"
+        )
+        return
+
+    stale_keys: list[str] = []
+    if project_store is not None:
+        try:
+            if resume_stale:
+                stale_keys = project_store.get_stale_running_citekeys(2.0)
+            n_stale = project_store.mark_stale_runs(2.0)
+            if n_stale:
+                console.print(f"[yellow]{n_stale} stale run(s) marked failed (error=stale)[/yellow]")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("stale-run cleanup failed: %s", exc)
+
     if model:
         cfg.ai.model = model
     ai = _init_ai(cfg)
+    mode = "exhaustive" if exhaustive else "standard"
+    if replace and not force:
+        console.print("[yellow]--replace has no effect without --force[/yellow]")
 
     from ..literature.pdf import PDFExtractor
 
@@ -56,9 +107,19 @@ def process(ctx, citekeys, serial, force, model, no_embed):
         if resolved:
             console.print(f"[green]Auto-resolved {resolved} reference gap(s)[/green]")
 
-    # Build citekey list: explicit, force-completed, or all pending
+    # Build citekey list: explicit, --from-file, stale, force-completed, or all pending
+    if from_file:
+        with open(from_file, encoding="utf-8") as fh:
+            file_keys = [
+                ln.strip().lstrip("@") for ln in fh
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+        citekeys = tuple(citekeys) + tuple(file_keys)
+    if resume_stale and stale_keys:
+        citekeys = tuple(citekeys) + tuple(k for k in stale_keys if k not in citekeys)
+        force = True
     if citekeys:
-        keys = list(citekeys)
+        keys = list(dict.fromkeys(citekeys))
     elif force:
         keys = state.get_completed_sources()
         if not keys:
@@ -107,6 +168,9 @@ def process(ctx, citekeys, serial, force, model, no_embed):
                         no_embed=no_embed,
                         paper_store=kctx.paper_store,
                         user_library=kctx.user_library,
+                        project_store=project_store,
+                        replace=replace,
+                        mode=mode,
                     ): ck
                     for ck in keys
                 }
@@ -162,6 +226,9 @@ def process(ctx, citekeys, serial, force, model, no_embed):
                 no_embed=no_embed,
                 paper_store=kctx.paper_store,
                 user_library=kctx.user_library,
+                project_store=project_store,
+                replace=replace,
+                mode=mode,
             )
             if n_frags > 0:
                 processed += 1
