@@ -153,6 +153,20 @@ class ExtractionResult(BaseModel):
     summary: str = ""
     extracted_at: datetime = Field(default_factory=datetime.now)
     downgrade_stats: DowngradeStats = Field(default_factory=DowngradeStats)
+    # Chunked-extraction facts (plan C1). Defaults keep single-shot callers valid.
+    chunk_total: int = 1
+    failed_chunks: int = 0
+    coverage_ratio: float = 1.0
+    validation_incomplete: bool = False
+    prompt_hash: str = ""
+    model: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_usd: Optional[float] = None
+    key_references: list[dict] = Field(default_factory=list)
+    # Parallel to ``fragments``: (char_start, char_end) into the page-marked
+    # full text, or None when the span could not be located.
+    spans: list[Optional[tuple[int, int]]] = Field(default_factory=list)
 
 
 class DailyPlan(BaseModel):

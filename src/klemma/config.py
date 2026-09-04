@@ -312,7 +312,22 @@ class ObsidianConfig(BaseModel):
 class AIConfig(BaseModel):
     backend: str = "litellm"  # "claude" | "litellm" | "openai" (deprecated)
     model: str = "opus"
+    # Text cap for single-shot prompts (annotate, online sources). Extraction
+    # is chunked over the full text and is NOT limited by this value.
     max_pdf_chars: int = 50000
+    # Chunked extraction (plan C1). Overlapping windows over the full text;
+    # a truncated/unparseable chunk is split in half down to min_chunk_chars.
+    chunk_size: int = 25000
+    chunk_overlap: int = 2000
+    min_chunk_chars: int = 4000
+    max_tokens_cap: int = 8192
+    # Per-source budget. 0 = unlimited tokens; None = no dollar cap.
+    budget_max_input_tokens: int = 0
+    budget_max_output_tokens: int = 0
+    budget_max_cost_usd: Optional[float] = None
+    # Price table: {"anthropic/claude-sonnet-5": {"input": 3.0, "output": 15.0}}
+    # in USD per 1M tokens. Unknown model → cost_usd is None (warned once).
+    pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
     timeout: int = 300
     retries: int = 2
     base_url: Optional[str] = None  # URL for OpenAI-compatible endpoints
@@ -339,6 +354,29 @@ class AIConfig(BaseModel):
     citation_check_max_prompt_chars: int = 12000
     citation_check_max_output_tokens: int = 1024
     verify_citations_inline: bool = True  # CLI default ON; SaaS gates via KLEMMA_VERIFY_CITATIONS_INLINE
+
+    @model_validator(mode="after")
+    def _validate_chunk_geometry(self) -> "AIConfig":
+        """A config typo must not turn into runaway extraction (Codex P1).
+
+        ``chunk_overlap >= chunk_size`` would advance the window by one char
+        per call; ``min_chunk_chars <= 0`` would split a truncated chunk
+        forever.
+        """
+        if self.chunk_size <= 0:
+            raise ValueError("ai.chunk_size must be positive")
+        if not 0 <= self.chunk_overlap < self.chunk_size:
+            raise ValueError("ai.chunk_overlap must satisfy 0 <= overlap < chunk_size")
+        if self.min_chunk_chars <= 0:
+            raise ValueError("ai.min_chunk_chars must be positive")
+        if self.max_tokens_cap < 256:
+            raise ValueError("ai.max_tokens_cap must be at least 256")
+        for name in ("budget_max_input_tokens", "budget_max_output_tokens"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"ai.{name} must be >= 0")
+        if self.budget_max_cost_usd is not None and self.budget_max_cost_usd < 0:
+            raise ValueError("ai.budget_max_cost_usd must be >= 0")
+        return self
 
     @property
     def api_key(self) -> Optional[str]:

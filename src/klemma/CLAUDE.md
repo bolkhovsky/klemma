@@ -216,7 +216,7 @@ Klemma error taxonomy for AI backends.
 
 ### ai.py (351 lines)
 `AIProvider` protocol → `AIProviderBase` → `ClaudeClient` + `create_ai()` factory.
-- `AICallResult` — dataclass with `text`, `duration_ms`, `input_tokens`, `output_tokens`, `retries_used`, `model`, `error`; truthy when `text is not None`
+- `AICallResult` — dataclass with `text`, `duration_ms`, `input_tokens`, `output_tokens`, `retries_used`, `model`, `error`, `finish_reason` (`stop | max_tokens | error | unknown`; LiteLLM maps the provider value via `normalize_finish_reason()`, Claude CLI and the base class report `unknown`); truthy when `text is not None`
 - `AIProvider.call()` / `call_json()` / `call_with_meta()` — main interface for AI calls
 - `call_with_meta()` — returns `AICallResult` with timing/tokens/error metadata; base wraps `call()`, backends override with structured error mapping
 - `AIProviderBase.render_prompt()` — Jinja2 template rendering
