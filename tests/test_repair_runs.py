@@ -282,7 +282,7 @@ def test_process_batch_stops_on_usage_limit_and_writes_remaining(tmp_path):
         r = _invoke("process", ["--from-file", str(listing), "--serial", "--force"], kctx, "process")
     assert r.exit_code == 0, r.output
     assert calls == ["k1"] and "Usage limit reached" in r.output
-    assert (tmp_path / "batch.txt.remaining").read_text(encoding="utf-8").splitlines()[1:] == ["k2", "k3"]
+    assert (tmp_path / "batch.txt.remaining").read_text(encoding="utf-8").splitlines()[1:] == ["k1", "k2", "k3"]
 
 
 def test_process_batch_rerun_ignores_limit_failure_from_earlier_batch(tmp_path):

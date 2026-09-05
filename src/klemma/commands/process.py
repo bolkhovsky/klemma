@@ -225,7 +225,8 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
             if len(keys) > 1:
                 console.print(f"\n[bold][{idx}/{len(keys)}] {ck}[/bold]")
             if idx > 1 and _limit_hit(project_store, keys[idx - 2]):
-                remaining = keys[idx - 1:]
+                # the previous source failed on the limit too — it needs the re-run
+                remaining = keys[idx - 2:]
                 _write_remaining(from_file, remaining)
                 console.print(
                     f"[red]Usage limit reached — batch stopped before @{ck}; "
