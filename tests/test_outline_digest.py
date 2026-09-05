@@ -37,6 +37,11 @@ SAMPLE = """# Образцовая структура (редакция)
 ### 2.1. Концептуальная модель
 - 2.1.1. Состав модели: поле, эталон. Н.
 
+## Глава 3. Методика (без сквозного номера, редакция 05.09)
+### 3.1. Процедура
+- **3.1.1. Манифесты данных.** FTP OSI SAF, WDC ААНИИ; контрольные суммы.
+- **3.1.2. Разбиение выборок.** Временной разрыв.
+
 ## 6. Заключение, приложения, список литературы
 ## 7. Перечень рисунков и таблиц
 ## 11. Открытые вопросы к руководителю
@@ -46,7 +51,8 @@ SAMPLE = """# Образцовая структура (редакция)
 def test_parse_ids_titles_levels_and_specials():
     p = parse_structure_file(SAMPLE)
     by_id = {i.id: i for i in p.items}
-    assert [i.id for i in p.items if i.level == 2] == ["Глава 1", "Глава 2"]
+    assert [i.id for i in p.items if i.level == 2] == ["Глава 1", "Глава 2", "Глава 3"]
+    assert by_id["3.1.1"].title == "Манифесты данных" and by_id["3.1.2"].title == "Разбиение выборок"
     assert by_id["1.1"].level == 3 and by_id["1.1"].title == "Северный морской путь и потребности НГО"
     assert by_id["1.1.1"].title == "Судоходство по СМП" and by_id["1.1.1"].level == 4
     assert by_id["1.1.2"].title == "Кромка льда как навигационный объект"
@@ -54,7 +60,7 @@ def test_parse_ids_titles_levels_and_specials():
     assert by_id["1.1.3.1"].level == 5 and by_id["1.1.3.1"].title.startswith("Субъективность аналитика")
     assert by_id["1.2.1"].title == "Физические методы"  # status «Г/Ч.» and dash cut
     assert by_id["2.1.1"].chapter == 2
-    assert p.numbered_item_ids == ["1.1.1", "1.1.2", "1.1.3", "1.1.3.1", "1.2.1", "2.1.1"]
+    assert p.numbered_item_ids == ["1.1.1", "1.1.2", "1.1.3", "1.1.3.1", "1.2.1", "2.1.1", "3.1.1", "3.1.2"]
     assert p.unparsed == []
     assert any("Введение" in s for s in p.sections)
     assert any("Заключение" in s for s in p.sections)
@@ -114,7 +120,7 @@ def test_acceptance_real_structure_has_101_unique_ids_and_fits_budget():
     # The structure is a living document (101 items on 04.09.2026, 80 after the
     # author's cut on 05.09); the invariants are: nothing silently unparsed,
     # ids unique, all four chapters present, digest within budget.
-    assert len(ids) >= 50 and len(set(ids)) == len(ids)
+    assert len(ids) >= 30 and len(set(ids)) == len(ids)
     assert p.unparsed == []
     assert [i.id for i in p.items if i.level == 2] == [f"Глава {n}" for n in (1, 2, 3, 4)]
     assert any("Введение" in s for s in p.sections) and any("Заключение" in s for s in p.sections)

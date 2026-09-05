@@ -3,8 +3,9 @@
 The dissertation keeps its working structure in a Markdown file
 (`Структура_диссертации_v2.md`): chapters as ``## N. Глава K. Title``,
 sections as ``### X.Y. Title`` and numbered items as bullets
-``- X.Y.Z. Title: prose… Источники: @a. Ч.`` (nested ``X.Y.Z.W`` bullets
-indented). The extractor needs the *index* of that structure — every id with a
+``- X.Y.Z. Title: prose… Источники: @a. Ч.`` or, since the 05.09.2026 edition,
+``- **X.Y.Z. Title.** prose`` (nested ``X.Y.Z.W`` bullets indented). The
+chapter heading may carry a running number (``## 2. Глава 1.``) or not. The extractor needs the *index* of that structure — every id with a
 short title — so that ``section`` in a fragment can point at the most specific
 item, not the prose, citekeys or status marks.
 
@@ -25,13 +26,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_CHAPTER_RE = re.compile(r"^##\s+\d+\.\s+Глава\s+(\d+)\.\s*(.+?)\s*$")
+_CHAPTER_RE = re.compile(r"^##\s+(?:\d+\.\s+)?Глава\s+(\d+)\.\s*(.+?)\s*$")
 _H2_RE = re.compile(r"^##\s+(?:\d+\.\s+)?(.+?)\s*$")
 _SECTION_RE = re.compile(r"^###\s+(\d+(?:\.\d+)+)\.?\s+(.+?)\s*$")
-_ITEM_RE = re.compile(r"^(\s*)-\s+(\d+(?:\.\d+){2,})\.\s+(.+?)\s*$")
+_ITEM_RE = re.compile(r"^(\s*)-\s+(?:\*\*)?(\d+(?:\.\d+){2,})\.\s+(.+?)\s*$")
 _NUMBERED_LINE_RE = re.compile(r"^\s*(?:[-#]+\s+)?\d+(?:\.\d+){1,}\.?\s")
 _STATUS_TAIL_RE = re.compile(r"\s*(?:\((?:рисунок|таблица)\))?\s*[ГЧНЭ](?:/[ГЧНЭ])*\.?\s*$")
-_TITLE_TERMINATORS = (":", ";", " Источники", " Материал", " — ", " (см.")
+_TITLE_TERMINATORS = ("**", ":", ";", " Источники", " Материал", " — ", " (см.")
 
 _SPECIAL_KEYWORDS = ("введение", "заключение", "приложени", "список литературы", "перечень")
 
