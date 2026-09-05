@@ -283,3 +283,27 @@ def test_process_batch_stops_on_usage_limit_and_writes_remaining(tmp_path):
     assert r.exit_code == 0, r.output
     assert calls == ["k1"] and "Usage limit reached" in r.output
     assert (tmp_path / "batch.txt.remaining").read_text(encoding="utf-8").splitlines()[1:] == ["k2", "k3"]
+
+
+def test_process_batch_rerun_ignores_limit_failure_from_earlier_batch(tmp_path):
+    """A limit-failed run left by a previous batch must not stop the re-run
+    before its first source (the failure belongs to another process)."""
+    kctx = _kctx(tmp_path)
+    pj = kctx.project_store
+    rid = pj.start_run("old", paper_id="p", attempt_id="a-old")
+    pj.fail_run(rid, "provider error on first call: You've hit your session limit")
+    listing = tmp_path / "batch.txt"
+    listing.write_text("k1\nk2\n", encoding="utf-8")
+    calls = []
+
+    def _fake_single(ck, *a, **kw):
+        calls.append(ck)
+        pj.start_run(ck, paper_id="p", attempt_id=f"a-{ck}")
+        return (1, "ok")
+
+    with patch("klemma.commands.process._init_ai"), \
+         patch("klemma.commands.process._process_single", side_effect=_fake_single):
+        r = _invoke("process", ["--from-file", str(listing), "--serial", "--force"], kctx, "process")
+    assert r.exit_code == 0, r.output
+    assert calls == ["k1", "k2"] and "Usage limit reached" not in r.output
+    assert not (tmp_path / "batch.txt.remaining").exists()
