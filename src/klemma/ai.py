@@ -434,6 +434,29 @@ class ClaudeClient(AIProviderBase):
         return cmd
 
     @staticmethod
+    def _cli_error_text(stdout: str, stderr: str) -> str:
+        """Human-readable error: the JSON result's message when the CLI returned
+        one (usage limit, auth), else stderr/stdout."""
+        try:
+            data = json.loads(stdout or "")
+            if isinstance(data, dict):
+                for key in ("result", "error", "api_error_status"):
+                    if data.get(key):
+                        return str(data[key])
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return (stderr or stdout or "").strip()
+
+    _RATE_LIMIT_MARKERS = ("limit", "rate", "429", "overloaded", "busy")
+
+    def _backoff(self, attempt: int, error_msg: str) -> None:
+        """Sleep before the next CLI retry; longer when the error looks like a
+        usage/rate limit so a subscription burst does not burn all retries."""
+        msg = (error_msg or "").lower()
+        base = 20.0 if any(m in msg for m in self._RATE_LIMIT_MARKERS) else 2.0
+        time.sleep(min(base * (2 ** attempt), 120.0))
+
+    @staticmethod
     def _parse_json_result(stdout: str) -> tuple[Optional[str], int, int, str, Optional[str]]:
         """(text, input_tokens, output_tokens, finish_reason, error) from JSON output.
 
@@ -529,12 +552,13 @@ class ClaudeClient(AIProviderBase):
                 )
                 if result.returncode != 0:
                     retries_used = attempt + 1
-                    error_msg = (result.stderr or result.stdout or "")[:300]
-                    last_error = f"cli_error: exit {result.returncode}"
+                    error_msg = self._cli_error_text(result.stdout, result.stderr)
+                    last_error = f"cli_error: exit {result.returncode}: {error_msg[:200]}"
                     logger.warning(
                         "Claude CLI error (attempt %d/%d): %s",
-                        attempt + 1, self.retries + 1, error_msg,
+                        attempt + 1, self.retries + 1, error_msg[:300],
                     )
+                    self._backoff(attempt, error_msg)
                     continue
                 elapsed = int((time.monotonic() - t0) * 1000)
                 text, tin, tout, finish, err = self._parse_json_result(result.stdout)
@@ -545,6 +569,7 @@ class ClaudeClient(AIProviderBase):
                         "Claude CLI result error (attempt %d/%d): %s",
                         attempt + 1, self.retries + 1, err,
                     )
+                    self._backoff(attempt, err)
                     continue
                 return AICallResult(
                     text=text, duration_ms=elapsed, input_tokens=tin, output_tokens=tout,
