@@ -782,6 +782,15 @@ class LocalProjectStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_last_run(self) -> Optional[dict]:
+        """Most recently created run row (any source) — used to detect a provider
+        limit that just ended the previous extraction in a serial batch."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM project_extraction_runs ORDER BY run_id DESC LIMIT 1"
+            ).fetchone()
+        return dict(row) if row else None
+
     def get_run(self, run_id: int) -> Optional[dict]:
         with self._conn() as conn:
             row = conn.execute(

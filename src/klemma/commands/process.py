@@ -224,6 +224,16 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
         for idx, ck in enumerate(keys, 1):
             if len(keys) > 1:
                 console.print(f"\n[bold][{idx}/{len(keys)}] {ck}[/bold]")
+            if _limit_hit(project_store, ck):
+                remaining = keys[idx - 1:]
+                _write_remaining(from_file, remaining)
+                console.print(
+                    f"[red]Usage limit reached — batch stopped before @{ck}; "
+                    f"{len(remaining)} source(s) left"
+                    + (f", written to {from_file}.remaining" if from_file else "")
+                    + ". Re-run after the limit resets.[/red]"
+                )
+                break
             n_frags, reason = _process_single(
                 ck,
                 cfg,
@@ -268,6 +278,39 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
         hint = format_candidate_hint(candidates)
         if hint:
             console.print(hint)
+
+
+_LIMIT_MARKERS = ("session limit", "usage limit", "rate limit", "credit balance")
+
+
+def _limit_hit(project_store, citekey: str) -> bool:
+    """True when the PREVIOUS run in this process ended on a provider limit.
+
+    The serial loop checks before each source: once the CLI/API reports a usage
+    limit, every further call fails within seconds and burns retries, so the
+    batch stops and the remainder is written out for a later re-run.
+    """
+    if project_store is None:
+        return False
+    try:
+        last = project_store.get_last_run()
+    except Exception:  # noqa: BLE001
+        return False
+    if not last or last.get("status") != "failed":
+        return False
+    err = (last.get("error") or "").lower()
+    return any(m in err for m in _LIMIT_MARKERS)
+
+
+def _write_remaining(from_file, keys: list[str]) -> None:
+    if not from_file or not keys:
+        return
+    from pathlib import Path
+
+    Path(f"{from_file}.remaining").write_text(
+        "# not processed (usage limit) — re-run with --from-file\n" + "\n".join(keys) + "\n",
+        encoding="utf-8",
+    )
 
 
 # --- Embed group ---

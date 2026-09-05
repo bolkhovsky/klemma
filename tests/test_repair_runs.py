@@ -258,3 +258,28 @@ def test_process_single_records_exhaustive_prompt_and_bypasses_cache(tmp_path):
     vault.append_to_note.assert_called_once()  # mirror fell back to appending the section
     r = _invoke("source", ["show", "k1", "--notes"], kctx, "analyze")
     assert "Structure notes" in r.output and "2.4.1" in r.output
+
+
+def test_process_batch_stops_on_usage_limit_and_writes_remaining(tmp_path):
+    """Serial batch: once a run fails on a usage limit, the loop stops and the
+    remainder is written next to --from-file instead of burning retries."""
+    kctx = _kctx(tmp_path)
+    pj = kctx.project_store
+    listing = tmp_path / "batch.txt"
+    listing.write_text("k1\nk2\nk3\n", encoding="utf-8")
+    calls = []
+
+    def _fake_single(ck, *a, **kw):
+        calls.append(ck)
+        rid = pj.start_run(ck, paper_id="p", attempt_id=f"a-{ck}")
+        if ck == "k1":
+            pj.fail_run(rid, "provider error on first call: You've hit your session limit")
+            return (0, "no fragments")
+        return (1, "ok")
+
+    with patch("klemma.commands.process._init_ai"), \
+         patch("klemma.commands.process._process_single", side_effect=_fake_single):
+        r = _invoke("process", ["--from-file", str(listing), "--serial", "--force"], kctx, "process")
+    assert r.exit_code == 0, r.output
+    assert calls == ["k1"] and "Usage limit reached" in r.output
+    assert (tmp_path / "batch.txt.remaining").read_text(encoding="utf-8").splitlines()[1:] == ["k2", "k3"]
