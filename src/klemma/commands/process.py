@@ -224,7 +224,7 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
         for idx, ck in enumerate(keys, 1):
             if len(keys) > 1:
                 console.print(f"\n[bold][{idx}/{len(keys)}] {ck}[/bold]")
-            if _limit_hit(project_store, ck):
+            if idx > 1 and _limit_hit(project_store, keys[idx - 2]):
                 remaining = keys[idx - 1:]
                 _write_remaining(from_file, remaining)
                 console.print(
@@ -283,12 +283,14 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
 _LIMIT_MARKERS = ("session limit", "usage limit", "rate limit", "credit balance")
 
 
-def _limit_hit(project_store, citekey: str) -> bool:
-    """True when the PREVIOUS run in this process ended on a provider limit.
+def _limit_hit(project_store, prev_citekey: str) -> bool:
+    """True when the run of the PREVIOUS source of this batch ended on a provider limit.
 
     The serial loop checks before each source: once the CLI/API reports a usage
     limit, every further call fails within seconds and burns retries, so the
-    batch stops and the remainder is written out for a later re-run.
+    batch stops and the remainder is written out for a later re-run. Only the
+    run this batch just made counts — a limit-failed run left in the database by
+    an earlier batch must not block the re-run after the limit resets.
     """
     if project_store is None:
         return False
@@ -296,7 +298,7 @@ def _limit_hit(project_store, citekey: str) -> bool:
         last = project_store.get_last_run()
     except Exception:  # noqa: BLE001
         return False
-    if not last or last.get("status") != "failed":
+    if not last or last.get("status") != "failed" or last.get("citekey") != prev_citekey:
         return False
     err = (last.get("error") or "").lower()
     return any(m in err for m in _LIMIT_MARKERS)
