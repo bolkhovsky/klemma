@@ -111,8 +111,11 @@ REAL = Path.home() / "research" / "dissertation" / "Структура_дисс�
 def test_acceptance_real_structure_has_101_unique_ids_and_fits_budget():
     p = parse_structure_file(REAL.read_text(encoding="utf-8"))
     ids = p.numbered_item_ids
-    assert len(ids) == 101 and len(set(ids)) == 101
+    # The structure is a living document (101 items on 04.09.2026, 80 after the
+    # author's cut on 05.09); the invariants are: nothing silently unparsed,
+    # ids unique, all four chapters present, digest within budget.
+    assert len(ids) >= 50 and len(set(ids)) == len(ids)
     assert p.unparsed == []
-    assert "1.6" in {i.id for i in p.items}
+    assert [i.id for i in p.items if i.level == 2] == [f"Глава {n}" for n in (1, 2, 3, 4)]
     assert any("Введение" in s for s in p.sections) and any("Заключение" in s for s in p.sections)
     assert len(render_outline_digest(p)) <= 12_000
