@@ -281,7 +281,7 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
             console.print(hint)
 
 
-_LIMIT_MARKERS = ("session limit", "usage limit", "rate limit", "credit balance")
+_LIMIT_MARKERS = ("session limit", "usage limit", "rate limit", "credit balance", "reached your", "manage usage credits")
 # provider unreachable (proxy/tunnel down): every further source would burn its
 # retries the same way, so the batch stops and the remainder is written out
 _OUTAGE_MARKERS = ("connection refused", "connectionrefused", "connection error")
