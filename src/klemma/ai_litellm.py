@@ -11,13 +11,19 @@ import re
 import time
 from typing import Optional
 
-from .ai import AICallResult, AIProviderBase, extract_json
+from .ai import AICallResult, AIProviderBase, extract_json, normalize_finish_reason
 from .config import AIConfig
 
 logger = logging.getLogger(__name__)
 
 # Patterns for reasoning models that need max_completion_tokens instead of max_tokens
-_REASONING_RE = re.compile(r"^(o1|o3|o4|gpt-5)", re.IGNORECASE)
+# and reject sampling params (temperature): OpenAI o-series/gpt-5, Claude 5 family
+# (fable/mythos/opus/sonnet-5) and Claude Opus 4.7/4.8 — all return 400 on temperature!=1.
+# Claude 4.6 family and Haiku 4.5 still accept temperature and must NOT match.
+_REASONING_RE = re.compile(
+    r"^(o1|o3|o4|gpt-5|claude-(fable|mythos|opus|sonnet)-5|claude-opus-4-[78])",
+    re.IGNORECASE,
+)
 
 
 class LiteLLMClient(AIProviderBase):
@@ -206,6 +212,9 @@ class LiteLLMClient(AIProviderBase):
                     getattr(usage, "completion_tokens", 0) if usage else 0
                 )
 
+                # OpenAI-style: "stop" | "length" | "content_filter" | ...;
+                # normalised to the AICallResult vocabulary.
+                raw_finish = getattr(response.choices[0], "finish_reason", None)
                 return AICallResult(
                     text=text,
                     duration_ms=elapsed,
@@ -213,6 +222,7 @@ class LiteLLMClient(AIProviderBase):
                     output_tokens=output_tokens,
                     retries_used=retries_used,
                     model=effective_model,
+                    finish_reason=normalize_finish_reason(raw_finish),
                 )
             except self._litellm.AuthenticationError as e:
                 # Fatal — do not retry

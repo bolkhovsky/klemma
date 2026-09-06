@@ -1,163 +1,26 @@
 """Fragment extraction skill — extracts citation fragments from PDFs."""
 
-import difflib
 import logging
-import unicodedata
 from pathlib import Path
 from typing import Optional
 
 from ..ai import AIProvider
 from ..config import KlemmaConfig, resolve_prompt
-from ..literature.models import DowngradeStats, ExtractionResult, Fragment, ZoteroEntry
+from ..literature.models import ExtractionResult, Fragment, ZoteroEntry
 from ..literature.pdf import PDFExtractor
 from ..state import StateManager
-from ..text_normalize import normalize, normalize_with_map
 from ..vault import VaultAdapter
+from .extract_engine import (  # noqa: F401  (re-exported: public API lives in the engine)
+    _FUZZY_RESCUE_THRESHOLD,
+    VERBATIM_VALIDATION_CAP_LARGE,
+    VERBATIM_VALIDATION_CAP_SMALL,
+    ExtractedFragment,
+    ExtractionOutcome,
+    locate_fragment_span,
+    validate_verbatim_fragments,
+)
 
 logger = logging.getLogger(__name__)
-
-# Fuzzy-match rescue threshold. Fragments whose AI-claimed verbatim text fails
-# an exact substring check but matches a window of the paper at this ratio or
-# above keep `verbatim=true` with a logged warning — this covers PDF extraction
-# noise (OCR char swaps, dropped diacritics) without giving cover to
-# fabrication. Below this ratio, the fragment is downgraded to
-# `verbatim=false`. Revisit after dogfooding the rescue count distribution.
-_FUZZY_RESCUE_THRESHOLD = 0.95
-
-
-def validate_verbatim_fragments(
-    fragments: list[Fragment],
-    pdf_text: str,
-    source_id: str,
-) -> DowngradeStats:
-    """Enforce the `verbatim=true` claim against the paper text.
-
-    Two-stage match: (1) exact substring after NFKC + PDF-noise normalization;
-    (2) difflib ratio fallback for OCR/extractor artifacts. Below the fuzzy
-    threshold, flip the flag to `false` instead of dropping the fragment —
-    a paraphrase is still useful, we just don't let it masquerade as a quote.
-
-    Caller must pass the full normalized PDF text. Under chunked extraction,
-    `process_source` / `reprocess_paper` build it from `extract_pages()` and
-    cap it via ``VERBATIM_VALIDATION_CAP_LARGE`` before passing here.
-    """
-    stats = DowngradeStats()
-    if not fragments:
-        return stats
-
-    norm_pdf = normalize(pdf_text)
-    if not norm_pdf:
-        # Nothing to validate against — leave flags as-is and warn once.
-        logger.warning(
-            "verbatim validator: empty normalized pdf_text for %s; skipping",
-            source_id,
-        )
-        return stats
-
-    for frag in fragments:
-        if not frag.verbatim:
-            continue  # paraphrases are unverifiable by substring — out of scope
-        stats.verbatim_claimed += 1
-
-        norm_frag = normalize(frag.text)
-        if not norm_frag:
-            frag.verbatim = False
-            stats.downgraded += 1
-            logger.warning(
-                "verbatim downgrade (%s): empty normalized fragment", source_id,
-            )
-            continue
-
-        if norm_frag in norm_pdf:
-            stats.verbatim_confirmed += 1
-            continue
-
-        # Stage 2: fuzzy rescue against a sliding window sized to the fragment.
-        # SequenceMatcher.find_longest_match on the full text is O(n) and fast
-        # enough at 50K chars × a handful of fragments; cheaper than chopping
-        # windows manually and avoids boundary-miss edge cases.
-        matcher = difflib.SequenceMatcher(None, norm_frag, norm_pdf, autojunk=False)
-        match = matcher.find_longest_match(0, len(norm_frag), 0, len(norm_pdf))
-        if match.size == 0:
-            frag.verbatim = False
-            stats.downgraded += 1
-            logger.warning(
-                "verbatim downgrade (%s, substring_match_failed): %s…",
-                source_id, norm_frag[:80],
-            )
-            continue
-
-        # Align the window so the fragment-start (position 0) lines up with
-        # the best-match anchor in the PDF. Without this, noise near the
-        # fragment's start pushes the anchor forward and the window
-        # mis-aligns, under-reporting the true similarity.
-        window_start = max(0, match.b - match.a)
-        window = norm_pdf[window_start : window_start + len(norm_frag)]
-        ratio = difflib.SequenceMatcher(None, norm_frag, window, autojunk=False).ratio()
-        if ratio >= _FUZZY_RESCUE_THRESHOLD:
-            stats.fuzzy_rescued += 1
-            logger.info(
-                "verbatim fuzzy-rescue (%s, ratio=%.3f): %s… ↔ %s…",
-                source_id, ratio, norm_frag[:60], window[:60],
-            )
-        else:
-            frag.verbatim = False
-            stats.downgraded += 1
-            logger.warning(
-                "verbatim downgrade (%s, fuzzy_match_below_threshold:%.3f): %s…",
-                source_id, ratio, norm_frag[:80],
-            )
-
-    return stats
-
-
-def _raw_span(source_text: str, idx_map: list[int], a: int, b: int) -> tuple[int, int]:
-    """Translate a normalized-space half-open span [a, b) into raw coordinates.
-
-    The end is the raw index right after the last matched char's combining
-    sequence, so spans never cut a base char away from its combining marks.
-    """
-    start = idx_map[a]
-    end = idx_map[b - 1] + 1
-    while end < len(source_text) and unicodedata.combining(source_text[end]):
-        end += 1
-    return start, end
-
-
-def locate_fragment_span(
-    fragment_text: str,
-    source_text: str,
-) -> tuple[int, int] | None:
-    """Locate a fragment inside the raw source text; return its span or None.
-
-    Match happens in normalized space (same pipeline as
-    ``validate_verbatim_fragments``: exact substring first, then the difflib
-    window rescue at ``_FUZZY_RESCUE_THRESHOLD``), and the hit is mapped back
-    into raw ``source_text`` coordinates via ``normalize_with_map`` — so the
-    returned span indexes directly into the sidecar canonical text.
-    """
-    norm_frag = normalize(fragment_text)
-    norm_src, idx_map = normalize_with_map(source_text)
-    if not norm_frag or not norm_src:
-        return None
-
-    pos = norm_src.find(norm_frag)
-    if pos >= 0:
-        return _raw_span(source_text, idx_map, pos, pos + len(norm_frag))
-
-    # Fuzzy rescue — mirrors the window logic in validate_verbatim_fragments.
-    matcher = difflib.SequenceMatcher(None, norm_frag, norm_src, autojunk=False)
-    match = matcher.find_longest_match(0, len(norm_frag), 0, len(norm_src))
-    if match.size == 0:
-        return None
-    window_start = max(0, match.b - match.a)
-    window_end = min(window_start + len(norm_frag), len(norm_src))
-    window = norm_src[window_start:window_end]
-    ratio = difflib.SequenceMatcher(None, norm_frag, window, autojunk=False).ratio()
-    if ratio < _FUZZY_RESCUE_THRESHOLD:
-        return None
-    return _raw_span(source_text, idx_map, window_start, window_end)
-
 
 def extract_fragments(
     entry: ZoteroEntry,
@@ -169,74 +32,85 @@ def extract_fragments(
     available_tags: list[str] | None = None,
     klemma_home: Optional[Path] = None,
     project_type: str = "dissertation",
+    *,
+    pages: Optional[list[str]] = None,
+    outline_digest: str = "",
+    mode: str = "standard",
+    replace_existing: bool = False,
 ) -> Optional[ExtractionResult]:
-    """Extract citation fragments from a paper's PDF text."""
+    """Extract citation fragments from a paper and persist them (CLI path).
 
-    prompt_path = resolve_prompt("extract.md", klemma_home) if klemma_home else Path(__file__).parent.parent.parent.parent / "prompts" / "extract.md"
-    user_prompt = ai.render_prompt(
-        prompt_path,
-        title=entry.title or "Unknown",
-        authors=entry.authors_str,
-        year=entry.year or "Unknown",
-        journal=entry.container_title or "N/A",
-        doi=entry.DOI or "N/A",
-        abstract=entry.abstract or "Not available",
-        pdf_text=pdf_text,
-        dissertation_context=dissertation_context,
-        available_tags=", ".join(available_tags) if available_tags else "",
-        language=config.ai.language,
-        project_type=project_type,
-    )
+    Thin wrapper over the pure engine (``extract_engine.extract_from_pages``):
+    when ``pages`` is given the full text is chunked and every chunk goes to
+    the model — ``config.ai.max_pdf_chars`` no longer limits extraction.
+    Without ``pages`` (online sources, legacy callers) ``pdf_text`` is sent as a
+    single chunk. Persistence stays here: fragments are saved to the project
+    state exactly as before; run lifecycle/publication arrives with plan C2.
+    """
+    from .extract_engine import Budget, extract_from_pages
 
-    system = (
-        "You are a research assistant extracting citation-worthy fragments from scientific papers. "
-        "Output only valid JSON with fragments array."
+    prompt_name = "extract_exhaustive.md" if mode == "exhaustive" else "extract.md"
+    prompt_path = (
+        resolve_prompt(prompt_name, klemma_home)
+        if klemma_home
+        else Path(__file__).parent.parent.parent.parent / "prompts" / prompt_name
     )
+    prompt_vars = {
+        "dissertation_context": dissertation_context,
+        "available_tags": ", ".join(available_tags) if available_tags else "",
+        "language": config.ai.language,
+        "project_type": project_type,
+        "outline_digest": outline_digest,
+    }
 
     from klemma.ai import resolve_task_model
 
-    data = ai.call_json(
-        system, user_prompt, max_tokens=4096,
-        model_override=resolve_task_model("extract", config.ai),
+    ai_cfg = config.ai
+    outcome = extract_from_pages(
+        pages,
+        entry,
+        prompt_path,
+        prompt_vars,
+        ai,
+        text=None if pages else pdf_text,
+        chunk_size=getattr(ai_cfg, "chunk_size", 25_000),
+        overlap=getattr(ai_cfg, "chunk_overlap", 2_000),
+        min_chunk_chars=getattr(ai_cfg, "min_chunk_chars", 4_000),
+        mode=mode,
+        budget=Budget(
+            max_input_tokens=int(getattr(ai_cfg, "budget_max_input_tokens", 0) or 0),
+            max_output_tokens=int(getattr(ai_cfg, "budget_max_output_tokens", 0) or 0),
+            max_cost_usd=getattr(ai_cfg, "budget_max_cost_usd", None),
+        ),
+        model_override=resolve_task_model("extract", ai_cfg),
+        pricing=getattr(ai_cfg, "pricing", None) or None,
+        max_tokens_cap=(
+            int(getattr(ai_cfg, "exhaustive_max_tokens", 16_384) or 16_384)
+            if mode == "exhaustive" else getattr(ai_cfg, "max_tokens_cap", 8_192)
+        ),
     )
-    if not data:
-        logger.error("Failed to extract fragments for %s", entry.id)
-        return None
 
-    # Parse fragments
-    fragments = []
-    for f_data in data.get("fragments", []):
-        try:
-            fragment = Fragment(
-                text=f_data.get("text", ""),
-                type=f_data.get("type", "key_idea"),
-                chapter=f_data.get("chapter"),
-                section=f_data.get("section"),
-                relevance=max(1, min(5, f_data.get("relevance", 3))),
-                usage_hint=f_data.get("usage_hint", ""),
-                page=f_data.get("page"),
-                citation_intent=f_data.get("citation_intent"),
-                verbatim=bool(f_data.get("verbatim", False)),
-            )
-            if fragment.text:
-                fragments.append(fragment)
-        except Exception as e:
-            logger.warning("Invalid fragment: %s", e)
-
-    if not fragments:
+    if outcome.error:
+        logger.error("Extraction aborted for %s: %s", entry.id, outcome.error)
+        return ExtractionResult(source_id=entry.id, error=outcome.error,
+                                prompt_hash=outcome.prompt_hash, model=outcome.model)
+    if not outcome.fragments:
         logger.warning("No valid fragments extracted for %s", entry.id)
-        return None
+        failed = [c.error for c in outcome.chunks if c.status == "failed" and c.error]
+        return ExtractionResult(source_id=entry.id, error=("; ".join(dict.fromkeys(failed))[:300]
+                                                            if failed else ""),
+                                prompt_hash=outcome.prompt_hash, model=outcome.model)
+    if outcome.failed_chunks:
+        logger.warning(
+            "%s: %d/%d chunk(s) failed — coverage %.1f%%",
+            entry.id, outcome.failed_chunks, outcome.leaf_chunks, outcome.coverage.ratio * 100,
+        )
 
-    # Post-AI integrity check: confirm every `verbatim=true` claim against the
-    # paper text and downgrade the ones that don't hold up. Mutates fragments
-    # in place; stats surface via ExtractionResult → CLI warning and SaaS
-    # job metadata.
-    downgrade_stats = validate_verbatim_fragments(fragments, pdf_text, entry.id)
+    fragments = outcome.plain_fragments
 
     # Compute content hashes for future content-addressable storage (ADR-014)
     from ..hashing import compute_content_hash
 
-    # Save to database
     fragment_dicts = [
         {
             "text": f.text,
@@ -252,15 +126,103 @@ def extract_fragments(
         }
         for f in fragments
     ]
+    # Destructive replacement only when the new extraction is complete: a
+    # partial result (failed chunk / incomplete coverage) is merged on top of
+    # the old corpus instead of replacing it (Codex P1 on PR-A).
+    if replace_existing:
+        if outcome.failed_chunks == 0 and outcome.coverage.complete and not outcome.validation_incomplete:
+            state.delete_fragments(entry.id)
+        else:
+            logger.warning(
+                "%s: reprocess is partial (%d failed chunk(s), coverage %.1f%%) — "
+                "existing fragments preserved, new ones merged",
+                entry.id, outcome.failed_chunks, outcome.coverage.ratio * 100,
+            )
     saved = state.save_fragments(entry.id, fragment_dicts)
     logger.info("Saved %d fragments for %s", saved, entry.id)
 
     return ExtractionResult(
         source_id=entry.id,
         fragments=fragments,
-        summary=data.get("summary", ""),
-        downgrade_stats=downgrade_stats,
+        summary=outcome.summary,
+        downgrade_stats=outcome.downgrade_stats,
+        chunk_total=outcome.leaf_chunks,
+        failed_chunks=outcome.failed_chunks,
+        coverage_ratio=outcome.coverage.ratio,
+        validation_incomplete=outcome.validation_incomplete,
+        prompt_hash=outcome.prompt_hash,
+        rendered_prompt_hash=outcome.rendered_prompt_hash,
+        model=outcome.model or (resolve_task_model("extract", ai_cfg) or ai_cfg.model or ""),
+        tokens_in=outcome.tokens_in,
+        tokens_out=outcome.tokens_out,
+        cost_usd=outcome.cost_usd,
+        key_references=outcome.key_refs,
+        spans=[
+            (ef.char_start, ef.char_end) if ef.char_start is not None else None
+            for ef in outcome.fragments
+        ],
+        verbatim_statuses=[ef.verbatim_status for ef in outcome.fragments],
+        source_locators=[ef.source_locator for ef in outcome.fragments],
+        notes=outcome.notes if mode == "exhaustive" else {},
+        not_extracted=_not_extracted(outline_digest, outcome) if mode == "exhaustive" else [],
     )
+
+
+def _not_extracted(outline_digest: str, outcome) -> list[str]:
+    from .outline_digest import not_extracted
+
+    covered: set[str] = set()
+    for ef in outcome.fragments:
+        if ef.fragment.section:
+            covered.add(str(ef.fragment.section))
+    for key in ("contradicts", "qualifies"):
+        for n in (outcome.notes or {}).get(key, []) or []:
+            if isinstance(n, dict) and n.get("item"):
+                covered.add(str(n["item"]))
+    return not_extracted(outline_digest, covered)
+
+
+def fragments_from_rows(rows: list[dict]) -> list[Fragment]:
+    """Rebuild ``Fragment`` models from ``state.get_fragments()`` rows.
+
+    Used to render the *merged* stored corpus into the vault after a partial
+    ``--force`` reprocess, so the note never shows a lossy subset.
+    """
+    out: list[Fragment] = []
+    for r in rows:
+        text = (r.get("fragment_text") or "").strip()
+        if not text:
+            continue
+        try:
+            relevance = int(r.get("relevance_score") or 3)
+        except (TypeError, ValueError):
+            relevance = 3
+        out.append(Fragment(
+            text=text,
+            type=r.get("fragment_type") or "key_idea",
+            chapter=r.get("chapter") if isinstance(r.get("chapter"), int) else None,
+            section=r.get("section") or None,
+            relevance=max(1, min(5, relevance)),
+            usage_hint=r.get("usage_hint") or "",
+            page=r.get("page_number") if isinstance(r.get("page_number"), int) else None,
+            verbatim=bool(r.get("verbatim", False)),
+        ))
+    return out
+
+
+def format_structure_notes(notes: dict, not_extracted: list[str]) -> str:
+    """Render exhaustive-mode notes for the vault («Заметки к структуре»)."""
+    lines: list[str] = []
+    for key, label in (("contradicts", "Противоречит"), ("qualifies", "Ограничивает")):
+        for n in notes.get(key, []) or []:
+            mark = "" if n.get("status") == "confirmed" else " (цитата не подтверждена)"
+            lines.append(f"- **{label} {n.get('item', '?')}**{mark}: «{n.get('quote', '')}»")
+            if n.get("note"):
+                lines.append(f"  - {n['note']}")
+    if not_extracted:
+        lines.append("")
+        lines.append("Пункты структуры без извлечений (not_extracted): " + ", ".join(not_extracted))
+    return "\n".join(lines).rstrip() or "—"
 
 
 def _format_fragments_for_vault(fragments: list[Fragment]) -> str:
@@ -366,7 +328,8 @@ def extract_from_citekey(
         logger.error("PDF not found for %s", citekey)
         return None
 
-    pdf_text = pdf_extractor.extract(pdf_path)
+    pages = pdf_extractor.extract_pages(pdf_path)
+    pdf_text = pdf_extractor.format_for_ai(pages) if pages else None
     if not pdf_text or len(pdf_text) < config.processing.min_pdf_length:
         logger.error("PDF text too short or extraction failed for %s", citekey)
         return None
@@ -377,4 +340,5 @@ def extract_from_citekey(
         available_tags=available_tags,
         klemma_home=klemma_home,
         project_type=project_type,
+        pages=pages,
     )

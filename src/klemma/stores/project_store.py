@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator, Optional
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6  # v6: extraction runs + active set + user-scoped project_fragments
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS project_sources (
@@ -42,19 +42,82 @@ CREATE TABLE IF NOT EXISTS project_source_sections (
 );
 CREATE INDEX IF NOT EXISTS idx_pss_section ON project_source_sections(section);
 
+"""
+
+_CREATE_PROJECT_FRAGMENTS = """
 CREATE TABLE IF NOT EXISTS project_fragments (
-    fragment_id    TEXT NOT NULL PRIMARY KEY,
-    citekey        TEXT,
+    fragment_id    TEXT NOT NULL,
+    citekey        TEXT NOT NULL DEFAULT '',
+    user_id        TEXT NOT NULL DEFAULT '',
     section        TEXT,
     section_type   TEXT,
     chapter        INTEGER,
     relevance_score INTEGER DEFAULT 3,
     usage_hint     TEXT,
-    used_in_draft  INTEGER DEFAULT 0
+    used_in_draft  INTEGER DEFAULT 0,
+    curated_section TEXT,
+    legacy_section  TEXT,
+    section_origin  TEXT NOT NULL DEFAULT 'model',
+    PRIMARY KEY (user_id, citekey, fragment_id)
 );
 CREATE INDEX IF NOT EXISTS idx_pf_section ON project_fragments(section);
 CREATE INDEX IF NOT EXISTS idx_pf_citekey ON project_fragments(citekey);
+CREATE INDEX IF NOT EXISTS idx_pf_fragment ON project_fragments(fragment_id);
 """
+
+_CREATE_SCHEMA = _CREATE_SCHEMA + _CREATE_PROJECT_FRAGMENTS
+
+_CREATE_RUNS = """
+CREATE TABLE IF NOT EXISTS project_extraction_runs (
+    run_id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id             TEXT NOT NULL DEFAULT '',
+    citekey             TEXT NOT NULL,
+    paper_id            TEXT,
+    attempt_id          TEXT,
+    request_fingerprint TEXT,
+    started_at          TEXT DEFAULT (datetime('now')),
+    finished_at         TEXT,
+    mode                TEXT NOT NULL DEFAULT 'standard',
+    prompt_name         TEXT,
+    prompt_hash         TEXT,
+    template_hash       TEXT,
+    ai_model            TEXT,
+    klemma_version      TEXT,
+    extractor_version   TEXT,
+    source_content_hash TEXT,
+    outline_hash        TEXT,
+    config_json         TEXT,
+    coverage_json       TEXT,
+    is_partial          INTEGER NOT NULL DEFAULT 0,
+    validation_incomplete INTEGER NOT NULL DEFAULT 0,
+    activation_reason   TEXT,
+    chunk_count         INTEGER NOT NULL DEFAULT 0,
+    failed_chunks       INTEGER NOT NULL DEFAULT 0,
+    fragment_count      INTEGER NOT NULL DEFAULT 0,
+    tokens_in           INTEGER NOT NULL DEFAULT 0,
+    tokens_out          INTEGER NOT NULL DEFAULT 0,
+    cost_usd            REAL,
+    status              TEXT NOT NULL DEFAULT 'running',
+    error               TEXT,
+    notes_json          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_per_source ON project_extraction_runs(user_id, citekey, run_id);
+
+CREATE TABLE IF NOT EXISTS project_run_fragments (
+    run_id          INTEGER NOT NULL REFERENCES project_extraction_runs(run_id),
+    fragment_id     TEXT NOT NULL,
+    relevance_score INTEGER DEFAULT 3,
+    usage_hint      TEXT,
+    model_section   TEXT,
+    chapter         INTEGER,
+    verbatim_status TEXT,
+    PRIMARY KEY (run_id, fragment_id)
+);
+CREATE INDEX IF NOT EXISTS idx_prf_fragment ON project_run_fragments(fragment_id);
+"""
+
+RUN_STATUSES = ("running", "pending", "published", "published_partial", "failed", "discarded")
+ACTIVE_STATUSES = ("published", "published_partial")
 
 _MIGRATE_V2 = """
 CREATE TABLE IF NOT EXISTS prune_verdicts (
@@ -219,6 +282,54 @@ class LocalProjectStore:
                 DROP TABLE prune_verdicts;
                 ALTER TABLE prune_verdicts_v5 RENAME TO prune_verdicts;
             """)
+        # v6: extraction runs, active set, user-scoped project_fragments (plan C2).
+        # project_fragments had PK fragment_id without user_id — two users of one
+        # project.db would share curated_section. Rebuilt with PK
+        # (user_id, citekey, fragment_id); legacy `section` is kept and copied to
+        # legacy_section with section_origin='legacy_unknown' (never guessed).
+        pf_pk = [
+            r[1] for r in conn.execute("PRAGMA table_info(project_fragments)").fetchall()
+            if r[5] > 0
+        ]
+        needs_pf_migration = pf_pk == ["fragment_id"]
+        if version < 6 or needs_pf_migration:
+            conn.executescript(_CREATE_RUNS)
+            if not pf_pk:  # v1-era DB without project_fragments at all
+                conn.executescript(_CREATE_PROJECT_FRAGMENTS)
+            if needs_pf_migration:
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS project_fragments_v6 (
+                        fragment_id    TEXT NOT NULL,
+                        citekey        TEXT NOT NULL DEFAULT '',
+                        user_id        TEXT NOT NULL DEFAULT '',
+                        section        TEXT,
+                        section_type   TEXT,
+                        chapter        INTEGER,
+                        relevance_score INTEGER DEFAULT 3,
+                        usage_hint     TEXT,
+                        used_in_draft  INTEGER DEFAULT 0,
+                        curated_section TEXT,
+                        legacy_section  TEXT,
+                        section_origin  TEXT NOT NULL DEFAULT 'model',
+                        PRIMARY KEY (user_id, citekey, fragment_id)
+                    );
+                    INSERT OR IGNORE INTO project_fragments_v6
+                        (fragment_id, citekey, user_id, section, section_type, chapter,
+                         relevance_score, usage_hint, used_in_draft, legacy_section,
+                         section_origin)
+                    SELECT fragment_id, COALESCE(citekey, ''), '', section, section_type,
+                           chapter, relevance_score, usage_hint, used_in_draft, section,
+                           'legacy_unknown'
+                    FROM project_fragments;
+                    DROP TABLE project_fragments;
+                    ALTER TABLE project_fragments_v6 RENAME TO project_fragments;
+                    CREATE INDEX IF NOT EXISTS idx_pf_section ON project_fragments(section);
+                    CREATE INDEX IF NOT EXISTS idx_pf_citekey ON project_fragments(citekey);
+                    CREATE INDEX IF NOT EXISTS idx_pf_fragment ON project_fragments(fragment_id);
+                """)
+            ps_cols = {r[1] for r in conn.execute("PRAGMA table_info(project_sources)").fetchall()}
+            if "active_run_id" not in ps_cols:
+                conn.execute("ALTER TABLE project_sources ADD COLUMN active_run_id INTEGER")
         if version < _SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -372,14 +483,480 @@ class LocalProjectStore:
         chapter: int = 0,
         relevance_score: int = 3,
     ) -> None:
-        """Register a fragment assignment to this project."""
+        """Register a fragment assignment to this project (legacy path, user '')."""
         with self._conn() as conn:
             conn.execute(
                 """INSERT OR IGNORE INTO project_fragments
-                   (fragment_id, citekey, section, section_type, chapter, relevance_score)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   (fragment_id, citekey, user_id, section, section_type, chapter,
+                    relevance_score, section_origin)
+                   VALUES (?, ?, '', ?, ?, ?, ?, 'model')""",
                 (fragment_id, citekey, section, section_type, chapter, relevance_score),
             )
+
+
+    # ------------------------------------------------------------------ #
+    # Extraction runs + active set (plan C2 / ADR-020)                     #
+    # ------------------------------------------------------------------ #
+
+    def start_run(self, citekey: str, *, user_id: Optional[str] = None, **fields) -> int:
+        """Insert a ``running`` row BEFORE the first AI call; returns run_id.
+
+        ``fields`` are the launch conditions (attempt_id, request_fingerprint,
+        paper_id, mode, prompt_*, ai_model, versions, hashes, config_json) —
+        duplicated here on purpose so a failed run is reproducible even when
+        nothing reached library.db.
+        """
+        allowed = {
+            "paper_id", "attempt_id", "request_fingerprint", "mode", "prompt_name",
+            "prompt_hash", "template_hash", "ai_model", "klemma_version",
+            "extractor_version", "source_content_hash", "outline_hash", "config_json",
+        }
+        cols = ["user_id", "citekey"] + [k for k in fields if k in allowed]
+        vals = [self._uid(user_id), citekey] + [fields[k] for k in fields if k in allowed]
+        with self._conn() as conn:
+            cur = conn.execute(
+                f"INSERT INTO project_extraction_runs ({', '.join(cols)}) "
+                f"VALUES ({', '.join('?' * len(cols))})",
+                vals,
+            )
+            return int(cur.lastrowid)
+
+    def fail_run(self, run_id: int, error: str, **counters) -> None:
+        self._update_run(run_id, status="failed", error=error, **counters)
+
+    def set_run_identity(
+        self, run_id: int, *, prompt_hash: str, ai_model: str, request_fingerprint: str,
+    ) -> None:
+        """Finalize identity from the actual rendered request and routed model."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE project_extraction_runs SET prompt_hash=?, ai_model=?, "
+                "request_fingerprint=? WHERE run_id=?",
+                (prompt_hash, ai_model, request_fingerprint, run_id),
+            )
+
+    def _update_run(self, run_id: int, **fields) -> None:
+        allowed = {
+            "status", "error", "coverage_json", "is_partial", "validation_incomplete",
+            "chunk_count", "failed_chunks", "fragment_count", "tokens_in", "tokens_out",
+            "cost_usd", "notes_json", "activation_reason", "attempt_id",
+            "prompt_hash", "ai_model", "request_fingerprint",
+        }
+        sets = [f"{k}=?" for k in fields if k in allowed]
+        vals = [fields[k] for k in fields if k in allowed]
+        if not sets:
+            return
+        with self._conn() as conn:
+            conn.execute(
+                f"UPDATE project_extraction_runs SET {', '.join(sets)}, "
+                f"finished_at=datetime('now') WHERE run_id=?",
+                vals + [run_id],
+            )
+
+    def publish_run(
+        self,
+        run_id: int,
+        fragments: list[dict],
+        *,
+        is_partial: bool,
+        validation_incomplete: bool,
+        counters: Optional[dict] = None,
+        verify_fragment: Optional[callable] = None,
+        replace_legacy: bool = False,
+    ) -> str:
+        """Step 2 of the publication protocol — ONE transaction in project.db.
+
+        Writes ``project_run_fragments``, upserts ``project_fragments`` (never
+        touching ``curated_section``), updates the run row and, only when the
+        run is complete and validated, switches ``project_sources.active_run_id``.
+        ``verify_fragment(fragment_id) -> bool`` is the cross-database integrity
+        check (fragment + attempt link exist in library.db); any failure rolls
+        the whole transaction back and marks the run ``failed, error=integrity``.
+
+        Returns the resulting status: ``published`` | ``pending``.
+        """
+        counters = counters or {}
+        with self._conn() as conn:
+            run = conn.execute(
+                "SELECT * FROM project_extraction_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise ValueError(f"run {run_id} not found")
+            uid, citekey = run["user_id"], run["citekey"]
+            try:
+                if verify_fragment is not None:
+                    for fr in fragments:
+                        if not verify_fragment(fr["fragment_id"]):
+                            raise RuntimeError(f"integrity: {fr['fragment_id']} missing in library")
+                for fr in fragments:
+                    conn.execute(
+                        """INSERT INTO project_run_fragments
+                           (run_id, fragment_id, relevance_score, usage_hint, model_section,
+                            chapter, verbatim_status)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)
+                           ON CONFLICT(run_id, fragment_id) DO UPDATE SET
+                             relevance_score=excluded.relevance_score,
+                             usage_hint=excluded.usage_hint,
+                             model_section=excluded.model_section,
+                             chapter=excluded.chapter,
+                             verbatim_status=excluded.verbatim_status""",
+                        (
+                            run_id, fr["fragment_id"], fr.get("relevance_score", 3),
+                            fr.get("usage_hint"), fr.get("model_section"),
+                            fr.get("chapter"), fr.get("verbatim_status"),
+                        ),
+                    )
+                    conn.execute(
+                        """INSERT INTO project_fragments
+                           (fragment_id, citekey, user_id, section, section_type, chapter,
+                            relevance_score, usage_hint, section_origin)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'model')
+                           ON CONFLICT(user_id, citekey, fragment_id) DO UPDATE SET
+                             section=excluded.section,
+                             chapter=excluded.chapter,
+                             relevance_score=excluded.relevance_score,
+                             usage_hint=excluded.usage_hint,
+                             section_origin=CASE
+                               WHEN project_fragments.curated_section IS NOT NULL
+                               THEN 'curated' ELSE 'model' END""",
+                        (
+                            fr["fragment_id"], citekey, uid, fr.get("model_section"),
+                            fr.get("section_type"), fr.get("chapter"),
+                            fr.get("relevance_score", 3), fr.get("usage_hint"),
+                        ),
+                    )
+                complete = not is_partial and not validation_incomplete
+                status = "published" if complete else "pending"
+                conn.execute(
+                    """UPDATE project_extraction_runs
+                       SET status=?, is_partial=?, validation_incomplete=?, fragment_count=?,
+                           coverage_json=?, chunk_count=?, failed_chunks=?, tokens_in=?,
+                           tokens_out=?, cost_usd=?, notes_json=?, attempt_id=COALESCE(?, attempt_id),
+                           finished_at=datetime('now')
+                       WHERE run_id=?""",
+                    (
+                        status, 1 if is_partial else 0, 1 if validation_incomplete else 0,
+                        len(fragments), counters.get("coverage_json"),
+                        counters.get("chunk_count", 0), counters.get("failed_chunks", 0),
+                        counters.get("tokens_in", 0), counters.get("tokens_out", 0),
+                        counters.get("cost_usd"), counters.get("notes_json"),
+                        counters.get("attempt_id"), run_id,
+                    ),
+                )
+                if complete:
+                    if replace_legacy:
+                        # --replace: drop project rows not linked to ANY run (legacy);
+                        # global library rows are never deleted.
+                        conn.execute(
+                            """DELETE FROM project_fragments
+                               WHERE user_id=? AND citekey=? AND fragment_id NOT IN (
+                                 SELECT prf.fragment_id FROM project_run_fragments prf
+                                 JOIN project_extraction_runs r ON r.run_id = prf.run_id
+                                 WHERE r.user_id=? AND r.citekey=?)""",
+                            (uid, citekey, uid, citekey),
+                        )
+                    self._activate_locked(conn, uid, citekey, run_id)
+                return status
+            except Exception as exc:
+                conn.rollback()
+                with self._conn() as c2:
+                    c2.execute(
+                        "UPDATE project_extraction_runs SET status='failed', error=?, "
+                        "finished_at=datetime('now') WHERE run_id=?",
+                        (f"integrity: {exc}"[:500], run_id),
+                    )
+                raise
+
+    def _activate_locked(self, conn, uid: str, citekey: str, run_id: int) -> None:
+        row = conn.execute(
+            "SELECT status, activation_reason FROM project_extraction_runs WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        if row is None or row["status"] not in ACTIVE_STATUSES:
+            raise RuntimeError(f"run {run_id} is {row['status'] if row else 'missing'}, not activatable")
+        if row["status"] == "published_partial" and not row["activation_reason"]:
+            raise RuntimeError("published_partial without activation_reason")
+        run_paper = conn.execute(
+            "SELECT paper_id FROM project_extraction_runs WHERE run_id=?", (run_id,)
+        ).fetchone()[0] or ""
+        real_paper = run_paper if run_paper and not run_paper.startswith("citekey:") else None
+        conn.execute(
+            """INSERT INTO project_sources (citekey, paper_id, user_id, active_run_id)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id, citekey) DO UPDATE SET
+                 active_run_id=excluded.active_run_id,
+                 paper_id=COALESCE(?, project_sources.paper_id)""",
+            (citekey, real_paper or "", uid, run_id, real_paper),
+        )
+
+    def activate_partial(
+        self, run_id: int, reason: str, *, user_id: Optional[str] = None,
+    ) -> None:
+        """Explicitly activate a pending partial run (``published_partial``)."""
+        if not reason.strip():
+            raise ValueError("activation reason is required")
+        with self._conn() as conn:
+            run = conn.execute(
+                "SELECT * FROM project_extraction_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise ValueError(f"run {run_id} not found")
+            if run["status"] != "pending":
+                raise RuntimeError(f"run {run_id} is {run['status']}, only pending can be activated")
+            if run["validation_incomplete"]:
+                raise RuntimeError("run has validation_incomplete=1 — run `klemma repair --run` first")
+            conn.execute(
+                "UPDATE project_extraction_runs SET status='published_partial', "
+                "activation_reason=? WHERE run_id=?",
+                (reason.strip(), run_id),
+            )
+            self._activate_locked(conn, run["user_id"], run["citekey"], run_id)
+
+    def clear_validation_incomplete(self, run_id: int) -> str:
+        """After ``repair --run``: drop the flag; publish automatically when complete."""
+        with self._conn() as conn:
+            run = conn.execute(
+                "SELECT * FROM project_extraction_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise ValueError(f"run {run_id} not found")
+            conn.execute(
+                "UPDATE project_extraction_runs SET validation_incomplete=0 WHERE run_id=?",
+                (run_id,),
+            )
+            if run["status"] == "pending" and not run["is_partial"]:
+                conn.execute(
+                    "UPDATE project_extraction_runs SET status='published' WHERE run_id=?",
+                    (run_id,),
+                )
+                self._activate_locked(conn, run["user_id"], run["citekey"], run_id)
+                return "published"
+            return run["status"]
+
+    def get_stale_running_citekeys(self, older_than_hours: float = 2.0) -> list[str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT citekey FROM project_extraction_runs
+                   WHERE status='running' AND started_at < datetime('now', ?)""",
+                (f"-{older_than_hours * 60:.0f} minutes",),
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def mark_stale_runs(self, older_than_hours: float = 2.0) -> int:
+        """``running`` rows older than the timeout → ``failed, error=stale``."""
+        return len(self.mark_stale_runs_detailed(older_than_hours))
+
+    def mark_stale_runs_detailed(self, older_than_hours: float = 2.0) -> list[dict]:
+        """Like ``mark_stale_runs`` but returns the affected rows (run_id, citekey,
+        attempt_id) so the caller can close the matching library attempts."""
+        with self._conn() as conn:
+            rows = [dict(r) for r in conn.execute(
+                """SELECT run_id, citekey, attempt_id FROM project_extraction_runs
+                   WHERE status='running' AND started_at < datetime('now', ?)""",
+                (f"-{older_than_hours * 60:.0f} minutes",),
+            )]
+            if rows:
+                conn.executemany(
+                    "UPDATE project_extraction_runs SET status='failed', error='stale', "
+                    "finished_at=datetime('now') WHERE run_id=?",
+                    [(r["run_id"],) for r in rows],
+                )
+        return rows
+
+    def ensure_source(self, citekey: str, paper_id: str, user_id: Optional[str] = None) -> None:
+        """Register a project source without touching its section assignments."""
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO project_sources (citekey, paper_id, user_id) VALUES (?, ?, ?)
+                   ON CONFLICT(user_id, citekey) DO UPDATE SET paper_id=excluded.paper_id""",
+                (citekey, paper_id, self._uid(user_id)),
+            )
+
+    def stranded_attempt_ids(self) -> list[dict]:
+        """Runs that hold an attempt id but never published (failed/running):
+        their library attempts may carry fragments no project row references."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT run_id, citekey, attempt_id, status FROM project_extraction_runs
+                   WHERE attempt_id IS NOT NULL AND status IN ('failed', 'running', 'discarded')"""
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_last_run(self) -> Optional[dict]:
+        """Most recently created run row (any source) — used to detect a provider
+        limit that just ended the previous extraction in a serial batch."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM project_extraction_runs ORDER BY run_id DESC LIMIT 1"
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_run(self, run_id: int) -> Optional[dict]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM project_extraction_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_runs(self, citekey: str, user_id: Optional[str] = None) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM project_extraction_runs WHERE user_id=? AND citekey=? ORDER BY run_id",
+                (self._uid(user_id), citekey),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_active_run_id(self, citekey: str, user_id: Optional[str] = None) -> Optional[int]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT active_run_id FROM project_sources WHERE user_id=? AND citekey=?",
+                (self._uid(user_id), citekey),
+            ).fetchone()
+        return int(row["active_run_id"]) if row and row["active_run_id"] is not None else None
+
+    def get_run_fragments(self, run_id: int) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM project_run_fragments WHERE run_id=? ORDER BY rowid", (run_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_project_fragments(
+        self,
+        citekey: str,
+        *,
+        user_id: Optional[str] = None,
+        run_id: Optional[int] = None,
+        all_runs: bool = False,
+    ) -> list[dict]:
+        """Project-side rows for a source.
+
+        Default = the ACTIVE set: rows linked to ``active_run_id``, or every
+        row without run links (legacy) when no run is active. ``run_id`` gives
+        that run's snapshot; ``all_runs`` returns every row with a ``run_ids``
+        column listing the runs that produced it.
+        """
+        uid = self._uid(user_id)
+        with self._conn() as conn:
+            if run_id is not None:
+                rows = conn.execute(
+                    """SELECT pf.*, prf.model_section AS run_model_section,
+                              prf.relevance_score AS run_relevance, prf.usage_hint AS run_usage_hint,
+                              prf.verbatim_status
+                       FROM project_run_fragments prf
+                       JOIN project_fragments pf
+                         ON pf.fragment_id = prf.fragment_id AND pf.user_id=? AND pf.citekey=?
+                       WHERE prf.run_id=? ORDER BY prf.rowid""",
+                    (uid, citekey, run_id),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            if all_runs:
+                rows = conn.execute(
+                    """SELECT pf.*, (
+                         SELECT group_concat(prf.run_id) FROM project_run_fragments prf
+                         JOIN project_extraction_runs r ON r.run_id = prf.run_id
+                         WHERE prf.fragment_id = pf.fragment_id AND r.user_id=pf.user_id
+                           AND r.citekey=pf.citekey) AS run_ids
+                       FROM project_fragments pf WHERE pf.user_id=? AND pf.citekey=?
+                       ORDER BY pf.rowid""",
+                    (uid, citekey),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            active = self.get_active_run_id(citekey, uid)
+            if active is None:
+                # Legacy set: every project row not owned by an ACTIVE run. Links
+                # to pending/failed runs must not hide a legacy fragment.
+                rows = conn.execute(
+                    """SELECT pf.* FROM project_fragments pf
+                       WHERE pf.user_id=? AND pf.citekey=? AND pf.fragment_id NOT IN (
+                         SELECT prf.fragment_id FROM project_run_fragments prf
+                         JOIN project_extraction_runs r ON r.run_id = prf.run_id
+                         WHERE r.user_id=? AND r.citekey=?
+                           AND r.status IN ('published', 'published_partial'))
+                       ORDER BY pf.rowid""",
+                    (uid, citekey, uid, citekey),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            # Active set: metadata comes from the active run's SNAPSHOT, so a
+            # pending rerun that touched the shared project row cannot change
+            # what the active corpus reports (curated_section still wins).
+            rows = conn.execute(
+                """SELECT pf.*, prf.verbatim_status,
+                          prf.model_section AS run_model_section,
+                          prf.relevance_score AS run_relevance,
+                          prf.usage_hint AS run_usage_hint,
+                          prf.chapter AS run_chapter
+                   FROM project_run_fragments prf
+                   JOIN project_fragments pf
+                     ON pf.fragment_id = prf.fragment_id AND pf.user_id=? AND pf.citekey=?
+                   WHERE prf.run_id=? ORDER BY prf.rowid""",
+                (uid, citekey, active),
+            ).fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                d["section"] = d.get("curated_section") or d.get("run_model_section")
+                d["relevance_score"] = d.get("run_relevance") if d.get("run_relevance") is not None else d.get("relevance_score")
+                d["usage_hint"] = d.get("run_usage_hint") if d.get("run_usage_hint") is not None else d.get("usage_hint")
+                d["chapter"] = d.get("run_chapter") if d.get("run_chapter") is not None else d.get("chapter")
+                out.append(d)
+            return out
+
+    def set_curated_section(
+        self, citekey: str, fragment_id: str, section: Optional[str],
+        *, user_id: Optional[str] = None,
+    ) -> bool:
+        """Human override of a fragment's section; never touched by runs."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                """UPDATE project_fragments
+                   SET curated_section=?, section_origin=CASE WHEN ? IS NULL THEN
+                       CASE WHEN legacy_section IS NOT NULL AND section IS NULL
+                            THEN 'legacy_unknown' ELSE 'model' END ELSE 'curated' END
+                   WHERE user_id=? AND citekey=? AND fragment_id=?""",
+                (section, section, self._uid(user_id), citekey, fragment_id),
+            )
+            return cur.rowcount > 0
+
+    def upsert_legacy_fragment(
+        self, citekey: str, fragment_id: str, *, user_id: Optional[str] = None,
+        section: Optional[str] = None, section_type: Optional[str] = None,
+        chapter: Optional[int] = None, relevance_score: int = 3,
+        usage_hint: Optional[str] = None, used_in_draft: bool = False,
+    ) -> None:
+        """Migration path: a monolith fragment becomes a project row with
+        ``legacy_section`` and ``section_origin='legacy_unknown'``."""
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO project_fragments
+                   (fragment_id, citekey, user_id, section, section_type, chapter,
+                    relevance_score, usage_hint, used_in_draft, legacy_section, section_origin)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'legacy_unknown')
+                   ON CONFLICT(user_id, citekey, fragment_id) DO UPDATE SET
+                     legacy_section=COALESCE(project_fragments.legacy_section, excluded.legacy_section),
+                     relevance_score=COALESCE(project_fragments.relevance_score, excluded.relevance_score),
+                     usage_hint=COALESCE(project_fragments.usage_hint, excluded.usage_hint)""",
+                (
+                    fragment_id, citekey, self._uid(user_id), section, section_type, chapter,
+                    relevance_score, usage_hint, 1 if used_in_draft else 0, section,
+                ),
+            )
+
+    def count_project_fragments(self, citekey: Optional[str] = None, user_id: Optional[str] = None) -> int:
+        with self._conn() as conn:
+            if citekey is None:
+                return conn.execute("SELECT COUNT(*) FROM project_fragments").fetchone()[0]
+            return conn.execute(
+                "SELECT COUNT(*) FROM project_fragments WHERE user_id=? AND citekey=?",
+                (self._uid(user_id), citekey),
+            ).fetchone()[0]
+
+    def referenced_attempt_ids(self) -> set[str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT attempt_id FROM project_extraction_runs WHERE attempt_id IS NOT NULL"
+            ).fetchall()
+        return {r[0] for r in rows}
 
     def get_sources_by_section(
         self, section: str, user_id: Optional[str] = None

@@ -382,6 +382,16 @@ class SourceRepository(BaseRepository):
             )
             return [dict(row) for row in cur.fetchall()]
 
+    def get_sources_for_selection(self) -> list[dict]:
+        """Every source with the fields `klemma source select` filters on."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                """SELECT id, status, quality_score, fragment_count, pdf_path, title,
+                          source_type
+                   FROM sources ORDER BY id"""
+            )
+            return [dict(row) for row in cur.fetchall()]
+
     def get_all_sources_metadata(self) -> list[dict]:
         """Get completed sources with full metadata for dedup checks."""
         with self._conn() as conn:

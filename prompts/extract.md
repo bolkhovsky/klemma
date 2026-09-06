@@ -31,6 +31,11 @@ Ground rules — no exceptions.
 
 ## Project Context
 {{ dissertation_context }}
+{% if outline_digest %}
+
+## Project Outline (condensed; item numbers are the target of `section`)
+{{ outline_digest }}
+{% endif %}
 
 ## Available Tags
 {{ available_tags }}
@@ -130,7 +135,7 @@ Guidelines:
 3. Identify methodology descriptions that could be referenced
 4. Look for results/metrics that support or contrast with the project's approach
 5. Flag definitions of key terms
-6. Map each fragment to the most specific section possible
+6. Map each fragment to the most specific outline item: `section` = the item number (`X.Y.Z` when a numbered item applies, else the section `X.Y`) exactly as listed in the Project Outline; never invent numbers that are not in the outline
 7. Usage hints should be in {{ language }}
 8. Fragments text stays in original paper language
 9. citation_intent must be one of: background, method, result_comparison, extends, contrasts, uses_data

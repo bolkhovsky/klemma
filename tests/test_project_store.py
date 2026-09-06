@@ -17,13 +17,13 @@ def store(tmp_path) -> LocalProjectStore:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_5(tmp_path):
+def test_schema_version_is_6(tmp_path):
     db_path = tmp_path / "project.db"
     LocalProjectStore(db_path)
     conn = sqlite3.connect(str(db_path))
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 5
+    assert version == 6
 
 
 def test_tables_created(tmp_path):
@@ -235,7 +235,7 @@ def test_migration_v1_to_v2_idempotent(tmp_path):
     version = conn2.execute("PRAGMA user_version").fetchone()[0]
     tables = {r[0] for r in conn2.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     conn2.close()
-    assert version == 5
+    assert version == 6
     assert "prune_verdicts" in tables
 
 

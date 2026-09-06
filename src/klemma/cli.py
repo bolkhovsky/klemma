@@ -42,117 +42,38 @@ def _auto_migrate_to_three_tier(klemma_home: Path, lib_db: Path) -> tuple[int, i
     """Migrate monolithic klemma.db → library.db + project.db non-destructively.
 
     Called automatically from _init_components() when project.db is empty but
-    klemma.db has sources. Creates a .db.bak backup before writing.
+    klemma.db has sources. Delegates to ``klemma.migration.migrate_monolith``
+    (plan C2): every field is carried over, paper identity is resolved by
+    real hash / DOI / citekey before a synthetic paper is minted. Creates a
+    .db.bak backup before writing.
 
-    Returns (n_papers, n_fragments, n_sections) or (0, 0, 0) if nothing to migrate.
+    Returns (n_sources, n_fragments, n_sections) or (0, 0, 0) if nothing to migrate.
     """
     import shutil
-    import sqlite3
+
+    from .migration import migrate_monolith
+    from .stores import LocalPaperStore, LocalProjectStore, LocalUserLibrary
 
     mono_db = klemma_home / "data" / "klemma.db"
     if not mono_db.exists():
         return 0, 0, 0
-
-    conn = sqlite3.connect(str(mono_db))
-    conn.row_factory = sqlite3.Row
-
-    sources = conn.execute(
-        "SELECT id, title, authors, year, abstract, doi, status, pdf_path, quality_score"
-        " FROM sources"
-    ).fetchall()
-    if not sources:
-        conn.close()
-        return 0, 0, 0
-
-    fragments = conn.execute(
-        "SELECT source_id, fragment_text, fragment_type, page_number, citation_intent"
-        " FROM fragments"
-    ).fetchall()
-
-    has_sections_tbl = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='source_sections'"
-    ).fetchone() is not None
-    sections = (
-        conn.execute("SELECT source_id, section FROM source_sections").fetchall()
-        if has_sections_tbl else []
-    )
-    conn.close()
-
-    # Backup before writing anything — skip if backup already exists from prior run
     bak = mono_db.with_suffix(".db.bak")
     if not bak.exists():
         shutil.copy2(mono_db, bak)
 
-    from .hashing import compute_content_hash, compute_prompt_hash
-    from .models import FragmentRecord
-    from .stores import LocalPaperStore, LocalProjectStore, LocalUserLibrary
+    def _resolve_pdf(src: dict):
+        p = src.get("pdf_path")
+        return Path(p) if p else None
 
-    paper_store = LocalPaperStore(lib_db)
-    user_lib = LocalUserLibrary(lib_db)
-
-    frag_by_citekey: dict[str, list] = {}
-    for f in fragments:
-        frag_by_citekey.setdefault(f["source_id"], []).append(f)
-
-    citekey_to_paper_id: dict[str, str] = {}
-    migrated_frags = 0
-
-    for src in sources:
-        citekey = src["id"]
-        pdf_hash = f"migrated:{citekey}"
-        paper_id = paper_store.register_paper(
-            title=src["title"] or citekey,
-            authors=src["authors"] or "",
-            year=src["year"],
-            doi=src["doi"] or None,
-            abstract=src["abstract"] or "",
-            pdf_hash=pdf_hash,
-        )
-        citekey_to_paper_id[citekey] = paper_id
-        user_lib.add_source(
-            paper_id, citekey,
-            status=src["status"] or "pending",
-            pdf_path=src["pdf_path"],
-            quality_score=src["quality_score"],
-        )
-        ck_frags = frag_by_citekey.get(citekey, [])
-        if ck_frags:
-            p_hash = compute_prompt_hash("migrated")
-            records = [
-                FragmentRecord(
-                    fragment_id=compute_content_hash(paper_id, f["fragment_text"], f["page_number"]),
-                    paper_id=paper_id,
-                    fragment_text=f["fragment_text"],
-                    fragment_type=f["fragment_type"] or "key_idea",
-                    page_number=f["page_number"],
-                    citation_intent=f["citation_intent"],
-                    content_hash=compute_content_hash(paper_id, f["fragment_text"], f["page_number"]),
-                )
-                for f in ck_frags
-            ]
-            migrated_frags += paper_store.save_fragments(paper_id, records, p_hash, "migrated")
-
-    proj_store = LocalProjectStore(klemma_home / "data" / "project.db")
-    secs_by_citekey: dict[str, list[str]] = {}
-    for s in sections:
-        secs_by_citekey.setdefault(s["source_id"], []).append(s["section"])
-
-    def _section_chapter(sec: str) -> int | None:
-        """Infer chapter number from section string (e.g. '1.1' → 1)."""
-        try:
-            return int(sec.split(".")[0])
-        except (ValueError, IndexError, AttributeError):
-            return None
-
-    for citekey, paper_id in citekey_to_paper_id.items():
-        sec_list = secs_by_citekey.get(citekey, [])
-        chap_list = [c for c in (_section_chapter(s) for s in sec_list) if c is not None]
-        # Always register in project_sources (even with no sections) so
-        # count_sources() > 0 after migration and auto-migrate doesn't re-trigger
-        proj_store.set_source_sections(citekey, paper_id, sec_list, chap_list)
-
-    n_sections = sum(len(v) for v in secs_by_citekey.values())
-    return len(sources), migrated_frags, n_sections
+    report = migrate_monolith(
+        mono_db,
+        paper_store=LocalPaperStore(lib_db),
+        user_library=LocalUserLibrary(lib_db),
+        project_store=LocalProjectStore(klemma_home / "data" / "project.db"),
+        apply=True,
+        pdf_resolver=_resolve_pdf,
+    )
+    return report.sources_total, report.n_project_fragment, report.n_sections
 
 
 def _init_components(config_path: str | None = None) -> KlemmaContext:
@@ -217,6 +138,9 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
 
     dissertation_context = load_project_context(project_chain, cfg)
     available_tags = load_available_tags(klemma_home, cfg, project_chain=project_chain)
+    from .skills.outline_digest import load_outline_digest
+
+    outline_digest = load_outline_digest(project_root, project)
 
     # Three-tier library (ADR-014 Phase 1B/1C): shared stores at ~/.klemma/library.db
     from .stores import LocalPaperStore, LocalProjectStore, LocalUserLibrary
@@ -262,6 +186,7 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
         project_name=project_root.name,
         klemma_home=klemma_home,
         dissertation_context=dissertation_context,
+        outline_digest=outline_digest,
         available_tags=available_tags,
         project_root=project_root,
         project_chain=project_chain,
@@ -1440,6 +1365,15 @@ def _detect_input_type(value: str) -> str:
         return "path"
     return "citekey"
 
+
+def _num_attr(obj, name: str, default):
+    """Read a numeric attribute defensively: mocks / None / non-numbers → default."""
+    value = getattr(obj, name, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return value
+
+
 def _process_single(
     citekey,
     cfg,
@@ -1458,6 +1392,10 @@ def _process_single(
     no_embed=False,
     paper_store=None,
     user_library=None,
+    project_store=None,
+    replace=False,
+    mode="standard",
+    outline_digest="",
 ):
     """Process a single source: find PDF, extract fragments, save to vault.
 
@@ -1526,7 +1464,7 @@ def _process_single(
     else:
         # Phase 1C citekey fast-path dedup: check user_library before reading PDF (ADR-014)
         # Faster than pdf_hash check: no PDF read needed when same citekey already processed.
-        if user_library and paper_store and not force:
+        if user_library and paper_store and not force and mode != "exhaustive":
             try:
                 _fast_paper_id = user_library.resolve_paper_id(citekey)
                 if _fast_paper_id:
@@ -1593,7 +1531,7 @@ def _process_single(
         # Phase 1B dedup: check library.db before extracting (ADR-014)
         _pdf_hash = None
         _paper_id = None
-        if paper_store and not force:
+        if paper_store and not force and mode != "exhaustive":
             try:
                 from .hashing import compute_pdf_hash
 
@@ -1685,31 +1623,140 @@ def _process_single(
                 )
                 _degraded_steps.append("sidecar")
 
-    # If reprocessing, clear old fragments before extracting fresh ones
-    if force:
-        state.delete_fragments(citekey)
+    # Step 0 of the run lifecycle (plan C2): the paper is registered and the
+    # `running` row exists BEFORE the first AI call, so a crash mid-extraction
+    # still leaves a reproducible failed run. Online sources have no PDF hash
+    # and stay on the legacy (run-less) path.
+    _run_handle = None
+    if project_store is not None and pdf_pages and source_type != "online":
+        try:
+            from .extraction_runs import start_run as _start_run
+            from .skills.outline_digest import outline_hash as _outline_hash
 
-    # Extract fragments
-    result = extract_fragments(
-        entry,
-        pdf_text,
-        cfg,
-        state,
-        ai,
-        dissertation_context=dissertation_context,
-        available_tags=available_tags,
-        klemma_home=klemma_home,
-        project_type=project_type,
-    )
+            if _pdf_hash is None and pdf_path:
+                from .hashing import compute_pdf_hash
+
+                _pdf_hash = compute_pdf_hash(pdf_path)
+            if paper_store is not None and _paper_id is None and _pdf_hash:
+                _paper_id = paper_store.register_paper(
+                    title=entry.title or citekey,
+                    authors=entry.authors_str or "",
+                    year=entry.year,
+                    doi=entry.DOI or None,
+                    abstract=entry.abstract or "",
+                    pdf_hash=_pdf_hash,
+                )
+            from . import __version__ as _kv
+            from .config import resolve_prompt as _resolve_prompt
+            from .hashing import compute_prompt_hash as _cph
+
+            _prompt_name = "extract_exhaustive.md" if mode == "exhaustive" else "extract.md"
+            _prompt_path = _resolve_prompt(_prompt_name, klemma_home) if klemma_home else None
+            _template_hash = (
+                _cph(_prompt_path.read_text(encoding="utf-8")) if _prompt_path else ""
+            )
+            _run_handle = _start_run(
+                project_store=project_store,
+                paper_store=paper_store,
+                citekey=citekey,
+                paper_id=_paper_id or f"citekey:{citekey}",
+                pages=pdf_pages,
+                config_ai=cfg.ai,
+                prompt_name=_prompt_name,
+                template_hash=_template_hash,
+                mode=mode,
+                klemma_version=str(_kv),
+                outline_hash=_outline_hash(outline_digest) if outline_digest else "",
+            )
+        except Exception as _e:  # noqa: BLE001 — the run substrate must not block extraction
+            logger.warning("run lifecycle start failed for %s: %s", citekey, _e)
+            _run_handle = None
+
+    # Extract fragments over the FULL text (chunked engine, plan C1); the
+    # truncated `pdf_text` is kept only for annotate/vault below. Any exception
+    # (provider, renderer, persistence) finalizes the run as failed so it can
+    # be retried at once instead of sitting in `running` for the stale timeout.
+    try:
+        result = extract_fragments(
+            entry,
+            pdf_text,
+            cfg,
+            state,
+            ai,
+            dissertation_context=dissertation_context,
+            available_tags=available_tags,
+            klemma_home=klemma_home,
+            project_type=project_type,
+            pages=pdf_pages or None,
+            # --replace drops the legacy corpus only when the new extraction is
+            # complete and validated; --force alone merges (plan C2).
+            replace_existing=replace,
+            mode=mode,
+            outline_digest=outline_digest,
+        )
+    except Exception as _e:
+        if _run_handle is not None:
+            from .extraction_runs import fail_run as _fail_run
+
+            _fail_run(project_store, paper_store, _run_handle, f"exception: {_e}"[:500])
+        raise
 
     if not result or not result.fragments:
+        _reason = (getattr(result, "error", "") or "no fragments") if result else "no fragments"
+        if _run_handle is not None:
+            from .extraction_runs import fail_run as _fail_run
+
+            _fail_run(project_store, paper_store, _run_handle, _reason[:500])
         if not quiet:
-            console.print("  [red]No fragments extracted[/red]")
-        state.sources.mark_skipped(citekey, "no fragments")
+            console.print(f"  [red]No fragments extracted[/red] [dim]{_reason}[/dim]")
+        # A source that already has fragments keeps its status: a failed
+        # re-run must not flip a completed source to skipped.
+        if not (state.get_fragments(source_id=citekey, limit=1)):
+            state.sources.mark_skipped(citekey, "no fragments")
         return (0, "no fragments")
 
+    # Steps 1–2: publish the run (library attempt + project transaction).
+    _run_status = None
+    if _run_handle is not None:
+        from .extraction_runs import publish_run as _publish_run
+
+        try:
+            _run_status = _publish_run(
+                project_store=project_store,
+                paper_store=paper_store,
+                handle=_run_handle,
+                result=result,
+                replace_legacy=replace,
+            )
+        except Exception as _e:  # noqa: BLE001 — store marked the run failed
+            logger.error("run publish failed for %s: %s", citekey, _e)
+            _run_status = "failed"
+            _degraded_steps.append("run_publish")
+        if not quiet:
+            _label = {
+                "published": "[green]run published[/green]",
+                "pending": "[yellow]run pending (partial or unvalidated — active set unchanged)[/yellow]",
+                "failed": "[red]run failed to publish[/red]",
+            }.get(_run_status, str(_run_status))
+            console.print(f"  {_label} [dim]#{_run_handle.run_id}[/dim]")
+
     if not quiet:
-        console.print(f"  [green]{len(result.fragments)} fragments[/green]", end="")
+        _chunks = _num_attr(result, "chunk_total", 1) or 1
+        _chunk_note = f" across {_chunks} chunk(s)" if _chunks > 1 else ""
+        console.print(f"  [green]{len(result.fragments)} fragments{_chunk_note}[/green]", end="")
+        _failed = _num_attr(result, "failed_chunks", 0)
+        if _failed:
+            console.print(
+                f"\n  [yellow]\u26a0 {_failed}/{_chunks} chunk(s) failed — "
+                f"coverage {_num_attr(result, 'coverage_ratio', 1.0) * 100:.1f}%[/yellow]",
+                end="",
+            )
+        if getattr(result, "validation_incomplete", False) is True:
+            console.print(
+                "\n  [yellow]\u26a0 text exceeds the verbatim validation cap; "
+                "run `klemma repair --steps verbatim` for full spans[/yellow]",
+                end="",
+            )
         ds = result.downgrade_stats
         if ds.downgraded:
             console.print(
@@ -1719,10 +1766,22 @@ def _process_single(
                 end="",
             )
 
-    # Save to vault
+    # Save to vault. After a partial --force the DB kept the old corpus and
+    # merged the new fragments; the note must show that merged set, not the
+    # partial new subset (update_section replaces the whole quotation block).
+    _partial = _num_attr(result, "failed_chunks", 0) > 0 or (
+        _num_attr(result, "coverage_ratio", 1.0) < 1.0
+    )
+    _vault_fragments = result.fragments
+    if force and _partial:
+        from .skills.extractor import fragments_from_rows
+
+        _merged = fragments_from_rows(state.get_fragments(source_id=citekey, limit=100_000))
+        if _merged:
+            _vault_fragments = _merged
     saved_path = save_fragments_to_vault(
         citekey,
-        result.fragments,
+        _vault_fragments,
         vault,
         entry=entry,
         config=cfg,
@@ -1740,9 +1799,42 @@ def _process_single(
         else:
             console.print(" [dim](DB only)[/dim]")
 
-    # Phase 1B dual-write: also persist to library.db (ADR-014)
-    # online sources have no PDF hash — skip dual-write
-    if paper_store and not force and source_type != "online":
+    # Exhaustive mode: mirror the structure notes into the vault note (best effort).
+    _notes = getattr(result, "notes", None) or {}
+    _not_extracted = getattr(result, "not_extracted", None) or []
+    if (_notes or _not_extracted) and saved_path:
+        try:
+            from .skills.extractor import format_structure_notes
+
+            _heading = "## \U0001f9ed Заметки к структуре"
+            _body = format_structure_notes(_notes, _not_extracted)
+            _written = vault.update_section(f"@{citekey}", _heading, _body)
+            if _written is None:
+                # note_factory templates carry no such heading — append it once.
+                _written = vault.append_to_note(f"@{citekey}", f"\n{_heading}\n\n{_body}\n")
+            if _written is None:
+                _degraded_steps.append("vault_notes")
+                if not quiet:
+                    console.print("  [yellow]⚠ structure notes not written to the vault note[/yellow]")
+        except Exception as _e:  # noqa: BLE001
+            _degraded_steps.append("vault_notes")
+            logger.warning("structure notes mirror failed for %s: %s", citekey, _e)
+
+    # A partial extraction (failed chunk / incomplete coverage) must not be
+    # published to the shared library cache nor registered as completed:
+    # the fast paths would serve it — to other projects too — without ever
+    # retrying. Mark the source degraded so `klemma status --degraded` lists
+    # it; `klemma process <citekey> --force` retries.
+    if _partial:
+        _degraded_steps.append("extraction")
+
+    # Phase 1B dual-write: also persist to library.db (ADR-014). Skipped when the
+    # run lifecycle already wrote the attempt (plan C2) — the legacy
+    # `extractions` table is not fed by the new path.
+    if (
+        paper_store and not force and not _partial and source_type != "online"
+        and _run_handle is None
+    ):
         try:
             from .hashing import compute_content_hash, compute_prompt_hash
             from .models import FragmentRecord
@@ -1787,7 +1879,7 @@ def _process_single(
             logger.debug("Library dual-write failed for %s: %s", citekey, _e)
 
     # Phase 1C: register citekey → paper_id in user library
-    if user_library and _paper_id:
+    if user_library and _paper_id and not _partial:
         try:
             user_library.add_source(
                 _paper_id,

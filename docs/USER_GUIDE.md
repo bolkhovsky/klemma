@@ -395,6 +395,108 @@ klemma ask -ch 1 "Найди пробелы в литературном обзо
 
 Агент получает полный контекст проекта (outline, источники, фрагменты, покрытие, пробелы) и может использовать инструменты (веб-поиск, файлы). Ответы сохраняются в `project_root/`.
 
+### 4.9 Верификация цитат перед подачей
+
+Контур верификации (ADR-018/ADR-019) проверяет, что каждое утверждение со ссылкой
+соответствует месту в источнике. Правило: фрагмент годится, чтобы **найти** место
+в источнике; **цитировать** можно только по полному тексту.
+
+**Шаг 1 — субстрат.** Полный текст цитируемых источников + честные флаги дословности:
+
+```bash
+klemma repair --cited draft --cited 'papers/**/paper_draft*.md'   # sidecar + verbatim + embeddings
+klemma repair --scan                                              # найти источники с тихо упавшими шагами
+klemma status --degraded                                          # очередь дообработки
+klemma repair --run 12                                            # проверить один прогон по sidecar и опубликовать
+```
+
+### Дайджест структуры в промпте извлечения
+
+Если в frontmatter `KLEMMA.md` указан файл структуры, извлекатель получает
+компактный индекс «номер — заголовок» всех глав, разделов и пунктов, и поле
+`section` у фрагмента ссылается на самый конкретный пункт:
+
+```yaml
+outline_file: Структура_диссертации_v2.md   # относительно каталога KLEMMA.md
+outline_max_chars: 12000                    # бюджет блока; сокращаются только заголовки
+```
+
+Файл разбирается по грамматике `## N. Глава K.`, `### X.Y.`, `- X.Y.Z. Заголовок: …`;
+неразобранные нумерованные строки попадают в предупреждение. Хэш дайджеста входит
+в отпечаток запроса прогона.
+
+### Режим --exhaustive и его приёмка
+
+`klemma process key --exhaustive` — best-effort полнота: каждое дословное
+утверждение по любому пункту структуры, плюс заметки `contradicts`/`qualifies`
+с дословными цитатами и список `not_extracted` (пункты, к которым ничего не
+привязано; это не доказательство отсутствия материала). Требует бэкенд с
+`finish_reason` (LiteLLM); Claude CLI отвергается. Заметки видны в
+`klemma source show key --notes` и в vault-разделе «Заметки к структуре».
+
+Качество режима измеряется отдельно, не unit-тестами:
+
+```bash
+klemma eval extract --gold ~/research/data/klemma_evals/exhaustive_gold --runs 3 \
+  --out docs/evals/exhaustive-2026-09.md --manifest notes/evals/exhaustive_gold.manifest.json
+```
+
+Gold-файлы `<citekey>.json` (`frame_pages`, все утверждения frame с `quote` и `item`)
+и метки `<citekey>.labels.json` живут вне git; в отчёт попадают только метрики и
+хэши. Порог: min recall ≥ 0,9 и min precision ≥ 0,8 по трём прогонам.
+
+### Прогоны извлечения и активный набор (ADR-020)
+
+Начиная с 0.19 каждое извлечение — это **прогон** (`project_extraction_runs` в
+`project.db`) с попыткой в `library.db`. `klemma process <citekey> --force`
+больше ничего не удаляет: новый прогон становится активным набором только
+если он полный (все чанки, покрытие 100 %) и проверенный; частичный или
+непроверенный прогон остаётся `pending`, старые выписки продолжают работать.
+
+```bash
+klemma process key --force                       # переизвлечь, старый корпус сохранить
+klemma process key --force --replace             # после полного прогона убрать legacy-строки проекта
+klemma process --from-file reprocess.txt --exhaustive
+klemma process --activate-partial 12 --reason "просмотрено вручную"   # published_partial
+klemma process --resume-stale                    # зависшие running > 2 ч → failed и повтор
+klemma source show key --all-runs                # прогоны, активный набор, происхождение секций
+klemma source select --include-zero --max-fragments 10 --min-quality 4 --with-pdf > reprocess.txt
+klemma migrate-library --ledger notes/library/migration_ledger.csv   # dry-run с числами N_*
+klemma migrate-library --apply --ledger notes/library/migration_ledger.csv
+```
+
+`repair` пересчитывает `verbatim` у всех фрагментов источника, включая даунгрейд
+«дословно» → «пересказ», и записывает span + локатор («п. 3.4», «табл. 2») для
+подтверждённых цитат.
+
+**Шаг 2 — проверка.** Работает и с `[@citekey]`, и с нумерованными ссылками
+(`[5]`, `[5, 12]`, `[5, п. 3.4]` — карта «номер → citekey» строится по библиографии):
+
+```bash
+klemma check-citations draft/chapter_1.md
+klemma check-citations papers/gningi/paper_draft_v2.md --no-ai    # только детерминированный слой
+klemma check-citations draft/chapter_1.md --incremental           # не перегонять свежие вердикты через judge
+```
+
+Несопоставленные номера и анафора («Там же») — находки, а не тихие пропуски.
+
+**Шаг 3 — ворота.** Результаты каждой проверки сохраняются в реестр `claims`
+(правка предложения автоматически помечает старый вердикт как `stale`):
+
+```bash
+klemma claims status draft/chapter_1.md          # ok / warn / unverifiable / stale / unchecked
+klemma claims status draft/chapter_1.md --gate   # exit 1, если есть незакрытые клеймы — для pre-submit
+```
+
+**Шаг 4 — обратный поиск.** Когда утверждение верно, но источник под ним не тот:
+
+```bash
+klemma find-source "функции потерь для U-Net, учитывающие ошибку кромки"
+```
+
+Команда ранжирует источники библиотеки по близости к утверждению и показывает
+citekey, локатор и фрагмент-кандидат.
+
 ---
 
 ## 5. Продвинутые возможности
