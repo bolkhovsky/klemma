@@ -229,7 +229,7 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
                 remaining = keys[idx - 2:]
                 _write_remaining(from_file, remaining)
                 console.print(
-                    f"[red]Usage limit reached — batch stopped before @{ck}; "
+                    f"[red]Usage limit or provider outage — batch stopped before @{ck}; "
                     f"{len(remaining)} source(s) left"
                     + (f", written to {from_file}.remaining" if from_file else "")
                     + ". Re-run after the limit resets.[/red]"
@@ -282,6 +282,9 @@ def process(ctx, citekeys, serial, force, model, no_embed, replace, exhaustive, 
 
 
 _LIMIT_MARKERS = ("session limit", "usage limit", "rate limit", "credit balance")
+# provider unreachable (proxy/tunnel down): every further source would burn its
+# retries the same way, so the batch stops and the remainder is written out
+_OUTAGE_MARKERS = ("connection refused", "connectionrefused", "connection error")
 
 
 def _limit_hit(project_store, prev_citekey: str) -> bool:
@@ -302,7 +305,7 @@ def _limit_hit(project_store, prev_citekey: str) -> bool:
     if not last or last.get("status") != "failed" or last.get("citekey") != prev_citekey:
         return False
     err = (last.get("error") or "").lower()
-    return any(m in err for m in _LIMIT_MARKERS)
+    return any(m in err for m in _LIMIT_MARKERS + _OUTAGE_MARKERS)
 
 
 def _write_remaining(from_file, keys: list[str]) -> None:
