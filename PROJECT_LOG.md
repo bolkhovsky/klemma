@@ -217,8 +217,17 @@ See CLAUDE.md for full project structure.
   заметки contradicts/qualifies, `not_extracted`, `klemma eval extract` (gold вне git),
   `source show --notes`; правки по внутреннему многоагентному ревью (42 находки).
 
+- CLI-бэкенд по подписке (#451): `claude -p --output-format json` отдаёт finish_reason и
+  usage; ANTHROPIC_API_KEY по умолчанию не передаётся (`AIConfig.claude_cli_use_api_key`).
+  Пауза при лимите внутри вызова до сброса (#452). Грамматика структуры v3 (#453).
+- Пачка `process --from-file --serial` (#454 и правки 06.09): остановка при лимите
+  провайдера или обрыве соединения («Connection refused»), остаток пишется в
+  `<файл>.remaining` вместе с упавшим источником; проверка лимита учитывает только
+  прогон предыдущего источника той же пачки (ранее чужой прогон блокировал перезапуск).
+
 ### Следующие цели
-- Пилот exhaustive в полигоне заблокирован кредитом API Anthropic; после пополнения —
-  B5 (5 источников), затем B6 на рабочей библиотеке.
+- B6 на рабочей библиотеке идёт пачками по окну лимита (≈3–5 источников на окно);
+  журнал в диссертации `notes/library/batch_runs_2026-09.md`.
+- Мерж `feat/verify-find-source` в `master` — решение автора.
 - Долг: перевод читающих команд (research, RAG, draft, check-citations) с монолита на
   активный набор ProjectStore; SaaS-путь без lifecycle прогонов (#372).
