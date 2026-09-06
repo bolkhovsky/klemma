@@ -329,3 +329,27 @@ def test_process_batch_stops_on_provider_outage(tmp_path):
     assert r.exit_code == 0, r.output
     assert calls == ["k1"] and "batch stopped" in r.output
     assert (tmp_path / "batch.txt.remaining").read_text(encoding="utf-8").splitlines()[1:] == ["k1", "k2"]
+
+
+def test_process_batch_stops_on_fable_limit_wording(tmp_path):
+    """The CLI's usage-limit message changed wording ("You've reached your Fable
+    limit") and the old marker list missed it, burning three retries per source
+    on every remaining item instead of stopping the batch."""
+    kctx = _kctx(tmp_path)
+    pj = kctx.project_store
+    listing = tmp_path / "batch.txt"
+    listing.write_text("k1\nk2\n", encoding="utf-8")
+    calls = []
+
+    def _fake_single(ck, *a, **kw):
+        calls.append(ck)
+        rid = pj.start_run(ck, paper_id="p", attempt_id=f"a-{ck}")
+        pj.fail_run(rid, "provider error on first call: cli_error: exit 1: You've reached your Fable "
+                         "limit. Switch to another model, or manage usage credits at claude.ai/settings/usage")
+        return (0, "no fragments")
+
+    with patch("klemma.commands.process._init_ai"), \
+         patch("klemma.commands.process._process_single", side_effect=_fake_single):
+        r = _invoke("process", ["--from-file", str(listing), "--serial", "--force"], kctx, "process")
+    assert r.exit_code == 0, r.output
+    assert calls == ["k1"] and "batch stopped" in r.output
