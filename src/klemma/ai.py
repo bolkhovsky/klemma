@@ -407,8 +407,8 @@ class ClaudeClient(AIProviderBase):
                 "'claude' command not found. Install Claude Code CLI: https://claude.ai/code"
             )
         use_key = bool(getattr(config, "claude_cli_use_api_key", False))
-        # --model flag requires ANTHROPIC_API_KEY (Max subscriptions don't support it)
         self._has_api_key = use_key and bool(os.environ.get("ANTHROPIC_API_KEY"))
+        self._isolated = bool(getattr(config, "claude_cli_isolated", False))
         # Sanitize env: no nested Claude Code session detection (#131); and unless
         # the user opted into API billing, strip the API key so the CLI runs on
         # the claude.ai login instead of silently charging the API.
@@ -417,19 +417,31 @@ class ClaudeClient(AIProviderBase):
             drop |= {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
         self._clean_env = {k: v for k, v in os.environ.items() if k not in drop}
 
+    # Isolated mode: no user/project settings (CLAUDE.md, rules, hooks), no MCP
+    # servers, no tools, no saved session — the model sees only our prompt.
+    _ISOLATION_FLAGS = (
+        "--setting-sources", "", "--strict-mcp-config", "--tools", "",
+        "--no-session-persistence",
+    )
+
     def _build_cmd(self, model: str, json_output: bool = False) -> list[str]:
-        """Build claude CLI command, omitting --model when no API key.
+        """Build claude CLI command.
 
         ``json_output`` asks for ``--output-format json``: the result object
-        carries ``stop_reason`` and ``usage`` (input/output tokens), which is
-        what ``call_with_meta`` needs to report ``finish_reason`` honestly and
-        lets the chunked engine run its exhaustive mode on a subscription
-        backend without an API key.
+        carries ``stop_reason``, ``usage`` and ``modelUsage``, which is what
+        ``call_with_meta`` needs to report ``finish_reason`` and the model
+        honestly and lets the chunked engine run its exhaustive mode on a
+        subscription backend without an API key.
+
+        ``--model`` is passed with an API key or in isolated mode; the legacy
+        path still omits it on a subscription (#456).
         """
         cmd = ["claude", "-p"]
         if json_output:
             cmd += ["--output-format", "json"]
-        if self._has_api_key:
+        if self._isolated:
+            cmd += list(self._ISOLATION_FLAGS)
+        if self._has_api_key or self._isolated:
             cmd += ["--model", model]
         return cmd
 
@@ -457,18 +469,28 @@ class ClaudeClient(AIProviderBase):
         time.sleep(min(base * (2 ** attempt), 120.0))
 
     @staticmethod
-    def _parse_json_result(stdout: str) -> tuple[Optional[str], int, int, str, Optional[str]]:
-        """(text, input_tokens, output_tokens, finish_reason, error) from JSON output.
+    def _parse_json_result(
+        stdout: str,
+    ) -> tuple[Optional[str], int, int, str, Optional[str], Optional[str]]:
+        """(text, input_tokens, output_tokens, finish_reason, error, model) from JSON output.
 
+        ``model`` is the one that actually answered (``modelUsage`` key with the
+        most output tokens), None when the CLI did not report it.
         Falls back to treating stdout as plain text when it is not the CLI's
         result object (older CLI, --output-format unsupported).
         """
         try:
             data = json.loads(stdout)
         except (json.JSONDecodeError, TypeError):
-            return stdout, 0, 0, "unknown", None
+            return stdout, 0, 0, "unknown", None, None
         if not isinstance(data, dict) or data.get("type") != "result":
-            return stdout, 0, 0, "unknown", None
+            return stdout, 0, 0, "unknown", None, None
+        usage_by_model = data.get("modelUsage") or {}
+        model = max(
+            usage_by_model,
+            key=lambda m: int((usage_by_model[m] or {}).get("outputTokens") or 0),
+            default=None,
+        ) if isinstance(usage_by_model, dict) else None
         usage = data.get("usage") or {}
         tin = int(usage.get("input_tokens") or 0) + int(usage.get("cache_read_input_tokens") or 0) \
             + int(usage.get("cache_creation_input_tokens") or 0)
@@ -477,8 +499,8 @@ class ClaudeClient(AIProviderBase):
         text = data.get("result")
         if data.get("is_error"):
             err = str(data.get("api_error_status") or data.get("result") or "cli error")[:300]
-            return None, tin, tout, "error", err
-        return (str(text) if text is not None else None), tin, tout, finish, None
+            return None, tin, tout, "error", err, model
+        return (str(text) if text is not None else None), tin, tout, finish, None, model
 
     def call(
         self,
@@ -561,7 +583,7 @@ class ClaudeClient(AIProviderBase):
                     self._backoff(attempt, error_msg)
                     continue
                 elapsed = int((time.monotonic() - t0) * 1000)
-                text, tin, tout, finish, err = self._parse_json_result(result.stdout)
+                text, tin, tout, finish, err, used_model = self._parse_json_result(result.stdout)
                 if err is not None:
                     retries_used = attempt + 1
                     last_error = f"cli_error: {err}"
@@ -573,7 +595,7 @@ class ClaudeClient(AIProviderBase):
                     continue
                 return AICallResult(
                     text=text, duration_ms=elapsed, input_tokens=tin, output_tokens=tout,
-                    retries_used=retries_used, model=effective_model,
+                    retries_used=retries_used, model=used_model or effective_model,
                     finish_reason=finish,
                 )
             except subprocess.TimeoutExpired:

@@ -469,16 +469,41 @@ klemma migrate-library --apply --ledger notes/library/migration_ledger.csv
 «дословно» → «пересказ», и записывает span + локатор («п. 3.4», «табл. 2») для
 подтверждённых цитат.
 
-**Шаг 2 — проверка.** Работает и с `[@citekey]`, и с нумерованными ссылками
-(`[5]`, `[5, 12]`, `[5, п. 3.4]` — карта «номер → citekey» строится по библиографии):
+**Шаг 2 — проверка.** Работает с `[@citekey]`, голым `@citekey` (как в черновиках
+`klemma draft`) и с нумерованными ссылками (`[5]`, `[5, 12]`, `[5, п. 3.4]` — карта
+«номер → citekey» строится по библиографии):
 
 ```bash
 klemma check-citations draft/chapter_1.md
 klemma check-citations papers/gningi/paper_draft_v2.md --no-ai    # только детерминированный слой
 klemma check-citations draft/chapter_1.md --incremental           # не перегонять свежие вердикты через judge
+klemma check-citations --json sections/03_systems.md | jq '.[0].verdicts[] | {citekey, severity, evidence_locator}'
 ```
 
 Несопоставленные номера и анафора («Там же») — находки, а не тихие пропуски.
+Числа сверяются без учёта десятичного разделителя (`0.674` в английском тексте
+находит `0,674` в русском ГОСТе); годы и номера документов/пунктов (`72039-2025`,
+`п. 7.3.4.1`) якорями не считаются. Колонка «Where» и поле `evidence_locator` в
+`--json` показывают, где в источнике найдено подтверждение.
+
+**Судья без API-ключа.** При `ai.backend: claude` судья работает через Claude Code
+CLI по подписке, в изолированном режиме: без вашего `CLAUDE.md`, правил, хуков и MCP,
+с явным `--model`. `ANTHROPIC_API_KEY` из окружения не используется (нужен явный
+`citation_check_model: anthropic/...` — тогда судья идёт через API и litellm).
+Вызов CLI занимает 2–40 с, поэтому для него задайте запас по времени:
+
+```yaml
+ai:
+  backend: claude
+  model: sonnet
+  citation_check_timeout: 180
+  citation_check_max_wall_clock: 1800
+  citation_check_retries: 1
+  max_ai_calls_per_draft: 100
+```
+
+Пути `zotero.*` и `obsidian.*` зависят от машины — держите их в `~/.klemmarc.yaml`,
+а не в `.klemma/config.yaml` проекта, который лежит в git.
 
 **Шаг 3 — ворота.** Результаты каждой проверки сохраняются в реестр `claims`
 (правка предложения автоматически помечает старый вердикт как `stale`):

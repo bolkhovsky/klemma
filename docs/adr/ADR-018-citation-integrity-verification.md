@@ -65,6 +65,21 @@ A separate `AIProvider` is cloned from `config.ai` with:
 is explicitly `anthropic/model-name` AND anthropic key is available. Otherwise `judge_ai=None`
 (degraded). This prevents the claude CLI backend from being used as a JSON judge.
 
+**Пересмотр 2026-09 (RC3).** Запрет CLI-судьи снят. С сентября 2026 развивается только CLI,
+и автор работает по подписке Claude Code без API-ключа; RC3 делал `check-citations` на
+`backend: claude` постоянно degraded — все числовые и дефиниционные якоря получали
+`unverifiable`. Теперь при `backend: claude` судья — `ClaudeClient` в изолированном режиме
+(`claude_cli_isolated`): `--setting-sources "" --strict-mcp-config --tools ""
+--no-session-persistence` и явный `--model`. Изоляция обязательна: без неё `claude -p`
+подгружает пользовательский `CLAUDE.md`, правила, хуки и MCP — замер 28.09.2026 показал
+~37K токенов контекста на вызов против ~9K, и инструкции пользователя («отвечай по-русски»,
+напоминания) попадают в JSON-ответ судьи. `--output-format json` сохраняется: фактическая
+модель берётся из `modelUsage`, а не из конфига. Путь через litellm остаётся только для явного
+`citation_check_model: anthropic/...` с ключом — это контур SaaS (`api/tasks.py`, backend
+всегда litellm). `json_mode` CLI не поддерживает; шаблон требует «ONLY valid JSON», а
+`extract_json` снимает code-fences. CLI-вызов медленнее (1,5–40 с), поэтому при
+`citation_check_max_wall_clock < 600` выводится предупреждение.
+
 ### Anti-injection
 
 Data boundaries: `<<<CLAIM>>>...<<<END>>>` in the prompt template. All user-provided text

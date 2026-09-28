@@ -194,6 +194,8 @@ def check_citations(ctx, targets, no_ai, incremental, fail_on, strict, as_json, 
                         "reason": v.reason,
                         "offending_span": v.offending_span,
                         "ai_used": v.ai_used,
+                        "evidence_locator": v.evidence_locator,
+                        "evidence_span": list(v.evidence_span) if v.evidence_span else None,
                         "claim_sentence": v.claim_sentence,
                     }
                     for v in r.verdicts
@@ -246,6 +248,7 @@ def _print_single_report(report) -> None:
     table.add_column("Citekey", width=16)
     table.add_column("Kind", width=12)
     table.add_column("Anchor", width=30, overflow="fold")
+    table.add_column("Where", width=10, overflow="fold")
     table.add_column("Reason", overflow="fold")
 
     for v in sorted(report.verdicts, key=lambda x: (
@@ -258,6 +261,7 @@ def _print_single_report(report) -> None:
             v.citekey,
             v.anchor.kind,
             v.anchor.raw[:60],
+            v.evidence_locator or "",
             v.reason,
         )
 

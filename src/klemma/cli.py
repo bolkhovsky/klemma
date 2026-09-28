@@ -25,6 +25,8 @@ from .state import StateManager
 from .vault import VaultAdapter, resolve_notes_root
 
 console = Console()
+# Diagnostics (project status line) go to stderr so `--json` stdout stays parseable.
+err_console = Console(stderr=True)
 logger = logging.getLogger(__name__)
 
 # CLI command → task name for model routing (used in status line)
@@ -116,7 +118,14 @@ def _init_components(config_path: str | None = None) -> KlemmaContext:
     state = StateManager(db_path)
 
     notes_root = resolve_notes_root(cfg, project_root)
-    notes_root.mkdir(parents=True, exist_ok=True)
+    try:
+        notes_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise click.ClickException(
+            f"notes directory {notes_root} is unavailable ({exc.strerror}). "
+            "Check obsidian.vault_path — machine-specific paths belong in "
+            "~/.klemmarc.yaml, not in the project's .klemma/config.yaml."
+        ) from exc
     vault = VaultAdapter(str(notes_root), use_cli=cfg.obsidian.use_cli)
     library = create_library(cfg)
 
@@ -584,7 +593,7 @@ def _print_status_line(
             )
         if db_label:
             parts.append(f"[dim]{db_label}[/dim]")
-        console.print("[dim]|[/dim] " + " [dim]|[/dim] ".join(parts))
+        err_console.print("[dim]|[/dim] " + " [dim]|[/dim] ".join(parts))
     except Exception:
         pass  # Don't crash on status line failure
 

@@ -639,6 +639,37 @@ def _parse_numbered_claims(
 # Evidence resolution
 # ---------------------------------------------------------------------------
 
+_NUMBER_PART_RE = re.compile(r"(\d+)(?:[.,](\d+))?")
+
+
+def _find_numeric_in_source(raw: str, source_text: str) -> Optional[str]:
+    """The source's own spelling of a numeric anchor, or None.
+
+    Decimal separator is either "." or "," (an English paper citing a Russian
+    standard writes 0.674 for «0,674»); digit boundaries on both sides, so
+    0.8 does not match 10.85. Sign and unit are left to the judge.
+    """
+    m = _NUMBER_PART_RE.search(raw)
+    if not m:
+        return None
+    number = re.escape(m.group(1)) + (r"[.,]" + re.escape(m.group(2)) if m.group(2) else "")
+    hit = re.search(r"(?<!\d)(?<!\d[.,])" + number + r"(?![.,]?\d)", source_text)
+    return hit.group(0) if hit else None
+
+
+def _locate_anchor(anchor: ClaimAnchor, source_text: str) -> Optional[str]:
+    """Text to search the source for, as the source spells it; None if absent.
+
+    Quote anchors search for their inner text — the guillemets belong to the
+    manuscript, not the source. Numeric anchors tolerate the decimal separator.
+    """
+    if anchor.kind == "numeric":
+        return _find_numeric_in_source(anchor.raw, source_text)
+    needle = anchor.raw.strip("«»\"“”'") if anchor.kind == "quote" else anchor.raw
+    norm = _normalize_text(needle)
+    return needle if norm and norm in _normalize_text(source_text) else None
+
+
 def _build_passages(source_text: str, anchor_raw: str, n: int = 3) -> list[str]:
     """Return up to n text passages around the anchor in source_text."""
     norm_anchor = _normalize_text(anchor_raw)
@@ -731,14 +762,12 @@ def _resolve_evidence(
             anchor_found=False,
         )
 
-    # Search for anchor in source. Quote anchors search for their inner
-    # text — the guillemets belong to the manuscript, not the source, so
-    # matching the raw anchor would always miss (and _build_passages would
-    # fall back to the head of the document, hiding the actual quote).
-    needle = anchor.raw.strip("«»\"“”'") if anchor.kind == "quote" else anchor.raw
-    norm_anchor = _normalize_text(needle)
-    norm_source = _normalize_text(source_text)
-    anchor_found = bool(norm_anchor and norm_anchor in norm_source)
+    # Search for the anchor as the source spells it; a miss would make
+    # _build_passages fall back to the head of the document and hide the
+    # actual evidence from the judge.
+    found = _locate_anchor(anchor, source_text)
+    anchor_found = found is not None
+    needle = found or anchor.raw
 
     passages = _build_passages(source_text, needle)
 
@@ -1127,12 +1156,14 @@ def _judge_model(ai_cfg: "KlemmaConfig.ai") -> str:  # type: ignore[name-defined
 def build_judge_provider(config: "KlemmaConfig") -> Optional["AIProvider"]:
     """Build an isolated AI provider for citation judging (ADR-018).
 
-    CTO RC3: for claude backend, judge is routed through litellm only when
-    citation_check_model is explicitly set in 'anthropic/...' format AND an
-    anthropic key is available. Otherwise returns None (degraded mode).
+    claude backend (revised 2026-09, ADR-018 «Пересмотр»): the judge runs
+    through the Claude CLI on the user's login, in isolated mode (no user
+    CLAUDE.md/hooks/MCP/tools in the context) with an explicit --model.
+    The litellm route stays for an explicit 'anthropic/...' citation_check_model
+    with an API key — the SaaS worker path (api/tasks.py).
 
-    Expected failures (ImportError, missing key, config errors) → return None.
-    Unexpected failures re-raised for the caller to handle.
+    Expected failures (ImportError, missing key or CLI, config errors) → None
+    (degraded mode). Unexpected failures re-raised for the caller to handle.
     """
     from ..ai import create_ai
 
@@ -1141,33 +1172,35 @@ def build_judge_provider(config: "KlemmaConfig") -> Optional["AIProvider"]:
     backend = ai_cfg.backend
 
     if backend == "claude":
-        # CTO RC3: only use litellm fallback with explicit anthropic/... model
-        if not judge_model.startswith("anthropic/"):
-            logger.warning(
-                "build_judge_provider: claude backend requires citation_check_model "
-                "in 'anthropic/model-name' format; judge unavailable (degraded)"
-            )
-            return None
-
         anthropic_key = (
             ai_cfg._resolved_api_keys.get("anthropic")
             or os.environ.get("ANTHROPIC_API_KEY")
         )
-        if not anthropic_key:
-            logger.warning(
-                "build_judge_provider: no ANTHROPIC_API_KEY for litellm judge fallback"
-            )
-            return None
-
-        judge_cfg = ai_cfg.model_copy(update={
-            "backend": "litellm",
-            "model": judge_model,
-            "retries": ai_cfg.citation_check_retries,
-            "timeout": ai_cfg.citation_check_timeout,
-            "json_mode": True,
-        })
-        # PrivateAttr mutation after model_copy is legal in Pydantic v2 (instance-level, not model-level)
-        judge_cfg._resolved_api_keys = {"anthropic": anthropic_key}
+        if judge_model.startswith("anthropic/") and anthropic_key:
+            judge_cfg = ai_cfg.model_copy(update={
+                "backend": "litellm",
+                "model": judge_model,
+                "retries": ai_cfg.citation_check_retries,
+                "timeout": ai_cfg.citation_check_timeout,
+                "json_mode": True,
+            })
+            # PrivateAttr mutation after model_copy is legal in Pydantic v2 (instance-level, not model-level)
+            judge_cfg._resolved_api_keys = {"anthropic": anthropic_key}
+        else:
+            if ai_cfg.citation_check_max_wall_clock < 600:
+                logger.warning(
+                    "build_judge_provider: claude CLI judge takes 10-40 s per claim; "
+                    "citation_check_max_wall_clock=%ss will leave most claims unverifiable",
+                    ai_cfg.citation_check_max_wall_clock,
+                )
+            judge_cfg = ai_cfg.model_copy(update={
+                "backend": "claude",
+                "model": judge_model.removeprefix("anthropic/"),
+                "retries": ai_cfg.citation_check_retries,
+                "timeout": ai_cfg.citation_check_timeout,
+                "claude_cli_isolated": True,
+            })
+            judge_cfg._resolved_api_keys = {}
 
     else:
         # litellm / openai backend
@@ -1183,6 +1216,9 @@ def build_judge_provider(config: "KlemmaConfig") -> Optional["AIProvider"]:
         return create_ai(judge_cfg)
     except ImportError as exc:
         logger.warning("build_judge_provider ImportError (litellm not installed?): %s", exc)
+        return None
+    except RuntimeError as exc:  # ClaudeClient: `claude` CLI not installed
+        logger.warning("build_judge_provider: %s", exc)
         return None
     except (ValueError, KeyError, TypeError) as exc:
         logger.warning("build_judge_provider config error: %s", exc)
@@ -1597,9 +1633,7 @@ def check_draft_inline(
 
                 # Combine passages into source_text for anchor search
                 source_text = "\n".join(passages)
-                norm_anchor = _normalize_text(anchor.raw)
-                norm_source = _normalize_text(source_text)
-                anchor_found = bool(norm_anchor and norm_anchor in norm_source)
+                anchor_found = _locate_anchor(anchor, source_text) is not None
 
                 bundle = EvidenceBundle(
                     claim_sentence=claim.sentence,

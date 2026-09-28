@@ -952,3 +952,137 @@ def test_verdict_carries_evidence_provenance(tmp_path):
     assert verdict.severity == "ok"
     assert verdict.evidence_span == bundle.evidence_span
     assert verdict.evidence_locator == "п. 7.1.3"
+
+
+# ---------------------------------------------------------------------------
+# build_judge_provider — claude backend (ADR-018, пересмотр 2026-09)
+# ---------------------------------------------------------------------------
+
+def _claude_config(**ai):
+    from klemma.config import KlemmaConfig
+
+    cfg = KlemmaConfig()
+    cfg.ai = cfg.ai.model_copy(update={"backend": "claude", "model": "sonnet", **ai})
+    return cfg
+
+
+def test_judge_claude_cli_without_api_key(monkeypatch):
+    from klemma import ai as ai_mod
+    from klemma.skills.citation_checker import build_judge_provider
+
+    monkeypatch.setattr(ai_mod.ClaudeClient, "check_cli_available", staticmethod(lambda: True))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    judge = build_judge_provider(_claude_config())
+
+    assert isinstance(judge, ai_mod.ClaudeClient)
+    cmd = judge._build_cmd(judge.model, json_output=True)
+    assert cmd[cmd.index("--model") + 1] == "sonnet"
+    assert cmd[cmd.index("--setting-sources") + 1] == ""
+    assert cmd[cmd.index("--tools") + 1] == ""
+    assert {"--strict-mcp-config", "--no-session-persistence"} <= set(cmd)
+
+
+def test_judge_claude_cli_ignores_zero_balance_key_without_anthropic_model(monkeypatch):
+    """A key in the shell must not reroute a bare-model judge to the API."""
+    from klemma import ai as ai_mod
+    from klemma.skills.citation_checker import build_judge_provider
+
+    monkeypatch.setattr(ai_mod.ClaudeClient, "check_cli_available", staticmethod(lambda: True))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-empty")
+    judge = build_judge_provider(_claude_config())
+
+    assert isinstance(judge, ai_mod.ClaudeClient)
+    assert "ANTHROPIC_API_KEY" not in judge._clean_env
+
+
+def test_judge_claude_cli_strips_anthropic_prefix_without_key(monkeypatch):
+    from klemma import ai as ai_mod
+    from klemma.skills.citation_checker import build_judge_provider
+
+    monkeypatch.setattr(ai_mod.ClaudeClient, "check_cli_available", staticmethod(lambda: True))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    judge = build_judge_provider(
+        _claude_config(citation_check_model="anthropic/claude-sonnet-5"),
+    )
+    assert isinstance(judge, ai_mod.ClaudeClient)
+    assert judge.model == "claude-sonnet-5"
+
+
+def test_judge_claude_cli_unavailable_returns_none(monkeypatch):
+    from klemma import ai as ai_mod
+    from klemma.skills.citation_checker import build_judge_provider
+
+    monkeypatch.setattr(ai_mod.ClaudeClient, "check_cli_available", staticmethod(lambda: False))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert build_judge_provider(_claude_config()) is None
+
+
+def test_judge_claude_anthropic_model_with_key_stays_litellm(monkeypatch):
+    """SaaS regression: explicit anthropic/... + key keeps the litellm route."""
+    pytest.importorskip("litellm")
+    from klemma.ai_litellm import LiteLLMClient
+    from klemma.skills.citation_checker import build_judge_provider
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    judge = build_judge_provider(
+        _claude_config(citation_check_model="anthropic/claude-sonnet-5"),
+    )
+    assert isinstance(judge, LiteLLMClient)
+
+
+def test_judge_claude_warns_on_short_wall_clock(monkeypatch, caplog):
+    from klemma import ai as ai_mod
+    from klemma.skills.citation_checker import build_judge_provider
+
+    monkeypatch.setattr(ai_mod.ClaudeClient, "check_cli_available", staticmethod(lambda: True))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with caplog.at_level("WARNING", logger="klemma.skills.citation_checker"):
+        build_judge_provider(_claude_config(citation_check_max_wall_clock=120))
+    assert "citation_check_max_wall_clock" in caplog.text
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="klemma.skills.citation_checker"):
+        build_judge_provider(_claude_config(citation_check_max_wall_clock=1800))
+    assert "citation_check_max_wall_clock" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Anchor lookup in the source (decimal separator, digit boundaries)
+# ---------------------------------------------------------------------------
+
+def test_numeric_anchor_found_with_comma_decimal_separator():
+    from klemma.skills.citation_checker import _find_numeric_in_source
+
+    src = "Допустимая ошибка равна ±0,674 σ для краткосрочных прогнозов."
+    assert _find_numeric_in_source("0.674", src) == "0,674"
+    assert _find_numeric_in_source("15 %", "концентрация 15% и выше") == "15"
+
+
+def test_numeric_anchor_respects_digit_boundaries():
+    from klemma.skills.citation_checker import _find_numeric_in_source
+
+    assert _find_numeric_in_source("0.8", "коэффициент 10.85 и 0,85") is None
+    assert _find_numeric_in_source("674", "величина 0,674 σ") is None
+    assert _find_numeric_in_source("0.8", "коэффициент 0,8 σ, далее") == "0,8"
+
+
+def test_resolve_evidence_centers_passage_on_source_spelling(tmp_path):
+    from klemma.skills.citation_checker import Claim, _resolve_evidence
+
+    pdfs = tmp_path / ".klemma" / "pdfs"
+    pdfs.mkdir(parents=True)
+    body = "Титульный лист. " * 100 + "Ошибка равна ±0,674 σ для краткосрочных прогнозов. " + "Хвост. " * 100
+    (pdfs / "abuzyarov2011.md").write_text(
+        f"---\ncitekey: abuzyarov2011\n---\n\n[Page 1]\n{body}\n", encoding="utf-8",
+    )
+    anchor = ClaimAnchor(
+        kind="numeric", raw="0.674", trigger="numeric_value",
+        start_offset=0, end_offset=5, anchor_id="0:5",
+    )
+    claim = Claim(
+        sentence="It equals 0.674 sigma @abuzyarov2011.", citekey="abuzyarov2011",
+        location="", anchors=[anchor], start_offset=0, end_offset=40,
+    )
+    bundle = _resolve_evidence(claim, anchor, project_root=tmp_path)
+    assert bundle.anchor_found and bundle.search_complete
+    assert "0,674" in bundle.passages[0]
+    assert verify_claim(bundle).severity != "hard_warn"
