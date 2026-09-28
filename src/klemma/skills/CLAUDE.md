@@ -163,10 +163,13 @@ Numbered-reference → citekey matching for `papers/` (claim-provenance PR-3). J
 - `build_ref_map(md_text, sources_meta) -> RefMap` — finds the bibliography via `find_bibliography_section()`, parses entries with `parse_numbered_references()`, matches each against sources_meta: normalized DOI exact (1.0) → fuzzy title (parsed title via `metadata._titles_match` 0.85, or source-title containment in the raw entry 0.75; year agreement when both known) → author surnames + exact year (0.7). Unmatched positions are kept — the checker reports them as soft_warn
 - `collect_sources_meta(state=?, paper_store=?, user_library=?) -> list[dict]` — gathers {citekey, title, authors, year, doi} rows: project state first, then user_library+paper_store for citekeys the project DB lacks; never raises
 
-### citation_checker.py (~1650 lines)
+### citation_checker.py (~1720 lines)
 Citation integrity verification engine (ADR-018): LLM-as-judge verifier + isolated judge provider + evidence model + claims-ledger substrate.
-- `detect_anchors(sentence, base_offset)` — numeric/quote/definitional anchor extraction (no AI)
-- `_parse_claims(md_text, ref_map?)` — ALL cited sentences become claims (anchorless too — the ledger counts them as unchecked); numbered-reference mode ("[5]", papers/) via `RefMap` with synthetic kind="reference" anchors
+- `detect_anchors(sentence, base_offset)` — numeric/quote/definitional anchor extraction (no AI); years and document/clause identifiers (`72039-2025`, `7.3.4.1`) are not numeric anchors (`_is_identifier`)
+- `_CITE_REF_RE` — `[@k]`, `[@a; @b]`, `[[@k]]` and bare `@k` (charset `_CITEKEY_CHARS`, no trailing period, e-mails excluded); `_cite_ref_content(m)` returns either group; `extract_cited_citekeys(md_text)` — public helper (used by `repair --cited`)
+- `_parse_claims(md_text, ref_map?)` — ALL cited sentences become claims (anchorless too — the ledger counts them as unchecked); markers are blanked (offset-preserving) before sentence bounds and anchors, a dot between digits is not a terminator (`_is_terminator`); numbered-reference mode ("[5]", papers/) via `RefMap` with synthetic kind="reference" anchors — only when the file has no @-markers at all
+- `_locate_anchor(anchor, source_text)` / `_find_numeric_in_source(raw, text)` — the source's own spelling of an anchor (numbers: "." or "," decimal separator, digit boundaries), used for `anchor_found` and to center the judge's passage window
+- `build_judge_provider(config)` — isolated judge: litellm/openai via `model_copy`; `backend: claude` → `ClaudeClient` with `claude_cli_isolated=True` (ADR-018 revision 2026-09), litellm only for explicit `anthropic/...` + key (SaaS)
 - `compute_claim_hash(sentence, citekey, ref_number?)` / `compute_anchor_key(anchor)` — content identity for the claims ledger; normalization makes hashes stable under whitespace/dash/case reformatting, any real edit changes the hash (staleness by design)
 - `build_claim_entries(claims, verdicts)` — flatten a check run into ledger rows (one per claim × anchor, anchorless → anchor_key="")
 - `_resolve_evidence(...)` — sidecar (`SidecarDoc`) → paper_store raw_text → legacy fragments; quote anchors search for their inner text (guillemets stripped); a found anchor is pinned to an advisory evidence span + locator via `locate_fragment_span` + `derive_locator`

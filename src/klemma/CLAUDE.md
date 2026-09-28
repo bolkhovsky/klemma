@@ -224,7 +224,7 @@ Klemma error taxonomy for AI backends.
 - `call_with_meta()` — returns `AICallResult` with timing/tokens/error metadata; base wraps `call()`, backends override with structured error mapping
 - `AIProviderBase.render_prompt()` — Jinja2 template rendering
 - `extract_json()` — parses JSON from markdown code blocks and unstructured text. On `JSONDecodeError` logs a sanitized 300-char slice around `e.pos` and attempts a narrow tolerant retry (trailing commas, control chars in strings). Does NOT auto-fix unescaped quotes — those go through LLM repair (#381)
-- `ClaudeClient` — subprocess wrapper for `claude -p --model <model>` with structured error tracking (timeout, CLI error, FileNotFoundError)
+- `ClaudeClient` — subprocess wrapper for `claude -p` with structured error tracking (timeout, CLI error, FileNotFoundError). Strips `ANTHROPIC_API_KEY` unless `claude_cli_use_api_key`. `claude_cli_isolated=True` (machine-to-machine calls, e.g. the citation judge) adds `_ISOLATION_FLAGS` (`--setting-sources "" --strict-mcp-config --tools "" --no-session-persistence`) and always passes `--model`; the legacy path omits `--model` on a subscription (#456). `call_with_meta` reports the model that actually answered (`modelUsage` from `--output-format json`)
 
 ### ai_openai.py (71 lines)
 **DEPRECATED** — thin delegation wrapper around `LiteLLMClient`. Emits `DeprecationWarning`, prefixes bare model names with `openai/`, delegates all calls to LiteLLM.
