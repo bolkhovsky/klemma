@@ -1260,6 +1260,23 @@ def _replay_verdict(
     )
 
 
+def _summarize(verdicts: list[CitationVerdict], claims: list[Claim]) -> str:
+    """One-line report summary. Claims without anchors get no verdict at all,
+    so they are counted as unchecked — never folded into «all claims ok»."""
+    counts: dict[str, int] = {}
+    for v in verdicts:
+        counts[v.severity] = counts.get(v.severity, 0) + 1
+    parts = [
+        f"{counts[s]} {s}"
+        for s in ("error", "hard_warn", "soft_warn", "unverifiable", "ok")
+        if counts.get(s, 0)
+    ]
+    unchecked = sum(1 for c in claims if not c.anchors)
+    if unchecked:
+        parts.append(f"{unchecked} unchecked (no anchor)")
+    return "; ".join(parts) if parts else "all claims ok"
+
+
 def check_citations_file(
     target_path: Path,
     *,
@@ -1441,16 +1458,7 @@ def check_citations_file(
                 errors.append(f"unexpected error: {exc}")
                 status = "error"
 
-    # Build summary
-    counts: dict[str, int] = {}
-    for v in verdicts:
-        counts[v.severity] = counts.get(v.severity, 0) + 1
-    parts = [
-        f"{counts[s]} {s}"
-        for s in ("hard_warn", "soft_warn", "unverifiable", "ok")
-        if counts.get(s, 0)
-    ]
-    summary = "; ".join(parts) if parts else "all claims ok"
+    summary = _summarize(verdicts, claims)
 
     return CitationCheckReport(
         target=str(target_path),
@@ -1685,16 +1693,7 @@ def check_draft_inline(
                 errors.append(f"unexpected error: {exc}")
                 status = "error"
 
-    # Build summary
-    counts: dict[str, int] = {}
-    for v in verdicts:
-        counts[v.severity] = counts.get(v.severity, 0) + 1
-    parts = [
-        f"{counts[s]} {s}"
-        for s in ("hard_warn", "soft_warn", "unverifiable", "ok")
-        if counts.get(s, 0)
-    ]
-    summary = "; ".join(parts) if parts else "all claims ok"
+    summary = _summarize(verdicts, claims)
 
     report = CitationCheckReport(
         target="inline",

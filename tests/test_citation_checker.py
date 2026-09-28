@@ -1086,3 +1086,11 @@ def test_resolve_evidence_centers_passage_on_source_spelling(tmp_path):
     assert bundle.anchor_found and bundle.search_complete
     assert "0,674" in bundle.passages[0]
     assert verify_claim(bundle).severity != "hard_warn"
+
+
+def test_summary_counts_anchorless_claims_as_unchecked():
+    from klemma.skills.citation_checker import _summarize
+
+    claims = _parse_claims("A claim without numbers @alpha2020. Another one [@beta2021].\n")
+    assert _summarize([], claims) == "2 unchecked (no anchor)"
+    assert _summarize([], []) == "all claims ok"
