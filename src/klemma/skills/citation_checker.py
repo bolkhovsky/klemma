@@ -256,6 +256,16 @@ _NUMERIC_RE = re.compile(
     r"(?![А-Яа-яA-Za-z\d])",
 )
 
+_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+_NUMBER_CHAIN_RE = re.compile(r"\d+(?:[.\-]\d+)+")
+
+
+def _is_identifier(chain: str) -> bool:
+    """A digit chain that names a document/clause rather than a quantity:
+    a part with 3+ dotted groups (7.3.4.1) or a 5+ digit group (72039-2025)."""
+    parts = [p.split(".") for p in chain.split("-")]
+    return any(len(p) >= 3 for p in parts) or any(len(g) >= 5 for p in parts for g in p)
+
 _QUOTE_RE = re.compile(r'[«"“](.*?)[»"”]', re.DOTALL)
 _QUOTE_MIN_WORDS = 5
 _QUOTE_MIN_CHARS = 30
@@ -309,9 +319,19 @@ def detect_anchors(sentence: str, base_offset: int = 0) -> list[ClaimAnchor]:
             anchor_id=f"{start}:{end}",
         ))
 
-    # Numeric anchors
+    # Numeric anchors. Years and identifiers ("ГОСТ Р 72039-2025", "п. 7.3.4.1",
+    # "РД 52.27.759-2011") are bibliographic metadata, not claims; values and
+    # ranges ("0.674", "10-15%", "1.5-2.0") stay.
+    id_spans = [
+        (m.start(), m.end()) for m in _NUMBER_CHAIN_RE.finditer(sentence)
+        if _is_identifier(m.group(0))
+    ]
     for m in _NUMERIC_RE.finditer(sentence):
         raw = m.group(0).strip()
+        if _YEAR_RE.fullmatch(raw) or any(
+            s < m.end() and m.start() < e for s, e in id_spans
+        ):
+            continue
         start = base_offset + m.start()
         end = base_offset + m.end()
         _add(ClaimAnchor(
@@ -330,11 +350,19 @@ def detect_anchors(sentence: str, base_offset: int = 0) -> list[ClaimAnchor]:
 # Claim parsing
 # ---------------------------------------------------------------------------
 
+# Citekey charset (same as drafter.py). The last char cannot be "." or ":",
+# so a bare key at the end of a sentence ("… @key.") leaves the period out.
+_CITEKEY_CHARS = r"[A-Za-z](?:[\w:.+\-]*[\w+\-])?"
+
 _CITE_REF_RE = re.compile(
-    r"\[{1,2}"         # [ or [[
-    r"(-?@[^\[\]]+)"   # content starting with optional - then @
-    r"\]{1,2}"         # ] or ]]
+    r"\[{1,2}(-?@[^\[\]]+)\]{1,2}"                  # [@k], [@a; @b], [[@k]]
+    r"|(?<![\w\[@])(-?@" + _CITEKEY_CHARS + r")"    # bare @k (not an e-mail)
 )
+
+
+def _cite_ref_content(m: "re.Match[str]") -> str:
+    """Marker content of a _CITE_REF_RE match: bracketed or bare."""
+    return m.group(1) or m.group(2)
 
 # Numbered citation marker: [5], [5, 12], [5; 12], [5, п. 3.4].
 # Numbers capped at 3 digits so bracketed years ("[2026]") are not taken for refs.
@@ -355,7 +383,7 @@ def _extract_citekeys_from_ref(content: str) -> list[str]:
     parts = re.split(r";\s*", content)
     keys = []
     for part in parts:
-        m = re.match(r"\s*-?@([A-Za-z][A-Za-z0-9_:\-]*)", part.strip())
+        m = re.match(r"\s*-?@(" + _CITEKEY_CHARS + ")", part.strip())
         if m:
             keys.append(m.group(1))
     return keys
@@ -392,6 +420,28 @@ def _mask_excluded_regions(text: str) -> str:
     return "".join(buf)
 
 
+def extract_cited_citekeys(md_text: str) -> set[str]:
+    """All citekeys cited in markdown (bracketed and bare @-markers).
+
+    Frontmatter, code and HTML comments are skipped, as in _parse_claims.
+    """
+    citekeys: set[str] = set()
+    for m in _CITE_REF_RE.finditer(_mask_excluded_regions(md_text)):
+        citekeys.update(_extract_citekeys_from_ref(_cite_ref_content(m)))
+    return citekeys
+
+
+def _is_terminator(text: str, i: int) -> bool:
+    """Sentence terminator at text[i]; a dot between digits ("0.674",
+    "52.27.759") is a decimal/section separator, not a sentence end."""
+    ch = text[i]
+    if ch not in _SENT_TERMINATORS:
+        return False
+    if ch == "." and 0 < i < len(text) - 1 and text[i - 1].isdigit() and text[i + 1].isdigit():
+        return False
+    return True
+
+
 def _find_sentence_bounds(masked: str, cite_start: int, cite_end: int) -> tuple[int, int]:
     """Find sentence boundaries around a citation reference in masked text."""
     # --- sentence start: scan backward ---
@@ -399,7 +449,7 @@ def _find_sentence_bounds(masked: str, cite_start: int, cite_end: int) -> tuple[
     i = cite_start - 1
     while i >= 0:
         ch = masked[i]
-        if ch in _SENT_TERMINATORS:
+        if _is_terminator(masked, i):
             sent_start = i + 1
             break
         if ch == "\n":
@@ -425,7 +475,7 @@ def _find_sentence_bounds(masked: str, cite_start: int, cite_end: int) -> tuple[
     i = cite_end
     while i < len(masked):
         ch = masked[i]
-        if ch in _SENT_TERMINATORS:
+        if _is_terminator(masked, i):
             sent_end = i + 1
             break
         if ch == "\n":
@@ -465,19 +515,23 @@ def _parse_claims(md_text: str, ref_map: "Optional[RefMap]" = None) -> list[Clai
 
     claims: list[Claim] = []
 
-    for cite_m in _CITE_REF_RE.finditer(masked):
-        content = cite_m.group(1)
-        citekeys = _extract_citekeys_from_ref(content)
+    markers = list(_CITE_REF_RE.finditer(masked))
+    # Same offset-preserving blanking as the numbered branch: dots inside a
+    # key ("@a.b", "@Stefan2025_x_.") must not cut the sentence, and digits of
+    # a key ("@gostR-72039-2025") must not become numeric anchors.
+    blanked = _CITE_REF_RE.sub(lambda mm: " " * len(mm.group(0)), masked)
+
+    for cite_m in markers:
+        citekeys = _extract_citekeys_from_ref(_cite_ref_content(cite_m))
         if not citekeys:
             continue
 
-        sent_start, sent_end = _find_sentence_bounds(masked, cite_m.start(), cite_m.end())
-        raw_sentence = md_text[sent_start:sent_end]
-        sentence = raw_sentence.strip()
+        sent_start, sent_end = _find_sentence_bounds(blanked, cite_m.start(), cite_m.end())
+        sentence = md_text[sent_start:sent_end].strip()
         if len(sentence) < 10:
             continue
 
-        anchors = detect_anchors(raw_sentence, base_offset=sent_start)
+        anchors = detect_anchors(blanked[sent_start:sent_end], base_offset=sent_start)
 
         for ck in citekeys:
             claims.append(Claim(
@@ -1212,10 +1266,10 @@ def check_citations_file(
         )
 
     # Numbered-reference mode (papers/): map "[N]" markers to citekeys via
-    # the bibliography. Only worth building when there are no [@ markers —
-    # _parse_claims applies the same guard before using it.
+    # the bibliography. Only worth building when there are no @-markers
+    # (bracketed or bare) — _parse_claims applies the same guard before using it.
     ref_map: "Optional[RefMap]" = None
-    if "[@" not in md_text:
+    if _CITE_REF_RE.search(_mask_excluded_regions(md_text)) is None:
         try:
             from .reference_matcher import build_ref_map, collect_sources_meta
             sources_meta = collect_sources_meta(

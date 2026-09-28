@@ -208,6 +208,88 @@ def test_parse_claims_plain_citation_has_no_false_numeric_anchor():
     assert claims[0].anchors == []
 
 
+def test_parse_claims_bare_at_key():
+    md = "The ice edge is verified against charts @melsomValidationMetricsIce2019.\n"
+    claims = _parse_claims(md)
+    assert [c.citekey for c in claims] == ["melsomValidationMetricsIce2019"]
+    assert claims[0].sentence.startswith("The ice edge")
+
+
+def test_parse_claims_bare_key_with_trailing_period_and_underscore():
+    md = (
+        "Thresholds refer to image values @Stefan2025_Data-driven_uncertainty-aware_. "
+        "Next sentence without a citation.\n"
+    )
+    claims = _parse_claims(md)
+    assert [c.citekey for c in claims] == ["Stefan2025_Data-driven_uncertainty-aware_"]
+    assert "Next sentence" not in claims[0].sentence
+
+
+def test_parse_claims_bare_key_with_inner_dot_keeps_sentence():
+    claims = _parse_claims("Values are reported per region @smith.jones2020 in detail.\n")
+    assert [c.citekey for c in claims] == ["smith.jones2020"]
+    assert claims[0].sentence.endswith("in detail.")
+
+
+def test_parse_claims_double_bracket():
+    claims = _parse_claims("Wiki-style reference works too [[@alpha2020]].\n")
+    assert [c.citekey for c in claims] == ["alpha2020"]
+
+
+def test_parse_claims_two_bare_keys_in_one_sentence():
+    claims = _parse_claims("Charts use microwave data @Cyril2025_MET @Kvanum2025_Dev.\n")
+    assert [c.citekey for c in claims] == ["Cyril2025_MET", "Kvanum2025_Dev"]
+    assert claims[0].sentence == claims[1].sentence
+
+
+def test_bare_at_not_email():
+    assert _parse_claims("Write to author@example.com for the data archive.\n") == []
+
+
+def test_bare_at_no_numeric_anchor_from_citekey():
+    claims = _parse_claims("Requirements are set by the standard @gostR-72039-2025.\n")
+    assert [c.citekey for c in claims] == ["gostR-72039-2025"]
+    assert claims[0].anchors == []
+
+
+def test_bare_at_mode_not_numbered_with_bibliography():
+    from klemma.skills.reference_matcher import RefMap
+
+    md = (
+        "The metric is defined per chart @melsom2019 and see [1].\n\n"
+        "## References\n\n1. Melsom A. Validation metrics. 2019.\n"
+    )
+    ref_map = RefMap(number_to_citekey={1: "melsom2019"}, unmatched={}, matches={})
+    claims = _parse_claims(md, ref_map=ref_map)
+    assert [c.citekey for c in claims] == ["melsom2019"]
+    assert all(a.kind != "reference" for c in claims for a in c.anchors)
+
+
+def test_decimal_dot_does_not_end_sentence():
+    md = "It equals $\\pm 0.674\\sigma$ of the variability @abuzyarov2011.\n"
+    claims = _parse_claims(md)
+    assert claims[0].sentence.startswith("It equals")
+    assert [a.raw for a in claims[0].anchors if a.kind == "numeric"] == ["0.674"]
+
+
+def test_numeric_skips_year_and_identifier():
+    raws = [a.raw for a in detect_anchors(
+        "Since 2019 the standard GOST R 72039-2025 and clause 7.3.4.1 of RD 52.27.759-2011 "
+        "require 15 % accuracy over 10-15 days and 1.5-2.0 m thickness."
+    ) if a.kind == "numeric"]
+    assert "2019" not in raws
+    assert not any(r.startswith(("72039", "2025", "7.3", "4.1", "52.27", "759")) for r in raws)
+    assert "15 %" in raws
+    assert {"10", "15", "1.5", "2.0"} <= {r.split()[0] for r in raws}
+
+
+def test_extract_cited_citekeys_bare_and_bracketed():
+    from klemma.skills.citation_checker import extract_cited_citekeys
+
+    md = "A [@alpha2020; @beta2021]. B @gamma2022.\n\n```\n@not_a_cite\n```\nmail x@y.org\n"
+    assert extract_cited_citekeys(md) == {"alpha2020", "beta2021", "gamma2022"}
+
+
 # ---------------------------------------------------------------------------
 # Path traversal protection (via read_pdf_sidecar)
 # ---------------------------------------------------------------------------
