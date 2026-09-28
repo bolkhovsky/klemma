@@ -1,5 +1,33 @@
 # Klemma — Project Log
 
+## 2026-08-31: Agent Skill `klemma-query` — read-only SQL для ad-hoc аналитики
+
+### What was done
+
+- New skill `.claude/skills/klemma-query/SKILL.md` (+ symlink in
+  `~/research/dissertation/.claude/skills/`): documents the three-tier storage
+  (ADR-014) — `~/.klemma/library.db`, project `project.db`, legacy `klemma.db` —
+  with schema map, `(citekey, user_id)` cross-DB join rule, ATTACH pattern, and
+  4 verified example queries (chapter coverage, fragment/verbatim stats,
+  claim-audit pull, reference_gaps via `json_each` + active prune verdicts).
+- Rationale: "CLI for writes, direct SQL for reads" — ad-hoc analytical
+  questions no longer require new CLI flags in the 2500-line `cli.py`.
+  Hard rule in the skill: read-only URI connections only
+  (`file:...?mode=ro`); mutations go through CLI; StateManager must not be
+  imported for reads (its `__init__` runs schema migrations / WAL commits).
+- All examples verified against live local DBs (2026-08-31): totals reconcile
+  (436 project_sources = chapters + UNASSIGNED), RO negative test passes.
+
+### Open data-quality questions (recorded, not fixed)
+
+- Mac/fram divergence: legacy DB has 443 sources on mac vs 401 on fram (both
+  ~13–14.08); skill targets local mac copies per user decision.
+- 20 of 436 `project_sources` have no matching `user_sources` row in the
+  dissertation scope (orphans); 27 have `primary_chapter IS NULL`.
+- `library.db` contains test fixtures under `user_id='test-user-123'`
+  (26 sources, incl. all 19 verbatim=1 fragments) — dissertation scope is
+  `user_id=''`, where verbatim=1 count is 0.
+
 ## v0.5.0 — 2026-02-20: Paper Acquisition + Agent Skills
 
 ### What was done
