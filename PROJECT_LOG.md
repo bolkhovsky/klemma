@@ -1,5 +1,23 @@
 # Klemma — Project Log
 
+## 2026-09-28/29: verify-стек в master (0.19.0), PR #457 — check-citations для ежедневной сверки
+
+### What was done
+- Стек verify #436–#441 влит в master одним merge-коммитом через #441 (`85cb9db`), версия 0.19.0; #437–#440 закрыты как влитые. Деплой SaaS выключен (`Deploy`, `Deploy Bonum Portal` — disabled_manually): поддерживается только CLI.
+- PR #457 (ветка `feat/verify-claude-judge`, Part of #435, #456): голые `@key` в парсере, CLI-судья по подписке в изолированном режиме (ADR-018, пересмотр RC3), числа без учёта десятичного разделителя, локатор в `--json`, диагностика CLI в stderr, «unchecked (no anchor)» в сводке, понятная ошибка при недоступном `obsidian.vault_path`.
+- Issue #456: `ClaudeClient` не передаёт `--model` на подписке и тянет пользовательский CLAUDE.md в `claude -p` (вне судьи не исправлено).
+- Диссертация (`~/research/dissertation`, коммит `aced1c0`, не запушен): проектный `.klemma/config.yaml` — backend claude + sonnet, машинные пути в `~/.klemmarc.yaml` мака и fram; обёртка `papers/summa-2026/kl` удалена. На маке: `~/.local/bin/klemma` → `.venv` репозитория, `ollama pull bge-m3`.
+
+### Measurements (SUMMA2026, мак, подписка)
+- Клеймов: 0 → 36 на 7 файлах; якорных 9; ложных hard_warn 2 → 0; 4 вердикта с локатором.
+- Изоляция `claude -p`: ~37K → ~9K токенов контекста, 5 с → 1,5 с на холостом вызове.
+- Полный прогон судьи: 5 вызовов, 52K входных токенов, 75 с, `claude-sonnet-5`.
+
+### Open
+- Перенос `.klemma/{data,pdfs}` с fram на мак не выполнен (заблокирован как деструктивный) — команда в `papers/summa-2026/CLAUDE.md`.
+- PR B (режим audit): retrieval должен быть многоязычным (bge-m3), лексический подсчёт общих слов не работает для пары «английский текст — русский источник».
+- Известные дрейфы [1], [14], [15] в предложениях без якоря — проверит только audit.
+
 ## 2026-08-31: Agent Skill `klemma-query` — read-only SQL для ad-hoc аналитики
 
 ### What was done
