@@ -221,6 +221,24 @@ def extract_json(text: str) -> Optional[dict]:
     return result
 
 
+def normalize_finish_reason(value: object) -> str:
+    """Map a provider stop reason onto ``stop | max_tokens | error | unknown``.
+
+    Anything that is not a non-empty string (MagicMock in tests, None from
+    backends that do not report it) is ``unknown``.
+    """
+    if not isinstance(value, str) or not value:
+        return "unknown"
+    v = value.lower()
+    if v in ("stop", "end_turn", "stop_sequence", "end"):
+        return "stop"
+    if v in ("length", "max_tokens", "max_output_tokens"):
+        return "max_tokens"
+    if v in ("error", "content_filter", "refusal"):
+        return "error"
+    return "unknown"
+
+
 @dataclass
 class AICallResult:
     """Result of an AI call with metadata for observability."""
@@ -232,6 +250,10 @@ class AICallResult:
     retries_used: int = 0
     model: str = ""
     error: Optional[str] = None
+    # Why the model stopped: "stop" | "max_tokens" | "error" | "unknown".
+    # Backends that cannot observe it (Claude CLI) report "unknown"; the
+    # chunked extraction engine treats "max_tokens" as truncation and splits.
+    finish_reason: Optional[str] = None
 
     def __bool__(self) -> bool:
         return self.text is not None
@@ -354,6 +376,7 @@ class AIProviderBase:
             duration_ms=elapsed,
             model=effective_model,
             error=None if text else "all retries exhausted",
+            finish_reason="unknown" if text else "error",
         )
 
     def render_prompt(self, template_path: Path, **kwargs) -> str:
@@ -383,19 +406,79 @@ class ClaudeClient(AIProviderBase):
             raise RuntimeError(
                 "'claude' command not found. Install Claude Code CLI: https://claude.ai/code"
             )
+        use_key = bool(getattr(config, "claude_cli_use_api_key", False))
         # --model flag requires ANTHROPIC_API_KEY (Max subscriptions don't support it)
-        self._has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-        # Sanitize env to avoid nested Claude Code session detection (#131)
-        self._clean_env = {
-            k: v for k, v in os.environ.items() if k != "CLAUDECODE"
-        }
+        self._has_api_key = use_key and bool(os.environ.get("ANTHROPIC_API_KEY"))
+        # Sanitize env: no nested Claude Code session detection (#131); and unless
+        # the user opted into API billing, strip the API key so the CLI runs on
+        # the claude.ai login instead of silently charging the API.
+        drop = {"CLAUDECODE"}
+        if not use_key:
+            drop |= {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
+        self._clean_env = {k: v for k, v in os.environ.items() if k not in drop}
 
-    def _build_cmd(self, model: str) -> list[str]:
-        """Build claude CLI command, omitting --model when no API key."""
+    def _build_cmd(self, model: str, json_output: bool = False) -> list[str]:
+        """Build claude CLI command, omitting --model when no API key.
+
+        ``json_output`` asks for ``--output-format json``: the result object
+        carries ``stop_reason`` and ``usage`` (input/output tokens), which is
+        what ``call_with_meta`` needs to report ``finish_reason`` honestly and
+        lets the chunked engine run its exhaustive mode on a subscription
+        backend without an API key.
+        """
         cmd = ["claude", "-p"]
+        if json_output:
+            cmd += ["--output-format", "json"]
         if self._has_api_key:
             cmd += ["--model", model]
         return cmd
+
+    @staticmethod
+    def _cli_error_text(stdout: str, stderr: str) -> str:
+        """Human-readable error: the JSON result's message when the CLI returned
+        one (usage limit, auth), else stderr/stdout."""
+        try:
+            data = json.loads(stdout or "")
+            if isinstance(data, dict):
+                for key in ("result", "error", "api_error_status"):
+                    if data.get(key):
+                        return str(data[key])
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return (stderr or stdout or "").strip()
+
+    _RATE_LIMIT_MARKERS = ("limit", "rate", "429", "overloaded", "busy")
+
+    def _backoff(self, attempt: int, error_msg: str) -> None:
+        """Sleep before the next CLI retry; longer when the error looks like a
+        usage/rate limit so a subscription burst does not burn all retries."""
+        msg = (error_msg or "").lower()
+        base = 20.0 if any(m in msg for m in self._RATE_LIMIT_MARKERS) else 2.0
+        time.sleep(min(base * (2 ** attempt), 120.0))
+
+    @staticmethod
+    def _parse_json_result(stdout: str) -> tuple[Optional[str], int, int, str, Optional[str]]:
+        """(text, input_tokens, output_tokens, finish_reason, error) from JSON output.
+
+        Falls back to treating stdout as plain text when it is not the CLI's
+        result object (older CLI, --output-format unsupported).
+        """
+        try:
+            data = json.loads(stdout)
+        except (json.JSONDecodeError, TypeError):
+            return stdout, 0, 0, "unknown", None
+        if not isinstance(data, dict) or data.get("type") != "result":
+            return stdout, 0, 0, "unknown", None
+        usage = data.get("usage") or {}
+        tin = int(usage.get("input_tokens") or 0) + int(usage.get("cache_read_input_tokens") or 0) \
+            + int(usage.get("cache_creation_input_tokens") or 0)
+        tout = int(usage.get("output_tokens") or 0)
+        finish = normalize_finish_reason(data.get("stop_reason"))
+        text = data.get("result")
+        if data.get("is_error"):
+            err = str(data.get("api_error_status") or data.get("result") or "cli error")[:300]
+            return None, tin, tout, "error", err
+        return (str(text) if text is not None else None), tin, tout, finish, None
 
     def call(
         self,
@@ -453,7 +536,7 @@ class ClaudeClient(AIProviderBase):
         """Call Claude CLI with structured error tracking."""
         effective_timeout = timeout or self.timeout
         effective_model = model_override or self.model
-        cmd = self._build_cmd(effective_model)
+        cmd = self._build_cmd(effective_model, json_output=True)
         prompt = f"{system}\n\n---\n\n{user}"
 
         t0 = time.monotonic()
@@ -469,17 +552,29 @@ class ClaudeClient(AIProviderBase):
                 )
                 if result.returncode != 0:
                     retries_used = attempt + 1
-                    error_msg = (result.stderr or result.stdout or "")[:300]
-                    last_error = f"cli_error: exit {result.returncode}"
+                    error_msg = self._cli_error_text(result.stdout, result.stderr)
+                    last_error = f"cli_error: exit {result.returncode}: {error_msg[:200]}"
                     logger.warning(
                         "Claude CLI error (attempt %d/%d): %s",
-                        attempt + 1, self.retries + 1, error_msg,
+                        attempt + 1, self.retries + 1, error_msg[:300],
                     )
+                    self._backoff(attempt, error_msg)
                     continue
                 elapsed = int((time.monotonic() - t0) * 1000)
+                text, tin, tout, finish, err = self._parse_json_result(result.stdout)
+                if err is not None:
+                    retries_used = attempt + 1
+                    last_error = f"cli_error: {err}"
+                    logger.warning(
+                        "Claude CLI result error (attempt %d/%d): %s",
+                        attempt + 1, self.retries + 1, err,
+                    )
+                    self._backoff(attempt, err)
+                    continue
                 return AICallResult(
-                    text=result.stdout, duration_ms=elapsed,
+                    text=text, duration_ms=elapsed, input_tokens=tin, output_tokens=tout,
                     retries_used=retries_used, model=effective_model,
+                    finish_reason=finish,
                 )
             except subprocess.TimeoutExpired:
                 retries_used = attempt + 1

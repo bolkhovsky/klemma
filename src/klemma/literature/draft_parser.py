@@ -169,24 +169,43 @@ def _detect_sections(pages: list[str]) -> list[DetectedSection]:
 
 def _is_bib_marker(line: str) -> bool:
     """Check if a line is a bibliography section header."""
-    normalized = line.lower().strip().rstrip(".")
+    normalized = line.lower().strip()
+    # Strip markdown heading prefix ("## Список литературы")
+    normalized = re.sub(r"^#{1,6}\s*", "", normalized).rstrip(".")
     # Strip numbered prefix
     normalized = re.sub(r"^\d+(?:\.\d+)*\s*[.\s]*", "", normalized)
     return normalized in _BIB_MARKERS
 
 
-def _extract_bibliography(full_text: str) -> list[ParsedReference]:
-    """Extract bibliography section and parse individual references."""
-    lines = full_text.split("\n")
-    bib_start = None
+def find_bibliography_section(text: str) -> tuple[int, int] | None:
+    """Locate the bibliography content span in text.
 
-    for i, line in enumerate(lines):
-        if _is_bib_marker(line.strip()):
-            bib_start = i + 1
-            break
+    Returns (start, end) character offsets into text: start — first character
+    after the bibliography marker line ("References", "Список литературы", …),
+    end — start of the next markdown heading after the bibliography (trailing
+    sections like "## Сведения об авторах"), or len(text) when there is none.
+    None when no marker line is found.
+    """
+    offset = 0
+    bib_start: int | None = None
+
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if bib_start is None:
+            if _is_bib_marker(stripped):
+                bib_start = min(offset + len(line) + 1, len(text))
+        elif re.match(r"^#{1,6}\s+\S", stripped):
+            return (bib_start, offset)
+        offset += len(line) + 1
 
     if bib_start is None:
-        return []
+        return None
+    return (bib_start, len(text))
 
-    bib_text = "\n".join(lines[bib_start:])
-    return parse_references(bib_text)
+
+def _extract_bibliography(full_text: str) -> list[ParsedReference]:
+    """Extract bibliography section and parse individual references."""
+    span = find_bibliography_section(full_text)
+    if span is None:
+        return []
+    return parse_references(full_text[span[0]:span[1]])

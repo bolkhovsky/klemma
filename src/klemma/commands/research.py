@@ -130,6 +130,7 @@ def research(ctx, section, no_save, force, model, require):
             dissertation_context=kctx.dissertation_context,
             available_tags=kctx.available_tags,
             klemma_home=kctx.klemma_home,
+            outline_digest=getattr(kctx, "outline_digest", ""),
         )
 
     extracted = extract_result["extracted"]

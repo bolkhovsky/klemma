@@ -1,0 +1,355 @@
+"""Plan C2: repair on the three-tier stores (--run, attempt provenance), source select/show."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from click.testing import CliRunner
+
+from klemma.cli import main as klemma_cli
+from klemma.hashing import compute_content_hash
+from klemma.literature.sidecar import write_pdf_sidecar
+from klemma.models import FragmentRecord
+from klemma.state import StateManager
+from klemma.stores.paper_store import LocalPaperStore
+from klemma.stores.project_store import LocalProjectStore
+from klemma.stores.user_library import LocalUserLibrary
+
+PAGE = "3.4 Определение требуемой обеспеченности\nОценка оправдываемости положения кромки льда.\n"
+
+
+def _kctx(tmp_path: Path):
+    state = StateManager(tmp_path / "klemma.db")
+    lib = tmp_path / "library.db"
+    kctx = MagicMock()
+    kctx.state = state
+    kctx.project_root = tmp_path
+    kctx.klemma_home = tmp_path / ".klemma"
+    kctx.config.ai.max_pdf_chars = 50000
+    kctx.config.zotero.storage_path = str(tmp_path / "storage")
+    kctx.library = None
+    kctx.paper_store = LocalPaperStore(lib)
+    kctx.user_library = LocalUserLibrary(lib)
+    kctx.project_store = LocalProjectStore(tmp_path / "project.db")
+    kctx.embeddings = None
+    return kctx
+
+
+def _invoke(cmd, args, kctx, module):
+    runner = CliRunner()
+    with patch(f"klemma.commands.{module}._get_context", return_value=kctx):
+        return runner.invoke(klemma_cli, [cmd] + args, catch_exceptions=False)
+
+
+def test_repair_run_validates_attempt_and_publishes(tmp_path):
+    kctx = _kctx(tmp_path)
+    ps, pj, ul = kctx.paper_store, kctx.project_store, kctx.user_library
+    kctx.state.register_sources(["gost2025"])
+    write_pdf_sidecar(tmp_path, "gost2025", [PAGE], {"title": "ГОСТ"})
+    pid = ps.register_paper(title="ГОСТ", pdf_hash="h")
+    ul.add_source(pid, "gost2025", status="completed")
+    quote = "Оценка оправдываемости положения кромки льда."
+    fid_ok = compute_content_hash(pid, quote, 1)
+    fid_bad = compute_content_hash(pid, "нет такого текста", 1)
+    ps.start_attempt("att", pid, ai_model="m")
+    ps.save_attempt_fragments("att", pid, [
+        FragmentRecord(fragment_id=fid_ok, paper_id=pid, fragment_text=quote, page_number=1, verbatim=True),
+        FragmentRecord(fragment_id=fid_bad, paper_id=pid, fragment_text="нет такого текста", page_number=1, verbatim=True),
+    ], [{"verbatim_status": "confirmed"}, {"verbatim_status": "confirmed"}])
+    run_id = pj.start_run("gost2025", paper_id=pid, attempt_id="att")
+    status = pj.publish_run(run_id, [{"fragment_id": fid_ok}, {"fragment_id": fid_bad}],
+                            is_partial=False, validation_incomplete=True)
+    assert status == "pending" and pj.get_active_run_id("gost2025") is None
+
+    result = _invoke("repair", ["--run", str(run_id)], kctx, "repair")
+    assert result.exit_code == 0, result.output
+    links = {r["fragment_id"]: r for r in ps.get_attempt_fragments("att")}
+    assert links[fid_ok]["verbatim_status"] == "confirmed"
+    assert links[fid_ok]["char_start"] is not None and links[fid_ok]["source_locator"] == "п. 3.4"
+    assert links[fid_bad]["verbatim_status"] == "downgraded"
+    run = pj.get_run(run_id)
+    assert run["status"] == "published" and run["validation_incomplete"] == 0
+    assert pj.get_active_run_id("gost2025") == run_id
+    assert "published" in result.output
+
+
+def test_repair_verbatim_mirrors_verdicts_into_legacy_attempt(tmp_path):
+    from klemma.migration import legacy_attempt_id
+
+    kctx = _kctx(tmp_path)
+    state, ps, ul = kctx.state, kctx.paper_store, kctx.user_library
+    state.register_sources(["gost2025"])
+    quote = "Оценка оправдываемости положения кромки льда."
+    state.save_fragments("gost2025", [{"text": quote, "page": 1, "verbatim": False},
+                                       {"text": "выдумка", "page": 1, "verbatim": True}])
+    write_pdf_sidecar(tmp_path, "gost2025", [PAGE], {"title": "ГОСТ"})
+    pid = ps.register_paper(title="ГОСТ", pdf_hash="h")
+    ul.add_source(pid, "gost2025", status="completed")
+
+    result = _invoke("repair", ["gost2025", "--steps", "verbatim"], kctx, "repair")
+    assert result.exit_code == 0, result.output
+    att = legacy_attempt_id(pid, "gost2025")
+    links = {r["fragment_text"]: r for r in ps.get_attempt_fragments(att)}
+    assert links[quote]["verbatim_status"] == "confirmed" and links[quote]["char_start"] is not None
+    assert links["выдумка"]["verbatim_status"] == "downgraded"
+    assert ps.get_attempt(att)["mode"] == "legacy"
+
+
+def test_source_select_filters_and_prints_citekeys(tmp_path):
+    kctx = _kctx(tmp_path)
+    state = kctx.state
+    state.register_sources(["zero", "few", "many", "lowq", "dropped"])
+    state.save_fragments("few", [{"text": "a"}, {"text": "b"}])
+    state.save_fragments("lowq", [{"text": "a"}])
+    state.save_fragments("many", [{"text": str(i)} for i in range(12)])
+    with state._conn() as conn:
+        conn.execute("UPDATE sources SET quality_score=5 WHERE id IN ('few','many')")
+        conn.execute("UPDATE sources SET quality_score=2 WHERE id='lowq'")
+        conn.execute("UPDATE sources SET status='completed'")
+        conn.execute("UPDATE sources SET title='Retrieval-augmented LLM agents' WHERE id='dropped'")
+    result = _invoke("source", ["select", "--max-fragments", "10", "--min-quality", "4",
+                                "--exclude-title-regex", "LLM"], kctx, "analyze")
+    assert result.exit_code == 0, result.output
+    keys = {ln.strip() for ln in result.output.splitlines() if ln.strip() and " " not in ln.strip()}
+    assert {"zero", "few"} <= keys and not ({"lowq", "many", "dropped"} & keys)
+
+
+def test_source_show_lists_runs(tmp_path):
+    kctx = _kctx(tmp_path)
+    kctx.state.register_sources(["k1"])
+    pj = kctx.project_store
+    r = pj.start_run("k1", paper_id="p", attempt_id="a", mode="standard", ai_model="m")
+    pj.publish_run(r, [{"fragment_id": "f1", "model_section": "2.4"}], is_partial=False,
+                   validation_incomplete=False)
+    result = _invoke("source", ["show", "k1", "--all-runs"], kctx, "analyze")
+    assert result.exit_code == 0, result.output
+    assert f"#{r}" in result.output and "published" in result.output
+    assert "Project fragments" in result.output and "2.4" in result.output
+
+
+def test_repair_run_publishes_attempt_consistently(tmp_path):
+    """Codex P1: after --run the library attempt mirrors the project status."""
+    kctx = _kctx(tmp_path)
+    ps, pj, ul = kctx.paper_store, kctx.project_store, kctx.user_library
+    kctx.state.register_sources(["gost2025"])
+    write_pdf_sidecar(tmp_path, "gost2025", [PAGE], {"title": "ГОСТ"})
+    pid = ps.register_paper(title="ГОСТ", pdf_hash="h")
+    ul.add_source(pid, "gost2025", status="completed")
+    quote = "Оценка оправдываемости положения кромки льда."
+    fid = compute_content_hash(pid, quote, 1)
+    ps.start_attempt("att", pid)
+    ps.save_attempt_fragments("att", pid, [FragmentRecord(fragment_id=fid, paper_id=pid, fragment_text=quote, page_number=1, verbatim=True)], [{"verbatim_status": "confirmed"}])
+    ps.finish_attempt("att", status="pending", validation_incomplete=True)
+    run_id = pj.start_run("gost2025", paper_id=pid, attempt_id="att")
+    pj.publish_run(run_id, [{"fragment_id": fid}], is_partial=False, validation_incomplete=True)
+    assert ps.get_fragments(pid) == []  # hidden while pending
+    result = _invoke("repair", ["--run", str(run_id)], kctx, "repair")
+    assert result.exit_code == 0, result.output
+    assert ps.get_attempt("att")["status"] == "published"
+    assert len(ps.get_fragments(pid)) == 1
+
+
+def test_process_rejects_replace_without_force(tmp_path):
+    kctx = _kctx(tmp_path)
+    r = _invoke("process", ["k", "--replace"], kctx, "process")
+    assert r.exit_code == 2 and "requires --force" in r.output
+
+
+def test_process_resume_stale_without_stale_runs_does_nothing(tmp_path):
+    kctx = _kctx(tmp_path)
+    with patch("klemma.commands.process._init_ai") as init_ai, \
+         patch("klemma.commands.process._process_single") as ps_single:
+        r = _invoke("process", ["--resume-stale"], kctx, "process")
+    assert r.exit_code == 0 and "No stale runs" in r.output
+    ps_single.assert_not_called()
+    init_ai.assert_not_called()
+
+
+def test_source_select_default_includes_degraded_and_project_prune(tmp_path):
+    kctx = _kctx(tmp_path)
+    state = kctx.state
+    state.register_sources(["deg", "dropped"])
+    with state._conn() as conn:
+        conn.execute("UPDATE sources SET status='degraded' WHERE id='deg'")
+        conn.execute("UPDATE sources SET status='completed' WHERE id='dropped'")
+    kctx.project_store.save_prune_verdicts([{"citekey": "dropped", "reason": "x"}], [])
+    r = _invoke("source", ["select"], kctx, "analyze")
+    keys = {ln.strip() for ln in r.output.splitlines() if ln.strip() and " " not in ln.strip()}
+    assert "deg" in keys and "dropped" not in keys
+
+
+def test_process_exhaustive_reaches_process_single_with_mode_and_digest(tmp_path):
+    kctx = _kctx(tmp_path)
+    kctx.outline_digest = "Глава 2. X\n  2.4 Y\n    2.4.1 Z"
+    kctx.project.type = "dissertation"
+    with patch("klemma.commands.process._init_ai"), \
+         patch("klemma.commands.process._process_single", return_value=(1, "ok")) as ps_single:
+        r = _invoke("process", ["k", "--exhaustive"], kctx, "process")
+    assert r.exit_code == 0, r.output
+    kw = ps_single.call_args.kwargs
+    assert kw["mode"] == "exhaustive" and kw["outline_digest"] == kctx.outline_digest
+
+
+def test_process_single_records_exhaustive_prompt_and_bypasses_cache(tmp_path):
+    """Confirmed review findings: run/attempt identity names extract_exhaustive.md and the
+    library fast paths do not serve cached standard fragments for --exhaustive."""
+    from unittest.mock import MagicMock
+
+    from klemma.cli import _process_single
+    from klemma.literature.models import ExtractionResult, Fragment
+
+    kctx = _kctx(tmp_path)
+    state, ps, ul, pj = kctx.state, kctx.paper_store, kctx.user_library, kctx.project_store
+    state.register_sources(["k1"])
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    # a cached paper with fragments in the library (would be served by the fast path)
+    from klemma.hashing import compute_pdf_hash
+
+    pid = ps.register_paper(title="P", pdf_hash=compute_pdf_hash(pdf))
+    ul.add_source(pid, "k1", status="completed")
+    ps.start_attempt("old", pid)
+    ps.save_attempt_fragments("old", pid, [FragmentRecord(fragment_id="f-old", paper_id=pid, fragment_text="cached")],
+                              [{"verbatim_status": "confirmed"}])
+    ps.finish_attempt("old", status="published")
+    home = tmp_path / ".klemma"
+    (home / "prompts").mkdir(parents=True)
+    (home / "prompts" / "extract_exhaustive.md").write_text("exhaustive template")
+    (home / "prompts" / "extract.md").write_text("standard template")
+    cfg = MagicMock()
+    cfg.ai.max_pdf_chars = 50000
+    cfg.ai.model = "m"
+    cfg.ai.chunk_size, cfg.ai.chunk_overlap, cfg.ai.min_chunk_chars = 25000, 2000, 4000
+    cfg.zotero.storage_path = str(tmp_path / "storage")
+    cfg.processing.min_pdf_length = 10
+    pdf_extractor = MagicMock()
+    pdf_extractor.find_pdf.return_value = pdf
+    pdf_extractor.extract_pages.return_value = ["page text " * 50]
+    pdf_extractor.format_for_ai.return_value = "page text " * 50
+    library = MagicMock()
+    library.entries.get.return_value = None
+    library.pdf_paths = {}
+    res = ExtractionResult(source_id="k1", fragments=[Fragment(text="new", section="2.4", verbatim=True)],
+                           spans=[(0, 3)], verbatim_statuses=["confirmed"],
+                           notes={"qualifies": [{"item": "2.4", "quote": "new", "status": "confirmed"}]},
+                           not_extracted=["2.4.1"])
+    with (
+        patch("klemma.skills.extractor.extract_fragments", return_value=res) as mock_extract,
+        patch("klemma.skills.extractor.save_fragments_to_vault", return_value=str(tmp_path / "note.md")),
+        patch("klemma.literature.metadata.lookup_s2", return_value=None),
+    ):
+        vault = MagicMock()
+        vault.update_section.return_value = None  # heading absent in the template
+        vault.append_to_note.return_value = tmp_path / "note.md"
+        n, status = _process_single(
+            citekey="k1", cfg=cfg, state=state, vault=vault, ai=MagicMock(),
+            pdf_extractor=pdf_extractor, library=library, quiet=True, klemma_home=home,
+            paper_store=ps, user_library=ul, project_store=pj, mode="exhaustive",
+            outline_digest="Глава 2. X\n  2.4 Y\n    2.4.1 Z",
+        )
+    assert (n, status) == (1, "ok")
+    mock_extract.assert_called_once()  # cache fast path did not short-circuit
+    run = pj.get_runs("k1")[-1]
+    assert run["prompt_name"] == "extract_exhaustive.md" and run["mode"] == "exhaustive"
+    assert "not_extracted" in (run["notes_json"] or "")
+    att = ps.get_attempt(run["attempt_id"])
+    assert att["prompt_name"] == "extract_exhaustive.md"
+    vault.append_to_note.assert_called_once()  # mirror fell back to appending the section
+    r = _invoke("source", ["show", "k1", "--notes"], kctx, "analyze")
+    assert "Structure notes" in r.output and "2.4.1" in r.output
+
+
+def test_process_batch_stops_on_usage_limit_and_writes_remaining(tmp_path):
+    """Serial batch: once a run fails on a usage limit, the loop stops and the
+    remainder is written next to --from-file instead of burning retries."""
+    kctx = _kctx(tmp_path)
+    pj = kctx.project_store
+    listing = tmp_path / "batch.txt"
+    listing.write_text("k1\nk2\nk3\n", encoding="utf-8")
+    calls = []
+
+    def _fake_single(ck, *a, **kw):
+        calls.append(ck)
+        rid = pj.start_run(ck, paper_id="p", attempt_id=f"a-{ck}")
+        if ck == "k1":
+            pj.fail_run(rid, "provider error on first call: You've hit your session limit")
+            return (0, "no fragments")
+        return (1, "ok")
+
+    with patch("klemma.commands.process._init_ai"), \
+         patch("klemma.commands.process._process_single", side_effect=_fake_single):
+        r = _invoke("process", ["--from-file", str(listing), "--serial", "--force"], kctx, "process")
+    assert r.exit_code == 0, r.output
+    assert calls == ["k1"] and "batch stopped" in r.output
+    assert (tmp_path / "batch.txt.remaining").read_text(encoding="utf-8").splitlines()[1:] == ["k1", "k2", "k3"]
+
+
+def test_process_batch_rerun_ignores_limit_failure_from_earlier_batch(tmp_path):
+    """A limit-failed run left by a previous batch must not stop the re-run
+    before its first source (the failure belongs to another process)."""
+    kctx = _kctx(tmp_path)
+    pj = kctx.project_store
+    rid = pj.start_run("old", paper_id="p", attempt_id="a-old")
+    pj.fail_run(rid, "provider error on first call: You've hit your session limit")
+    listing = tmp_path / "batch.txt"
+    listing.write_text("k1\nk2\n", encoding="utf-8")
+    calls = []
+
+    def _fake_single(ck, *a, **kw):
+        calls.append(ck)
+        pj.start_run(ck, paper_id="p", attempt_id=f"a-{ck}")
+        return (1, "ok")
+
+    with patch("klemma.commands.process._init_ai"), \
+         patch("klemma.commands.process._process_single", side_effect=_fake_single):
+        r = _invoke("process", ["--from-file", str(listing), "--serial", "--force"], kctx, "process")
+    assert r.exit_code == 0, r.output
+    assert calls == ["k1", "k2"] and "batch stopped" not in r.output
+    assert not (tmp_path / "batch.txt.remaining").exists()
+
+
+def test_process_batch_stops_on_provider_outage(tmp_path):
+    """A connection-refused failure (proxy/tunnel down) stops the batch like a limit."""
+    kctx = _kctx(tmp_path)
+    pj = kctx.project_store
+    listing = tmp_path / "batch.txt"
+    listing.write_text("k1\nk2\n", encoding="utf-8")
+    calls = []
+
+    def _fake_single(ck, *a, **kw):
+        calls.append(ck)
+        rid = pj.start_run(ck, paper_id="p", attempt_id=f"a-{ck}")
+        pj.fail_run(rid, "provider error on first call: cli_error: exit 1: API Error: Connection refused (ConnectionRefused)")
+        return (0, "no fragments")
+
+    with patch("klemma.commands.process._init_ai"), \
+         patch("klemma.commands.process._process_single", side_effect=_fake_single):
+        r = _invoke("process", ["--from-file", str(listing), "--serial", "--force"], kctx, "process")
+    assert r.exit_code == 0, r.output
+    assert calls == ["k1"] and "batch stopped" in r.output
+    assert (tmp_path / "batch.txt.remaining").read_text(encoding="utf-8").splitlines()[1:] == ["k1", "k2"]
+
+
+def test_process_batch_stops_on_fable_limit_wording(tmp_path):
+    """The CLI's usage-limit message changed wording ("You've reached your Fable
+    limit") and the old marker list missed it, burning three retries per source
+    on every remaining item instead of stopping the batch."""
+    kctx = _kctx(tmp_path)
+    pj = kctx.project_store
+    listing = tmp_path / "batch.txt"
+    listing.write_text("k1\nk2\n", encoding="utf-8")
+    calls = []
+
+    def _fake_single(ck, *a, **kw):
+        calls.append(ck)
+        rid = pj.start_run(ck, paper_id="p", attempt_id=f"a-{ck}")
+        pj.fail_run(rid, "provider error on first call: cli_error: exit 1: You've reached your Fable "
+                         "limit. Switch to another model, or manage usage credits at claude.ai/settings/usage")
+        return (0, "no fragments")
+
+    with patch("klemma.commands.process._init_ai"), \
+         patch("klemma.commands.process._process_single", side_effect=_fake_single):
+        r = _invoke("process", ["--from-file", str(listing), "--serial", "--force"], kctx, "process")
+    assert r.exit_code == 0, r.output
+    assert calls == ["k1"] and "batch stopped" in r.output

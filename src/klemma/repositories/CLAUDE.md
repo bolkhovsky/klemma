@@ -1,6 +1,6 @@
 # Repositories
 
-Domain repositories decomposed from `StateManager` (1599 lines -> 8 focused modules). StateManager remains as backward-compatible facade.
+Domain repositories decomposed from `StateManager` (10 focused modules). StateManager remains as backward-compatible facade.
 
 ## Architecture
 
@@ -18,7 +18,8 @@ StateManager (facade)
     ├── PlansRepository       — daily plans, reading queue, writing streak
     ├── PruneRepository       — prune verdicts, protection logic
     ├── BenchmarkRepository   — benchmark run history, comparison
-    └── DecisionsRepository   — Guided Serendipity decisions, notes, feedback
+    ├── DecisionsRepository   — Guided Serendipity decisions, notes, feedback
+    └── ClaimsRepository      — manuscript claims ledger, incremental citation audit
 ```
 
 All repos receive `StateManager._conn` as their connection factory via `BaseRepository.__init__`.
@@ -32,6 +33,8 @@ Base class providing shared `_conn` factory.
 ### sources.py (~440 lines)
 Source lifecycle, sections, Zotero key management, vault sync.
 - `register_sources()`, `mark_completed()`, `get_source()`, `get_stats()`, `update_source_info()` (persist title/authors/year/abstract/doi)
+- `mark_degraded(source_id, steps)` / `clear_degraded(source_id)` / `get_degraded_sources()` — `degraded` status lifecycle: completed-with-defects (`degraded_steps` = JSON list of repair step names, e.g. "embeddings", "sidecar"); `clear_degraded` is a no-op unless the source is currently degraded; `get_stats()` counts degraded via `ProcessingStatus.ALL`
+- `set_pdf_text_length()` — record extracted full-text length (sum of sidecar page lengths); called from `_process_single()` right after extraction
 - `get_all_sources()` — includes `year` column for recency filtering
 - `get_all_sources_metadata()` — full metadata (title, authors, year, doi) for dedup checks
 - `set_source_sections()` — replaces old `_set_sections_inline`
@@ -51,7 +54,8 @@ Fragment CRUD, citation intent coverage, fragment-level embeddings.
 - `get_fragment_embeddings(model?)` — return `{fragment_id: vector}`
 - `get_fragment_embedding_stats()` — coverage stats (total, embedded, by model)
 - `get_unembedded_fragments()` — fragments missing embeddings
-- `retrieve_similar_fragments(query_embedding, top_k, model?)` — top-K cosine retrieval
+- `retrieve_similar_fragments(query_embedding, top_k, model?)` — top-K cosine retrieval; rows carry `similarity`, `citekey`, `verbatim`, `source_locator` (consumer: `klemma find-source`)
+- `update_fragment_provenance(fragment_id, *, verbatim?, char_start?, char_end?, source_locator?)` — update provenance fields; `None` leaves a column untouched; `verbatim=False` also NULLs the span/locator (a non-verbatim fragment cannot carry a verified span). Writer: `klemma repair`
 - `save_reassign_skip()`, `save_reassign_skips_batch()`, `get_reassign_skips()`, `clear_reassign_skips()` — legacy skip persistence (unused since batch --apply removed)
 
 ### embeddings_store.py (~180 lines)
@@ -109,6 +113,14 @@ Guided Serendipity decisions: branching points, research notes, retrospective fe
 - `add_note(decision_id, note)` — add/update research note on a decision
 - `set_feedback(decision_id, feedback)` — set 'like' or 'dislike' retrospective feedback
 - `get_feedback_summary()` — aggregate feedback for prompt injection (liked_types, disliked_types, recent_notes)
+
+### claims.py (~170 lines)
+Manuscript claims ledger — durable state of the citation audit (claim-provenance PR-4). One row per (manuscript_path, claim_hash, anchor_key); identity is content-based (`citation_checker.compute_claim_hash`), so editing a sentence retires the old row (stale) and starts the new one unchecked — staleness by design, no diffing.
+- `record_check(manuscript_path, entries, judge_model?)` — UPSERT on UNIQUE(manuscript_path, claim_hash, anchor_key); refreshes char range/verdict/reason/evidence_*/verified_at, revives stale rows; `judge_model` lands only on AI verdicts and is COALESCE-preserved when a replayed verdict arrives without a fresh model name
+- `mark_stale(manuscript_path, live_hashes)` — mark rows whose hash vanished from the fresh parse; returns newly-marked count
+- `get_claims(manuscript_path, include_stale=True)` — ledger rows in manuscript order
+- `get_status_summary(manuscript_path?)` — per-manuscript counters (ok/soft_warn/hard_warn/unverifiable/unchecked/stale, last_verified) backing `klemma claims status --gate`
+Writers: `klemma check-citations` (every run); readers: `--incremental` replay + `klemma claims status`.
 
 ## Cross-repo dependencies
 

@@ -68,7 +68,7 @@ def test_claude_client_model_override():
     """ClaudeClient passes model_override to subprocess when API key is set."""
     from klemma.ai import ClaudeClient
 
-    cfg = AIConfig(backend="claude", model="sonnet")
+    cfg = AIConfig(backend="claude", model="sonnet", claude_cli_use_api_key=True)
     with patch("klemma.ai.ClaudeClient.check_cli_available", return_value=True), \
          patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test"}):
         client = ClaudeClient(cfg)
@@ -90,7 +90,7 @@ def test_claude_client_default_model_without_override():
     """Without override, default model is used."""
     from klemma.ai import ClaudeClient
 
-    cfg = AIConfig(backend="claude", model="sonnet")
+    cfg = AIConfig(backend="claude", model="sonnet", claude_cli_use_api_key=True)
     with patch("klemma.ai.ClaudeClient.check_cli_available", return_value=True), \
          patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test"}):
         client = ClaudeClient(cfg)

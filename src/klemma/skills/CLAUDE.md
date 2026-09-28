@@ -39,12 +39,29 @@ Morning briefing generation. Gathers: deadline, streak, yesterday's plan, chapte
 - `_read_chapter_plan()` — load session plan from vault
 - Intervention types: `NONE`, `REPLAN`, `BOOST`, `SKIP`
 
-### extractor.py (335 lines)
+### extract_engine.py (~560 lines)
+Pure chunked-extraction engine (plan C1): pages → `ExtractionOutcome`, no DB, no vault. Callers (`extractor.extract_fragments`, `api/tasks._run_chunked_extraction`) own persistence and token accounting.
+- `extract_from_pages(pages, entry, prompt_path, prompt_vars, ai, *, text=None, chunks=None, chunk_size, overlap, min_chunk_chars, max_tokens_cap, mode, budget, model_override, pricing, on_call, full_text)` — exactly one of `pages` (→ `build_chunks_from_pages`, looked up on the `klemma.literature.pdf` module at call time so tests can patch it), `text` (single chunk) or prebuilt `chunks`. Per chunk: render → `call_with_meta` → `extract_json` → repair retry; `finish_reason == "max_tokens"` or unparseable JSON → split the chunk in half (children carry `parent_index`) down to `min_chunk_chars`, then `failed`. Budget (`Budget(max_input_tokens, max_output_tokens, max_cost_usd)`) is reserved *before* each call; exhaustion fails the remaining chunks with `error="budget"`. In `mode="exhaustive"` a backend reporting `finish_reason="unknown"` aborts with `outcome.error`.
+- Post-processing: single `validate_verbatim_fragments` pass over the full text (texts > `VERBATIM_VALIDATION_CAP_LARGE` → `validation_incomplete=True`), `locate_fragment_span` per fragment (coordinates index into the `[Page N]`-marked full text), `dedup_by_text_and_span` (exact normalized text, or difflib ≥ 0.95 *and* overlapping spans — shared prefixes are not duplicates), `compute_coverage` (interval union of `ok` leaf chunks; overlap/splits can never exceed 100 %), `estimate_cost_usd` (pricing table, provider-prefix tolerant, None when unknown).
+- Exhaustive mode (plan C4): `mode="exhaustive"` uses `prompts/extract_exhaustive.md`, chunk size ≤ 20k, always the full output cap (`AIConfig.exhaustive_max_tokens`, 16384), refuses a backend whose first `finish_reason` is `unknown`; per-chunk `notes {contradicts, qualifies}` are merged by `_finalize_notes` (quote located → `confirmed`, else `unverified`; dedup by item + normalized text + overlapping span); `not_covered` from the model is ignored — `outline_digest.not_extracted(digest, covered_ids)` computes it deterministically after all chunks.
+- Types: `ExtractedFragment(fragment, char_start, char_end, source_locator, verbatim_status, chunk_index)`, `ChunkOutcome`, `CoverageReport`, `ExtractionOutcome` (`is_partial`, `plain_fragments`).
+- `validate_verbatim_fragments(fragments, pdf_text, source_id)` and `locate_fragment_span(fragment_text, source_text)` now live here (pure; the engine must not depend on `extractor.py`, which imports `state.py`); `extractor.py` re-exports them together with `VERBATIM_VALIDATION_CAP_SMALL/LARGE` and `_FUZZY_RESCUE_THRESHOLD`, so existing imports and test patches keep working.
+
+### outline_digest.py (~170 lines)
+Plan C3: condensed «id — title» index of the dissertation structure file for the extraction prompt.
+- `parse_structure_file(text) -> ParsedOutline` — chapters only from `## N. Глава K. Title`, sections `### X.Y. Title`, numbered bullets `- X.Y.Z. Title: …` (nested `X.Y.Z.W` → level 5); titles cut at `:`/`;`/`Источники`/`Материал`/` — ` and stripped of status marks (Г/Ч/Н/Э); introduction/conclusion/appendix headings kept in `sections`; every numbered bullet that failed to parse lands in `unparsed` (acceptance test demands `[]`).
+- `render_outline_digest(parsed, max_chars=12000, title_max=80)` — full index for ALL chapters; the budget is met only by shrinking titles (80→60→45→30), ids are never dropped. `outline_hash(digest)` feeds `request_fingerprint`.
+- `digest_ids(digest)` / `not_extracted(digest, covered)` — ids present in a rendered digest and the ones no fragment/note referenced (exhaustive mode).
+- `resolve_outline_path(project_root, outline_file)` (relative → project root), `load_outline_digest(project_root, project)` (missing file → warn once, `""`). Configured via `ProjectConfig.outline_file` / `outline_max_chars` in KLEMMA.md frontmatter; injected as `{{ outline_digest }}` (`## Project Outline` block in `prompts/extract.md`, hidden when empty).
+
+### extractor.py (~380 lines)
 Fragment extraction from PDFs with citation intent classification.
-- `extract_fragments(entry, pdf_text, config, state, ai, dissertation_context, available_tags, klemma_home)` — renders `prompts/extract.md` → Claude → `ExtractionResult` (fragments + citation_intent + citation_links + `downgrade_stats: DowngradeStats`)
-- `validate_verbatim_fragments(fragments, pdf_text, source_id)` — public; post-AI integrity check: two-stage match (NFKC-normalized exact substring → difflib fuzzy rescue ≥0.95) against the full normalized PDF text. Scope-gated on `frag.verbatim=True`; flips failing claims to `False` (paraphrase) instead of dropping them. Returns counts via `DowngradeStats`. Public because the SaaS worker (`api/tasks.py`) and `klemma backfill-verbatim` reuse it. Under chunked extraction (#379) `process_source` / `reprocess_paper` call this once per paper after the chunk loop, passing `full_text` capped via `VERBATIM_VALIDATION_CAP_LARGE` from `api/constants.py`
+- `extract_fragments(entry, pdf_text, config, state, ai, dissertation_context, available_tags, klemma_home, project_type, *, pages=None, outline_digest="", mode="standard")` — CLI wrapper over `extract_engine.extract_from_pages`: with `pages` the FULL text is chunked (`config.ai.max_pdf_chars` no longer limits extraction), without it `pdf_text` is one chunk; saves fragments to project state (run lifecycle arrives with plan C2) and returns `ExtractionResult` (now with `chunk_total`, `failed_chunks`, `coverage_ratio`, `validation_incomplete`, `prompt_hash`, `model`, tokens, `cost_usd`, `key_references`, `spans`); renders `prompts/extract.md` → Claude → `ExtractionResult` (fragments + citation_intent + citation_links + `downgrade_stats: DowngradeStats`)
+- `validate_verbatim_fragments(fragments, pdf_text, source_id)` — public; post-AI integrity check: two-stage match (NFKC-normalized exact substring → difflib fuzzy rescue ≥0.95) against the full normalized PDF text. Scope-gated on `frag.verbatim=True`; flips failing claims to `False` (paraphrase) instead of dropping them. Returns counts via `DowngradeStats`. Public because the SaaS worker (`api/tasks.py`) reuses it. Under chunked extraction (#379) `process_source` / `reprocess_paper` call this once per paper after the chunk loop, passing `full_text` capped via `VERBATIM_VALIDATION_CAP_LARGE` from `api/constants.py`
+- `locate_fragment_span(fragment_text, source_text) -> (start, end) | None` — locate a fragment inside raw source text (sidecar canonical text): same match pipeline as the validator (exact normalized substring → difflib window ≥0.95), then the hit is mapped back to raw coordinates via `text_normalize.normalize_with_map`. Consumer: `klemma repair` (fragment `char_start`/`char_end` backfill)
 - `extract_from_citekey()` — full pipeline (find PDF → extract text → analyze → save citation_links to graph)
 - `save_fragments_to_vault(citekey, fragments, vault, ..., dissertation_context, available_tags, klemma_home)` — appends to `@citekey.md`; auto-creates note if missing
+- `format_structure_notes(notes, not_extracted)` — renders exhaustive-mode notes for the vault section «🧭 Заметки к структуре» (mirrored by `_process_single`; `klemma source show --notes` reads the run's `notes_json`)
 
 ### researcher.py (~620 lines)
 Section research briefings. Shared helpers extracted to `context_loader.py` — backward-compat aliases `_load_chapter_draft`, `_extract_section`, `_load_section_sources`, `_fit_prompt_budget`, `_validate_citekeys` re-exported via imports. Two modes:
@@ -138,6 +155,24 @@ Guided Serendipity briefing — analyzes new sources, finds connections, generat
 - `BriefingResult` — dataclass: source info, key_claims, connections, niches, forks
 - `generate_briefing(source_citekey, config, state, ai, ...)` — renders `prompts/briefing.md` → AI → parse JSON
 - `save_briefing_as_decision(result, state)` — save forks as pending decision
+
+### reference_matcher.py (~200 lines)
+Numbered-reference → citekey matching for `papers/` (claim-provenance PR-3). Journals require "[5]"-style citations, so submitted papers carry no `[@citekey]` markers — this module maps bibliography entry numbers to library citekeys so `check-citations` can verify them.
+- `RefMatch` — dataclass: number, citekey, method ("doi" | "title" | "authors_year"), confidence
+- `RefMap` — dataclass: `number_to_citekey: dict[int, str]`, `unmatched: dict[int, ParsedReference]`, `matches: dict[int, RefMatch]`; `match(n)` / `confidence(n)` accessors
+- `build_ref_map(md_text, sources_meta) -> RefMap` — finds the bibliography via `find_bibliography_section()`, parses entries with `parse_numbered_references()`, matches each against sources_meta: normalized DOI exact (1.0) → fuzzy title (parsed title via `metadata._titles_match` 0.85, or source-title containment in the raw entry 0.75; year agreement when both known) → author surnames + exact year (0.7). Unmatched positions are kept — the checker reports them as soft_warn
+- `collect_sources_meta(state=?, paper_store=?, user_library=?) -> list[dict]` — gathers {citekey, title, authors, year, doi} rows: project state first, then user_library+paper_store for citekeys the project DB lacks; never raises
+
+### citation_checker.py (~1650 lines)
+Citation integrity verification engine (ADR-018): LLM-as-judge verifier + isolated judge provider + evidence model + claims-ledger substrate.
+- `detect_anchors(sentence, base_offset)` — numeric/quote/definitional anchor extraction (no AI)
+- `_parse_claims(md_text, ref_map?)` — ALL cited sentences become claims (anchorless too — the ledger counts them as unchecked); numbered-reference mode ("[5]", papers/) via `RefMap` with synthetic kind="reference" anchors
+- `compute_claim_hash(sentence, citekey, ref_number?)` / `compute_anchor_key(anchor)` — content identity for the claims ledger; normalization makes hashes stable under whitespace/dash/case reformatting, any real edit changes the hash (staleness by design)
+- `build_claim_entries(claims, verdicts)` — flatten a check run into ledger rows (one per claim × anchor, anchorless → anchor_key="")
+- `_resolve_evidence(...)` — sidecar (`SidecarDoc`) → paper_store raw_text → legacy fragments; quote anchors search for their inner text (guillemets stripped); a found anchor is pinned to an advisory evidence span + locator via `locate_fragment_span` + `derive_locator`
+- `verify_claim` / `verify_claim_batch` — deterministic and AI verifiers; verdicts carry `evidence_span`/`evidence_locator`
+- `check_citations_file(..., replay?)` — orchestrator; `replay` maps (claim_hash, anchor_key) → live ledger row and replays definitive verdicts instead of re-judging (--incremental)
+- `check_draft_inline(...)` — writer/verifier-split inline path (never touches the ledger)
 
 ### coach.py (~170 lines)
 Contextual research advisor — methodology-driven heuristics (zero AI calls). Thresholds from 21 methodology papers (Pautasso 2013, Cohan 2019, Kallestinova 2011).

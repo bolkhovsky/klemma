@@ -186,3 +186,48 @@ See CLAUDE.md for full project structure.
 - TUI reader and sources screens
 - ChromaDB semantic search (Iteration 3)
 - Telegram bot delivery (Iteration 3)
+
+
+## v0.19.0 (в работе) — 2026-09-04: движок извлечения и прогоны (план докфудинга C1–C2)
+
+### Что сделано
+- PR-A (#446, смержен в `feat/verify-find-source`): чистый чанкованный движок
+  `skills/extract_engine.py` по всему тексту (интервальное покрытие, деление при обрыве,
+  бюджет до вызова, дедуп по тексту и span), `AICallResult.finish_reason` во всех
+  бэкендах, `AIConfig.chunk_*`/`budget_*`/`pricing`, три раунда замечаний Codex.
+- PR-B (`feat/extraction-runs`): `extraction_attempts` в library.db без изменения
+  `user_version`; ProjectStore v6 (`project_extraction_runs`, `project_run_fragments`,
+  `project_fragments` с PK `(user_id, citekey, fragment_id)`, `active_run_id`);
+  протокол публикации `extraction_runs.py` (шаг 0 до вызова модели, одна транзакция
+  project.db, проверка целостности); `klemma.migration.migrate_monolith` с реестром и
+  dry-run; `repair --run`, зеркало вердиктов в попытки; `source show --all-runs`,
+  `source select`; `process --replace/--from-file/--resume-stale/--activate-partial`
+  (`--exhaustive` в PR-B был скрытой заглушкой). ADR-020.
+
+### Стек и схемы
+- Python 3.11+, uv (`uv.lock` в репозитории), venv `~/.venvs/klemma`, pytest (2385 тестов), ruff.
+- БД: монолит `.klemma/data/klemma.db` (state.py v16), `~/.klemma/library.db`
+  (PaperStore идемпотентные таблицы + UserLibrary v7, sqlite-vec опционально),
+  `.klemma/data/project.db` (ProjectStore v6).
+- Конфиг: `~/.klemmarc.yaml` + `.klemma/config.yaml` + frontmatter `KLEMMA.md`.
+
+- PR-C (#449, `feat/outline-digest`): дайджест структуры в промпт (`skills/outline_digest.py`,
+  `ProjectConfig.outline_file`, `KlemmaContext.outline_digest`, приёмка на 101 пункте).
+- PR-D (#450, `feat/exhaustive-mode`): `--exhaustive` best-effort с `extract_exhaustive.md`,
+  заметки contradicts/qualifies, `not_extracted`, `klemma eval extract` (gold вне git),
+  `source show --notes`; правки по внутреннему многоагентному ревью (42 находки).
+
+- CLI-бэкенд по подписке (#451): `claude -p --output-format json` отдаёт finish_reason и
+  usage; ANTHROPIC_API_KEY по умолчанию не передаётся (`AIConfig.claude_cli_use_api_key`).
+  Пауза при лимите внутри вызова до сброса (#452). Грамматика структуры v3 (#453).
+- Пачка `process --from-file --serial` (#454 и правки 06.09): остановка при лимите
+  провайдера или обрыве соединения («Connection refused»), остаток пишется в
+  `<файл>.remaining` вместе с упавшим источником; проверка лимита учитывает только
+  прогон предыдущего источника той же пачки (ранее чужой прогон блокировал перезапуск).
+
+### Следующие цели
+- B6 на рабочей библиотеке идёт пачками по окну лимита (≈3–5 источников на окно);
+  журнал в диссертации `notes/library/batch_runs_2026-09.md`.
+- Мерж `feat/verify-find-source` в `master` — решение автора.
+- Долг: перевод читающих команд (research, RAG, draft, check-citations) с монолита на
+  активный набор ProjectStore; SaaS-путь без lifecycle прогонов (#372).

@@ -37,6 +37,8 @@ class KlemmaContext:
     # Points to active project's .klemma/ dir (backward-compat with skills)
     klemma_home: Path = field(default_factory=lambda: Path.home() / ".klemma")
     dissertation_context: str = ""
+    # Plan C3: condensed «id — title» index of the structure file (may be "")
+    outline_digest: str = ""
     available_tags: list[str] = field(default_factory=list)
     # New: per-directory project support
     project_root: Optional[Path] = None  # directory containing .klemma/

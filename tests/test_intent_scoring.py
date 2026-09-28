@@ -58,6 +58,124 @@ class TestMigrateSchema:
             }
         assert "citation_intent" in cols
 
+
+class TestMigrationV16:
+    """v16: fragment spans/locator, sources.degraded_steps, claims table."""
+
+    @staticmethod
+    def _make_v15_db(db_path):
+        """Build a minimal v15-era database (no v16 columns/tables)."""
+        import sqlite3
+
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE sources (
+                id TEXT PRIMARY KEY,
+                zotero_key TEXT,
+                status TEXT DEFAULT 'pending',
+                processed_at TEXT,
+                error_message TEXT,
+                note_path TEXT,
+                quality_score INTEGER,
+                primary_chapter INTEGER,
+                primary_section TEXT,
+                relevance_nr1 INTEGER DEFAULT 0,
+                relevance_nr2 INTEGER DEFAULT 0,
+                citation_priority TEXT DEFAULT 'medium',
+                pdf_path TEXT,
+                pdf_text_length INTEGER,
+                fragment_count INTEGER DEFAULT 0
+            );
+            CREATE TABLE fragments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id TEXT NOT NULL REFERENCES sources(id),
+                fragment_text TEXT NOT NULL,
+                fragment_type TEXT,
+                chapter INTEGER,
+                section TEXT,
+                relevance_score INTEGER,
+                usage_hint TEXT,
+                page_number INTEGER,
+                extracted_at TEXT DEFAULT (datetime('now')),
+                used_in_draft BOOLEAN DEFAULT 0,
+                citation_intent TEXT,
+                embedding BLOB,
+                embedding_model TEXT,
+                section_type TEXT,
+                verbatim INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(source_id, fragment_text)
+            );
+            INSERT INTO sources (id, status) VALUES ('legacy2020', 'completed');
+            INSERT INTO fragments (source_id, fragment_text)
+                VALUES ('legacy2020', 'A legacy fragment.');
+            PRAGMA user_version = 15;
+        """)
+        conn.commit()
+        conn.close()
+
+    def test_v16_upgrades_v15_db(self, tmp_path):
+        db_path = tmp_path / "v15.db"
+        self._make_v15_db(db_path)
+
+        state = StateManager(db_path)
+
+        with state._conn() as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
+            frag_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(fragments)")
+            }
+            assert {"char_start", "char_end", "source_locator"} <= frag_cols
+            src_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(sources)")
+            }
+            assert "degraded_steps" in src_cols
+            tables = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            assert "claims" in tables
+            indexes = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                )
+            }
+            assert "idx_claims_manuscript" in indexes
+            # Legacy data survives
+            row = conn.execute(
+                "SELECT fragment_text FROM fragments WHERE source_id='legacy2020'"
+            ).fetchone()
+            assert row[0] == "A legacy fragment."
+
+    def test_v16_idempotent_on_v15_db(self, tmp_path):
+        """Running _migrate_schema twice on an upgraded v15 DB is safe."""
+        db_path = tmp_path / "v15.db"
+        self._make_v15_db(db_path)
+        state = StateManager(db_path)
+
+        with state._conn() as conn:
+            state._migrate_schema(conn)
+            state._migrate_schema(conn)
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
+            # Columns are not duplicated
+            frag_cols = [
+                row[1] for row in conn.execute("PRAGMA table_info(fragments)")
+            ]
+            assert frag_cols.count("char_start") == 1
+            assert frag_cols.count("source_locator") == 1
+
+    def test_fresh_db_has_claims_table(self, tmp_path):
+        """Base SCHEMA ships claims — fresh DBs get it without migration."""
+        state = StateManager(tmp_path / "fresh.db")
+        with state._conn() as conn:
+            cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(claims)")
+            }
+        assert {
+            "manuscript_path", "claim_hash", "anchor_key", "sentence",
+            "citekey", "char_start", "char_end", "verdict", "stale",
+        } <= cols
+
     def test_reference_gaps_has_citation_intent_column(self, state):
         """Migration v1 adds citation_intent to reference_gaps."""
         with state._conn() as conn:

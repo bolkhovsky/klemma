@@ -18,7 +18,7 @@ class TestMigrationV3:
     def test_schema_version_is_current(self, state):
         with state._conn() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 15
+        assert version == 16
 
     def test_citation_links_table_exists(self, state):
         with state._conn() as conn:

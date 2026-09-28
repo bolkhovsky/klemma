@@ -36,6 +36,10 @@ _YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
 # Numbered reference prefix: [1], 1., 1)
 _NUMBERED_PREFIX_RE = re.compile(r"^\s*\[?\d+[.\])]\s*")
 
+# Numbered entry start for number-preserving parsing. Capped at 3 digits so a
+# wrapped line starting with a year ("2011. — Vol. …") is not taken for a new entry.
+_NUMBERED_ENTRY_RE = re.compile(r"^\s*\[?(\d{1,3})[.\])]\s+", re.MULTILINE)
+
 
 def parse_reference(raw: str) -> ParsedReference:
     """Parse a single bibliography string into structured fields.
@@ -111,6 +115,25 @@ def parse_references(text: str) -> list[ParsedReference]:
         ref = parse_reference(entry)
         results.append(ref)
 
+    return results
+
+
+def parse_numbered_references(text: str) -> list[tuple[int, ParsedReference]]:
+    """Parse a numbered bibliography section, PRESERVING entry numbers.
+
+    Like parse_references(), but splits on entry markers ([1], 1., 1)) via
+    finditer and returns (number, ParsedReference) pairs — the number is what
+    in-text markers like "[5]" refer to. Entries too short to be real
+    references (< 20 chars) are skipped.
+    """
+    matches = list(_NUMBERED_ENTRY_RE.finditer(text))
+    results: list[tuple[int, ParsedReference]] = []
+    for i, m in enumerate(matches):
+        entry_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        entry = text[m.end():entry_end].strip()
+        if len(entry) < 20:
+            continue
+        results.append((int(m.group(1)), parse_reference(entry)))
     return results
 
 

@@ -318,3 +318,41 @@ def test_litellm_call_with_meta_retries_counted():
     result = client.call_with_meta("sys", "usr")
     assert result.text == "ok"
     assert result.retries_used == 2
+
+
+# ---------------------------------------------------------------------------
+# finish_reason (plan C1) — the chunked engine splits on "max_tokens"
+# ---------------------------------------------------------------------------
+
+
+def test_call_with_meta_maps_length_to_max_tokens():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from klemma.ai_litellm import LiteLLMClient
+    from klemma.config import AIConfig
+
+    client = LiteLLMClient(AIConfig(backend="litellm", model="openai/gpt-4o-mini"))
+    mock_litellm = MagicMock()
+    mock_litellm.completion.return_value = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="{}"), finish_reason="length")],
+        usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+    )
+    client._litellm = mock_litellm
+    assert client.call_with_meta("s", "u").finish_reason == "max_tokens"
+
+
+def test_call_with_meta_reports_unknown_without_finish_reason():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from klemma.ai_litellm import LiteLLMClient
+    from klemma.config import AIConfig
+
+    client = LiteLLMClient(AIConfig(backend="litellm", model="openai/gpt-4o-mini"))
+    mock_litellm = MagicMock()
+    mock_litellm.completion.return_value = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+    )
+    client._litellm = mock_litellm
+    assert client.call_with_meta("s", "u").finish_reason == "unknown"

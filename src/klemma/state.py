@@ -9,6 +9,7 @@ from typing import Optional
 from .repositories import (
     BenchmarkRepository,
     CitationsRepository,
+    ClaimsRepository,
     DecisionsRepository,
     EmbeddingsStoreRepository,
     FragmentRepository,
@@ -25,6 +26,9 @@ class ProcessingStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    # Completed with defects: some pipeline step (embeddings, sidecar) failed
+    # silently; the failed steps are listed in sources.degraded_steps.
+    DEGRADED = "degraded"
 
 
 SCHEMA = """
@@ -127,6 +131,33 @@ CREATE TABLE IF NOT EXISTS prune_verdicts (
     reason TEXT,
     updated_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    manuscript_path TEXT NOT NULL,
+    claim_hash TEXT NOT NULL,
+    anchor_key TEXT NOT NULL DEFAULT '',
+    sentence TEXT NOT NULL,
+    citekey TEXT NOT NULL DEFAULT '',
+    ref_number INTEGER,
+    location TEXT,
+    char_start INTEGER NOT NULL,
+    char_end INTEGER NOT NULL,
+    anchor_kind TEXT,
+    anchor_raw TEXT,
+    verdict TEXT,
+    reason TEXT,
+    ai_used INTEGER NOT NULL DEFAULT 0,
+    judge_model TEXT,
+    evidence_start INTEGER,
+    evidence_end INTEGER,
+    evidence_locator TEXT,
+    verified_at TEXT,
+    stale INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(manuscript_path, claim_hash, anchor_key)
+);
+CREATE INDEX IF NOT EXISTS idx_claims_manuscript ON claims(manuscript_path, stale);
 """
 
 PRUNE_EXPIRY_DAYS = 14
@@ -161,6 +192,7 @@ class StateManager:
         self.prune = PruneRepository(self._conn)
         self.benchmarks = BenchmarkRepository(self._conn)
         self.decisions = DecisionsRepository(self._conn)
+        self.claims = ClaimsRepository(self._conn)
 
     @contextmanager
     def _conn(self):
@@ -189,7 +221,7 @@ class StateManager:
         # library.db (stores/paper_store.py) has its own independent
         # PRAGMA user_version chain — do not merge the two sequences.
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        target = 15  # bump this when adding new migrations
+        target = 16  # bump this when adding new migrations
 
         if version < 1:
             existing_frag = {
@@ -481,6 +513,65 @@ class StateManager:
                     "ALTER TABLE fragments ADD COLUMN verbatim INTEGER NOT NULL DEFAULT 0"
                 )
 
+        if version < 16:
+            # Claim-provenance substrate: fragment spans into the sidecar
+            # canonical text + human-readable source locator ("п. 3.4",
+            # "табл. 2"). `section` is NOT reused — it holds the
+            # dissertation section, not the source's.
+            existing_frag = {
+                row[1] for row in conn.execute("PRAGMA table_info(fragments)")
+            }
+            for col, col_type in [
+                ("char_start", "INTEGER"),
+                ("char_end", "INTEGER"),
+                ("source_locator", "TEXT"),
+            ]:
+                if col not in existing_frag:
+                    conn.execute(
+                        f"ALTER TABLE fragments ADD COLUMN {col} {col_type}"
+                    )
+
+            # JSON array of pipeline steps that silently failed (embeddings
+            # down, sidecar write failed, ...) — consumer is the future
+            # `degraded` source status.
+            existing_src = {
+                row[1] for row in conn.execute("PRAGMA table_info(sources)")
+            }
+            if "degraded_steps" not in existing_src:
+                conn.execute(
+                    "ALTER TABLE sources ADD COLUMN degraded_steps TEXT"
+                )
+
+            conn.execute("""CREATE TABLE IF NOT EXISTS claims (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                manuscript_path TEXT NOT NULL,
+                claim_hash TEXT NOT NULL,
+                anchor_key TEXT NOT NULL DEFAULT '',
+                sentence TEXT NOT NULL,
+                citekey TEXT NOT NULL DEFAULT '',
+                ref_number INTEGER,
+                location TEXT,
+                char_start INTEGER NOT NULL,
+                char_end INTEGER NOT NULL,
+                anchor_kind TEXT,
+                anchor_raw TEXT,
+                verdict TEXT,
+                reason TEXT,
+                ai_used INTEGER NOT NULL DEFAULT 0,
+                judge_model TEXT,
+                evidence_start INTEGER,
+                evidence_end INTEGER,
+                evidence_locator TEXT,
+                verified_at TEXT,
+                stale INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(manuscript_path, claim_hash, anchor_key)
+            )""")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_claims_manuscript "
+                "ON claims(manuscript_path, stale)"
+            )
+
         conn.execute(f"PRAGMA user_version = {target}")
 
     # ── Source delegation ─────────────────────────────────────────────────
@@ -503,6 +594,9 @@ class StateManager:
 
     def set_pdf_path(self, source_id: str, path: str):
         return self.sources.set_pdf_path(source_id, path)
+
+    def set_pdf_text_length(self, source_id: str, length: int):
+        return self.sources.set_pdf_text_length(source_id, length)
 
     def get_pending_sources(self, limit: int = 0) -> list[str]:
         return self.sources.get_pending_sources(limit)
@@ -538,6 +632,15 @@ class StateManager:
 
     def mark_skipped(self, source_id: str, reason: str):
         return self.sources.mark_skipped(source_id, reason)
+
+    def mark_degraded(self, source_id: str, steps: list[str]):
+        return self.sources.mark_degraded(source_id, steps)
+
+    def clear_degraded(self, source_id: str):
+        return self.sources.clear_degraded(source_id)
+
+    def get_degraded_sources(self) -> list[dict]:
+        return self.sources.get_degraded_sources()
 
     def get_source(self, source_id: str) -> Optional[dict]:
         return self.sources.get_source(source_id)
@@ -575,6 +678,9 @@ class StateManager:
 
     def get_all_sources(self) -> list[dict]:
         return self.sources.get_all_sources()
+
+    def get_sources_for_selection(self) -> list[dict]:
+        return self.sources.get_sources_for_selection()
 
     def get_all_sources_metadata(self) -> list[dict]:
         return self.sources.get_all_sources_metadata()
@@ -631,6 +737,23 @@ class StateManager:
 
     def update_fragment_section(self, fragment_id: int, section: str) -> bool:
         return self.fragments.update_fragment_section(fragment_id, section)
+
+    def update_fragment_provenance(
+        self,
+        fragment_id: int,
+        *,
+        verbatim: Optional[bool] = None,
+        char_start: Optional[int] = None,
+        char_end: Optional[int] = None,
+        source_locator: Optional[str] = None,
+    ) -> bool:
+        return self.fragments.update_fragment_provenance(
+            fragment_id,
+            verbatim=verbatim,
+            char_start=char_start,
+            char_end=char_end,
+            source_locator=source_locator,
+        )
 
     def get_fragment_embedding_stats(self) -> dict:
         return self.fragments.get_fragment_embedding_stats()
@@ -813,6 +936,21 @@ class StateManager:
 
     def get_benchmarked_citekeys(self) -> set[str]:
         return self.benchmarks.get_benchmarked_citekeys()
+
+    # ── Claims ledger delegation ────────────────────────────────────────
+
+    def record_claim_check(self, manuscript_path: str, entries: list[dict],
+                           judge_model: Optional[str] = None) -> int:
+        return self.claims.record_check(manuscript_path, entries, judge_model)
+
+    def mark_claims_stale(self, manuscript_path: str, live_hashes: set[str]) -> int:
+        return self.claims.mark_stale(manuscript_path, live_hashes)
+
+    def get_claims(self, manuscript_path: str, include_stale: bool = True) -> list[dict]:
+        return self.claims.get_claims(manuscript_path, include_stale)
+
+    def get_claims_status_summary(self, manuscript_path: Optional[str] = None) -> list[dict]:
+        return self.claims.get_status_summary(manuscript_path)
 
     def get_sections_for_type(self, section_type: str) -> list[str]:
         """Return numeric section IDs mapped to a semantic type."""

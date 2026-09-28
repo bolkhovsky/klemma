@@ -19,8 +19,12 @@ Centralised here so magic numbers in tasks.py are documented and testable.
 #
 # AI extraction is chunked separately via build_chunks_from_pages — that
 # limit is unrelated and lives in literature/pdf.py.
-VERBATIM_VALIDATION_CAP_SMALL = 100_000     # full text used when pdf_text < this
-VERBATIM_VALIDATION_CAP_LARGE = 1_000_000   # backstop for pathological inputs (#382)
+# The values live in the pure extraction engine (plan C1) and are re-exported
+# here so existing imports keep working.
+from klemma.skills.extract_engine import (  # noqa: E402, F401
+    VERBATIM_VALIDATION_CAP_LARGE,
+    VERBATIM_VALIDATION_CAP_SMALL,
+)
 
 # ── Embeddings enforcement ──────────────────────────────────────────────────
 # SaaS must use local Ollama embeddings — no external API calls for embeddings.

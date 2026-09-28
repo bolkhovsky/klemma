@@ -42,9 +42,12 @@ All Pydantic models for the data layer:
 - `load_entry_lookup()` — citekey → `ZoteroEntry` from BBT JSON
 - CamelCase splitting: `wagnerSeaiceInformation2020` → `[wagner, seaice, information, 2020]`
 
-### sidecar.py (~90 lines)
-Raw PDF text sidecar writer — feynman-style format at `<project_root>/.klemma/pdfs/<citekey>.md`. Introduced in ADR-016 as the on-disk trace of processed PDFs and the primary-source passage store for downstream tooling.
+### sidecar.py (~230 lines)
+Raw PDF text sidecar writer + reader — feynman-style format at `<project_root>/.klemma/pdfs/<citekey>.md`. Introduced in ADR-016 as the on-disk trace of processed PDFs and the primary-source passage store for downstream tooling. Written by `_process_single()` **immediately after text extraction, before the AI call** — the full text survives AI failure or zero-fragment extraction (claim-provenance substrate).
 - `write_pdf_sidecar(project_root, citekey, pages, metadata) -> Path` — atomic write via `tempfile.mkstemp` + `os.fdopen` + `os.replace`; rejects `..`, `/`, `\\`, empty citekeys (pattern mirrors `LocalFileStore._file_path()`); idempotent (reprocessing overwrites cleanly); creates missing `.klemma/pdfs/` directory
+- `SidecarDoc` — dataclass: `text` (canonical text) + `page_spans: list[(page, char_start, char_end)]` (half-open, trimmed to non-whitespace page content) + `page_for(offset) -> int | None`
+- `load_sidecar_doc(project_root, citekey) -> SidecarDoc | None` — parses page markers into per-page character spans at read time (no extra storage). **HARD CONTRACT**: `load_sidecar_doc(...).text` is byte-for-byte equal to `read_pdf_sidecar(...)` — fragment/claim offsets are always in canonical text coordinates
+- `read_pdf_sidecar(project_root, citekey) -> str | None` — delegates to `load_sidecar_doc`; canonical text = frontmatter stripped, each `\n<!-- Page N -->\n` marker replaced by a single `\n`, then `str.strip()`
 
 **Format contracts** (must not drift without a version bump — the planned semantic citation drift checker is the second consumer):
 1. **Path**: always `<project_root>/.klemma/pdfs/<citekey>.md`. No config override. Downstream consumers can hardcode.
@@ -71,6 +74,10 @@ Layout:
 <page 2 prose>
 ```
 
+### locator.py (~80 lines)
+Human-readable source locators from sidecar text — pure string heuristics, advisory-only (never gate a verdict).
+- `derive_locator(text, span_start, page=None) -> str | None` — scan lines upward from the span: numbered clause `^\d+(\.\d+)+` → «п. X.Y», «Таблица N» → «табл. N», «Приложение X»; fallback «с. {page}», else None. Consumer: `klemma repair` (fragment `source_locator` backfill)
+
 ### note_factory.py (470 lines)
 Vault note creation pipeline — largest module in the package:
 1. `auto_classify()` — regex-based chapter/section/tag assignment from title+abstract; returns `matched: bool` (True when any chapter_mapping pattern matched)
@@ -79,18 +86,20 @@ Vault note creation pipeline — largest module in the package:
 4. `create_vault_note()` — renders structured note with frontmatter + sections
 5. Reference gap extraction — bibliography cross-check against library
 
-### draft_parser.py (~170 lines)
+### draft_parser.py (~200 lines)
 Parse structure and bibliography from draft PDFs for Klemma `--from-draft` onboarding (#76). Uses PyMuPDF.
 - `DraftParseResult` — dataclass: title, sections, references, full_text, page_count
 - `DetectedSection` — dataclass: heading, level (1-3), text, page_start
 - `parse_draft_pdf(pdf_path) -> DraftParseResult` — extract title (font-size heuristic), numbered sections, bibliography entries
-- `_extract_bibliography(full_text)` — find bib section marker (EN/RU), parse entries via `reference_parser.parse_references()`
+- `find_bibliography_section(text) -> tuple[int, int] | None` — char span of the bibliography content: starts after the marker line (EN/RU, plain or markdown heading), ends at the next markdown heading or EOF. Reused by `skills/reference_matcher.py` and the numbered-mode claim parser
+- `_extract_bibliography(full_text)` — `find_bibliography_section()` + `reference_parser.parse_references()`
 
-### reference_parser.py (~140 lines)
+### reference_parser.py (~170 lines)
 Parse bibliography strings into structured `ParsedReference` dataclass. Pure string processing, no AI, no external deps. Foundation for Klemma `--from-draft` onboarding (#76).
 - `ParsedReference` — dataclass: raw, authors, year, title, journal, doi, url
 - `parse_reference(raw) -> ParsedReference` — parse single entry (APA, numbered, DOI/URL extraction)
 - `parse_references(text) -> list[ParsedReference]` — split bibliography section into entries, filter short
+- `parse_numbered_references(text) -> list[tuple[int, ParsedReference]]` — like `parse_references()` but PRESERVES entry numbers ([1] / 1. / 1) markers, ≤3 digits so wrapped year lines don't split entries); feeds the `[N] → citekey` ref map for numbered manuscripts
 
 ## Data flows
 
