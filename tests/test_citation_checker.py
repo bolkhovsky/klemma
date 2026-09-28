@@ -1094,3 +1094,18 @@ def test_summary_counts_anchorless_claims_as_unchecked():
     claims = _parse_claims("A claim without numbers @alpha2020. Another one [@beta2021].\n")
     assert _summarize([], claims) == "2 unchecked (no anchor)"
     assert _summarize([], []) == "all claims ok"
+
+
+def test_bare_at_not_url_path_and_keeps_numbered_mode():
+    from klemma.skills.citation_checker import extract_cited_citekeys
+    from klemma.skills.reference_matcher import RefMap
+
+    assert extract_cited_citekeys("See https://medium.com/@someuser/post for details.") == set()
+    md = (
+        "The metric is defined per chart [1].\n\n"
+        "## References\n\n1. Melsom A. Validation metrics. https://medium.com/@melsom/post 2019.\n"
+    )
+    ref_map = RefMap(number_to_citekey={1: "melsom2019"}, unmatched={}, matches={})
+    claims = _parse_claims(md, ref_map=ref_map)
+    assert [c.citekey for c in claims] == ["melsom2019"]
+    assert claims[0].anchors[-1].kind == "reference"

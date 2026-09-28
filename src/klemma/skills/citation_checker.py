@@ -356,7 +356,7 @@ _CITEKEY_CHARS = r"[A-Za-z](?:[\w:.+\-]*[\w+\-])?"
 
 _CITE_REF_RE = re.compile(
     r"\[{1,2}(-?@[^\[\]]+)\]{1,2}"                  # [@k], [@a; @b], [[@k]]
-    r"|(?<![\w\[@])(-?@" + _CITEKEY_CHARS + r")"    # bare @k (not an e-mail)
+    r"|(?<![\w\[@/])(-?@" + _CITEKEY_CHARS + r")"   # bare @k (not an e-mail or URL path)
 )
 
 
