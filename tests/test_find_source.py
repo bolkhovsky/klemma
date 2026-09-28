@@ -187,6 +187,26 @@ def test_partial_coverage_prints_counts(tmp_path):
     assert "@ren2025" in result.output
 
 
+def test_json_stdout_stays_parseable_with_coverage_warning(tmp_path):
+    """Coverage warning goes to stderr: `find-source --json | jq` must parse."""
+    import json
+
+    state = StateManager(tmp_path / "klemma.db")
+    _seed_corpus(state)
+    state.register_sources(["gap2026"])
+    state.save_fragments("gap2026", [{
+        "text": "Совсем не эмбеддированный фрагмент про другую тему.",
+        "type": "key_idea", "section": "1.1", "relevance": 3,
+    }])
+    kctx = _make_kctx(tmp_path, state, _FakeEmbeddings())
+
+    result = _invoke(["--json", "ошибка кромки"], kctx)
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["candidates"]
+    assert "Покрытие" in result.stderr
+
+
 # ---------------------------------------------------------------------------
 # Graceful degradation
 # ---------------------------------------------------------------------------
