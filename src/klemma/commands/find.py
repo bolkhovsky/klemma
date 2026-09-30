@@ -7,7 +7,7 @@ import sys
 import click
 from rich.table import Table
 
-from ..cli import _get_context, console, main
+from ..cli import _get_context, console, err_console, main
 
 _PREVIEW_CHARS = 160
 
@@ -88,7 +88,7 @@ def find_source(ctx, claim_text, top_k, as_json):
     emb = kctx.embeddings
 
     if not emb:
-        console.print(
+        err_console.print(
             "[yellow]Эмбеддинги не настроены (embeddings.backend в config.yaml) — "
             "обратный поиск недоступен.[/yellow]"
         )
@@ -106,18 +106,18 @@ def find_source(ctx, claim_text, top_k, as_json):
     if frag_covered == 0 and src_covered == 0:
         other_models = sorted(set(frag_stats["models"]) | set(src_stats["models"]))
         if other_models:
-            console.print(
+            err_console.print(
                 f"[yellow]Корпус эмбеддирован другими моделями ({', '.join(other_models)}), "
                 f"активная — {model_name}. Запустите `klemma embed all --remodel`.[/yellow]"
             )
         else:
-            console.print(
+            err_console.print(
                 "[yellow]В корпусе нет эмбеддингов — запустите `klemma embed all`.[/yellow]"
             )
         return
 
     if frag_covered < frag_stats["total"] or src_covered < src_stats["total"]:
-        console.print(
+        err_console.print(
             f"[yellow]Покрытие модели {model_name}: "
             f"фрагменты {frag_covered}/{frag_stats['total']}, "
             f"источники {src_covered}/{src_stats['total']} — "
@@ -127,10 +127,10 @@ def find_source(ctx, claim_text, top_k, as_json):
     try:
         query_vec = emb.embed(claim_text)
     except Exception as exc:
-        console.print(f"[red]Не удалось получить эмбеддинг запроса: {exc}[/red]")
+        err_console.print(f"[red]Не удалось получить эмбеддинг запроса: {exc}[/red]")
         sys.exit(2)
     if not query_vec:
-        console.print("[red]Провайдер эмбеддингов вернул пустой вектор для запроса.[/red]")
+        err_console.print("[red]Провайдер эмбеддингов вернул пустой вектор для запроса.[/red]")
         sys.exit(2)
 
     frag_hits = state.retrieve_similar_fragments(

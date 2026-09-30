@@ -422,6 +422,58 @@ def test_claude_cli_strips_api_key_unless_opted_in(monkeypatch):
     assert c2._clean_env.get("ANTHROPIC_API_KEY") == "sk-test" and c2._has_api_key
 
 
+def test_claude_cli_isolated_mode_flags_and_model(monkeypatch):
+    from klemma import ai as ai_mod
+    from klemma.config import AIConfig
+
+    monkeypatch.setattr(ai_mod.ClaudeClient, "check_cli_available", staticmethod(lambda: True))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    c = ai_mod.ClaudeClient(AIConfig(backend="claude", model="sonnet", claude_cli_isolated=True))
+    cmd = c._build_cmd("sonnet", json_output=True)
+    assert cmd[:4] == ["claude", "-p", "--output-format", "json"]
+    assert cmd[cmd.index("--model") + 1] == "sonnet"
+    for flag in ai_mod.ClaudeClient._ISOLATION_FLAGS:
+        assert flag in cmd
+
+
+def test_claude_cli_reports_model_from_model_usage():
+    import json as _json
+
+    from klemma.ai import ClaudeClient
+
+    out = _json.dumps({
+        "type": "result", "result": "{}", "stop_reason": "end_turn",
+        "usage": {"input_tokens": 2, "output_tokens": 5},
+        "modelUsage": {
+            "claude-haiku-4-5": {"outputTokens": 1},
+            "claude-sonnet-5": {"outputTokens": 40},
+        },
+    })
+    text, tin, tout, finish, err, model = ClaudeClient._parse_json_result(out)
+    assert (text, err, model) == ("{}", None, "claude-sonnet-5")
+    assert ClaudeClient._parse_json_result("plain text")[5] is None
+
+
+def test_claude_call_with_meta_uses_actual_model(monkeypatch):
+    import json as _json
+    import subprocess
+
+    from klemma import ai as ai_mod
+    from klemma.config import AIConfig
+
+    monkeypatch.setattr(ai_mod.ClaudeClient, "check_cli_available", staticmethod(lambda: True))
+    stdout = _json.dumps({
+        "type": "result", "result": "ok", "usage": {},
+        "modelUsage": {"claude-opus-5-5": {"outputTokens": 3}},
+    })
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout=stdout, stderr=""),
+    )
+    c = ai_mod.ClaudeClient(AIConfig(backend="claude", model="sonnet"))
+    assert c.call_with_meta("s", "u").model == "claude-opus-5-5"
+
+
 def test_claude_cli_error_text_and_backoff(monkeypatch):
     import json as _json
     from types import SimpleNamespace

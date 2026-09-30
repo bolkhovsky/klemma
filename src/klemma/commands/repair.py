@@ -34,7 +34,7 @@ import click
 from ..cli import _auto_embed_after_process, _get_context, console, main
 from ..literature.locator import derive_locator
 from ..literature.sidecar import load_sidecar_doc, write_pdf_sidecar
-from ..skills.citation_checker import _CITE_REF_RE, _extract_citekeys_from_ref
+from ..skills.citation_checker import extract_cited_citekeys
 from ..skills.extractor import locate_fragment_span
 
 _KNOWN_STEPS = ("sidecar", "verbatim", "embeddings")
@@ -62,7 +62,7 @@ class RepairStats:
 
 
 def collect_cited_citekeys(patterns: tuple[str, ...]) -> tuple[set[str], list[str]]:
-    """Scan markdown files for ``[@citekey]`` references.
+    """Scan markdown files for ``[@citekey]`` and bare ``@citekey`` references.
 
     Each pattern is a path or a glob; directories are walked for ``*.md``.
     Returns (citekeys, warnings) — a missing/empty pattern is a warning,
@@ -93,8 +93,7 @@ def collect_cited_citekeys(patterns: tuple[str, ...]) -> tuple[set[str], list[st
         except OSError as exc:
             warnings.append(f"--cited {md}: {exc}")
             continue
-        for m in _CITE_REF_RE.finditer(text):
-            citekeys.update(_extract_citekeys_from_ref(m.group(1)))
+        citekeys.update(extract_cited_citekeys(text))
 
     return citekeys, warnings
 

@@ -256,6 +256,16 @@ _NUMERIC_RE = re.compile(
     r"(?![А-Яа-яA-Za-z\d])",
 )
 
+_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+_NUMBER_CHAIN_RE = re.compile(r"\d+(?:[.\-]\d+)+")
+
+
+def _is_identifier(chain: str) -> bool:
+    """A digit chain that names a document/clause rather than a quantity:
+    a part with 3+ dotted groups (7.3.4.1) or a 5+ digit group (72039-2025)."""
+    parts = [p.split(".") for p in chain.split("-")]
+    return any(len(p) >= 3 for p in parts) or any(len(g) >= 5 for p in parts for g in p)
+
 _QUOTE_RE = re.compile(r'[«"“](.*?)[»"”]', re.DOTALL)
 _QUOTE_MIN_WORDS = 5
 _QUOTE_MIN_CHARS = 30
@@ -309,9 +319,19 @@ def detect_anchors(sentence: str, base_offset: int = 0) -> list[ClaimAnchor]:
             anchor_id=f"{start}:{end}",
         ))
 
-    # Numeric anchors
+    # Numeric anchors. Years and identifiers ("ГОСТ Р 72039-2025", "п. 7.3.4.1",
+    # "РД 52.27.759-2011") are bibliographic metadata, not claims; values and
+    # ranges ("0.674", "10-15%", "1.5-2.0") stay.
+    id_spans = [
+        (m.start(), m.end()) for m in _NUMBER_CHAIN_RE.finditer(sentence)
+        if _is_identifier(m.group(0))
+    ]
     for m in _NUMERIC_RE.finditer(sentence):
         raw = m.group(0).strip()
+        if _YEAR_RE.fullmatch(raw) or any(
+            s < m.end() and m.start() < e for s, e in id_spans
+        ):
+            continue
         start = base_offset + m.start()
         end = base_offset + m.end()
         _add(ClaimAnchor(
@@ -330,11 +350,19 @@ def detect_anchors(sentence: str, base_offset: int = 0) -> list[ClaimAnchor]:
 # Claim parsing
 # ---------------------------------------------------------------------------
 
+# Citekey charset (same as drafter.py). The last char cannot be "." or ":",
+# so a bare key at the end of a sentence ("… @key.") leaves the period out.
+_CITEKEY_CHARS = r"[A-Za-z](?:[\w:.+\-]*[\w+\-])?"
+
 _CITE_REF_RE = re.compile(
-    r"\[{1,2}"         # [ or [[
-    r"(-?@[^\[\]]+)"   # content starting with optional - then @
-    r"\]{1,2}"         # ] or ]]
+    r"\[{1,2}(-?@[^\[\]]+)\]{1,2}"                  # [@k], [@a; @b], [[@k]]
+    r"|(?<![\w\[@/])(-?@" + _CITEKEY_CHARS + r")"   # bare @k (not an e-mail or URL path)
 )
+
+
+def _cite_ref_content(m: "re.Match[str]") -> str:
+    """Marker content of a _CITE_REF_RE match: bracketed or bare."""
+    return m.group(1) or m.group(2)
 
 # Numbered citation marker: [5], [5, 12], [5; 12], [5, п. 3.4].
 # Numbers capped at 3 digits so bracketed years ("[2026]") are not taken for refs.
@@ -355,7 +383,7 @@ def _extract_citekeys_from_ref(content: str) -> list[str]:
     parts = re.split(r";\s*", content)
     keys = []
     for part in parts:
-        m = re.match(r"\s*-?@([A-Za-z][A-Za-z0-9_:\-]*)", part.strip())
+        m = re.match(r"\s*-?@(" + _CITEKEY_CHARS + ")", part.strip())
         if m:
             keys.append(m.group(1))
     return keys
@@ -392,6 +420,28 @@ def _mask_excluded_regions(text: str) -> str:
     return "".join(buf)
 
 
+def extract_cited_citekeys(md_text: str) -> set[str]:
+    """All citekeys cited in markdown (bracketed and bare @-markers).
+
+    Frontmatter, code and HTML comments are skipped, as in _parse_claims.
+    """
+    citekeys: set[str] = set()
+    for m in _CITE_REF_RE.finditer(_mask_excluded_regions(md_text)):
+        citekeys.update(_extract_citekeys_from_ref(_cite_ref_content(m)))
+    return citekeys
+
+
+def _is_terminator(text: str, i: int) -> bool:
+    """Sentence terminator at text[i]; a dot between digits ("0.674",
+    "52.27.759") is a decimal/section separator, not a sentence end."""
+    ch = text[i]
+    if ch not in _SENT_TERMINATORS:
+        return False
+    if ch == "." and 0 < i < len(text) - 1 and text[i - 1].isdigit() and text[i + 1].isdigit():
+        return False
+    return True
+
+
 def _find_sentence_bounds(masked: str, cite_start: int, cite_end: int) -> tuple[int, int]:
     """Find sentence boundaries around a citation reference in masked text."""
     # --- sentence start: scan backward ---
@@ -399,7 +449,7 @@ def _find_sentence_bounds(masked: str, cite_start: int, cite_end: int) -> tuple[
     i = cite_start - 1
     while i >= 0:
         ch = masked[i]
-        if ch in _SENT_TERMINATORS:
+        if _is_terminator(masked, i):
             sent_start = i + 1
             break
         if ch == "\n":
@@ -425,7 +475,7 @@ def _find_sentence_bounds(masked: str, cite_start: int, cite_end: int) -> tuple[
     i = cite_end
     while i < len(masked):
         ch = masked[i]
-        if ch in _SENT_TERMINATORS:
+        if _is_terminator(masked, i):
             sent_end = i + 1
             break
         if ch == "\n":
@@ -465,19 +515,23 @@ def _parse_claims(md_text: str, ref_map: "Optional[RefMap]" = None) -> list[Clai
 
     claims: list[Claim] = []
 
-    for cite_m in _CITE_REF_RE.finditer(masked):
-        content = cite_m.group(1)
-        citekeys = _extract_citekeys_from_ref(content)
+    markers = list(_CITE_REF_RE.finditer(masked))
+    # Same offset-preserving blanking as the numbered branch: dots inside a
+    # key ("@a.b", "@Stefan2025_x_.") must not cut the sentence, and digits of
+    # a key ("@gostR-72039-2025") must not become numeric anchors.
+    blanked = _CITE_REF_RE.sub(lambda mm: " " * len(mm.group(0)), masked)
+
+    for cite_m in markers:
+        citekeys = _extract_citekeys_from_ref(_cite_ref_content(cite_m))
         if not citekeys:
             continue
 
-        sent_start, sent_end = _find_sentence_bounds(masked, cite_m.start(), cite_m.end())
-        raw_sentence = md_text[sent_start:sent_end]
-        sentence = raw_sentence.strip()
+        sent_start, sent_end = _find_sentence_bounds(blanked, cite_m.start(), cite_m.end())
+        sentence = md_text[sent_start:sent_end].strip()
         if len(sentence) < 10:
             continue
 
-        anchors = detect_anchors(raw_sentence, base_offset=sent_start)
+        anchors = detect_anchors(blanked[sent_start:sent_end], base_offset=sent_start)
 
         for ck in citekeys:
             claims.append(Claim(
@@ -585,6 +639,37 @@ def _parse_numbered_claims(
 # Evidence resolution
 # ---------------------------------------------------------------------------
 
+_NUMBER_PART_RE = re.compile(r"(\d+)(?:[.,](\d+))?")
+
+
+def _find_numeric_in_source(raw: str, source_text: str) -> Optional[str]:
+    """The source's own spelling of a numeric anchor, or None.
+
+    Decimal separator is either "." or "," (an English paper citing a Russian
+    standard writes 0.674 for «0,674»); digit boundaries on both sides, so
+    0.8 does not match 10.85. Sign and unit are left to the judge.
+    """
+    m = _NUMBER_PART_RE.search(raw)
+    if not m:
+        return None
+    number = re.escape(m.group(1)) + (r"[.,]" + re.escape(m.group(2)) if m.group(2) else "")
+    hit = re.search(r"(?<!\d)(?<!\d[.,])" + number + r"(?![.,]?\d)", source_text)
+    return hit.group(0) if hit else None
+
+
+def _locate_anchor(anchor: ClaimAnchor, source_text: str) -> Optional[str]:
+    """Text to search the source for, as the source spells it; None if absent.
+
+    Quote anchors search for their inner text — the guillemets belong to the
+    manuscript, not the source. Numeric anchors tolerate the decimal separator.
+    """
+    if anchor.kind == "numeric":
+        return _find_numeric_in_source(anchor.raw, source_text)
+    needle = anchor.raw.strip("«»\"“”'") if anchor.kind == "quote" else anchor.raw
+    norm = _normalize_text(needle)
+    return needle if norm and norm in _normalize_text(source_text) else None
+
+
 def _build_passages(source_text: str, anchor_raw: str, n: int = 3) -> list[str]:
     """Return up to n text passages around the anchor in source_text."""
     norm_anchor = _normalize_text(anchor_raw)
@@ -677,14 +762,12 @@ def _resolve_evidence(
             anchor_found=False,
         )
 
-    # Search for anchor in source. Quote anchors search for their inner
-    # text — the guillemets belong to the manuscript, not the source, so
-    # matching the raw anchor would always miss (and _build_passages would
-    # fall back to the head of the document, hiding the actual quote).
-    needle = anchor.raw.strip("«»\"“”'") if anchor.kind == "quote" else anchor.raw
-    norm_anchor = _normalize_text(needle)
-    norm_source = _normalize_text(source_text)
-    anchor_found = bool(norm_anchor and norm_anchor in norm_source)
+    # Search for the anchor as the source spells it; a miss would make
+    # _build_passages fall back to the head of the document and hide the
+    # actual evidence from the judge.
+    found = _locate_anchor(anchor, source_text)
+    anchor_found = found is not None
+    needle = found or anchor.raw
 
     passages = _build_passages(source_text, needle)
 
@@ -1073,12 +1156,14 @@ def _judge_model(ai_cfg: "KlemmaConfig.ai") -> str:  # type: ignore[name-defined
 def build_judge_provider(config: "KlemmaConfig") -> Optional["AIProvider"]:
     """Build an isolated AI provider for citation judging (ADR-018).
 
-    CTO RC3: for claude backend, judge is routed through litellm only when
-    citation_check_model is explicitly set in 'anthropic/...' format AND an
-    anthropic key is available. Otherwise returns None (degraded mode).
+    claude backend (revised 2026-09, ADR-018 «Пересмотр»): the judge runs
+    through the Claude CLI on the user's login, in isolated mode (no user
+    CLAUDE.md/hooks/MCP/tools in the context) with an explicit --model.
+    The litellm route stays for an explicit 'anthropic/...' citation_check_model
+    with an API key — the SaaS worker path (api/tasks.py).
 
-    Expected failures (ImportError, missing key, config errors) → return None.
-    Unexpected failures re-raised for the caller to handle.
+    Expected failures (ImportError, missing key or CLI, config errors) → None
+    (degraded mode). Unexpected failures re-raised for the caller to handle.
     """
     from ..ai import create_ai
 
@@ -1087,33 +1172,35 @@ def build_judge_provider(config: "KlemmaConfig") -> Optional["AIProvider"]:
     backend = ai_cfg.backend
 
     if backend == "claude":
-        # CTO RC3: only use litellm fallback with explicit anthropic/... model
-        if not judge_model.startswith("anthropic/"):
-            logger.warning(
-                "build_judge_provider: claude backend requires citation_check_model "
-                "in 'anthropic/model-name' format; judge unavailable (degraded)"
-            )
-            return None
-
         anthropic_key = (
             ai_cfg._resolved_api_keys.get("anthropic")
             or os.environ.get("ANTHROPIC_API_KEY")
         )
-        if not anthropic_key:
-            logger.warning(
-                "build_judge_provider: no ANTHROPIC_API_KEY for litellm judge fallback"
-            )
-            return None
-
-        judge_cfg = ai_cfg.model_copy(update={
-            "backend": "litellm",
-            "model": judge_model,
-            "retries": ai_cfg.citation_check_retries,
-            "timeout": ai_cfg.citation_check_timeout,
-            "json_mode": True,
-        })
-        # PrivateAttr mutation after model_copy is legal in Pydantic v2 (instance-level, not model-level)
-        judge_cfg._resolved_api_keys = {"anthropic": anthropic_key}
+        if judge_model.startswith("anthropic/") and anthropic_key:
+            judge_cfg = ai_cfg.model_copy(update={
+                "backend": "litellm",
+                "model": judge_model,
+                "retries": ai_cfg.citation_check_retries,
+                "timeout": ai_cfg.citation_check_timeout,
+                "json_mode": True,
+            })
+            # PrivateAttr mutation after model_copy is legal in Pydantic v2 (instance-level, not model-level)
+            judge_cfg._resolved_api_keys = {"anthropic": anthropic_key}
+        else:
+            if ai_cfg.citation_check_max_wall_clock < 600:
+                logger.warning(
+                    "build_judge_provider: claude CLI judge takes 10-40 s per claim; "
+                    "citation_check_max_wall_clock=%ss will leave most claims unverifiable",
+                    ai_cfg.citation_check_max_wall_clock,
+                )
+            judge_cfg = ai_cfg.model_copy(update={
+                "backend": "claude",
+                "model": judge_model.removeprefix("anthropic/"),
+                "retries": ai_cfg.citation_check_retries,
+                "timeout": ai_cfg.citation_check_timeout,
+                "claude_cli_isolated": True,
+            })
+            judge_cfg._resolved_api_keys = {}
 
     else:
         # litellm / openai backend
@@ -1129,6 +1216,9 @@ def build_judge_provider(config: "KlemmaConfig") -> Optional["AIProvider"]:
         return create_ai(judge_cfg)
     except ImportError as exc:
         logger.warning("build_judge_provider ImportError (litellm not installed?): %s", exc)
+        return None
+    except RuntimeError as exc:  # ClaudeClient: `claude` CLI not installed
+        logger.warning("build_judge_provider: %s", exc)
         return None
     except (ValueError, KeyError, TypeError) as exc:
         logger.warning("build_judge_provider config error: %s", exc)
@@ -1168,6 +1258,23 @@ def _replay_verdict(
         evidence_span=evidence_span,
         evidence_locator=saved.get("evidence_locator"),
     )
+
+
+def _summarize(verdicts: list[CitationVerdict], claims: list[Claim]) -> str:
+    """One-line report summary. Claims without anchors get no verdict at all,
+    so they are counted as unchecked — never folded into «all claims ok»."""
+    counts: dict[str, int] = {}
+    for v in verdicts:
+        counts[v.severity] = counts.get(v.severity, 0) + 1
+    parts = [
+        f"{counts[s]} {s}"
+        for s in ("error", "hard_warn", "soft_warn", "unverifiable", "ok")
+        if counts.get(s, 0)
+    ]
+    unchecked = sum(1 for c in claims if not c.anchors)
+    if unchecked:
+        parts.append(f"{unchecked} unchecked (no anchor)")
+    return "; ".join(parts) if parts else "all claims ok"
 
 
 def check_citations_file(
@@ -1212,10 +1319,10 @@ def check_citations_file(
         )
 
     # Numbered-reference mode (papers/): map "[N]" markers to citekeys via
-    # the bibliography. Only worth building when there are no [@ markers —
-    # _parse_claims applies the same guard before using it.
+    # the bibliography. Only worth building when there are no @-markers
+    # (bracketed or bare) — _parse_claims applies the same guard before using it.
     ref_map: "Optional[RefMap]" = None
-    if "[@" not in md_text:
+    if _CITE_REF_RE.search(_mask_excluded_regions(md_text)) is None:
         try:
             from .reference_matcher import build_ref_map, collect_sources_meta
             sources_meta = collect_sources_meta(
@@ -1351,16 +1458,7 @@ def check_citations_file(
                 errors.append(f"unexpected error: {exc}")
                 status = "error"
 
-    # Build summary
-    counts: dict[str, int] = {}
-    for v in verdicts:
-        counts[v.severity] = counts.get(v.severity, 0) + 1
-    parts = [
-        f"{counts[s]} {s}"
-        for s in ("hard_warn", "soft_warn", "unverifiable", "ok")
-        if counts.get(s, 0)
-    ]
-    summary = "; ".join(parts) if parts else "all claims ok"
+    summary = _summarize(verdicts, claims)
 
     return CitationCheckReport(
         target=str(target_path),
@@ -1543,9 +1641,7 @@ def check_draft_inline(
 
                 # Combine passages into source_text for anchor search
                 source_text = "\n".join(passages)
-                norm_anchor = _normalize_text(anchor.raw)
-                norm_source = _normalize_text(source_text)
-                anchor_found = bool(norm_anchor and norm_anchor in norm_source)
+                anchor_found = _locate_anchor(anchor, source_text) is not None
 
                 bundle = EvidenceBundle(
                     claim_sentence=claim.sentence,
@@ -1597,16 +1693,7 @@ def check_draft_inline(
                 errors.append(f"unexpected error: {exc}")
                 status = "error"
 
-    # Build summary
-    counts: dict[str, int] = {}
-    for v in verdicts:
-        counts[v.severity] = counts.get(v.severity, 0) + 1
-    parts = [
-        f"{counts[s]} {s}"
-        for s in ("hard_warn", "soft_warn", "unverifiable", "ok")
-        if counts.get(s, 0)
-    ]
-    summary = "; ".join(parts) if parts else "all claims ok"
+    summary = _summarize(verdicts, claims)
 
     report = CitationCheckReport(
         target="inline",
